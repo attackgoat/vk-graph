@@ -1,4 +1,4 @@
-# Contributing to Screen 13
+# Contributing to vk-graph
 
 Thank you for taking the time to look over this document. You are encouraged to open issues, submit
 PRs, suggest changes, or anything else you feel might move this project forward.

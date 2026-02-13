@@ -4,11 +4,11 @@ use {
     clap::Parser,
     image::ImageReader,
     log::info,
-    screen_13::prelude::LazyPool,
-    screen_13_fx::*,
-    screen_13_imgui::prelude::*,
-    screen_13_window::WindowBuilder,
     std::{io::Cursor, time::Instant},
+    vk_graph::prelude::LazyPool,
+    vk_graph_fx::*,
+    vk_graph_imgui::prelude::*,
+    vk_graph_window::WindowBuilder,
     winit::dpi::LogicalSize,
 };
 
@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
     profile_with_puffin::init();
 
-    // Create Screen 13 things any similar program might need
+    // Create vk-graph things any similar program might need
     let args = Args::parse();
     let window = WindowBuilder::default()
         .debug(args.debug)

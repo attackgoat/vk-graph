@@ -6,9 +6,9 @@ use {
     glam::{Mat4, Vec3},
     inline_spirv::inline_spirv,
     log::warn,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
     std::{mem::size_of, sync::Arc},
+    vk_graph::prelude::*,
+    vk_graph_window::WindowBuilder,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };

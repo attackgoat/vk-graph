@@ -7,16 +7,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in library 'screen-13'",
+            "name": "Debug unit tests in library 'vk-graph'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
                     "--lib",
-                    "--package=screen-13"
+                    "--package=vk-graph"
                 ],
                 "filter": {
-                    "name": "screen-13",
+                    "name": "vk-graph",
                     "kind": "lib"
                 }
             },
@@ -31,7 +31,7 @@
                 "args": [
                     "build",
                     "--example=hello_world",
-                    "--package=screen-13"
+                    "--package=vk-graph"
                 ],
                 "filter": {
                     "name": "hello_world",

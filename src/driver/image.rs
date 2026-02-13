@@ -77,9 +77,9 @@ pub(crate) fn image_subresource_range_intersects(
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use ash::vk;
-/// # use screen_13::driver::{AccessType, DriverError};
-/// # use screen_13::driver::device::{Device, DeviceInfo};
-/// # use screen_13::driver::image::{Image, ImageInfo};
+/// # use vk_graph::driver::{AccessType, DriverError};
+/// # use vk_graph::driver::device::{Device, DeviceInfo};
+/// # use vk_graph::driver::image::{Image, ImageInfo};
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
@@ -117,9 +117,9 @@ impl Image {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::image::{Image, ImageInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
@@ -224,7 +224,7 @@ impl Image {
     ///
     /// # Note
     ///
-    /// Used to maintain object state when passing a _Screen 13_-created `vk::Image` handle to
+    /// Used to maintain object state when passing a _vk-graph_-created `vk::Image` handle to
     /// external code such as [_Ash_] or [_Erupt_] bindings.
     ///
     /// # Examples
@@ -234,9 +234,9 @@ impl Image {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::{AccessType, DriverError};
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::image::{Image, ImageInfo};
+    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);

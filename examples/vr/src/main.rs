@@ -7,19 +7,6 @@ use {
     log::{debug, error, trace},
     meshopt::{generate_vertex_remap, remap_index_buffer, remap_vertex_buffer},
     openxr::{self as xr, EnvironmentBlendMode, ViewConfigurationType},
-    screen_13::{
-        driver::{
-            ash::vk::{self},
-            buffer::{Buffer, BufferInfo},
-            device::Device,
-            graphic::{DepthStencilMode, GraphicPipelineInfo},
-            image::{Image, ImageInfo},
-            AccessType,
-        },
-        graph::RenderGraph,
-        pool::{lazy::LazyPool, Pool as _},
-    },
-    screen_13_hot::{graphic::HotGraphicPipeline, shader::HotShader},
     std::{
         fs::{metadata, File},
         io::BufReader,
@@ -33,6 +20,19 @@ use {
         time::Duration,
     },
     tobj::{load_obj, GPU_LOAD_OPTIONS},
+    vk_graph::{
+        driver::{
+            ash::vk::{self},
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{DepthStencilMode, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+            AccessType,
+        },
+        graph::RenderGraph,
+        pool::{lazy::LazyPool, Pool as _},
+    },
+    vk_graph_hot::{graphic::HotGraphicPipeline, shader::HotShader},
 };
 
 // Sets bits with index 0 and 1 for stereoscopic rendering

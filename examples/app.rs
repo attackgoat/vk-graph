@@ -3,7 +3,8 @@ mod profile_with_puffin;
 use {
     clap::Parser,
     log::error,
-    screen_13::{
+    std::sync::Arc,
+    vk_graph::{
         Display, DisplayError, DisplayInfo,
         driver::{
             device::{Device, DeviceInfoBuilder},
@@ -13,7 +14,6 @@ use {
         graph::RenderGraph,
         pool::hash::HashPool,
     },
-    std::sync::Arc,
     winit::{
         application::ApplicationHandler,
         error::EventLoopError,
@@ -39,7 +39,7 @@ impl ApplicationHandler for Application {
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window_attributes = Window::default_attributes().with_title("Screen 13");
+        let window_attributes = Window::default_attributes().with_title("vk-graph");
         let window = event_loop.create_window(window_attributes).unwrap();
 
         let args = Args::parse();

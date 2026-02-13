@@ -16,7 +16,7 @@ using the provided [`FrameContext`] closure. The [`EventLoop`] builder handles c
 of the [`Device`] driver, however you may construct one manually for headless rendering.
 
 ```no_run
-use screen_13_window::{Window, WindowError};
+use vk_graph_window::{Window, WindowError};
 
 fn main() -> Result<(), WindowError> {
     let window = Window::new()?;
@@ -34,7 +34,7 @@ fn main() -> Result<(), WindowError> {
 # Resources and Pipelines
 
 All resources and pipelines, as well as the driver itself, use shared reference tracking to keep
-pointers alive. _Screen 13_ uses `std::sync::Arc` to track references.
+pointers alive. _vk-graph_ uses `std::sync::Arc` to track references.
 
 ## Information
 
@@ -52,9 +52,9 @@ For example, a typical host-mappable buffer:
 ```no_run
 # use std::sync::Arc;
 # use ash::vk;
-# use screen_13::driver::DriverError;
-# use screen_13::driver::device::{Device, DeviceInfo};
-# use screen_13::driver::buffer::{Buffer, BufferInfo};
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # fn main() -> Result<(), DriverError> {
 # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
@@ -73,10 +73,10 @@ For example, a graphics pipeline:
 ```no_run
 # use std::sync::Arc;
 # use ash::vk;
-# use screen_13::driver::DriverError;
-# use screen_13::driver::device::{Device, DeviceInfo};
-# use screen_13::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
-# use screen_13::driver::shader::Shader;
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+# use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
 # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 # let my_frag_code = [0u8; 1];
@@ -102,11 +102,11 @@ For example, leasing an image:
 ```no_run
 # use std::sync::Arc;
 # use ash::vk;
-# use screen_13::driver::DriverError;
-# use screen_13::driver::device::{Device, DeviceInfo};
-# use screen_13::driver::image::{ImageInfo};
-# use screen_13::pool::{Pool};
-# use screen_13::pool::lazy::{LazyPool};
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::image::{ImageInfo};
+# use vk_graph::pool::{Pool};
+# use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
 # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 let mut pool = LazyPool::new(&device);
@@ -118,7 +118,7 @@ let my_image = pool.lease(info)?;
 
 # Render Graph Operations
 
-All rendering in _Screen 13_ is performed using a [`RenderGraph`] composed of user-specified passes,
+All rendering in _vk-graph_ is performed using a [`RenderGraph`] composed of user-specified passes,
 which may include pipelines and read/write access to resources. Recorded passes are automatically
 optimized before submission to the graphics hardware.
 
@@ -140,13 +140,13 @@ it as a node. Bound nodes may only be used with the graphs they were bound to. N
 ```no_run
 # use std::sync::Arc;
 # use ash::vk;
-# use screen_13::driver::DriverError;
-# use screen_13::driver::device::{Device, DeviceInfo};
-# use screen_13::driver::buffer::{Buffer, BufferInfo};
-# use screen_13::driver::image::{Image, ImageInfo};
-# use screen_13::graph::RenderGraph;
-# use screen_13::pool::{Pool};
-# use screen_13::pool::lazy::{LazyPool};
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::buffer::{Buffer, BufferInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# use vk_graph::graph::RenderGraph;
+# use vk_graph::pool::{Pool};
+# use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
 # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 # let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
@@ -175,7 +175,7 @@ println!("{:?}", image); // Arc<Image>
 # Ok(()) }
 ```
 
-_Note:_ See [this code](https://github.com/attackgoat/screen-13/blob/master/src/graph/edge.rs#L34)
+_Note:_ See [this code](https://github.com/attackgoat/vk-graph/blob/master/src/graph/edge.rs#L34)
 for all the things that can be bound or unbound from a graph.
 
 _Note:_ Once unbound, the node is invalid and should be dropped.
@@ -192,13 +192,13 @@ Example:
 ```no_run
 # use std::sync::Arc;
 # use ash::vk;
-# use screen_13::driver::DriverError;
-# use screen_13::driver::device::{Device, DeviceInfo};
-# use screen_13::driver::buffer::{Buffer, BufferInfo};
-# use screen_13::driver::image::{Image, ImageInfo};
-# use screen_13::graph::RenderGraph;
-# use screen_13::pool::{Pool};
-# use screen_13::pool::lazy::{LazyPool};
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::buffer::{Buffer, BufferInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# use vk_graph::graph::RenderGraph;
+# use vk_graph::pool::{Pool};
+# use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
 # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 # let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
@@ -234,11 +234,11 @@ Pipeline instances may be bound to a [`PassRef`] in order to execute the associa
 ```no_run
 # use std::sync::Arc;
 # use ash::vk;
-# use screen_13::driver::DriverError;
-# use screen_13::driver::device::{Device, DeviceInfo};
-# use screen_13::driver::compute::{ComputePipeline, ComputePipelineInfo};
-# use screen_13::driver::shader::{Shader};
-# use screen_13::graph::RenderGraph;
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+# use vk_graph::driver::shader::{Shader};
+# use vk_graph::graph::RenderGraph;
 # fn main() -> Result<(), DriverError> {
 # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 # let my_shader_code = [0u8; 1];
@@ -258,7 +258,7 @@ graph
 
 ## Image samplers
 
-By default, _Screen 13_ will use "linear repeat-mode" samplers unless a special suffix appears as
+By default, _vk-graph_ will use "linear repeat-mode" samplers unless a special suffix appears as
 part of the name within GLSL or HLSL shader code. The `_sampler_123` suffix should be used where
 `1`, `2`, and `3` are replaced with:
 
@@ -326,7 +326,7 @@ pub mod pool;
 
 mod display;
 
-/// Things which are used in almost every single _Screen 13_ program.
+/// Things which are used in almost every single _vk-graph_ program.
 pub mod prelude {
     pub use super::{
         display::{Display, DisplayError, DisplayInfo, DisplayInfoBuilder, ResolverPool},

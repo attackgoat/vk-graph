@@ -54,10 +54,10 @@ impl ComputePipeline {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::compute::{ComputePipeline, ComputePipelineInfo};
-    /// # use screen_13::driver::shader::{Shader};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+    /// # use vk_graph::driver::shader::{Shader};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let my_shader_code = [0u8; 1];

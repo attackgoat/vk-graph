@@ -1,25 +1,24 @@
-# Screen 13
+# vk-graph
 
-[![Crates.io](https://img.shields.io/crates/v/screen-13.svg)](https://crates.io/crates/screen-13)
-[![Docs.rs](https://docs.rs/screen-13/badge.svg)](https://docs.rs/screen-13)
-[![LoC](https://tokei.rs/b1/github/attackgoat/screen-13?category=code)](https://github.com/attackgoat/screen-13)
+[![Crates.io](https://img.shields.io/crates/v/vk-graph.svg)](https://crates.io/crates/vk-graph)
+[![Docs.rs](https://docs.rs/vk-graph/badge.svg)](https://docs.rs/vk-graph)
+[![LoC](https://tokei.rs/b1/github/attackgoat/vk-graph?category=code)](https://github.com/attackgoat/vk-graph)
 
-_Screen 13_ is an easy-to-use Vulkan rendering engine in the spirit of
-_[QBasic](https://en.wikipedia.org/wiki/QBasic)_.
+_vk-graph_ is a high-performance Vulkan driver with automatic resource management and execution.
 
 ```toml
 [dependencies]
-screen-13 = "0.12"
+vk-graph = "0.14"
 ```
 
 ## Overview
 
-_Screen 13_ provides a high performance [Vulkan](https://www.vulkan.org/) driver using smart
+_vk-graph_ provides a high performance [Vulkan](https://www.vulkan.org/) driver using smart
 pointers. The driver may be created manually for headless rendering or automatically using the
 built-in window abstraction:
 
 ```rust
-use screen_13_window::{Window, WindowError};
+use vk_graph_window::{Window, WindowError};
 
 fn main() -> Result<(), WindowError> {
     Window::new()?.run(|frame| {
@@ -30,7 +29,7 @@ fn main() -> Result<(), WindowError> {
 
 ## Usage
 
-_Screen 13_ provides a fully-generic render graph structure for simple and statically
+_vk-graph_ provides a fully-generic render graph structure for simple and statically
 typed access to all the resources used while rendering. The `RenderGraph` structure allows Vulkan
 smart pointer resources to be bound as "nodes" which may be used anywhere in a graph. The graph
 itself is not tied to swapchain access and may be used to execute general command streams.
@@ -41,7 +40,7 @@ Features of the render graph:
  - Automatic Vulkan management (render passes, subpasses, descriptors, pools, _etc._)
  - Automatic render pass scheduling, re-ordering, merging, with resource aliasing
  - Interoperable with existing Vulkan code
- - Optional [shader hot-reload](contrib/screen-13-hot/README.md) from disk
+ - Optional [shader hot-reload](contrib/vk-graph-hot/README.md) from disk
 
 ```rust
 render_graph
@@ -68,15 +67,15 @@ To enable logging, set the `RUST_LOG` environment variable to `trace`, `debug`, 
 _You may also filter messages, for example:_
 
 ```bash
-RUST_LOG=screen_13::driver=trace,screen_13=warn cargo run --example ray_trace
+RUST_LOG=vk_graph::driver=trace,vk_graph=warn cargo run --example ray_trace
 ```
 
 ```
-TRACE screen_13::driver::instance > created a Vulkan instance
-DEBUG screen_13::driver::physical_device > physical device: NVIDIA GeForce RTX 3090
-DEBUG screen_13::driver::physical_device > extension "VK_KHR_16bit_storage" v1
-DEBUG screen_13::driver::physical_device > extension "VK_KHR_8bit_storage" v1
-DEBUG screen_13::driver::physical_device > extension "VK_KHR_acceleration_structure" v13
+TRACE vk_graph::driver::instance > created a Vulkan instance
+DEBUG vk_graph::driver::physical_device > physical device: NVIDIA GeForce RTX 3090
+DEBUG vk_graph::driver::physical_device > extension "VK_KHR_16bit_storage" v1
+DEBUG vk_graph::driver::physical_device > extension "VK_KHR_8bit_storage" v1
+DEBUG vk_graph::driver::physical_device > extension "VK_KHR_acceleration_structure" v13
 ...
 ```
 
@@ -100,13 +99,13 @@ cargo run --features profile-with-puffin --release --example vsm_omni
 
 Included are some examples you might find helpful:
 
-- [`hello_world.rs`](contrib/screen-13-window/examples/hello_world.rs) — Displays a window on the screen. Please start here.
+- [`hello_world.rs`](contrib/vk-graph-window/examples/hello_world.rs) — Displays a window on the screen. Please start here.
 - [`triangle.rs`](examples/triangle.rs) — Shaders and full setup of index/vertex buffers; < 100 LOC.
 - [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass shader toy using the original
   shader code.
 
 See the [example code](examples/README.md), 
-[documentation](https://docs.rs/screen-13/latest/screen_13/), or helpful
+[documentation](https://docs.rs/vk-graph/latest/vk_graph/), or helpful
 [getting started guide](examples/getting-started.md) for more information.
 
 **_NOTE:_** Required development packages and libraries are listed in the _getting started guide_.
@@ -132,7 +131,7 @@ ability to get things done quickly while using modern tools.
 
 ### Inspirations
 
-_Screen 13_ was built from the learnings and lessons shared by others throughout our community. In
+_vk-graph_ was built from the learnings and lessons shared by others throughout our community. In
 particular, here are some of the repositories I found useful:
 
  - [Bevy](https://bevyengine.org/): A refreshingly simple data-driven game engine built in Rust

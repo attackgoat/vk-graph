@@ -1,6 +1,6 @@
 //! Resource leasing and pooling types.
 //!
-//! _Screen 13_ provides caching for acceleration structure, buffer and image resources which may be
+//! _vk-graph_ provides caching for acceleration structure, buffer and image resources which may be
 //! leased from configurable pools using their corresponding information structure. Most programs
 //! will do fine with a single [`FifoPool`](self::fifo::FifoPool).
 //!
@@ -13,7 +13,7 @@
 //! offering a different strategy which balances performance (_more buckets_) with memory efficiency
 //! (_fewer buckets_).
 //!
-//! _Screen 13_'s pools can be grouped into two major categories:
+//! _vk-graph_'s pools can be grouped into two major categories:
 //!
 //! * Single-bucket: [`FifoPool`](self::fifo::FifoPool)
 //! * Multi-bucket: [`LazyPool`](self::lazy::LazyPool), [`HashPool`](self::hash::HashPool)
@@ -25,11 +25,11 @@
 //! ```no_run
 //! # use std::sync::Arc;
 //! # use ash::vk;
-//! # use screen_13::driver::DriverError;
-//! # use screen_13::driver::device::{Device, DeviceInfo};
-//! # use screen_13::driver::image::{ImageInfo};
-//! # use screen_13::pool::{Pool};
-//! # use screen_13::pool::lazy::{LazyPool};
+//! # use vk_graph::driver::DriverError;
+//! # use vk_graph::driver::device::{Device, DeviceInfo};
+//! # use vk_graph::driver::image::{ImageInfo};
+//! # use vk_graph::pool::{Pool};
+//! # use vk_graph::pool::lazy::{LazyPool};
 //! # fn main() -> Result<(), DriverError> {
 //! # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 //! let mut pool = LazyPool::new(&device);

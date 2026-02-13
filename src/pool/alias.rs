@@ -62,7 +62,7 @@ alias_builder!(ImageInfo => Image);
 ///
 /// # Examples
 ///
-/// See [`aliasing.rs`](https://github.com/attackgoat/screen-13/blob/master/examples/aliasing.rs)
+/// See [`aliasing.rs`](https://github.com/attackgoat/vk-graph/blob/master/examples/aliasing.rs)
 pub struct AliasPool<T> {
     accel_structs: Vec<(
         AccelerationStructureInfo,

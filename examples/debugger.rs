@@ -5,7 +5,7 @@
     I hope you enjoy this choose-your-own-debugger adventure!
 
     First you will want to read this:
-    https://github.com/attackgoat/screen-13/blob/master/examples/getting-started.md
+    https://github.com/attackgoat/vk-graph/blob/master/examples/getting-started.md
 
     Enter your "name" to begin:
         cargo run --example debugger
@@ -23,8 +23,8 @@
 
     To continue, uncomment line 30.
 */
-fn main() -> Result<(), screen_13_window::WindowError> {
-    use {log::debug, screen_13::prelude::*, screen_13_window::Window, std::sync::Arc};
+fn main() -> Result<(), vk_graph_window::WindowError> {
+    use {log::debug, std::sync::Arc, vk_graph::prelude::*, vk_graph_window::Window};
 
     // 👋, 🌎!
     //pretty_env_logger::init();
@@ -52,7 +52,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
                 When something goes wrong, it is probably *not* during this frame closure. The
                 reason is that during this scope nearly everything is deferred until frame
                 resolution where we try to schedule the work and get it displayed on the screen.
-                Typically, as here, we let Screen 13 handle all graph resolution (no code or
+                Typically, as here, we let vk-graph handle all graph resolution (no code or
                 concerns here) - but it is valid to control the process manually, see the available
                 functions in the API docs.
 
@@ -80,7 +80,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
                 }
             - Run `cargo run --example debugger`
             - You should see the PID in the console output
-            - Enter the VS Code Debugger; click `[>] Attach (screen-13)`
+            - Enter the VS Code Debugger; click `[>] Attach (vk-graph)`
             - Enter the PID
             - In the call stack pane, select the first thread; pause it
             - You are now parked on a syscall
@@ -151,7 +151,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
 
         /*
             Case #2:
-                We are about to record a compute pass which causes Screen 13 to panic
+                We are about to record a compute pass which causes vk-graph to panic
 
             Note: You'll see a panic here:
                 thread 'main' panicked at 'uninitialized swapchain image ...'
@@ -205,7 +205,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
         Where to next? Fire up RenderDoc, capture a frame and have fun! But beware - RenderDoc does
         a replay of the capture it created; and it resubmits things ever so slightly differently at
         times - you most likely will NOT see any synchronization issues in RenderDoc if you DO see
-        them in Screen 13.
+        them in vk-graph.
 
         If you ever get stuck, switch between `vkconfig` settings of API dump and synchronization;
         those usually say exactly what is going wrong, and usually you need to use multiple layers

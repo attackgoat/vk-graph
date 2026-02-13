@@ -4,9 +4,9 @@ use {
     bytemuck::{NoUninit, cast_slice},
     clap::Parser,
     inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
     std::sync::Arc,
+    vk_graph::prelude::*,
+    vk_graph_window::WindowBuilder,
 };
 
 static SHADER_RAY_GEN: &[u32] = inline_spirv!(

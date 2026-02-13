@@ -68,10 +68,10 @@ impl RayTracePipeline {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
-    /// # use screen_13::driver::shader::Shader;
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+    /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let my_rgen_code = [0u8; 1];
@@ -314,7 +314,7 @@ impl RayTracePipeline {
     /// # Examples
     ///
     /// See
-    /// [ray_trace.rs](https://github.com/attackgoat/screen-13/blob/master/examples/ray_trace.rs)
+    /// [ray_trace.rs](https://github.com/attackgoat/vk-graph/blob/master/examples/ray_trace.rs)
     /// for a detail example which constructs a shader binding table buffer using this function.
     pub fn group_handle(this: &Self, idx: usize) -> Result<&[u8], DriverError> {
         let &RayTraceProperties {

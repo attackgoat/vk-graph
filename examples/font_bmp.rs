@@ -5,17 +5,17 @@ use {
     clap::Parser,
     image::ImageReader,
     inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_fx::*,
-    screen_13_window::WindowBuilder,
     std::{io::Cursor, sync::Arc, time::Instant},
+    vk_graph::prelude::*,
+    vk_graph_fx::*,
+    vk_graph_window::WindowBuilder,
 };
 
 fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
     profile_with_puffin::init();
 
-    // Standard Screen 13 stuff
+    // Standard vk-graph stuff
     let args = Args::parse();
     let window = WindowBuilder::default().debug(args.debug).build()?;
     let display = GraphicPresenter::new(&window.device)?;
@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
             });
 
         // Print some text onto the image
-        let text = "Screen 13";
+        let text = "vk-graph";
         let (_offset, [width, height]) = small_10px_font.measure(text);
         let scale = 4.0;
         let x = 320f32 * 0.5 / scale - width as f32 * 0.5;

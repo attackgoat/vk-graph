@@ -6,9 +6,9 @@ use {
     core::f32,
     glam::{Vec4, vec3},
     inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::{WindowBuilder, WindowError},
     std::sync::Arc,
+    vk_graph::prelude::*,
+    vk_graph_window::{WindowBuilder, WindowError},
 };
 
 // TODO: Add texelFetch option

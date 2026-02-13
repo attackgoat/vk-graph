@@ -1100,12 +1100,12 @@ pub(super) const fn pipeline_stage_access_flags(
 
 /// Describes the general category of all graphics driver failure cases.
 ///
-/// In the event of a failure you should follow the _Screen 13_ code to the responsible Vulkan API
+/// In the event of a failure you should follow the _vk-graph_ code to the responsible Vulkan API
 /// and then to the `Ash` stub call; it will generally contain a link to the appropriate
 /// specification. The specifications provide a table of possible error conditions which can be a
 /// good starting point to debug the issue.
 ///
-/// Feel free to open an issue on GitHub, [here](https://github.com/attackgoat/screen-13/issues) for
+/// Feel free to open an issue on GitHub, [here](https://github.com/attackgoat/vk-graph/issues) for
 /// help debugging the issue.
 #[derive(Debug)]
 pub enum DriverError {

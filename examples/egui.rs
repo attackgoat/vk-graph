@@ -1,8 +1,8 @@
 mod profile_with_puffin;
 
 use {
-    clap::Parser, screen_13::prelude::*, screen_13_egui::prelude::*,
-    screen_13_window::WindowBuilder, winit::dpi::LogicalSize,
+    clap::Parser, vk_graph::prelude::*, vk_graph_egui::prelude::*, vk_graph_window::WindowBuilder,
+    winit::dpi::LogicalSize,
 };
 
 fn main() -> anyhow::Result<()> {

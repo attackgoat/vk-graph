@@ -26,9 +26,9 @@ use {
     inline_spirv::inline_spirv,
     log::debug,
     rand::{Rng, rng, seq::IndexedRandom},
-    screen_13::prelude::*,
-    screen_13_window::{FrameContext, WindowBuilder, WindowError},
     std::{mem::size_of, sync::Arc},
+    vk_graph::prelude::*,
+    vk_graph_window::{FrameContext, WindowBuilder, WindowError},
 };
 
 type Operation = fn(&mut FrameContext, &mut HashPool);
@@ -57,14 +57,14 @@ fn main() -> Result<(), WindowError> {
 
     let mut rng = rng();
 
-    let screen_13 = WindowBuilder::default().debug(true).build()?;
-    let mut pool = HashPool::new(&screen_13.device);
+    let vk_graph = WindowBuilder::default().debug(true).build()?;
+    let mut pool = HashPool::new(&vk_graph.device);
 
     let mut frame_count = 0;
 
     let args = Args::parse();
 
-    screen_13.run(|mut frame| {
+    vk_graph.run(|mut frame| {
         if frame_count == args.frame_count {
             *frame.will_exit = true;
             return;

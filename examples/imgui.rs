@@ -2,10 +2,10 @@ mod profile_with_puffin;
 
 use {
     clap::Parser,
-    screen_13::prelude::*,
-    screen_13_fx::*,
-    screen_13_imgui::{Condition, ImGui},
-    screen_13_window::{WindowBuilder, WindowError},
+    vk_graph::prelude::*,
+    vk_graph_fx::*,
+    vk_graph_imgui::{Condition, ImGui},
+    vk_graph_window::{WindowBuilder, WindowError},
     winit::dpi::LogicalSize,
 };
 
@@ -13,7 +13,7 @@ fn main() -> Result<(), WindowError> {
     pretty_env_logger::init();
     profile_with_puffin::init();
 
-    // Screen 13 things we need for this demo
+    // vk-graph things we need for this demo
     let args = Args::parse();
     let window = WindowBuilder::default()
         .debug(args.debug)

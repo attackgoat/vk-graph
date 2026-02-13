@@ -4,12 +4,12 @@ use {
     clap::Parser,
     hassle_rs::compile_hlsl,
     inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
     std::{
         path::{Path, PathBuf},
         sync::Arc,
     },
+    vk_graph::prelude::*,
+    vk_graph_window::WindowBuilder,
 };
 
 /// Displays a sequence of image samplers.
@@ -224,7 +224,7 @@ fn create_pipeline(
 }
 
 fn read_image(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Arc<Image>> {
-    // For another way to loading images, see screen_13_fx::ImageLoader
+    // For another way to loading images, see vk_graph_fx::ImageLoader
     let gulf_jpg = image::open(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path))?;
     let image = Arc::new(Image::create(
         device,

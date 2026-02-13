@@ -5,9 +5,9 @@ use {
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3},
     inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
     std::sync::Arc,
+    vk_graph::prelude::*,
+    vk_graph_window::WindowBuilder,
 };
 
 #[derive(Clone, Copy)]

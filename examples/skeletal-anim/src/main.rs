@@ -8,8 +8,6 @@ use {
         model::{Joint, Vertex},
         Pak, PakBuf,
     },
-    screen_13::prelude::*,
-    screen_13_window::{WindowBuilder, WindowError},
     std::{
         cmp::Ordering,
         env::current_exe,
@@ -18,6 +16,8 @@ use {
         sync::Arc,
         time::{Duration, Instant},
     },
+    vk_graph::prelude::*,
+    vk_graph_window::{WindowBuilder, WindowError},
 };
 
 // This blog has a really good overview of what is happening here:
@@ -163,7 +163,7 @@ fn load_texture(
     assert_eq!(bitmap.height().count_ones(), 1);
 
     // NOTE: This is the most basic way to load an image; you probably want to use something like
-    // screen-13-fx::ImageLoader instead!
+    // vk-graph-fx::ImageLoader instead!
 
     // We will stage the pixels in a host-accessible buffer
     let buffer = Arc::new(Buffer::create_from_slice(

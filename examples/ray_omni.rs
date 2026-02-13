@@ -7,8 +7,6 @@ use {
     inline_spirv::inline_spirv,
     log::info,
     meshopt::remap::{generate_vertex_remap, remap_index_buffer, remap_vertex_buffer},
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
     std::{
         env::current_exe,
         fs::{metadata, write},
@@ -17,6 +15,8 @@ use {
         sync::Arc,
     },
     tobj::{GPU_LOAD_OPTIONS, load_obj},
+    vk_graph::prelude::*,
+    vk_graph_window::WindowBuilder,
 };
 
 fn main() -> anyhow::Result<()> {

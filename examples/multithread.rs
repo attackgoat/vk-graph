@@ -5,9 +5,6 @@ use {
     clap::Parser,
     image::ImageReader,
     log::info,
-    screen_13::prelude::*,
-    screen_13_fx::BitmapFont,
-    screen_13_window::WindowBuilder,
     std::{
         collections::VecDeque,
         io::Cursor,
@@ -19,6 +16,9 @@ use {
         thread::{available_parallelism, sleep, spawn},
         time::{Duration, Instant},
     },
+    vk_graph::prelude::*,
+    vk_graph_fx::BitmapFont,
+    vk_graph_window::WindowBuilder,
 };
 
 const COLOR_SUBRESOURCE_LAYER: vk::ImageSubresourceLayers = vk::ImageSubresourceLayers {

@@ -36,9 +36,9 @@ use std::sync::Mutex;
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use ash::vk;
-/// # use screen_13::driver::{AccessType, DriverError};
-/// # use screen_13::driver::device::{Device, DeviceInfo};
-/// # use screen_13::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
+/// # use vk_graph::driver::{AccessType, DriverError};
+/// # use vk_graph::driver::device::{Device, DeviceInfo};
+/// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 /// # const SIZE: vk::DeviceSize = 1024;
@@ -71,9 +71,9 @@ impl AccelerationStructure {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// const SIZE: vk::DeviceSize = 1024;
@@ -142,7 +142,7 @@ impl AccelerationStructure {
     ///
     /// # Note
     ///
-    /// Used to maintain object state when passing a _Screen 13_-created
+    /// Used to maintain object state when passing a _vk-graph_-created
     /// `vk::AccelerationStructureKHR` handle to external code such as [_Ash_] or [_Erupt_]
     /// bindings.
     ///
@@ -153,9 +153,9 @@ impl AccelerationStructure {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::{AccessType, DriverError};
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
+    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # const SIZE: vk::DeviceSize = 1024;
@@ -199,9 +199,9 @@ impl AccelerationStructure {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::{AccessType, DriverError};
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
+    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # const SIZE: vk::DeviceSize = 1024;
@@ -241,9 +241,9 @@ impl AccelerationStructure {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, DeviceOrHostAddress};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, DeviceOrHostAddress};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let my_geom_triangles = AccelerationStructureGeometryData::Triangles {

@@ -40,9 +40,9 @@ use std::sync::Mutex;
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use ash::vk;
-/// # use screen_13::driver::{AccessType, DriverError};
-/// # use screen_13::driver::device::{Device, DeviceInfo};
-/// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+/// # use vk_graph::driver::{AccessType, DriverError};
+/// # use vk_graph::driver::device::{Device, DeviceInfo};
+/// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 /// # let info = BufferInfo::device_mem(8, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
@@ -77,9 +77,9 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// const SIZE: vk::DeviceSize = 1024;
@@ -187,9 +187,9 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// const DATA: [u8; 4] = [0xfe, 0xed, 0xbe, 0xef];
@@ -222,7 +222,7 @@ impl Buffer {
     ///
     /// # Note
     ///
-    /// Used to maintain object state when passing a _Screen 13_-created `vk::Buffer` handle to
+    /// Used to maintain object state when passing a _vk-graph_-created `vk::Buffer` handle to
     /// external code such as [_Ash_] or [_Erupt_] bindings.
     ///
     /// # Examples
@@ -232,9 +232,9 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::{AccessType, DriverError};
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo, BufferSubresourceRange};
+    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo, BufferSubresourceRange};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # const SIZE: vk::DeviceSize = 1024;
@@ -297,9 +297,9 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let info = BufferInfo::host_mem(4, vk::BufferUsageFlags::empty());
@@ -330,9 +330,9 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let info = BufferInfo::host_mem(4, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
@@ -370,9 +370,9 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # const DATA: [u8; 4] = [0; 4];
@@ -408,9 +408,9 @@ impl Buffer {
     /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use glam::Mat4;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # const DATA: [u8; 4] = [0; 4];

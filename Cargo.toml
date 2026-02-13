@@ -1,16 +1,16 @@
 [package]
-name = "screen-13"
-version = "0.13.0"
+name = "vk-graph"
+version = "0.14.0+alpha"
 authors = ["John Wells <john@attackgoat.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/attackgoat/screen-13"
-homepage = "https://github.com/attackgoat/screen-13"
-documentation = "https://docs.rs/screen-13"
+repository = "https://github.com/attackgoat/vk-graph"
+homepage = "https://github.com/attackgoat/vk-graph"
+documentation = "https://docs.rs/vk-graph"
 keywords = ["gamedev", "vulkan"]
 categories = ["game-development", "multimedia::images", "rendering::engine"]
-description = "An easy-to-use Vulkan rendering engine in the spirit of QBasic."
+description = "A high-performance Vulkan driver with automatic resource management and execution."
 
 [features]
 default = []
@@ -31,7 +31,7 @@ paste = "1.0"
 profiling = "1.0"
 raw-window-handle = "0.6"
 spirq = "1.2"
-vk-sync = { version = "0.5", package = "vk-sync-fork" }  # // SEE: https://github.com/gwihlidal/vk-sync-rs/pull/4 -> https://github.com/expenses/vk-sync-rs
+vk-sync = { version = "0.5", package = "vk-sync-fork" } # // SEE: https://github.com/gwihlidal/vk-sync-rs/pull/4 -> https://github.com/expenses/vk-sync-rs
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ash-molten = "0.20"
@@ -54,10 +54,10 @@ puffin = "0.19"
 puffin_http = "0.16"
 rand = "0.9"
 reqwest = { version = "0.12", features = ["blocking"] }
-screen-13-fx = { path = "contrib/screen-13-fx" }
-screen-13-imgui = { path = "contrib/screen-13-imgui" }
-screen-13-egui = { path = "contrib/screen-13-egui" }
-screen-13-window = { path = "contrib/screen-13-window" }
+vk-graph-fx = { path = "contrib/vk-graph-fx" }
+vk-graph-imgui = { path = "contrib/vk-graph-imgui" }
+vk-graph-egui = { path = "contrib/vk-graph-egui" }
+vk-graph-window = { path = "contrib/vk-graph-window" }
 tobj = "4.0"
 winit = "0.30"
 winit_input_helper = { git = "https://github.com/stefnotch/winit_input_helper.git", rev = "6e76a79d01ce836c01b9cdeaa98846a6f0955dc4" } #"0.16"

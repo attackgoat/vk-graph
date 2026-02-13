@@ -4,9 +4,9 @@ use {
     bytemuck::cast_slice,
     clap::Parser,
     inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::{WindowBuilder, WindowError},
     std::sync::Arc,
+    vk_graph::prelude::*,
+    vk_graph_window::{WindowBuilder, WindowError},
 };
 
 // A Vulkan triangle using a graphic pipeline, vertex/fragment shaders, and index/vertex buffers.

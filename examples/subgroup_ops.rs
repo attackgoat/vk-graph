@@ -2,8 +2,8 @@ use {
     bytemuck::cast_slice,
     clap::Parser,
     inline_spirv::inline_spirv,
-    screen_13::prelude::*,
     std::{mem::size_of, sync::Arc, time::Instant},
+    vk_graph::prelude::*,
 };
 
 /// Advanced example demonstrating subgroup operations (arithmetic and ballot).

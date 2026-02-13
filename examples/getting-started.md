@@ -1,7 +1,7 @@
-# Getting Started with _Screen 13_
+# Getting Started with _vk-graph_
 
-This guide is intended for developers who are new to _Screen 13_ and want a step-by-step introduction. For further details on these
-topics refer to the online [documentation](https://docs.rs/screen-13/latest/screen_13/).
+This guide is intended for developers who are new to _vk-graph_ and want a step-by-step introduction. For further details on these
+topics refer to the online [documentation](https://docs.rs/vk-graph/latest/vk_graph/).
 
 ## Required Packages
 
@@ -18,7 +18,7 @@ _Windows_:
 
 ## Documentation
 
-Read the generated [documentation](https://docs.rs/screen-13/latest/screen_13/) online, or run the
+Read the generated [documentation](https://docs.rs/vk-graph/latest/vk_graph/) online, or run the
 following command locally:
 
 ```
@@ -27,8 +27,8 @@ cargo doc --open
 
 ## Changes
 
-Stay informed of recent changes to _Screen 13_ using the
-[change log](https://github.com/attackgoat/screen-13/blob/master/CHANGELOG.md) file.
+Stay informed of recent changes to _vk-graph_ using the
+[change log](https://github.com/attackgoat/vk-graph/blob/master/CHANGELOG.md) file.
 
 ## Performance Profiling
 

@@ -1,20 +1,20 @@
 use {
     log::{debug, error},
     openxr as xr,
-    screen_13::driver::{
-        ash::{
-            self,
-            vk::{self, Handle as _},
-        },
-        device::Device,
-        physical_device::PhysicalDevice,
-    },
     std::{
         ffi::c_void,
         fmt::{Debug, Formatter},
         mem::transmute,
         ops::Deref,
         sync::Arc,
+    },
+    vk_graph::driver::{
+        ash::{
+            self,
+            vk::{self, Handle as _},
+        },
+        device::Device,
+        physical_device::PhysicalDevice,
     },
 };
 
@@ -51,9 +51,9 @@ impl Instance {
         }
 
         let app_info = xr::ApplicationInfo {
-            application_name: "screen-13-example-vr",
+            application_name: "vk-graph-example-vr",
             application_version: 0,
-            engine_name: "screen-13-example-vr",
+            engine_name: "vk-graph-example-vr",
             engine_version: 0,
         };
         let xr_instance = xr_entry
@@ -155,7 +155,7 @@ impl Instance {
                     })?;
                 let vk_instance = vk::Instance::from_raw(vk_instance as _);
 
-                screen_13::driver::Instance::load(vk_entry, vk_instance).map_err(|err| {
+                vk_graph::driver::Instance::load(vk_entry, vk_instance).map_err(|err| {
                     error!("Vulkan instance load: {err}");
 
                     InstanceCreateError::VulkanUnsupported

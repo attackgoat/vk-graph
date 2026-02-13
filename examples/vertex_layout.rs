@@ -5,9 +5,9 @@ use {
     clap::Parser,
     half::f16,
     inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::{FrameContext, WindowBuilder},
     std::{mem::size_of, sync::Arc},
+    vk_graph::prelude::*,
+    vk_graph_window::{FrameContext, WindowBuilder},
 };
 
 /// This example draws two triangles using two different vertex formats.

@@ -17,9 +17,9 @@ bytemuck = "1.14"
 clap = { version = "4.5", features = ["derive"] }
 pak = "0.5"
 pretty_env_logger = "0.5"
-screen-13 = { path = "../.." }
-screen-13-fx = { path = "../../contrib/screen-13-fx" }
-screen-13-window = { path = "../../contrib/screen-13-window" }
+vk-graph = { path = "../.." }
+vk-graph-fx = { path = "../../contrib/vk-graph-fx" }
+vk-graph-window = { path = "../../contrib/vk-graph-window" }
 winit = "0.30"
 
 [build-dependencies]
