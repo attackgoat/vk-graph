@@ -4,7 +4,6 @@ use {
     bytemuck::{NoUninit, Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Quat, Vec3, vec3},
-    inline_spirv::inline_spirv,
     log::info,
     meshopt::remap::{generate_vertex_remap, remap_index_buffer, remap_vertex_buffer},
     std::{
@@ -16,6 +15,7 @@ use {
     tobj::{GPU_LOAD_OPTIONS, load_obj},
     vk_graph::prelude::*,
     vk_graph_window::WindowBuilder,
+    vk_shader_macros::glsl,
     winit::{dpi::LogicalSize, event::Event, keyboard::KeyCode, window::Fullscreen},
     winit_input_helper::WinitInputHelper,
 };
@@ -444,9 +444,10 @@ fn best_2d_optimal_format(
 }
 
 fn create_blur_x_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, DriverError> {
-    let comp = inline_spirv!(
+    let comp = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(compute)
 
         #define POS_X 0
         #define NEG_X 1
@@ -536,8 +537,7 @@ fn create_blur_x_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
                 accumulator -= imageLoad(image, ivec3(x - RADIUS, y, face)).rg;
             }
         }
-        "#,
-        comp
+        "#
     );
 
     let shader = Shader::new_compute(comp.as_slice()).specialization_info(SpecializationInfo::new(
@@ -567,9 +567,10 @@ fn create_blur_x_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
 }
 
 fn create_blur_y_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, DriverError> {
-    let comp = inline_spirv!(
+    let comp = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(compute)
 
         #define POS_X 0
         #define NEG_X 1
@@ -659,8 +660,7 @@ fn create_blur_y_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
                 accumulator -= imageLoad(image, ivec3(x, y - RADIUS, face)).rg;
             }
         }
-        "#,
-        comp
+        "#
     );
 
     let shader = Shader::new_compute(comp.as_slice()).specialization_info(SpecializationInfo::new(
@@ -690,9 +690,10 @@ fn create_blur_y_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
 }
 
 fn create_debug_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let vert = inline_spirv!(
+    let vert = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(vertex)
 
         layout(push_constant) uniform PushConstants {
             layout(offset = 0) mat4 model;
@@ -714,12 +715,12 @@ fn create_debug_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, D
             world_normal_out = normalize((push_const.model * vec4(normal, 1)).xyz);
             gl_Position = camera.projection * camera.view * vec4(world_position_out, 1);
         }
-        "#,
-        vert
+        "#
     );
-    let frag = inline_spirv!(
+    let frag = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(fragment)
 
         layout(binding = 1) uniform Light {
             vec3 position;
@@ -749,8 +750,7 @@ fn create_debug_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, D
                 color_out.rgb = vec3(lambertian * attenuation);
             }
         }
-        "#,
-        frag
+        "#
     );
 
     let info = GraphicPipelineInfo::default();
@@ -766,9 +766,10 @@ fn create_debug_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, D
 }
 
 fn create_mesh_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let vert = inline_spirv!(
+    let vert = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(vertex)
 
         layout(push_constant) uniform PushConstants {
             layout(offset = 0) mat4 model;
@@ -794,12 +795,12 @@ fn create_mesh_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, Dr
             world_position_out = push_const.model * vec4(position, 1.0);
             gl_Position = camera.projection * camera.view * world_position_out;
         }
-        "#,
-        vert
+        "#
     );
-    let frag = inline_spirv!(
+    let frag = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(fragment)
 
         #define EPSILON 0.0001
         #define MIN_SHADOW 0.1
@@ -861,8 +862,7 @@ fn create_mesh_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, Dr
                 color_out.rgb = vec3(attenuation * lambertian * shadow);
             }
         }
-        "#,
-        frag
+        "#
     );
 
     let info = GraphicPipelineInfo::default();
@@ -885,9 +885,10 @@ fn create_mesh_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, Dr
 }
 
 fn create_shadow_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let vert = inline_spirv!(
+    let vert = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(vertex)
 
         layout(push_constant) uniform PushConstants {
             layout(offset = 0) mat4 model;
@@ -914,12 +915,12 @@ fn create_shadow_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, 
             gl_Position = light.projection * light.view * world_position;
             world_position_out = world_position.xyz;
         }
-        "#,
-        vert
+        "#
     );
-    let frag = inline_spirv!(
+    let frag = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(fragment)
 
         layout(binding = 0) uniform Light {
             vec3 position;
@@ -937,8 +938,7 @@ fn create_shadow_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, 
             color_out.x = dist;
             color_out.y = dist * dist;
         }
-        "#,
-        frag
+        "#
     );
 
     let info = GraphicPipelineInfo::default();
@@ -956,9 +956,10 @@ fn create_shadow_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, 
 fn create_shadow_pipeline_with_geometry_shader(
     device: &Arc<Device>,
 ) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let vert = inline_spirv!(
+    let vert = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(vertex)
 
         #define TAN_HALF_FOVY 1.0 // tan(45deg)
         #define ASPECT_RATIO 1.0
@@ -1040,12 +1041,12 @@ fn create_shadow_pipeline_with_geometry_shader(
             view_positions_out.positions[4] = view4_pos;
             view_positions_out.positions[5] = view5_pos;
         }
-        "#,
-        vert
+        "#
     );
-    let geom = inline_spirv!(
+    let geom = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(geometry)
 
         #define CLIP mat4(1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5, 1.0)
 
@@ -1111,12 +1112,12 @@ fn create_shadow_pipeline_with_geometry_shader(
             gl_Layer = 5;
             emit(0x64, 5);
         }
-        "#,
-        geom
+        "#
     );
-    let frag = inline_spirv!(
+    let frag = glsl!(
         r#"
         #version 450 core
+        #pragma shader_stage(fragment)
 
         layout(binding = 0) uniform Light {
             vec3 position;
@@ -1134,8 +1135,7 @@ fn create_shadow_pipeline_with_geometry_shader(
             color_out.x = dist;
             color_out.y = dist * dist;
         }
-        "#,
-        frag
+        "#
     );
 
     let info = GraphicPipelineInfo::default();

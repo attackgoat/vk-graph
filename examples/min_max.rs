@@ -1,10 +1,10 @@
 use {
     bytemuck::cast_slice,
     clap::Parser,
-    inline_spirv::inline_spirv,
     log::warn,
     std::{mem::size_of, sync::Arc},
     vk_graph::prelude::*,
+    vk_shader_macros::glsl,
 };
 
 // Min/max sampler reduction is commonly used to create depth buffer mip-maps for use with gpu-based
@@ -179,8 +179,10 @@ fn reduce_depth_image(
             device,
             ComputePipelineInfo::default(),
             Shader::new_compute(
-                inline_spirv!(
-                    r#"#version 460 core
+                glsl!(
+                    r#"
+                    #version 460 core
+                    #pragma shader_stage(compute)
                 
                     layout(binding = 0) uniform sampler2D depth_image;
                     layout(binding = 1) writeonly uniform image2D reduced_image;
@@ -192,8 +194,8 @@ fn reduce_depth_image(
 
                         ivec2 store_xy = ivec2(gl_GlobalInvocationID.xy);
                         imageStore(reduced_image, store_xy, sample_val);
-                    }"#,
-                    comp
+                    }
+                    "#
                 )
                 .as_slice(),
             )

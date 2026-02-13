@@ -1,8 +1,8 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::cast_slice, clap::Parser, inline_spirv::inline_spirv, std::sync::Arc,
-    vk_graph::prelude::*,
+    bytemuck::cast_slice, clap::Parser, std::sync::Arc, vk_graph::prelude::*,
+    vk_shader_macros::glsl,
 };
 
 /// This program demonstrates a single render pass which uses multiple executions to record a chain
@@ -57,9 +57,10 @@ fn main() -> Result<(), DriverError> {
             &device,
             ComputePipelineInfo::default(),
             Shader::new_compute(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(compute)
 
                     layout(binding = 0) uniform sampler2D src_mip;
                     layout(binding = 1, r32f) writeonly uniform image2D dst_mip;
@@ -68,9 +69,7 @@ fn main() -> Result<(), DriverError> {
                         vec4 depth = texture(src_mip, vec2(gl_GlobalInvocationID.xy << 1) + 1.0);
                         imageStore(dst_mip, ivec2(gl_GlobalInvocationID.xy), depth);
                     }
-                    "#,
-                    comp,
-                    vulkan1_2
+                    "#
                 )
                 .as_slice(),
             )

@@ -220,9 +220,10 @@ pub struct ComputePipelineInfo {
     /// Basic usage (GLSL):
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 460 core
     /// #extension GL_EXT_nonuniform_qualifier : require
+    /// #pragma shader_stage(compute)
     ///
     /// layout(set = 0, binding = 0, rgba8) writeonly uniform image2D my_binding[];
     ///
@@ -230,7 +231,7 @@ pub struct ComputePipelineInfo {
     /// {
     ///     // my_binding will have space for 8,192 images by default
     /// }
-    /// # "#, comp);
+    /// # "#);
     /// ```
     #[builder(default = "8192")]
     pub bindless_descriptor_count: u32,

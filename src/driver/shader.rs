@@ -692,8 +692,9 @@ pub struct Shader {
     /// Basic usage (GLSL):
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 460 core
+    /// #pragma shader_stage(compute)
     ///
     /// // Defaults to 6 if not set using Shader specialization_info!
     /// layout(constant_id = 0) const uint MY_COUNT = 6;
@@ -704,7 +705,7 @@ pub struct Shader {
     /// {
     ///     // Code uses MY_COUNT number of my_samplers here
     /// }
-    /// # "#, comp);
+    /// # "#);
     /// ```
     ///
     /// ```no_run

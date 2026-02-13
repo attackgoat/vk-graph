@@ -4,11 +4,11 @@ use {
     bmfont::{BMFont, OrdinateOrientation},
     clap::Parser,
     image::ImageReader,
-    inline_spirv::inline_spirv,
     std::{io::Cursor, sync::Arc, time::Instant},
     vk_graph::prelude::*,
     vk_graph_fx::*,
     vk_graph_window::WindowBuilder,
+    vk_shader_macros::glsl,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -51,10 +51,11 @@ fn main() -> anyhow::Result<()> {
     let smoke_pipeline = Arc::new(ComputePipeline::create(&window.device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
-        inline_spirv!(
+        glsl!(
             r#"
             // Derived from https://www.shadertoy.com/view/Xl2XWz
             #version 460 core
+            #pragma shader_stage(compute)
 
             layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -107,8 +108,6 @@ fn main() -> anyhow::Result<()> {
                 imageStore(image, ivec2(gl_GlobalInvocationID.xy), fragColor);
             }
             "#,
-            comp,
-            vulkan1_2
         )
         .as_slice()).specialization_info(SpecializationInfo {
             data: subgroup_size.to_ne_bytes().to_vec(),

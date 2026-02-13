@@ -3,13 +3,13 @@ mod profile_with_puffin;
 use {
     clap::Parser,
     hassle_rs::compile_hlsl,
-    inline_spirv::inline_spirv,
     std::{
         path::{Path, PathBuf},
         sync::Arc,
     },
     vk_graph::prelude::*,
     vk_graph_window::WindowBuilder,
+    vk_shader_macros::glsl,
 };
 
 /// Displays a sequence of image samplers.
@@ -89,32 +89,36 @@ fn create_pipeline(
     let mut frag_shader = match (args.hlsl, args.separate) {
         (true, true) => {
             // HLSL separate image sampler
-            Shader::new_fragment(
-                inline_spirv!(
-                    r#"
-                struct FullscreenVertexOutput
-                {
-                    float4 position : SV_Position;
-                    [[vk::location(0)]] float2 uv : TEXCOORD0;
-                };
+            // Shader::new_fragment(
+            //     glsl!(
+            //         kind: frag,
 
-                [[vk::binding(0, 0)]] Texture2D screenTexture : register(t0);
-                [[vk::binding(1, 0)]] SamplerState textureSampler : register(s0);
+            //         r#"
+            //     struct FullscreenVertexOutput
+            //     {
+            //         float4 position : SV_Position;
+            //         [[vk::location(0)]] float2 uv : TEXCOORD0;
+            //     };
 
-                float4 main(FullscreenVertexOutput input)
-                    : SV_Target
-                {
-                    return screenTexture.Sample(textureSampler, input.uv);
-                }
-                "#,
-                    frag,
-                    hlsl
-                )
-                .as_slice(),
-            )
+            //     [[vk::binding(0, 0)]] Texture2D screenTexture : register(t0);
+            //     [[vk::binding(1, 0)]] SamplerState textureSampler : register(s0);
+
+            //     float4 main(FullscreenVertexOutput input)
+            //         : SV_Target
+            //     {
+            //         return screenTexture.Sample(textureSampler, input.uv);
+            //     }
+            //     "#,
+            //         frag,
+            //         hlsl
+            //     )
+            //     .as_slice(),
+            // )
+
+            todo!()
         }
         (true, false) => {
-            // HLSL combined image sampler: inline_spirv uses shaderc which does not support this, so
+            // HLSL combined image sampler: include_glsl uses shaderc which does not support this, so
             // we are using hassle_rs which uses dxc. You must follow the instructions listed here to
             // use hassle_rs:
             // See: https://github.com/Traverse-Research/hassle-rs
@@ -147,20 +151,20 @@ fn create_pipeline(
         (false, true) => {
             // GLSL separate image sampler
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
-                #version 460 core
+                    #version 460 core
+                    #pragma shader_stage(fragment)
 
-                layout(binding = 0) uniform texture2D image;
-                layout(binding = 1) uniform sampler image_sampler;
-                layout(location = 0) in vec2 vk_TexCoord;
-                layout(location = 0) out vec4 vk_Color;
+                    layout(binding = 0) uniform texture2D image;
+                    layout(binding = 1) uniform sampler image_sampler;
+                    layout(location = 0) in vec2 vk_TexCoord;
+                    layout(location = 0) out vec4 vk_Color;
 
-                void main() {
-                    vk_Color = texture(sampler2D(image, image_sampler), vk_TexCoord);
-                }
-                "#,
-                    frag
+                    void main() {
+                        vk_Color = texture(sampler2D(image, image_sampler), vk_TexCoord);
+                    }
+                    "#
                 )
                 .as_slice(),
             )
@@ -168,9 +172,10 @@ fn create_pipeline(
         (false, false) => {
             // GLSL combined image sampler
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
-                #version 460 core
+                    #version 460 core
+                    #pragma shader_stage(fragment)
 
                     layout(binding = 0) uniform sampler2D image;
                     layout(location = 0) in vec2 vk_TexCoord;
@@ -179,8 +184,7 @@ fn create_pipeline(
                     void main() {
                         vk_Color = texture(image, vk_TexCoord);
                     }
-                "#,
-                    frag
+                    "#
                 )
                 .as_slice(),
             )
@@ -197,9 +201,10 @@ fn create_pipeline(
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     const vec2[3] VERTICES = {
                         vec2(-1, -1),
@@ -213,8 +218,7 @@ fn create_pipeline(
                         gl_Position = vec4(VERTICES[gl_VertexIndex], 0, 1);
                         vk_TexCoord = 0.75 * gl_Position.xy + vec2(0.5);
                     }
-                    "#,
-                    vert
+                    "#
                 )
                 .as_slice(),
             ),

@@ -1,6 +1,6 @@
 use {
-    super::BitmapFont, anyhow::Context, bmfont::BMFont, inline_spirv::include_spirv, log::info,
-    std::sync::Arc, vk_graph::prelude::*,
+    super::BitmapFont, anyhow::Context, bmfont::BMFont, log::info, std::sync::Arc,
+    vk_graph::prelude::*, vk_shader_macros::include_glsl,
 };
 
 #[cfg(debug_assertions)]
@@ -42,15 +42,14 @@ impl ImageLoader {
                 device,
                 ComputePipelineInfo::default(),
                 Shader::new_compute(
-                    include_spirv!("res/shader/compute/decode_bitmap_r_rg.comp", comp).as_slice(),
+                    include_glsl!("res/shader/compute/decode_bitmap_r_rg.comp").as_slice(),
                 ),
             )?),
             decode_rgb_rgba: Arc::new(ComputePipeline::create(
                 device,
                 ComputePipelineInfo::default(),
                 Shader::new_compute(
-                    include_spirv!("res/shader/compute/decode_bitmap_rgb_rgba.comp", comp)
-                        .as_slice(),
+                    include_glsl!("res/shader/compute/decode_bitmap_rgb_rgba.comp").as_slice(),
                 ),
             )?),
             device: Arc::clone(device),

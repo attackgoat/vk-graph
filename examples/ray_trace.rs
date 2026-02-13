@@ -3,20 +3,22 @@ mod profile_with_puffin;
 use {
     bytemuck::cast_slice,
     clap::Parser,
-    inline_spirv::inline_spirv,
     log::warn,
     std::{io::BufReader, mem::size_of, sync::Arc},
     tobj::{GPU_LOAD_OPTIONS, load_mtl_buf, load_obj_buf},
     vk_graph::prelude::*,
     vk_graph_window::WindowBuilder,
+    vk_shader_macros::glsl,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };
 
-static SHADER_RAY_GEN: &[u32] = inline_spirv!(
+static SHADER_RAY_GEN: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : require
+    #pragma shader_stage(raygen)
 
     #define M_PI 3.1415926535897932384626433832795
 
@@ -83,17 +85,17 @@ static SHADER_RAY_GEN: &[u32] = inline_spirv!(
 
         imageStore(image, ivec2(gl_LaunchIDEXT.xy), color);
     }
-    "#,
-    rgen,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
+static SHADER_CLOSEST_HIT: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : require
     #extension GL_EXT_nonuniform_qualifier : enable
+    #pragma shader_stage(closest)
 
     #define M_PI 3.1415926535897932384626433832795
 
@@ -281,16 +283,16 @@ static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
 
         payload.rayDepth += 1;
     }
-    "#,
-    rchit,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_MISS: &[u32] = inline_spirv!(
+static SHADER_MISS: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : require
+    #pragma shader_stage(miss)
 
     layout(location = 0) rayPayloadInEXT Payload {
         vec3 rayOrigin;
@@ -307,25 +309,23 @@ static SHADER_MISS: &[u32] = inline_spirv!(
     void main() {
         payload.rayActive = 0;
     }
-    "#,
-    rmiss,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_SHADOW_MISS: &[u32] = inline_spirv!(
+static SHADER_SHADOW_MISS: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : require
+    #pragma shader_stage(miss)
 
     layout(location = 1) rayPayloadInEXT bool isShadow;
 
     void main() {
         isShadow = false;
     }
-    "#,
-    rmiss,
-    vulkan1_2
+    "#
 )
 .as_slice();
 

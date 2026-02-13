@@ -4,7 +4,6 @@ use {
     bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3, vec4},
-    inline_spirv::inline_spirv,
     log::info,
     meshopt::remap::{generate_vertex_remap, remap_index_buffer, remap_vertex_buffer},
     std::{
@@ -17,6 +16,7 @@ use {
     tobj::{GPU_LOAD_OPTIONS, load_obj},
     vk_graph::prelude::*,
     vk_graph_window::WindowBuilder,
+    vk_shader_macros::glsl,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -227,9 +227,10 @@ fn create_blas(
 }
 
 fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let vert = inline_spirv!(
+    let vert = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(vertex)
 
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec3 inNormal;
@@ -257,15 +258,15 @@ fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverE
             outLightVec = normalize(ubo.lightPos - inPos);
             outViewVec = -pos.xyz;
         }
-        "#,
-        vert,
-        vulkan1_2
+        "#
     );
-    let frag = inline_spirv!(
+    let frag = glsl!(
+        target: vulkan1_2,
         r#"
         #version 460 core
         #extension GL_EXT_ray_tracing : enable
         #extension GL_EXT_ray_query : enable
+        #pragma shader_stage(fragment)
 
         layout (binding = 1) uniform accelerationStructureEXT topLevelAS;
 
@@ -299,9 +300,7 @@ fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverE
                 outFragColor *= 0.1;
             }
         }
-        "#,
-        frag,
-        vulkan1_2
+        "#
     );
 
     Ok(Arc::new(GraphicPipeline::create(

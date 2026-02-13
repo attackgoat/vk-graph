@@ -3,10 +3,10 @@
 // use.
 
 use {
-    inline_spirv::include_spirv,
     log::trace,
     std::{collections::HashMap, sync::Arc},
     vk_graph::prelude::*,
+    vk_shader_macros::include_glsl,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -485,295 +485,259 @@ impl TransitionPipeline {
                     ComputePipelineInfo::default(),
                     Shader::new_compute(match transition_ty {
                         TransitionType::Angular => {
-                            include_spirv!("res/shader/transition/angular.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/angular.comp").as_slice()
                         }
                         TransitionType::Bounce => {
-                            include_spirv!("res/shader/transition/bounce.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/bounce.comp").as_slice()
                         }
                         TransitionType::BowTieHorizontal => {
-                            include_spirv!("res/shader/transition/bow_tie_horizontal.comp", comp)
+                            include_glsl!("res/shader/transition/bow_tie_horizontal.comp")
                                 .as_slice()
                         }
                         TransitionType::BowTieVertical => {
-                            include_spirv!("res/shader/transition/bow_tie_vertical.comp", comp)
+                            include_glsl!("res/shader/transition/bow_tie_vertical.comp").as_slice()
+                        }
+                        TransitionType::BowTieWithParameter => {
+                            include_glsl!("res/shader/transition/bow_tie_with_parameter.comp",)
                                 .as_slice()
                         }
-                        TransitionType::BowTieWithParameter => include_spirv!(
-                            "res/shader/transition/bow_tie_with_parameter.comp",
-                            comp
-                        )
-                        .as_slice(),
                         TransitionType::Burn => {
-                            include_spirv!("res/shader/transition/burn.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/burn.comp").as_slice()
                         }
-                        TransitionType::ButterflyWaveScrawler => include_spirv!(
-                            "res/shader/transition/butterfly_wave_scrawler.comp",
-                            comp
-                        )
-                        .as_slice(),
-                        TransitionType::CannabisLeaf => {
-                            include_spirv!("res/shader/transition/cannabis_leaf.comp", comp)
+                        TransitionType::ButterflyWaveScrawler => {
+                            include_glsl!("res/shader/transition/butterfly_wave_scrawler.comp",)
                                 .as_slice()
+                        }
+                        TransitionType::CannabisLeaf => {
+                            include_glsl!("res/shader/transition/cannabis_leaf.comp").as_slice()
                         }
                         TransitionType::Circle => {
-                            include_spirv!("res/shader/transition/circle.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/circle.comp").as_slice()
                         }
                         TransitionType::CircleCrop => {
-                            include_spirv!("res/shader/transition/circle_crop.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/circle_crop.comp").as_slice()
                         }
                         TransitionType::CircleOpen => {
-                            include_spirv!("res/shader/transition/circle_open.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/circle_open.comp").as_slice()
                         }
                         TransitionType::ColorDistance => {
-                            include_spirv!("res/shader/transition/color_distance.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/color_distance.comp").as_slice()
                         }
                         TransitionType::ColorPhase => {
-                            include_spirv!("res/shader/transition/color_phase.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/color_phase.comp").as_slice()
                         }
                         TransitionType::CoordFromIn => {
-                            include_spirv!("res/shader/transition/coord_from_in.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/coord_from_in.comp").as_slice()
                         }
                         TransitionType::CrazyParametricFun => {
-                            include_spirv!("res/shader/transition/crazy_parametric_fun.comp", comp)
+                            include_glsl!("res/shader/transition/crazy_parametric_fun.comp")
                                 .as_slice()
                         }
                         TransitionType::Crosshatch => {
-                            include_spirv!("res/shader/transition/crosshatch.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/crosshatch.comp").as_slice()
                         }
                         TransitionType::CrossWarp => {
-                            include_spirv!("res/shader/transition/cross_warp.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/cross_warp.comp").as_slice()
                         }
                         TransitionType::CrossZoom => {
-                            include_spirv!("res/shader/transition/cross_zoom.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/cross_zoom.comp").as_slice()
                         }
                         TransitionType::Cube => {
-                            include_spirv!("res/shader/transition/cube.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/cube.comp").as_slice()
                         }
                         TransitionType::Directional => {
-                            include_spirv!("res/shader/transition/directional.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/directional.comp").as_slice()
                         }
                         TransitionType::DirectionalEasing => {
-                            include_spirv!("res/shader/transition/directional_easing.comp", comp)
+                            include_glsl!("res/shader/transition/directional_easing.comp")
                                 .as_slice()
                         }
                         TransitionType::DirectionalWarp => {
-                            include_spirv!("res/shader/transition/directional_warp.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/directional_warp.comp").as_slice()
                         }
                         TransitionType::DirectionalWipe => {
-                            include_spirv!("res/shader/transition/directional_wipe.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/directional_wipe.comp").as_slice()
                         }
                         TransitionType::Displacement => {
-                            include_spirv!("res/shader/transition/displacement.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/displacement.comp").as_slice()
                         }
                         TransitionType::DoomScreen => {
-                            include_spirv!("res/shader/transition/doom_screen.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/doom_screen.comp").as_slice()
                         }
                         TransitionType::Doorway => {
-                            include_spirv!("res/shader/transition/doorway.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/doorway.comp").as_slice()
                         }
                         TransitionType::Dreamy => {
-                            include_spirv!("res/shader/transition/dreamy.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/dreamy.comp").as_slice()
                         }
                         TransitionType::DreamyZoom => {
-                            include_spirv!("res/shader/transition/dreamy_zoom.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/dreamy_zoom.comp").as_slice()
                         }
                         TransitionType::FadeColor => {
-                            include_spirv!("res/shader/transition/fade_color.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/fade_color.comp").as_slice()
                         }
                         TransitionType::Fade => {
-                            include_spirv!("res/shader/transition/fade.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/fade.comp").as_slice()
                         }
                         TransitionType::FadeGrayscale => {
-                            include_spirv!("res/shader/transition/fade_grayscale.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/fade_grayscale.comp").as_slice()
                         }
                         TransitionType::FilmBurn => {
-                            include_spirv!("res/shader/transition/film_burn.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/film_burn.comp").as_slice()
                         }
                         TransitionType::Flyeye => {
-                            include_spirv!("res/shader/transition/flyeye.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/flyeye.comp").as_slice()
                         }
                         TransitionType::GlitchDisplace => {
-                            include_spirv!("res/shader/transition/glitch_displace.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/glitch_displace.comp").as_slice()
                         }
                         TransitionType::GlitchMemories => {
-                            include_spirv!("res/shader/transition/glitch_memories.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/glitch_memories.comp").as_slice()
                         }
                         TransitionType::GridFlip => {
-                            include_spirv!("res/shader/transition/grid_flip.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/grid_flip.comp").as_slice()
                         }
                         TransitionType::Heart => {
-                            include_spirv!("res/shader/transition/heart.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/heart.comp").as_slice()
                         }
                         TransitionType::Hexagonalize => {
-                            include_spirv!("res/shader/transition/hexagonalize.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/hexagonalize.comp").as_slice()
                         }
                         TransitionType::InvertedPageCurl => {
-                            include_spirv!("res/shader/transition/inverted_page_curl.comp", comp)
+                            include_glsl!("res/shader/transition/inverted_page_curl.comp")
                                 .as_slice()
                         }
                         TransitionType::Kaleidoscope => {
-                            include_spirv!("res/shader/transition/kaleidoscope.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/kaleidoscope.comp").as_slice()
                         }
                         TransitionType::LeftRight => {
-                            include_spirv!("res/shader/transition/left_right.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/left_right.comp").as_slice()
                         }
                         TransitionType::LinearBlur => {
-                            include_spirv!("res/shader/transition/linear_blur.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/linear_blur.comp").as_slice()
                         }
                         TransitionType::Luma => {
-                            include_spirv!("res/shader/transition/luma.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/luma.comp").as_slice()
                         }
                         TransitionType::LuminanceMelt => {
-                            include_spirv!("res/shader/transition/luminance_melt.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/luminance_melt.comp").as_slice()
                         }
                         TransitionType::Morph => {
-                            include_spirv!("res/shader/transition/morph.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/morph.comp").as_slice()
                         }
                         TransitionType::Mosaic => {
-                            include_spirv!("res/shader/transition/mosaic.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/mosaic.comp").as_slice()
                         }
                         TransitionType::Multiply => {
-                            include_spirv!("res/shader/transition/multiply.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/multiply.comp").as_slice()
                         }
                         TransitionType::Overexposure => {
-                            include_spirv!("res/shader/transition/overexposure.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/overexposure.comp").as_slice()
                         }
                         TransitionType::Perlin => {
-                            include_spirv!("res/shader/transition/perlin.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/perlin.comp").as_slice()
                         }
                         TransitionType::Pinwheel => {
-                            include_spirv!("res/shader/transition/pinwheel.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/pinwheel.comp").as_slice()
                         }
                         TransitionType::Pixelize => {
-                            include_spirv!("res/shader/transition/pixelize.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/pixelize.comp").as_slice()
                         }
                         TransitionType::PolarFunction => {
-                            include_spirv!("res/shader/transition/polar_function.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/polar_function.comp").as_slice()
                         }
                         TransitionType::PolkaDotsCurtain => {
-                            include_spirv!("res/shader/transition/polka_dots_curtain.comp", comp)
+                            include_glsl!("res/shader/transition/polka_dots_curtain.comp")
                                 .as_slice()
                         }
                         TransitionType::PowerKaleido => {
-                            include_spirv!("res/shader/transition/power_kaleido.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/power_kaleido.comp").as_slice()
                         }
                         TransitionType::Radial => {
-                            include_spirv!("res/shader/transition/radial.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/radial.comp").as_slice()
                         }
                         TransitionType::RandomNoisex => {
-                            include_spirv!("res/shader/transition/random_noisex.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/random_noisex.comp").as_slice()
                         }
                         TransitionType::RandomSquares => {
-                            include_spirv!("res/shader/transition/random_squares.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/random_squares.comp").as_slice()
                         }
                         TransitionType::Ripple => {
-                            include_spirv!("res/shader/transition/ripple.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/ripple.comp").as_slice()
                         }
                         TransitionType::Rotate => {
-                            include_spirv!("res/shader/transition/rotate.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/rotate.comp").as_slice()
                         }
                         TransitionType::RotateScale => {
-                            include_spirv!("res/shader/transition/rotate_scale.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/rotate_scale.comp").as_slice()
                         }
                         TransitionType::ScaleIn => {
-                            include_spirv!("res/shader/transition/scale_in.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/scale_in.comp").as_slice()
                         }
                         TransitionType::SimpleZoom => {
-                            include_spirv!("res/shader/transition/simple_zoom.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/simple_zoom.comp").as_slice()
                         }
                         TransitionType::SquaresWire => {
-                            include_spirv!("res/shader/transition/squares_wire.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/squares_wire.comp").as_slice()
                         }
                         TransitionType::Squeeze => {
-                            include_spirv!("res/shader/transition/squeeze.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/squeeze.comp").as_slice()
                         }
                         TransitionType::StereoViewer => {
-                            include_spirv!("res/shader/transition/stereo_viewer.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/stereo_viewer.comp").as_slice()
                         }
                         TransitionType::Swap => {
-                            include_spirv!("res/shader/transition/swap.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/swap.comp").as_slice()
                         }
                         TransitionType::Swirl => {
-                            include_spirv!("res/shader/transition/swirl.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/swirl.comp").as_slice()
                         }
                         TransitionType::TangentMotionBlur => {
-                            include_spirv!("res/shader/transition/tangent_motion_blur.comp", comp)
+                            include_glsl!("res/shader/transition/tangent_motion_blur.comp")
                                 .as_slice()
                         }
                         TransitionType::TopBottom => {
-                            include_spirv!("res/shader/transition/top_bottom.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/top_bottom.comp").as_slice()
                         }
                         TransitionType::TvStatic => {
-                            include_spirv!("res/shader/transition/tv_static.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/tv_static.comp").as_slice()
                         }
                         TransitionType::UndulatingBurnOut => {
-                            include_spirv!("res/shader/transition/undulating_burn_out.comp", comp)
+                            include_glsl!("res/shader/transition/undulating_burn_out.comp")
                                 .as_slice()
                         }
                         TransitionType::WaterDrop => {
-                            include_spirv!("res/shader/transition/water_drop.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/water_drop.comp").as_slice()
                         }
                         TransitionType::Wind => {
-                            include_spirv!("res/shader/transition/wind.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/wind.comp").as_slice()
                         }
                         TransitionType::WindowBlinds => {
-                            include_spirv!("res/shader/transition/window_blinds.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/window_blinds.comp").as_slice()
                         }
                         TransitionType::WindowSlice => {
-                            include_spirv!("res/shader/transition/window_slice.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/window_slice.comp").as_slice()
                         }
                         TransitionType::WipeDown => {
-                            include_spirv!("res/shader/transition/wipe_down.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/wipe_down.comp").as_slice()
                         }
                         TransitionType::WipeLeft => {
-                            include_spirv!("res/shader/transition/wipe_left.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/wipe_left.comp").as_slice()
                         }
                         TransitionType::WipeRight => {
-                            include_spirv!("res/shader/transition/wipe_right.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/wipe_right.comp").as_slice()
                         }
                         TransitionType::WipeUp => {
-                            include_spirv!("res/shader/transition/wipe_up.comp", comp).as_slice()
+                            include_glsl!("res/shader/transition/wipe_up.comp").as_slice()
                         }
                         TransitionType::ZoomInCircles => {
-                            include_spirv!("res/shader/transition/zoom_in_circles.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/zoom_in_circles.comp").as_slice()
                         }
                         TransitionType::ZoomLeftWipe => {
-                            include_spirv!("res/shader/transition/zoom_left_wipe.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/zoom_left_wipe.comp").as_slice()
                         }
                         TransitionType::ZoomRightWipe => {
-                            include_spirv!("res/shader/transition/zoom_right_wipe.comp", comp)
-                                .as_slice()
+                            include_glsl!("res/shader/transition/zoom_right_wipe.comp").as_slice()
                         }
                     }),
                 )

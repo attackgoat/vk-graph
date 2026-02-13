@@ -1,9 +1,9 @@
 use {
     bytemuck::cast_slice,
     glam::{vec3, Mat4},
-    inline_spirv::include_spirv,
     std::sync::Arc,
     vk_graph::prelude::*,
+    vk_shader_macros::include_glsl,
 };
 
 pub struct ComputePresenter([Arc<ComputePipeline>; 2]);
@@ -13,16 +13,12 @@ impl ComputePresenter {
         let pipeline1 = Arc::new(ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
-            Shader::new_compute(
-                include_spirv!("res/shader/compute/present1.comp", comp).as_slice(),
-            ),
+            Shader::new_compute(include_glsl!("res/shader/compute/present1.comp").as_slice()),
         )?);
         let pipeline2 = Arc::new(ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
-            Shader::new_compute(
-                include_spirv!("res/shader/compute/present2.comp", comp).as_slice(),
-            ),
+            Shader::new_compute(include_glsl!("res/shader/compute/present2.comp").as_slice()),
         )?);
 
         Ok(Self([pipeline1, pipeline2]))
@@ -88,11 +84,9 @@ impl GraphicPresenter {
                 device,
                 GraphicPipelineInfo::default(),
                 [
-                    Shader::new_vertex(
-                        include_spirv!("res/shader/graphic/present.vert", vert).as_slice(),
-                    ),
+                    Shader::new_vertex(include_glsl!("res/shader/graphic/present.vert").as_slice()),
                     Shader::new_fragment(
-                        include_spirv!("res/shader/graphic/present.frag", frag).as_slice(),
+                        include_glsl!("res/shader/graphic/present.frag").as_slice(),
                     ),
                 ],
             )?),

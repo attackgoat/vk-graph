@@ -5,10 +5,10 @@ use {
     clap::Parser,
     core::f32,
     glam::{Vec4, vec3},
-    inline_spirv::inline_spirv,
     std::sync::Arc,
     vk_graph::prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
+    vk_shader_macros::glsl,
 };
 
 // TODO: Add texelFetch option
@@ -96,9 +96,10 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     const vec2 POSITION[] = {
                         vec2(-1, -1),
@@ -116,15 +117,15 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
                         ab = max(position.y, 0);
                         gl_Position = vec4(position, 0, 1);
                     }
-                    "#,
-                    vert
+                    "#
                 )
                 .as_slice(),
             ),
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(fragment)
 
                     layout(push_constant) uniform PushConstants {
                         layout(offset = 0) vec3 a;
@@ -137,8 +138,7 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
                     void main() {
                         color = vec4(mix(a, b, ab), 1);
                     }
-                    "#,
-                    frag
+                    "#
                 )
                 .as_slice(),
             ),
@@ -202,9 +202,10 @@ fn splat(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     const vec2 POSITION[] = {
                         vec2(-1, -1),
@@ -229,15 +230,15 @@ fn splat(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
                         texcoord = TEXCOORD[gl_VertexIndex];
                         gl_Position = vec4(POSITION[gl_VertexIndex], 0, 1);
                     }
-                    "#,
-                    vert
+                    "#
                 )
                 .as_slice(),
             ),
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(fragment)
 
                     layout(binding = 0) uniform sampler2D image;
 
@@ -247,8 +248,7 @@ fn splat(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
                     void main() {
                         color = texture(image, texcoord);
                     }
-                    "#,
-                    frag
+                    "#
                 )
                 .as_slice(),
             )

@@ -649,17 +649,17 @@ pub struct GraphicPipelineInfo {
     /// Basic usage (GLSL):
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 460 core
     /// #extension GL_EXT_nonuniform_qualifier : require
+    /// #pragma shader_stage(fragment)
     ///
     /// layout(set = 0, binding = 0) uniform sampler2D my_binding[];
     ///
-    /// void main()
-    /// {
+    /// void main() {
     ///     // my_binding will have space for 8,192 images by default
     /// }
-    /// # "#, frag);
+    /// # "#);
     /// ```
     #[builder(default = "8192")]
     pub bindless_descriptor_count: u32,

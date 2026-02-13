@@ -3,9 +3,9 @@ use {
     bmfont::BMFont,
     bytemuck::{cast, cast_slice},
     glam::{vec3, Mat4},
-    inline_spirv::include_spirv,
     std::sync::Arc,
     vk_graph::prelude::*,
+    vk_shader_macros::include_glsl,
 };
 
 type Color = [u8; 4];
@@ -42,20 +42,16 @@ impl BitmapFont {
                 device,
                 GraphicPipelineInfoBuilder::default().blend(BlendMode::ALPHA),
                 [
-                    Shader::new_vertex(
-                        include_spirv!("res/shader/graphic/font.vert", vert).as_slice(),
-                    ),
-                    Shader::new_fragment(
-                        include_spirv!("res/shader/graphic/font.frag", frag).as_slice(),
-                    )
-                    .specialization_info(SpecializationInfo::new(
-                        [vk::SpecializationMapEntry {
-                            constant_id: 0,
-                            offset: 0,
-                            size: 4,
-                        }],
-                        num_pages.to_ne_bytes(),
-                    )),
+                    Shader::new_vertex(include_glsl!("res/shader/graphic/font.vert").as_slice()),
+                    Shader::new_fragment(include_glsl!("res/shader/graphic/font.frag").as_slice())
+                        .specialization_info(SpecializationInfo::new(
+                            [vk::SpecializationMapEntry {
+                                constant_id: 0,
+                                offset: 0,
+                                size: 4,
+                            }],
+                            num_pages.to_ne_bytes(),
+                        )),
                 ],
             )
             .context("Unable to create bitmap font pipeline")?,

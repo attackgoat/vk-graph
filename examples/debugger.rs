@@ -131,17 +131,17 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
                 frame.device,
                 ComputePipelineInfo::default(),
                 Shader::new_compute(
-                    inline_spirv::inline_spirv!(
+                    vk_shader_macros::glsl!(
                         r#"
                         #version 460 core
+                        #pragma shader_stage(compute)
 
                         layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
                         layout(set = 0, binding = 42, rgba8) restrict readonly uniform image2D an_image;
 
                         void main() {/* TODO: 📈...💰! */}
-                        "#,
-                        comp
+                        "#
                     )
                     .as_slice(),
                 ),

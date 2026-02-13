@@ -410,17 +410,17 @@ pub struct RayTracePipelineInfo {
     /// Basic usage (GLSL):
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(target: vulkan1_2, r#"
     /// #version 460 core
     /// #extension GL_EXT_nonuniform_qualifier : require
+    /// #pragma shader_stage(closest)
     ///
     /// layout(set = 0, binding = 0, rgba8) readonly uniform image2D my_binding[];
     ///
-    /// void main()
-    /// {
+    /// void main() {
     ///     // my_binding will have space for 8,192 images by default
     /// }
-    /// # "#, rchit, vulkan1_2);
+    /// # "#);
     /// ```
     #[builder(default = "8192")]
     pub bindless_descriptor_count: u32,

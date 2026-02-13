@@ -51,7 +51,7 @@ pub struct HotShader {
     /// Basic usage (GLSL):
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(kind: comp, r#"
     /// #version 460 core
     ///
     /// // Defaults to 6 if not set using HotShader specialization_info!
@@ -63,7 +63,7 @@ pub struct HotShader {
     /// {
     ///     // Code uses MY_COUNT number of my_samplers here
     /// }
-    /// # "#, comp);
+    /// # "#);
     /// ```
     ///
     /// ```no_run

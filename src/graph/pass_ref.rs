@@ -1196,18 +1196,18 @@ impl Compute<'_> {
     /// Basic usage:
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 450
+    /// #pragma shader_stage(compute)
     ///
     /// layout(set = 0, binding = 0, std430) restrict writeonly buffer MyBufer {
     ///     uint my_buf[];
     /// };
     ///
-    /// void main()
-    /// {
+    /// void main() {
     ///     // TODO
     /// }
-    /// # "#, comp);
+    /// # "#);
     /// ```
     ///
     /// ```no_run
@@ -1378,8 +1378,9 @@ impl Compute<'_> {
     /// Basic usage:
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 450
+    /// #pragma shader_stage(compute)
     ///
     /// layout(push_constant) uniform PushConstants {
     ///     layout(offset = 0) uint the_answer;
@@ -1389,7 +1390,7 @@ impl Compute<'_> {
     /// {
     ///     // TODO: Add bindings to read/write things!
     /// }
-    /// # "#, comp);
+    /// # "#);
     /// ```
     ///
     /// ```no_run
@@ -1439,19 +1440,19 @@ impl Compute<'_> {
     /// Basic usage:
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 450
+    /// #pragma shader_stage(compute)
     ///
     /// layout(push_constant) uniform PushConstants {
     ///     layout(offset = 0) uint some_val1;
     ///     layout(offset = 4) uint some_val2;
     /// } push_constants;
     ///
-    /// void main()
-    /// {
+    /// void main() {
     ///     // TODO: Add bindings to read/write things!
     /// }
-    /// # "#, comp);
+    /// # "#);
     /// ```
     ///
     /// ```no_run
@@ -2086,18 +2087,18 @@ impl Draw<'_> {
     /// Basic usage:
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 450
+    /// #pragma shader_stage(compute)
     ///
     /// layout(push_constant) uniform PushConstants {
     ///     layout(offset = 0) uint the_answer;
     /// } push_constants;
     ///
-    /// void main()
-    /// {
+    /// void main() {
     ///     // TODO: Add code!
     /// }
-    /// # "#, vert);
+    /// # "#);
     /// ```
     ///
     /// ```no_run
@@ -2154,19 +2155,19 @@ impl Draw<'_> {
     /// Basic usage:
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 450
+    /// #pragma shader_stage(compute)
     ///
     /// layout(push_constant) uniform PushConstants {
     ///     layout(offset = 0) uint some_val1;
     ///     layout(offset = 4) uint some_val2;
     /// } push_constants;
     ///
-    /// void main()
-    /// {
+    /// void main() {
     ///     // TODO: Add code!
     /// }
-    /// # "#, vert);
+    /// # "#);
     /// ```
     ///
     /// ```no_run
@@ -4736,18 +4737,18 @@ impl RayTrace<'_> {
     /// Basic usage:
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(target: vulkan1_2, r#"
     /// #version 460
+    /// #pragma shader_stage(closest)
     ///
     /// layout(push_constant) uniform PushConstants {
     ///     layout(offset = 0) uint some_val;
     /// } push_constants;
     ///
-    /// void main()
-    /// {
+    /// void main() {
     ///     // TODO: Add bindings to write things!
     /// }
-    /// # "#, rchit, vulkan1_2);
+    /// # "#);
     /// ```
     ///
     /// ```no_run
@@ -4805,8 +4806,9 @@ impl RayTrace<'_> {
     /// Basic usage:
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(target: vulkan1_2, r#"
     /// #version 460
+    /// #pragma shader_stage(closest)
     ///
     /// layout(push_constant) uniform PushConstants {
     ///     layout(offset = 0) uint some_val1;
@@ -4817,7 +4819,7 @@ impl RayTrace<'_> {
     /// {
     ///     // TODO: Add bindings to write things!
     /// }
-    /// # "#, rchit, vulkan1_2);
+    /// # "#);
     /// ```
     ///
     /// ```no_run

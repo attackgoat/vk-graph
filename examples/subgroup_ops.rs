@@ -1,9 +1,9 @@
 use {
     bytemuck::cast_slice,
     clap::Parser,
-    inline_spirv::inline_spirv,
     std::{mem::size_of, sync::Arc, time::Instant},
     vk_graph::prelude::*,
+    vk_shader_macros::glsl,
 };
 
 /// Advanced example demonstrating subgroup operations (arithmetic and ballot).
@@ -155,11 +155,13 @@ fn create_reduce_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
         device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
-            inline_spirv!(
+            glsl!(
+                target: vulkan1_2,
                 r#"
                 #version 460 core
                 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
                 #extension GL_KHR_shader_subgroup_arithmetic : require
+                #pragma shader_stage(compute)
 
                 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -178,9 +180,7 @@ fn create_reduce_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
                         workgroup_buf[gl_WorkGroupID.x] = sum;
                     }
                 }
-                "#,
-                comp,
-                vulkan1_2,
+                "#
             )
             .as_slice(),
         )
@@ -207,11 +207,13 @@ fn create_exclusive_sum_pipeline(
         ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
-            Shader::new_compute(inline_spirv!(
+            Shader::new_compute(glsl!(
+                target: vulkan1_2,
                 r#"
                 #version 460 core
                 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
                 #extension GL_KHR_shader_subgroup_arithmetic : require
+                #pragma shader_stage(compute)
 
                 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -242,9 +244,7 @@ fn create_exclusive_sum_pipeline(
 
                     output_buf[gl_GlobalInvocationID.x] = subgroup_sum + workgroup_sum;
                 }
-                "#,
-                comp,
-                vulkan1_2
+                "#
         ).as_slice())
             .specialization_info(SpecializationInfo {
                 data: device.physical_device.properties_v1_1.subgroup_size.to_ne_bytes().to_vec(),

@@ -10,5 +10,5 @@ readme = "README.md"
 bytemuck = "1.24"
 imgui = "0.12"
 imgui-winit-support = "0.13"
-inline-spirv = "0.2"
 vk-graph = { path = "../.." }
+vk-shader-macros = "0.2"

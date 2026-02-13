@@ -23,12 +23,12 @@ Also helpful to run with valgrind:
 */
 use {
     clap::Parser,
-    inline_spirv::inline_spirv,
     log::debug,
     rand::{Rng, rng, seq::IndexedRandom},
     std::{mem::size_of, sync::Arc},
     vk_graph::prelude::*,
     vk_graph_window::{FrameContext, WindowBuilder, WindowError},
+    vk_shader_macros::glsl,
 };
 
 type Operation = fn(&mut FrameContext, &mut HashPool);
@@ -311,9 +311,10 @@ fn record_compute_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         frame.device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(compute)
 
                 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -327,8 +328,7 @@ fn record_compute_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
 
                 void main() {
                 }
-                "#,
-                comp
+                "#
             )
             .as_slice(),
         )
@@ -393,10 +393,11 @@ fn record_compute_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         frame.device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
                 #extension GL_EXT_nonuniform_qualifier : require
+                #pragma shader_stage(compute)
 
                 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -415,8 +416,7 @@ fn record_compute_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
                         );
                     }
                 }
-                "#,
-                comp
+                "#
             )
             .as_slice(),
         ),
@@ -468,14 +468,14 @@ fn record_compute_no_op(frame: &mut FrameContext, _: &mut HashPool) {
         frame.device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(compute)
 
                 void main() {
                 }
-                "#,
-                comp
+                "#
             )
             .as_slice(),
         ),
@@ -493,20 +493,21 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             void main() {
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
             #extension GL_EXT_nonuniform_qualifier : require
+            #pragma shader_stage(fragment)
 
             layout(push_constant) uniform PushConstants {
                 layout(offset = 0) uint count;
@@ -524,8 +525,7 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
                     );
                 }
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -590,27 +590,27 @@ fn record_graphic_load_store(frame: &mut FrameContext, _: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             void main() {
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color_out;
 
             void main() {
                 color_out = vec4(0);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -697,9 +697,10 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfoBuilder::default().samples(sample_count),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             const vec2 UV[3] = {
                 vec2(-1, -1),
@@ -710,21 +711,20 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             void main() {
                 gl_Position = vec4(UV[gl_VertexIndex], 0, 1);
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color_out;
 
             void main() {
                 color_out = vec4(1);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -824,23 +824,26 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color0;
+
                 void main() {
                     color0 = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -854,23 +857,26 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color0;
+
                 void main() {
                     color0 = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -907,23 +913,26 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color0;
+
                 void main() {
                     color0 = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -937,25 +946,28 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color0;
                 layout(location = 1) out vec4 color1;
+
                 void main() {
                     color0 = vec4(0);
                     color1 = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -971,23 +983,26 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
-            #version 460 core
-            void main() { }
-            "#,
-                vert
+                #version 460 core
+                #pragma shader_stage(vertex)
+
+                void main() { }
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
-            #version 460 core
-            layout(location = 0) out vec4 color0;
-            void main() {
-                color0 = vec4(0);
-            }
-            "#,
-                frag
+                #version 460 core
+                #pragma shader_stage(fragment)
+
+                layout(location = 0) out vec4 color0;
+
+                void main() {
+                    color0 = vec4(0);
+                }
+                "#
             )
             .as_slice(),
         ))
@@ -1025,23 +1040,26 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color_out;
+
                 void main() {
                     color_out = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -1056,22 +1074,24 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 void main() {
                     gl_FragDepth = 0.0;
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -1109,22 +1129,24 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 void main() {
                     gl_FragDepth = 0.0;
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -1138,23 +1160,26 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color_out;
+
                 void main() {
                     color_out = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -1183,22 +1208,24 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(                kind: frag,
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 void main() {
                     gl_FragDepth = 0.0;
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -1212,22 +1239,24 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 void main() {
                     gl_FragDepth = 0.0;
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
@@ -1239,31 +1268,31 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
 }
 
 fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut HashPool) {
-    let vertex = inline_spirv!(
+    let vertex = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(vertex)
 
         void main() {
         }
-        "#,
-        vert
+        "#
     )
     .as_slice();
     let pipeline_a = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
         vertex,
-        inline_spirv!(
+        glsl!(            kind: frag,
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color_out;
 
             void main() {
                 color_out = vec4(0);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -1271,9 +1300,11 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
         frame.device,
         GraphicPipelineInfo::default(),
         vertex,
-        inline_spirv!(
+        glsl!(
+            kind: frag,
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(input_attachment_index = 0, binding = 0) uniform subpassInput color_in;
             layout(location = 0) out vec4 color_out;
@@ -1281,8 +1312,7 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
             void main() {
                 color_out = subpassLoad(color_in);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -1322,26 +1352,26 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             void main() {
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color;
 
             void main() {
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -1379,19 +1409,20 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             void main() {
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(binding = 0) uniform sampler2D my_sampler_lle;
 
@@ -1400,8 +1431,7 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
             void main() {
                 color_out = texture(my_sampler_lle, vec2(0));
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );

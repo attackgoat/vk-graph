@@ -3,16 +3,18 @@ mod profile_with_puffin;
 use {
     bytemuck::{NoUninit, cast_slice},
     clap::Parser,
-    inline_spirv::inline_spirv,
     std::sync::Arc,
     vk_graph::prelude::*,
     vk_graph_window::WindowBuilder,
+    vk_shader_macros::glsl,
 };
 
-static SHADER_RAY_GEN: &[u32] = inline_spirv!(
+static SHADER_RAY_GEN: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : enable
+    #pragma shader_stage(raygen)
     
     layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
     layout(binding = 1, set = 0, rgba32f) uniform image2D image;
@@ -35,17 +37,17 @@ static SHADER_RAY_GEN: &[u32] = inline_spirv!(
     
         imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(hitValue, 0.0));
     }
-    "#,
-    rgen,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
+static SHADER_CLOSEST_HIT: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : enable
     #extension GL_EXT_nonuniform_qualifier : enable
+    #pragma shader_stage(closest)
     
     layout(location = 0) rayPayloadInEXT vec3 resultColor;
     hitAttributeEXT vec2 attribs;
@@ -54,25 +56,23 @@ static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
       const vec3 barycentricCoords = vec3(1.0f - attribs.x - attribs.y, attribs.x, attribs.y);
       resultColor = barycentricCoords;
     }
-    "#,
-    rchit,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_MISS: &[u32] = inline_spirv!(
+static SHADER_MISS: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : enable
+    #pragma shader_stage(miss)
     
     layout(location = 0) rayPayloadInEXT vec3 hitValue;
     
     void main() {
         hitValue = vec3(0.0, 0.0, 0.2);
     }
-    "#,
-    rmiss,
-    vulkan1_2
+    "#
 )
 .as_slice();
 

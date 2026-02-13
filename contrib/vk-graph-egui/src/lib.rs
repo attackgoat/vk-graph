@@ -10,6 +10,7 @@ use {
     egui_winit::winit::{event::Event, window::Window},
     std::{borrow::Cow, collections::HashMap, sync::Arc},
     vk_graph::prelude::*,
+    vk_shader_macros::include_glsl,
 };
 
 pub struct Egui {
@@ -43,14 +44,8 @@ impl Egui {
                     })
                     .cull_mode(vk::CullModeFlags::NONE),
                 [
-                    Shader::new_vertex(
-                        inline_spirv::include_spirv!("shaders/vert.glsl", vert, vulkan1_2)
-                            .as_slice(),
-                    ),
-                    Shader::new_fragment(
-                        inline_spirv::include_spirv!("shaders/frag.glsl", frag, vulkan1_2)
-                            .as_slice(),
-                    ),
+                    Shader::new_vertex(include_glsl!("shaders/egui.vert").as_slice()),
+                    Shader::new_fragment(include_glsl!("shaders/egui.frag").as_slice()),
                 ],
             )
             .unwrap(),

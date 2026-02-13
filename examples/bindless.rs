@@ -3,10 +3,10 @@ mod profile_with_puffin;
 use {
     bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
-    inline_spirv::inline_spirv,
     std::sync::Arc,
     vk_graph::prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
+    vk_shader_macros::glsl,
     winit::dpi::LogicalSize,
 };
 
@@ -100,9 +100,10 @@ fn create_graphic_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>,
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     const vec2 QUAD[] = {
                         vec2(0, 0),
@@ -125,16 +126,16 @@ fn create_graphic_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>,
                         gl_Position = vec4(QUAD[gl_VertexIndex] * scale + offset, 0, 1);
                         instance_index_out = gl_InstanceIndex;
                     }
-                    "#,
-                    vert
+                    "#
                 )
                 .as_slice(),
             ),
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
                     #extension GL_EXT_nonuniform_qualifier : require
+                    #pragma shader_stage(fragment)
 
                     layout(set = 0, binding = 0) uniform sampler2D sampler_nnr[];
 
@@ -145,8 +146,7 @@ fn create_graphic_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>,
                     void main() {
                         color_out = texture(sampler_nnr[nonuniformEXT(instance_index)], vec2(0.5, 0.5));
                     }
-                    "#,
-                    frag
+                    "#
                 )
                 .as_slice(),
             ),

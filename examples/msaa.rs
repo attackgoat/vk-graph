@@ -4,11 +4,11 @@ use {
     bytemuck::{NoUninit, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3},
-    inline_spirv::inline_spirv,
     log::warn,
     std::{mem::size_of, sync::Arc},
     vk_graph::prelude::*,
     vk_graph_window::WindowBuilder,
+    vk_shader_macros::glsl,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };
@@ -317,9 +317,10 @@ fn create_mesh_pipeline(
     device: &Arc<Device>,
     sample_count: SampleCount,
 ) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let vert = inline_spirv!(
+    let vert = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(vertex)
 
         layout(push_constant) uniform PushConstants {
             mat4 world;
@@ -345,12 +346,12 @@ fn create_mesh_pipeline(
             normal_out = (push_const.world * vec4(normal, 1.0)).xyz;
             color_out = color;
         }
-        "#,
-        vert
+        "#
     );
-    let frag = inline_spirv!(
+    let frag = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(fragment)
 
         layout(set = 0, binding = 0) uniform Scene {
             mat4 view;
@@ -368,8 +369,7 @@ fn create_mesh_pipeline(
 
             color_out = vec4(color * lambertian, 1.0);
         }
-        "#,
-        frag
+        "#
     );
 
     let info = GraphicPipelineInfoBuilder::default().samples(sample_count);

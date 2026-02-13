@@ -4,10 +4,10 @@ use {
     bytemuck::{bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3},
-    inline_spirv::inline_spirv,
     std::sync::Arc,
     vk_graph::prelude::*,
     vk_graph_window::WindowBuilder,
+    vk_shader_macros::glsl,
 };
 
 #[derive(Clone, Copy)]
@@ -304,44 +304,41 @@ fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape
 
 fn create_fill_background_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
     let vertex_shader = Shader::new_vertex(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450 core
+            #pragma shader_stage(vertex)
 
             const float X[6] = {-1, -1, 1, 1, 1, -1};
             const float Y[6] = {-1, 1, -1, 1, -1, 1};
 
-            vec2 vertex_pos()
-            {
+            vec2 vertex_pos() {
                 float x = X[gl_VertexIndex];
                 float y = Y[gl_VertexIndex];
 
                 return vec2(x, y);
             }
 
-            void main()
-            {
+            void main() {
                 gl_Position = vec4(vertex_pos(), 0, 1);
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
     );
 
     let fragment_shader = Shader::new_fragment(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color;
 
-            void main()
-            {
+            void main() {
                 color = vec4(vec3(0.75), 1.0);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -358,9 +355,10 @@ fn create_fill_background_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline>
 
 fn create_prepass_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
     let vertex_shader = Shader::new_vertex(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(vertex)
 
             layout (location = 0) in vec3 inPos;
             layout (location = 1) in vec3 inNormal;
@@ -380,45 +378,40 @@ fn create_prepass_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
                 vec3 objPos;
             } pushConsts;
 
-            out gl_PerVertex 
-            {
+            out gl_PerVertex {
                 vec4 gl_Position;
             };
 
-            void main() 
-            {
+            void main() {
                 vec3 locPos = vec3(ubo.model * vec4(inPos, 1.0));
                 outWorldPos = locPos + pushConsts.objPos;
                 outNormal = mat3(ubo.model) * inNormal;
                 gl_Position =  ubo.projection * ubo.view * vec4(outWorldPos, 1.0);
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
     );
 
     let fragment_shader = Shader::new_fragment(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(fragment)
 
             layout (location = 0) in vec3 inWorldPos;
             layout (location = 1) in vec3 inNormal;
 
-            layout (binding = 0) uniform UBO 
-            {
+            layout (binding = 0) uniform UBO {
                 mat4 projection;
                 mat4 model;
                 mat4 view;
                 vec3 camPos;
             } ubo;
 
-            void main()
-            {
+            void main() {
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -436,9 +429,10 @@ fn create_prepass_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
 fn create_pbr_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
     // See: https://github.com/SaschaWillems/Vulkan/blob/master/data/shaders/glsl/pbrbasic/pbr.vert
     let vertex_shader = Shader::new_vertex(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(vertex)
 
             layout (location = 0) in vec3 inPos;
             layout (location = 1) in vec3 inNormal;
@@ -458,29 +452,27 @@ fn create_pbr_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
                 vec3 objPos;
             } pushConsts;
 
-            out gl_PerVertex 
-            {
+            out gl_PerVertex {
                 vec4 gl_Position;
             };
 
-            void main() 
-            {
+            void main() {
                 vec3 locPos = vec3(ubo.model * vec4(inPos, 1.0));
                 outWorldPos = locPos + pushConsts.objPos;
                 outNormal = mat3(ubo.model) * inNormal;
                 gl_Position =  ubo.projection * ubo.view * vec4(outWorldPos, 1.0);
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
     );
 
     // See: https://github.com/SaschaWillems/Vulkan/blob/master/data/shaders/glsl/pbrbasic/pbr.frag
     let fragment_shader = Shader::new_fragment(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(fragment)
 
             layout (location = 0) in vec3 inWorldPos;
             layout (location = 1) in vec3 inNormal;
@@ -606,8 +598,7 @@ fn create_pbr_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
 
                 outColor = vec4(color, 1.0);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );

@@ -11,9 +11,9 @@ use {
         winit::{event::Event, window::Window},
         {HiDpiMode, WinitPlatform},
     },
-    inline_spirv::include_spirv,
     std::{sync::Arc, time::Duration},
     vk_graph::prelude::*,
+    vk_shader_macros::include_glsl,
 };
 
 #[derive(Debug)]
@@ -35,8 +35,8 @@ impl ImGui {
                     .blend(BlendMode::PRE_MULTIPLIED_ALPHA)
                     .cull_mode(vk::CullModeFlags::NONE),
                 [
-                    Shader::new_vertex(include_spirv!("res/shader/imgui.vert", vert).as_slice()),
-                    Shader::new_fragment(include_spirv!("res/shader/imgui.frag", frag).as_slice()),
+                    Shader::new_vertex(include_glsl!("res/shader/imgui.vert").as_slice()),
+                    Shader::new_fragment(include_glsl!("res/shader/imgui.frag").as_slice()),
                 ],
             )
             .unwrap(),

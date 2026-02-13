@@ -3,10 +3,10 @@ mod profile_with_puffin;
 use {
     bytemuck::cast_slice,
     clap::Parser,
-    inline_spirv::inline_spirv,
     std::sync::Arc,
     vk_graph::prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
+    vk_shader_macros::glsl,
 };
 
 // A Vulkan triangle using a graphic pipeline, vertex/fragment shaders, and index/vertex buffers.
@@ -21,9 +21,10 @@ fn main() -> Result<(), WindowError> {
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     layout(location = 0) in vec3 position;
                     layout(location = 1) in vec3 color;
@@ -34,15 +35,15 @@ fn main() -> Result<(), WindowError> {
                         gl_Position = vec4(position, 1);
                         vk_Color = color;
                     }
-                    "#,
-                    vert
+                    "#
                 )
                 .as_slice(),
             ),
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(fragment)
 
                     layout(location = 0) in vec3 color;
 
@@ -51,8 +52,7 @@ fn main() -> Result<(), WindowError> {
                     void main() {
                         vk_Color = vec4(color, 1);
                     }
-                    "#,
-                    frag
+                    "#
                 )
                 .as_slice(),
             ),

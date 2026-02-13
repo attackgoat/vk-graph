@@ -1,4 +1,5 @@
 #version 450
+#pragma shader_stage(vertex)
 
 layout(location = 0) in vec2 i_pos;
 layout(location = 1) in vec2 i_uv;

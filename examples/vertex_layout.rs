@@ -4,10 +4,10 @@ use {
     bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
     half::f16,
-    inline_spirv::inline_spirv,
     std::{mem::size_of, sync::Arc},
     vk_graph::prelude::*,
     vk_graph_window::{FrameContext, WindowBuilder},
+    vk_shader_macros::glsl,
 };
 
 /// This example draws two triangles using two different vertex formats.
@@ -195,26 +195,27 @@ fn create_vertex_shader(is_double: bool) -> ShaderBuilder {
     // dvec2 when using 64-bit positions; and for the purposes of this example we don't want to
     // duplicate this shader code. You probably don't want to do this, or you may have different
     // facilities for generating SPIR-V code - either way ignore the macro unless you're interested
-    // in the inline_spirv! wizardry it contains which is unrelated to this example.
+    // in the include_glsl! wizardry it contains which is unrelated to this example.
     macro_rules! compile_vert {
         ($vec2_ty:literal) => {
-            inline_spirv!(
-            r#"
-            #version 460 core
+            glsl!(
+                define: VEC2_TY $vec2_ty,
+                r#"
+                #version 460 core
+                #pragma shader_stage(vertex)
 
-            layout(location = 0) in VEC2_TY position_in;
-            layout(location = 1) in vec3 color_in;
+                layout(location = 0) in VEC2_TY position_in;
+                layout(location = 1) in vec3 color_in;
 
-            layout(location = 0) out vec3 color_out;
+                layout(location = 0) out vec3 color_out;
 
-            void main() {
-                gl_Position = vec4(position_in, 0, 1);
-                color_out = color_in;
-            }
-            "#,
-            vert,
-            D VEC2_TY = $vec2_ty,
-        )};
+                void main() {
+                    gl_Position = vec4(position_in, 0, 1);
+                    color_out = color_in;
+                }
+                "#
+            )
+        };
     }
 
     let spirv = if is_double {
@@ -230,9 +231,10 @@ fn create_pipeline(
     device: &Arc<Device>,
     vertex: ShaderBuilder,
 ) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let fragment_spirv = inline_spirv!(
+    let fragment_spirv = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(fragment)
 
         layout(location = 0) in vec3 color_in;
 
@@ -241,8 +243,7 @@ fn create_pipeline(
         void main() {
             color_out = vec4(color_in, 1.0);
         }
-        "#,
-        frag
+        "#
     );
 
     Ok(Arc::new(GraphicPipeline::create(
