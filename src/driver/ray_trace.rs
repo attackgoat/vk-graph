@@ -6,7 +6,7 @@ use {
         device::Device,
         merge_push_constant_ranges,
         physical_device::RayTraceProperties,
-        shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader, align_spriv},
+        shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
@@ -219,7 +219,7 @@ impl RayTracePipeline {
             for (idx, shader) in shaders.iter().enumerate() {
                 let module = device
                     .create_shader_module(
-                        &vk::ShaderModuleCreateInfo::default().code(align_spriv(&shader.spirv)?),
+                        &vk::ShaderModuleCreateInfo::default().code(shader.spirv.words()),
                         None,
                     )
                     .map_err(|err| {

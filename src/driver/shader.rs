@@ -9,6 +9,7 @@ use {
     spirq::{
         ReflectConfig,
         entry_point::EntryPoint,
+        parse::SpirvBinary,
         ty::{DescriptorType, ScalarType, Type, VectorType},
         var::Variable,
     },
@@ -16,7 +17,6 @@ use {
         collections::{BTreeMap, HashMap},
         fmt::{Debug, Formatter},
         iter::repeat_n,
-        mem::size_of_val,
         ops::Deref,
         sync::Arc,
         thread::panicking,
@@ -24,18 +24,6 @@ use {
 };
 
 pub(crate) type DescriptorBindingMap = HashMap<Descriptor, (DescriptorInfo, vk::ShaderStageFlags)>;
-
-pub(crate) fn align_spriv(code: &[u8]) -> Result<&[u32], DriverError> {
-    let (prefix, code, suffix) = unsafe { code.align_to() };
-
-    if prefix.len() + suffix.len() == 0 {
-        Ok(code)
-    } else {
-        warn!("Invalid SPIR-V code");
-
-        Err(DriverError::InvalidData)
-    }
-}
 
 #[profiling::function]
 fn guess_immutable_sampler(binding_name: &str) -> SamplerInfo {
@@ -737,7 +725,8 @@ pub struct Shader {
     /// Although SPIR-V code is specified as `u32` values, this field uses `u8` in order to make
     /// loading from file simpler. You should always have a SPIR-V code length which is a multiple
     /// of four bytes, or an error will be returned during pipeline creation.
-    pub spirv: Vec<u8>,
+    #[builder(setter(into))]
+    pub spirv: SpirvBinary,
 
     /// The shader stage this structure applies to.
     pub stage: vk::ShaderStageFlags,
@@ -755,10 +744,8 @@ pub struct Shader {
 impl Shader {
     /// Specifies a shader with the given `stage` and shader code values.
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(stage: vk::ShaderStageFlags, spirv: impl ShaderCode) -> ShaderBuilder {
-        ShaderBuilder::default()
-            .spirv(spirv.into_vec())
-            .stage(stage)
+    pub fn new(stage: vk::ShaderStageFlags, spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+        ShaderBuilder::default().spirv(spirv).stage(stage)
     }
 
     /// Creates a new ray trace shader.
@@ -766,7 +753,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_any_hit(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_any_hit(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::ANY_HIT_KHR, spirv)
     }
 
@@ -775,7 +762,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_callable(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_callable(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::CALLABLE_KHR, spirv)
     }
 
@@ -784,7 +771,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_closest_hit(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_closest_hit(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::CLOSEST_HIT_KHR, spirv)
     }
 
@@ -793,7 +780,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_compute(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_compute(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::COMPUTE, spirv)
     }
 
@@ -802,7 +789,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_fragment(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_fragment(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::FRAGMENT, spirv)
     }
 
@@ -811,7 +798,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_geometry(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_geometry(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::GEOMETRY, spirv)
     }
 
@@ -820,7 +807,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_intersection(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_intersection(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::INTERSECTION_KHR, spirv)
     }
 
@@ -829,7 +816,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid.
-    pub fn new_mesh(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_mesh(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::MESH_EXT, spirv)
     }
 
@@ -838,7 +825,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_miss(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_miss(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::MISS_KHR, spirv)
     }
 
@@ -847,7 +834,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_ray_gen(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_ray_gen(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::RAYGEN_KHR, spirv)
     }
 
@@ -856,7 +843,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid.
-    pub fn new_task(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_task(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TASK_EXT, spirv)
     }
 
@@ -865,7 +852,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tesselation_ctrl(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_tesselation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, spirv)
     }
 
@@ -874,7 +861,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tesselation_eval(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_tesselation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, spirv)
     }
 
@@ -883,7 +870,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_vertex(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_vertex(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::VERTEX, spirv)
     }
 
@@ -1159,7 +1146,7 @@ impl Shader {
     #[profiling::function]
     fn reflect_entry_point(
         entry_name: &str,
-        spirv: &[u8],
+        spirv: impl Into<SpirvBinary>,
         specialization_info: Option<&SpecializationInfo>,
     ) -> Result<EntryPoint, DriverError> {
         let mut config = ReflectConfig::new();
@@ -1420,7 +1407,10 @@ impl ShaderBuilder {
         self.entry_point = Some(
             Shader::reflect_entry_point(
                 entry_name,
-                self.spirv.as_deref().unwrap(),
+                self.spirv
+                    .as_ref()
+                    .map(|spirv| spirv.words())
+                    .expect("spirv code must be set at initialization"),
                 self.specialization_info
                     .as_ref()
                     .map(|opt| opt.as_ref())
@@ -1504,49 +1494,6 @@ struct ShaderBuilderError;
 impl From<UninitializedFieldError> for ShaderBuilderError {
     fn from(_: UninitializedFieldError) -> Self {
         Self
-    }
-}
-
-/// Trait for types which can be converted into shader code.
-pub trait ShaderCode {
-    /// Converts the instance into SPIR-V shader code specified as a byte array.
-    fn into_vec(self) -> Vec<u8>;
-}
-
-impl ShaderCode for &[u8] {
-    fn into_vec(self) -> Vec<u8> {
-        debug_assert_eq!(self.len() % 4, 0, "invalid spir-v code");
-
-        self.to_vec()
-    }
-}
-
-impl ShaderCode for &[u32] {
-    fn into_vec(self) -> Vec<u8> {
-        pub fn into_u8_slice<T>(t: &[T]) -> &[u8]
-        where
-            T: Sized,
-        {
-            use std::slice::from_raw_parts;
-
-            unsafe { from_raw_parts(t.as_ptr() as *const _, size_of_val(t)) }
-        }
-
-        into_u8_slice(self).into_vec()
-    }
-}
-
-impl ShaderCode for Vec<u8> {
-    fn into_vec(self) -> Vec<u8> {
-        debug_assert_eq!(self.len() % 4, 0, "invalid spir-v code");
-
-        self
-    }
-}
-
-impl ShaderCode for Vec<u32> {
-    fn into_vec(self) -> Vec<u8> {
-        self.as_slice().into_vec()
     }
 }
 

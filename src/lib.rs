@@ -365,10 +365,7 @@ pub mod prelude {
                 RayTraceShaderGroup, RayTraceShaderGroupType,
             },
             render_pass::ResolveMode,
-            shader::{
-                SamplerInfo, SamplerInfoBuilder, Shader, ShaderBuilder, ShaderCode,
-                SpecializationInfo,
-            },
+            shader::{SamplerInfo, SamplerInfoBuilder, Shader, ShaderBuilder, SpecializationInfo},
             surface::Surface,
             swapchain::{
                 Swapchain, SwapchainError, SwapchainImage, SwapchainInfo, SwapchainInfoBuilder,
