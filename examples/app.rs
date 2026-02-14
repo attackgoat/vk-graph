@@ -46,7 +46,7 @@ impl ApplicationHandler for Application {
         let device_info = DeviceInfoBuilder::default().debug(args.debug);
         let device = Arc::new(Device::create_display(device_info, &window).unwrap());
 
-        let surface = Surface::create(&device, &window).unwrap();
+        let surface = Surface::create(&device, &window, &window).unwrap();
         let surface_formats = Surface::formats(&surface).unwrap();
         let surface_format = Surface::linear_or_default(&surface_formats);
         let window_size = window.inner_size();

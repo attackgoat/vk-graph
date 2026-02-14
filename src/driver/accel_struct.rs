@@ -52,13 +52,59 @@ use std::sync::Mutex;
 /// [deref]: core::ops::Deref
 /// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
 #[derive(Debug)]
+#[repr(C)]
 pub struct AccelerationStructure {
     access: Mutex<AccessType>,
-    accel_struct: (vk::AccelerationStructureKHR, Buffer),
+
+    /// The native Vulkan resource handle of the buffer which supports this acceleration structure.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub buffer: Buffer,
+
+    #[cfg(not(doc))]
+    buffer: Buffer,
+
+    /// The device which owns this buffer resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub device: Arc<Device>,
+
+    #[cfg(not(doc))]
     device: Arc<Device>,
 
+    /// The native Vulkan resource handle of this acceleration structure.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::AccelerationStructureKHR,
+
+    #[cfg(not(doc))]
+    handle: vk::AccelerationStructureKHR,
+
     /// Information used to create this object.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub info: AccelerationStructureInfo,
+
+    #[cfg(not(doc))]
+    info: AccelerationStructureInfo,
+
+    /// A name for debugging purposes.
+    pub name: Option<String>,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct AccelerationStructureRef {
+    access: Mutex<AccessType>,
+    pub buffer: Buffer,
+    pub device: Arc<Device>,
+    pub handle: vk::AccelerationStructureKHR,
+    pub info: AccelerationStructureInfo,
+    pub name: Option<String>,
 }
 
 impl AccelerationStructure {
@@ -80,7 +126,7 @@ impl AccelerationStructure {
     /// let info = AccelerationStructureInfo::blas(SIZE);
     /// let accel_struct = AccelerationStructure::create(&device, info)?;
     ///
-    /// assert_ne!(*accel_struct, vk::AccelerationStructureKHR::null());
+    /// assert_ne!(accel_struct.handle, vk::AccelerationStructureKHR::null());
     /// assert_eq!(accel_struct.info.size, SIZE);
     /// # Ok(()) }
     /// ```
@@ -102,10 +148,10 @@ impl AccelerationStructure {
             ),
         )?;
 
-        let accel_struct = {
+        let handle = {
             let create_info = vk::AccelerationStructureCreateInfoKHR::default()
                 .ty(info.ty)
-                .buffer(*buffer)
+                .buffer(buffer.handle)
                 .size(info.size);
 
             let accel_struct_ext = Device::expect_accel_struct_ext(device);
@@ -129,9 +175,11 @@ impl AccelerationStructure {
 
         Ok(Self {
             access: Mutex::new(AccessType::Nothing),
-            accel_struct: (accel_struct, buffer),
+            buffer,
             device,
+            handle,
             info,
+            name: None,
         })
     }
 
@@ -219,7 +267,7 @@ impl AccelerationStructure {
         unsafe {
             accel_struct_ext.get_acceleration_structure_device_address(
                 &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                    .acceleration_structure(this.accel_struct.0),
+                    .acceleration_structure(this.handle),
             )
         }
     }
@@ -325,11 +373,12 @@ impl AccelerationStructure {
     }
 }
 
+#[doc(hidden)]
 impl Deref for AccelerationStructure {
-    type Target = vk::AccelerationStructureKHR;
+    type Target = AccelerationStructureRef;
 
     fn deref(&self) -> &Self::Target {
-        &self.accel_struct.0
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 
@@ -343,7 +392,7 @@ impl Drop for AccelerationStructure {
         let accel_struct_ext = Device::expect_accel_struct_ext(&self.device);
 
         unsafe {
-            accel_struct_ext.destroy_acceleration_structure(self.accel_struct.0, None);
+            accel_struct_ext.destroy_acceleration_structure(self.handle, None);
         }
     }
 }

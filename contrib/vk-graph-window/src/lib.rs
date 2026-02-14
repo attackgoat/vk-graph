@@ -71,7 +71,7 @@ impl Window {
                 &mut self,
                 window: &winit::window::Window,
             ) -> Result<Display, DriverError> {
-                let surface = Surface::create(&self.device, &window)?;
+                let surface = Surface::create(&self.device, &window, &window)?;
                 let surface_formats = Surface::formats(&surface)?;
                 let surface_format = self
                     .data
@@ -85,8 +85,8 @@ impl Window {
                     SwapchainInfo::new(window_size.width, window_size.height, surface_format)
                         .to_builder();
 
-                if let Some(image_count) = self.data.image_count {
-                    swapchain_info = swapchain_info.desired_image_count(image_count);
+                if let Some(min_image_count) = self.data.min_image_count {
+                    swapchain_info = swapchain_info.min_image_count(min_image_count);
                 }
 
                 if let Some(v_sync) = self.data.v_sync {
@@ -400,7 +400,7 @@ pub struct WindowBuilder {
     attributes: WindowAttributes,
     cmd_buf_count: usize,
     device_info: DeviceInfo,
-    image_count: Option<u32>,
+    min_image_count: Option<u32>,
     surface_format_fn: Option<Box<dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR>>,
     v_sync: Option<bool>,
     window_mode_override: Option<Option<FullscreenMode>>,
@@ -415,7 +415,7 @@ impl WindowBuilder {
             data: WindowData {
                 attributes: self.attributes,
                 cmd_buf_count: self.cmd_buf_count,
-                image_count: self.image_count,
+                min_image_count: self.min_image_count,
                 surface_format_fn: self.surface_format_fn,
                 v_sync: self.v_sync,
                 window_mode_override: self.window_mode_override,
@@ -463,11 +463,13 @@ impl WindowBuilder {
         self
     }
 
-    /// The desired, but not guaranteed, number of images that will be in the created swapchain.
+    /// The minimum number of presentable images that the application needs. The implementation will
+    /// either create the swapchain with at least that many images, or it will fail to create the
+    /// swapchain.
     ///
-    /// More images introduces more display lag, but smoother animation.
-    pub fn desired_image_count(mut self, count: u32) -> Self {
-        self.image_count = Some(count);
+    /// More images introduce more display lag, but smoother animation.
+    pub fn min_image_count(mut self, count: u32) -> Self {
+        self.min_image_count = Some(count);
         self
     }
 
@@ -521,7 +523,7 @@ impl fmt::Debug for WindowBuilder {
             .field("attributes", &self.attributes)
             .field("cmd_buffer_count", &self.cmd_buf_count)
             .field("device_info", &self.device_info)
-            .field("image_count", &self.image_count)
+            .field("min_image_count", &self.min_image_count)
             .field(
                 "surface_format_fn",
                 &self.surface_format_fn.as_ref().map(|_| ()),
@@ -538,7 +540,7 @@ impl Default for WindowBuilder {
             attributes: Default::default(),
             cmd_buf_count: 5,
             device_info: Default::default(),
-            image_count: None,
+            min_image_count: None,
             surface_format_fn: None,
             v_sync: None,
             window_mode_override: None,
@@ -549,7 +551,7 @@ impl Default for WindowBuilder {
 struct WindowData {
     attributes: WindowAttributes,
     cmd_buf_count: usize,
-    image_count: Option<u32>,
+    min_image_count: Option<u32>,
     surface_format_fn: Option<Box<dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR>>,
     v_sync: Option<bool>,
     window_mode_override: Option<Option<FullscreenMode>>,

@@ -29,13 +29,35 @@ use {
 /// [deref]: core::ops::Deref
 /// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
 #[derive(Debug)]
+#[repr(C)]
 pub struct RayTracePipeline {
     pub(crate) descriptor_bindings: DescriptorBindingMap,
     pub(crate) descriptor_info: PipelineDescriptorInfo,
+
+    /// The device which owns this buffer resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub device: Arc<Device>,
+
+    #[cfg(not(doc))]
     device: Arc<Device>,
 
+    /// The native Vulkan resource handle of this pipeline.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::Pipeline,
+
+    #[cfg(not(doc))]
+    handle: vk::Pipeline,
+
     /// Information used to create this object.
+    #[cfg(doc)]
     pub info: RayTracePipelineInfo,
+
+    #[cfg(not(doc))]
+    info: RayTracePipelineInfo,
 
     pub(crate) layout: vk::PipelineLayout,
 
@@ -43,7 +65,21 @@ pub struct RayTracePipeline {
     pub name: Option<String>,
 
     pub(crate) push_constants: Vec<vk::PushConstantRange>,
-    pipeline: vk::Pipeline,
+    shader_modules: Vec<vk::ShaderModule>,
+    shader_group_handles: Vec<u8>,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct RayTracePipelineRef {
+    pub(crate) descriptor_bindings: DescriptorBindingMap,
+    pub(crate) descriptor_info: PipelineDescriptorInfo,
+    pub device: Arc<Device>,
+    pub handle: vk::Pipeline,
+    pub info: RayTracePipelineInfo,
+    pub(crate) layout: vk::PipelineLayout,
+    pub name: Option<String>,
+    pub(crate) push_constants: Vec<vk::PushConstantRange>,
     shader_modules: Vec<vk::ShaderModule>,
     shader_group_handles: Vec<u8>,
 }
@@ -97,7 +133,7 @@ impl RayTracePipeline {
     ///     ],
     /// )?;
     ///
-    /// assert_ne!(*pipeline, vk::Pipeline::null());
+    /// assert_ne!(pipeline.handle, vk::Pipeline::null());
     /// assert_eq!(pipeline.info.max_ray_recursion_depth, 1);
     /// # Ok(()) }
     /// ```
@@ -222,7 +258,7 @@ impl RayTracePipeline {
                 .ray_trace_ext
                 .as_ref()
                 .ok_or(DriverError::Unsupported)?;
-            let pipeline = ray_trace_ext
+            let handle = ray_trace_ext
                 .create_ray_tracing_pipelines(
                     vk::DeferredOperationKHR::null(),
                     Device::pipeline_cache(device),
@@ -285,7 +321,7 @@ impl RayTracePipeline {
             //
             let shader_group_handles = {
                 ray_trace_ext.get_ray_tracing_shader_group_handles(
-                    pipeline,
+                    handle,
                     0,
                     group_count as u32,
                     group_count * shader_group_handle_size as usize,
@@ -297,11 +333,11 @@ impl RayTracePipeline {
                 descriptor_bindings,
                 descriptor_info,
                 device,
+                handle,
                 info,
                 layout,
                 name: None,
                 push_constants,
-                pipeline,
                 shader_modules,
                 shader_group_handles,
             })
@@ -348,7 +384,7 @@ impl RayTracePipeline {
                 .ray_trace_ext
                 .as_ref()
                 .unwrap_unchecked()
-                .get_ray_tracing_shader_group_stack_size(this.pipeline, group, group_shader)
+                .get_ray_tracing_shader_group_stack_size(this.handle, group, group_shader)
         }
     }
 
@@ -359,11 +395,12 @@ impl RayTracePipeline {
     }
 }
 
+#[doc(hidden)]
 impl Deref for RayTracePipeline {
-    type Target = vk::Pipeline;
+    type Target = RayTracePipelineRef;
 
     fn deref(&self) -> &Self::Target {
-        &self.pipeline
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 
@@ -375,7 +412,7 @@ impl Drop for RayTracePipeline {
         }
 
         unsafe {
-            self.device.destroy_pipeline(self.pipeline, None);
+            self.device.destroy_pipeline(self.handle, None);
             self.device.destroy_pipeline_layout(self.layout, None);
         }
 

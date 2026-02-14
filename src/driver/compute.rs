@@ -24,19 +24,54 @@ use {
 /// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
 /// [deref]: core::ops::Deref
 #[derive(Debug)]
+#[repr(C)]
 pub struct ComputePipeline {
     pub(crate) descriptor_bindings: DescriptorBindingMap,
     pub(crate) descriptor_info: PipelineDescriptorInfo,
+
+    /// The device which owns this buffer resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub device: Arc<Device>,
+
+    #[cfg(not(doc))]
     device: Arc<Device>,
+
     pub(crate) layout: vk::PipelineLayout,
 
+    /// The native Vulkan resource handle of this pipeline.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::Pipeline,
+
+    #[cfg(not(doc))]
+    handle: vk::Pipeline,
+
     /// Information used to create this object.
+    #[cfg(doc)]
     pub info: ComputePipelineInfo,
+
+    #[cfg(not(doc))]
+    info: ComputePipelineInfo,
 
     /// A descriptive name used in debugging messages.
     pub name: Option<String>,
 
-    pipeline: vk::Pipeline,
+    pub(crate) push_constants: Option<vk::PushConstantRange>,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct ComputePipelineRef {
+    pub(crate) descriptor_bindings: DescriptorBindingMap,
+    pub(crate) descriptor_info: PipelineDescriptorInfo,
+    pub device: Arc<Device>,
+    pub(crate) layout: vk::PipelineLayout,
+    pub handle: vk::Pipeline,
+    pub info: ComputePipelineInfo,
+    pub name: Option<String>,
     pub(crate) push_constants: Option<vk::PushConstantRange>,
 }
 
@@ -65,7 +100,7 @@ impl ComputePipeline {
     /// let shader = Shader::new_compute(my_shader_code.as_slice());
     /// let pipeline = ComputePipeline::create(&device, ComputePipelineInfo::default(), shader)?;
     ///
-    /// assert_ne!(*pipeline, vk::Pipeline::null());
+    /// assert_ne!(pipeline.handle, vk::Pipeline::null());
     /// # Ok(()) }
     /// ```
     #[profiling::function]
@@ -136,12 +171,14 @@ impl ComputePipeline {
                 .map_err(|err| {
                     warn!("{err}");
 
+                    device.destroy_shader_module(shader_module, None);
+
                     DriverError::Unsupported
                 })?;
             let pipeline_info = vk::ComputePipelineCreateInfo::default()
                 .stage(stage_create_info)
                 .layout(layout);
-            let pipeline = device
+            let handle = device
                 .create_compute_pipelines(
                     Device::pipeline_cache(&device),
                     from_ref(&pipeline_info),
@@ -149,6 +186,8 @@ impl ComputePipeline {
                 )
                 .map_err(|(_, err)| {
                     warn!("{err}");
+
+                    device.destroy_shader_module(shader_module, None);
 
                     DriverError::Unsupported
                 })?[0];
@@ -159,10 +198,10 @@ impl ComputePipeline {
                 descriptor_bindings,
                 descriptor_info,
                 device,
+                handle,
                 info,
                 layout,
                 name: None,
-                pipeline,
                 push_constants,
             })
         }
@@ -175,11 +214,12 @@ impl ComputePipeline {
     }
 }
 
+#[doc(hidden)]
 impl Deref for ComputePipeline {
-    type Target = vk::Pipeline;
+    type Target = ComputePipelineRef;
 
     fn deref(&self) -> &Self::Target {
-        &self.pipeline
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 
@@ -191,7 +231,7 @@ impl Drop for ComputePipeline {
         }
 
         unsafe {
-            self.device.destroy_pipeline(self.pipeline, None);
+            self.device.destroy_pipeline(self.handle, None);
             self.device.destroy_pipeline_layout(self.layout, None);
         }
     }

@@ -221,7 +221,9 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
                     && (item.info.host_read & info.host_read) == info.host_read
                     && (item.info.host_write & info.host_write) == info.host_write
                     && item.info.alignment >= info.alignment
-                    && item.info.size >= info.size && item.info.usage.contains(info.usage) {
+                    && item.info.size >= info.size
+                    && item.info.usage.contains(info.usage)
+                {
                     let item = cache.swap_remove(idx);
 
                     return Ok(Lease::new(cache_ref, item));

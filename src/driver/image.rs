@@ -92,18 +92,54 @@ pub(crate) fn image_subresource_range_intersects(
 /// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkImage.html
 /// [deref]: core::ops::Deref
 /// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
+#[repr(C)]
 pub struct Image {
     accesses: Mutex<ImageAccess<AccessType>>,
     allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
-    pub(super) device: Arc<Device>,
-    image: vk::Image,
+
+    /// The device which owns this image resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub device: Arc<Device>,
+
+    #[cfg(not(doc))]
+    device: Arc<Device>,
+
+    /// The native Vulkan resource handle of this image.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::Image,
+
+    #[cfg(not(doc))]
+    handle: vk::Image,
+
     #[allow(clippy::type_complexity)]
     image_view_cache: Mutex<HashMap<ImageViewInfo, ImageView>>,
 
-    /// Information used to create this object.
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub info: ImageInfo,
 
+    #[cfg(not(doc))]
+    info: ImageInfo,
+
     /// A name for debugging purposes.
+    pub name: Option<String>,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct ImageRef {
+    accesses: Mutex<ImageAccess<AccessType>>,
+    allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
+    pub device: Arc<Device>,
+    pub handle: vk::Image,
+    image_view_cache: Mutex<HashMap<ImageViewInfo, ImageView>>,
+    pub info: ImageInfo,
     pub name: Option<String>,
 }
 
@@ -125,7 +161,7 @@ impl Image {
     /// let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// let image = Image::create(&device, info)?;
     ///
-    /// assert_ne!(*image, vk::Image::null());
+    /// assert_ne!(image.handle, vk::Image::null());
     /// assert_eq!(image.info.width, 32);
     /// assert_eq!(image.info.height, 32);
     /// # Ok(()) }
@@ -149,14 +185,14 @@ impl Image {
         let create_info: ImageCreateInfo = info.into();
         let create_info =
             create_info.queue_family_indices(&device.physical_device.queue_family_indices);
-        let image = unsafe {
+        let handle = unsafe {
             device.create_image(&create_info, None).map_err(|err| {
                 warn!("unable to create image: {err}");
 
                 DriverError::Unsupported
             })?
         };
-        let requirements = unsafe { device.get_image_memory_requirements(image) };
+        let requirements = unsafe { device.get_image_memory_requirements(handle) };
         let allocation = {
             profiling::scope!("allocate");
 
@@ -178,14 +214,14 @@ impl Image {
                     warn!("unable to allocate image memory: {err}");
 
                     unsafe {
-                        device.destroy_image(image, None);
+                        device.destroy_image(handle, None);
                     }
 
                     DriverError::from_alloc_err(err)
                 })
                 .and_then(|allocation| {
                     if let Err(err) = unsafe {
-                        device.bind_image_memory(image, allocation.memory(), allocation.offset())
+                        device.bind_image_memory(handle, allocation.memory(), allocation.offset())
                     } {
                         warn!("unable to bind image memory: {err}");
 
@@ -194,7 +230,7 @@ impl Image {
                         }
 
                         unsafe {
-                            device.destroy_image(image, None);
+                            device.destroy_image(handle, None);
                         }
 
                         Err(DriverError::OutOfMemory)
@@ -204,13 +240,13 @@ impl Image {
                 })
         }?;
 
-        debug_assert_ne!(image, vk::Image::null());
+        debug_assert_ne!(handle, vk::Image::null());
 
         Ok(Self {
             accesses,
             allocation: Some(allocation),
             device,
-            image,
+            handle,
             image_view_cache: Mutex::new(Default::default()),
             info,
             name: None,
@@ -314,7 +350,7 @@ impl Image {
 
         // Does NOT copy over the image accesses!
         // Force previous access to general to wait for presentation
-        let Self { image, info, .. } = *this;
+        let Self { handle, info, .. } = *this;
         let accesses = ImageAccess::new(info, AccessType::General);
         let accesses = Mutex::new(accesses);
 
@@ -322,7 +358,7 @@ impl Image {
             accesses,
             allocation: None,
             device: Arc::clone(&this.device),
-            image,
+            handle,
             image_view_cache: Mutex::new(image_view_cache),
             info,
             name: this.name.clone(),
@@ -344,7 +380,7 @@ impl Image {
         }
 
         unsafe {
-            this.device.destroy_image(this.image, None);
+            this.device.destroy_image(this.handle, None);
         }
 
         {
@@ -366,7 +402,7 @@ impl Image {
     /// The image is not destroyed automatically on drop, unlike images created through the
     /// [`Image::create`] function.
     #[profiling::function]
-    pub fn from_raw(device: &Arc<Device>, image: vk::Image, info: impl Into<ImageInfo>) -> Self {
+    pub fn from_raw(device: &Arc<Device>, handle: vk::Image, info: impl Into<ImageInfo>) -> Self {
         let device = Arc::clone(device);
         let info = info.into();
 
@@ -380,7 +416,7 @@ impl Image {
             accesses: Mutex::new(accesses),
             allocation: None,
             device,
-            image,
+            handle,
             image_view_cache: Mutex::new(Default::default()),
             info,
             name: None,
@@ -399,7 +435,7 @@ impl Image {
             Entry::Occupied(entry) => entry.get().image_view,
             Entry::Vacant(entry) => {
                 entry
-                    .insert(ImageView::create(&this.device, info, this.image)?)
+                    .insert(ImageView::create(&this.device, info, this.handle)?)
                     .image_view
             }
         })
@@ -409,18 +445,19 @@ impl Image {
 impl Debug for Image {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(name) = &self.name {
-            write!(f, "{} ({:?})", name, self.image)
+            write!(f, "{} ({:?})", name, self.handle)
         } else {
-            write!(f, "{:?}", self.image)
+            write!(f, "{:?}", self.handle)
         }
     }
 }
 
+#[doc(hidden)]
 impl Deref for Image {
-    type Target = vk::Image;
+    type Target = ImageRef;
 
     fn deref(&self) -> &Self::Target {
-        &self.image
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 

@@ -16,14 +16,60 @@ use {
 
 /// Provides the ability to present rendering results to a [`Surface`].
 #[derive(Debug)]
+#[repr(C)]
 pub struct Swapchain {
+    /// The device which owns this buffer resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub device: Arc<Device>,
+
+    #[cfg(not(doc))]
     device: Arc<Device>,
+
+    /// The native Vulkan resource handle of this swapchain.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::SwapchainKHR,
+
+    #[cfg(not(doc))]
+    handle: vk::SwapchainKHR,
+
+    handle_prev: vk::SwapchainKHR,
     images: Box<[SwapchainImage]>,
+
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub info: SwapchainInfo,
+
+    #[cfg(not(doc))]
     info: SwapchainInfo,
-    old_swapchain: vk::SwapchainKHR,
+
     suboptimal: bool,
+
+    /// The surface which supports this swapchain.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub surface: Surface,
+
+    #[cfg(not(doc))]
     surface: Surface,
-    swapchain: vk::SwapchainKHR,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct SwapchainRef {
+    pub device: Arc<Device>,
+    pub handle: vk::SwapchainKHR,
+    handle_prev: vk::SwapchainKHR,
+    images: Box<[SwapchainImage]>,
+    pub info: SwapchainInfo,
+    suboptimal: bool,
+    pub surface: Surface,
 }
 
 impl Swapchain {
@@ -41,11 +87,11 @@ impl Swapchain {
         Ok(Swapchain {
             device,
             images: Default::default(),
+            handle: vk::SwapchainKHR::null(),
+            handle_prev: vk::SwapchainKHR::null(),
             info,
-            old_swapchain: vk::SwapchainKHR::null(),
             suboptimal: true,
             surface,
-            swapchain: vk::SwapchainKHR::null(),
         })
     }
 
@@ -70,12 +116,7 @@ impl Swapchain {
             let swapchain_ext = Device::expect_swapchain_ext(&self.device);
 
             let image_idx = unsafe {
-                swapchain_ext.acquire_next_image(
-                    self.swapchain,
-                    u64::MAX,
-                    acquired,
-                    vk::Fence::null(),
-                )
+                swapchain_ext.acquire_next_image(self.handle, u64::MAX, acquired, vk::Fence::null())
             }
             .map(|(idx, suboptimal)| {
                 if suboptimal {
@@ -146,17 +187,14 @@ impl Swapchain {
         Err(SwapchainError::Suboptimal)
     }
 
-    fn clamp_desired_image_count(
-        desired_image_count: u32,
-        surface_capabilities: vk::SurfaceCapabilitiesKHR,
-    ) -> u32 {
-        let mut desired_image_count = desired_image_count.max(surface_capabilities.min_image_count);
+    fn clamp_min_image_count(min_image_count: u32, surface: vk::SurfaceCapabilitiesKHR) -> u32 {
+        let min_image_count = min_image_count.max(surface.min_image_count);
 
-        if surface_capabilities.max_image_count != 0 {
-            desired_image_count = desired_image_count.min(surface_capabilities.max_image_count);
+        if surface.max_image_count == 0 {
+            return min_image_count;
         }
 
-        desired_image_count.min(u8::MAX as u32)
+        min_image_count.min(surface.max_image_count)
     }
 
     #[profiling::function]
@@ -177,11 +215,6 @@ impl Swapchain {
 
             *swapchain = vk::SwapchainKHR::null();
         }
-    }
-
-    /// Gets information about this swapchain.
-    pub fn info(&self) -> SwapchainInfo {
-        self.info.clone()
     }
 
     /// Presents an image which has been previously acquired using
@@ -210,7 +243,7 @@ impl Swapchain {
 
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(wait_semaphores)
-            .swapchains(slice::from_ref(&self.swapchain))
+            .swapchains(slice::from_ref(&self.handle))
             .image_indices(slice::from_ref(&image.image_idx));
 
         let swapchain_ext = Device::expect_swapchain_ext(&self.device);
@@ -221,7 +254,7 @@ impl Swapchain {
                 &present_info,
             ) {
                 Ok(_) => {
-                    Self::destroy_swapchain(&self.device, &mut self.old_swapchain);
+                    Self::destroy_swapchain(&self.device, &mut self.handle_prev);
                 }
                 Err(err)
                     if err == vk::Result::ERROR_DEVICE_LOST
@@ -248,12 +281,11 @@ impl Swapchain {
 
     #[profiling::function]
     fn recreate_swapchain(&mut self) -> Result<(), DriverError> {
-        Self::destroy_swapchain(&self.device, &mut self.old_swapchain);
+        Self::destroy_swapchain(&self.device, &mut self.handle_prev);
 
         let surface_caps = Surface::capabilities(&self.surface)?;
 
-        let desired_image_count =
-            Self::clamp_desired_image_count(self.info.desired_image_count, surface_caps);
+        let min_image_count = Self::clamp_min_image_count(self.info.min_image_count, surface_caps);
 
         let image_usage = self.supported_surface_usage(surface_caps.supported_usage_flags)?;
 
@@ -290,8 +322,8 @@ impl Swapchain {
 
         let swapchain_ext = Device::expect_swapchain_ext(&self.device);
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
-            .surface(*self.surface)
-            .min_image_count(desired_image_count)
+            .surface(self.surface.handle)
+            .min_image_count(min_image_count)
             .image_color_space(self.info.surface.color_space)
             .image_format(self.info.surface.format)
             .image_extent(vk::Extent2D {
@@ -304,7 +336,7 @@ impl Swapchain {
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .present_mode(self.info.present_mode)
             .clipped(true)
-            .old_swapchain(self.swapchain)
+            .old_swapchain(self.handle)
             .image_array_layers(1);
         let swapchain = unsafe { swapchain_ext.create_swapchain(&swapchain_create_info, None) }
             .map_err(|err| {
@@ -350,8 +382,8 @@ impl Swapchain {
         self.info.height = surface_height;
         self.info.width = surface_width;
         self.images = images;
-        self.old_swapchain = self.swapchain;
-        self.swapchain = swapchain;
+        self.handle_prev = self.handle;
+        self.handle = swapchain;
         self.suboptimal = false;
 
         info!(
@@ -429,6 +461,15 @@ impl Swapchain {
     }
 }
 
+#[doc(hidden)]
+impl Deref for Swapchain {
+    type Target = SwapchainRef;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self as *const Self as *const Self::Target) }
+    }
+}
+
 impl Drop for Swapchain {
     #[profiling::function]
     fn drop(&mut self) {
@@ -436,8 +477,8 @@ impl Drop for Swapchain {
             return;
         }
 
-        Self::destroy_swapchain(&self.device, &mut self.old_swapchain);
-        Self::destroy_swapchain(&self.device, &mut self.swapchain);
+        Self::destroy_swapchain(&self.device, &mut self.handle_prev);
+        Self::destroy_swapchain(&self.device, &mut self.handle);
     }
 }
 
@@ -487,7 +528,7 @@ impl Deref for SwapchainImage {
 }
 
 /// Information used to create a [`Swapchain`] instance.
-#[derive(Builder, Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build", error = "SwapchainInfoBuilderError"),
     derive(Clone, Debug),
@@ -495,14 +536,16 @@ impl Deref for SwapchainImage {
 )]
 #[non_exhaustive]
 pub struct SwapchainInfo {
-    /// The desired, but not guaranteed, number of images that will be in the created swapchain.
-    ///
-    /// More images introduces more display lag, but smoother animation.
-    #[builder(default = "2")]
-    pub desired_image_count: u32,
-
     /// The initial height of the surface.
     pub height: u32,
+
+    /// The minimum number of presentable images that the application needs. The implementation will
+    /// either create the swapchain with at least that many images, or it will fail to create the
+    /// swapchain.
+    ///
+    /// More images introduce more display lag, but smoother animation.
+    #[builder(default = "2")]
+    pub min_image_count: u32,
 
     /// The format and color space of the surface.
     pub surface: vk::SurfaceFormatKHR,
@@ -559,11 +602,11 @@ impl SwapchainInfo {
     #[inline(always)]
     pub fn new(width: u32, height: u32, surface: vk::SurfaceFormatKHR) -> SwapchainInfo {
         Self {
-            width,
             height,
-            surface,
-            desired_image_count: 3,
+            min_image_count: 2,
             present_mode: vk::PresentModeKHR::MAILBOX,
+            surface,
+            width,
         }
     }
 
@@ -571,10 +614,10 @@ impl SwapchainInfo {
     #[inline(always)]
     pub fn to_builder(self) -> SwapchainInfoBuilder {
         SwapchainInfoBuilder {
-            desired_image_count: Some(self.desired_image_count),
             height: Some(self.height),
-            surface: Some(self.surface),
+            min_image_count: Some(self.min_image_count),
             present_mode: Some(self.present_mode),
+            surface: Some(self.surface),
             width: Some(self.width),
         }
     }
@@ -624,7 +667,7 @@ mod tests {
     #[test]
     pub fn swapchain_info() {
         let info = Info::new(20, 24, vk::SurfaceFormatKHR::default());
-        let builder = info.clone().to_builder().build();
+        let builder = info.to_builder().build();
 
         assert_eq!(info, builder);
     }

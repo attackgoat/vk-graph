@@ -89,6 +89,10 @@ let my_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
 # Ok(()) }
 ```
 
+_Note:_ dtolnay's read-only public field deref pattern
+(_[Link](https://github.com/dtolnay/case-studies/blob/master/readonly-fields/README.md)_) is used to
+make the information of each resource easily available and immutable.
+
 ## Pooling
 
 Multiple [`pool`] types are available to reduce the impact of frequently creating and dropping
@@ -219,8 +223,8 @@ graph
         // device is &ash::Device
         // cmd_buf is vk::CommandBuffer
         // bindings is a magical object you can retrieve the Vulkan resource from
-        let vk_buffer: vk::Buffer = *bindings[buffer_node];
-        let vk_image: vk::Image = *bindings[image_node];
+        let vk_buffer: vk::Buffer = bindings[buffer_node].handle;
+        let vk_image: vk::Image = bindings[image_node].handle;
 
         // You are free to READ vk_buffer and WRITE vk_image!
     });

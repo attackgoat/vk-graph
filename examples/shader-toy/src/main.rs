@@ -50,7 +50,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let window = WindowBuilder::default()
         .debug(args.debug)
-        .desired_image_count(3)
+        .min_image_count(3)
         .window(|builder| builder.with_inner_size(PhysicalSize::new(1280.0f64, 720.0f64)))
         .build()?;
     let display = GraphicPresenter::new(&window.device).context("Presenter")?;

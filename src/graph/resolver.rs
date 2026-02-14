@@ -633,13 +633,13 @@ impl Resolver {
         if log_enabled!(Trace) {
             let (ty, name, vk_pipeline) = match pipeline {
                 ExecutionPipeline::Compute(pipeline) => {
-                    ("compute", pipeline.name.as_ref(), ***pipeline)
+                    ("compute", pipeline.name.as_ref(), pipeline.handle)
                 }
                 ExecutionPipeline::Graphic(pipeline) => {
                     ("graphic", pipeline.name.as_ref(), vk::Pipeline::null())
                 }
                 ExecutionPipeline::RayTrace(pipeline) => {
-                    ("ray trace", pipeline.name.as_ref(), ***pipeline)
+                    ("ray trace", pipeline.name.as_ref(), pipeline.handle)
                 }
             };
             if let Some(name) = name {
@@ -652,14 +652,14 @@ impl Resolver {
         // We store a shared reference to this pipeline inside the command buffer!
         let pipeline_bind_point = pipeline.bind_point();
         let pipeline = match pipeline {
-            ExecutionPipeline::Compute(pipeline) => ***pipeline,
+            ExecutionPipeline::Compute(pipeline) => pipeline.handle,
             ExecutionPipeline::Graphic(pipeline) => RenderPass::graphic_pipeline(
                 physical_pass.render_pass.as_mut().unwrap(),
                 pipeline,
                 depth_stencil,
                 exec_idx as _,
             )?,
-            ExecutionPipeline::RayTrace(pipeline) => ***pipeline,
+            ExecutionPipeline::RayTrace(pipeline) => pipeline.handle,
         };
 
         unsafe {
@@ -1969,7 +1969,7 @@ impl Resolver {
                                     next_access: access,
                                     prev_access,
                                     resource: BufferResource {
-                                        buffer: **buffer,
+                                        buffer: buffer.handle,
                                         offset: range.start as _,
                                         size: (range.end - range.start) as _,
                                     },
@@ -2002,7 +2002,7 @@ impl Resolver {
                                     next_access: access,
                                     prev_access,
                                     resource: ImageResource {
-                                        image: **image,
+                                        image: image.handle,
                                         range,
                                     },
                                 })
@@ -2248,7 +2248,7 @@ impl Resolver {
                                 {
                                     if initial_layout {
                                         tls.images.push(ImageResourceBarrier {
-                                            image: **image,
+                                            image: image.handle,
                                             next_access: initial_image_layout_access(access),
                                             prev_access,
                                             range,
@@ -3084,7 +3084,7 @@ impl Resolver {
 
                     tls.buffer_infos.push(
                         vk::DescriptorBufferInfo::default()
-                            .buffer(**buffer)
+                            .buffer(buffer.handle)
                             .offset(buffer_view_info.start)
                             .range(buffer_view_info.end - buffer_view_info.start),
                     );
@@ -3108,7 +3108,7 @@ impl Resolver {
 
                     tls.accel_struct_infos.push(
                         vk::WriteDescriptorSetAccelerationStructureKHR::default()
-                            .acceleration_structures(std::slice::from_ref(accel_struct)),
+                            .acceleration_structures(std::slice::from_ref(&accel_struct.handle)),
                     );
                 } else {
                     unimplemented!();

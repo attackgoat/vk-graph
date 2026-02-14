@@ -442,8 +442,8 @@ impl RenderGraph {
         }
 
         pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_image = *bindings[src_node];
-            let dst_image = *bindings[dst_node];
+            let src_image = bindings[src_node].handle;
+            let dst_image = bindings[dst_node].handle;
 
             unsafe {
                 device.cmd_blit_image(
@@ -482,7 +482,7 @@ impl RenderGraph {
             .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
                 device.cmd_clear_color_image(
                     cmd_buf,
-                    *bindings[image_node],
+                    bindings[image_node].handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &vk::ClearColorValue {
                         float32: color_value.0,
@@ -515,7 +515,7 @@ impl RenderGraph {
             .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
                 device.cmd_clear_depth_stencil_image(
                     cmd_buf,
-                    *bindings[image_node],
+                    bindings[image_node].handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &vk::ClearDepthStencilValue { depth, stencil },
                     &[image_view_info.into()],
@@ -601,8 +601,8 @@ impl RenderGraph {
         }
 
         pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_buf = *bindings[src_node];
-            let dst_buf = *bindings[dst_node];
+            let src_buf = bindings[src_node].handle;
+            let dst_buf = bindings[dst_node].handle;
 
             unsafe {
                 device.cmd_copy_buffer(cmd_buf, src_buf, dst_buf, regions.as_ref());
@@ -688,8 +688,8 @@ impl RenderGraph {
         }
 
         pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_buf = *bindings[src_node];
-            let dst_image = *bindings[dst_node];
+            let src_buf = bindings[src_node].handle;
+            let dst_image = bindings[dst_node].handle;
 
             unsafe {
                 device.cmd_copy_buffer_to_image(
@@ -781,8 +781,8 @@ impl RenderGraph {
         }
 
         pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_image = *bindings[src_node];
-            let dst_image = *bindings[dst_node];
+            let src_image = bindings[src_node].handle;
+            let dst_image = bindings[dst_node].handle;
 
             unsafe {
                 device.cmd_copy_image(
@@ -877,8 +877,8 @@ impl RenderGraph {
         }
 
         pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_image = *bindings[src_node];
-            let dst_buf = *bindings[dst_node];
+            let src_image = bindings[src_node].handle;
+            let dst_buf = bindings[dst_node].handle;
 
             unsafe {
                 device.cmd_copy_image_to_buffer(
@@ -915,7 +915,7 @@ impl RenderGraph {
         self.begin_pass("fill buffer")
             .access_node_subrange(buffer_node, AccessType::TransferWrite, region.clone())
             .record_cmd_buf(move |device, cmd_buf, bindings| {
-                let buffer = *bindings[buffer_node];
+                let buffer = bindings[buffer_node].handle;
 
                 unsafe {
                     device.cmd_fill_buffer(
@@ -1024,7 +1024,7 @@ impl RenderGraph {
         self.begin_pass("update buffer")
             .access_node_subrange(buffer_node, AccessType::TransferWrite, offset..data_end)
             .record_cmd_buf(move |device, cmd_buf, bindings| {
-                let buffer = *bindings[buffer_node];
+                let buffer = bindings[buffer_node].handle;
 
                 unsafe {
                     device.cmd_update_buffer(cmd_buf, buffer, offset, data.as_ref());

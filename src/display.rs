@@ -189,7 +189,7 @@ impl Display {
                         discard_contents: false,
                         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        image: ***swapchain_image,
+                        image: swapchain_image.handle,
                         range,
                     }),
                 );
@@ -266,7 +266,7 @@ impl Display {
 
     /// Gets information about the swapchain.
     pub fn swapchain_info(&self) -> SwapchainInfo {
-        self.swapchain.info()
+        self.swapchain.info
     }
 }
 

@@ -15,9 +15,32 @@ use {
 };
 
 /// Smart pointer handle to a [`vk::SurfaceKHR`] object.
+#[repr(C)]
 pub struct Surface {
+    /// The device which owns this buffer resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub device: Arc<Device>,
+
+    #[cfg(not(doc))]
     device: Arc<Device>,
-    surface: vk::SurfaceKHR,
+
+    /// The native Vulkan resource handle of this surface.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::SurfaceKHR,
+
+    #[cfg(not(doc))]
+    handle: vk::SurfaceKHR,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct SurfaceRef {
+    pub device: Arc<Device>,
+    pub handle: vk::SurfaceKHR,
 }
 
 impl Surface {
@@ -26,10 +49,8 @@ impl Surface {
         let surface_ext = Device::expect_surface_ext(&this.device);
 
         unsafe {
-            surface_ext.get_physical_device_surface_capabilities(
-                *this.device.physical_device,
-                this.surface,
-            )
+            surface_ext
+                .get_physical_device_surface_capabilities(*this.device.physical_device, this.handle)
         }
         .inspect_err(|err| warn!("unable to get surface capabilities: {err}"))
         .or(Err(DriverError::Unsupported))
@@ -42,11 +63,12 @@ impl Surface {
     #[profiling::function]
     pub fn create(
         device: &Arc<Device>,
-        window: &(impl HasDisplayHandle + HasWindowHandle),
+        display: impl HasDisplayHandle,
+        window: impl HasWindowHandle,
     ) -> Result<Self, DriverError> {
         let device = Arc::clone(device);
         let instance = Device::instance(&device);
-        let display_handle = window.display_handle().map_err(|err| {
+        let display_handle = display.display_handle().map_err(|err| {
             warn!("{err}");
 
             DriverError::Unsupported
@@ -56,7 +78,7 @@ impl Surface {
 
             DriverError::Unsupported
         })?;
-        let surface = unsafe {
+        let handle = unsafe {
             create_surface(
                 Instance::entry(instance),
                 instance,
@@ -71,7 +93,7 @@ impl Surface {
             DriverError::Unsupported
         })?;
 
-        Ok(Self { device, surface })
+        Ok(Self { device, handle })
     }
 
     /// Lists the supported surface formats.
@@ -82,7 +104,7 @@ impl Surface {
                 .surface_ext
                 .as_ref()
                 .unwrap()
-                .get_physical_device_surface_formats(*this.device.physical_device, this.surface)
+                .get_physical_device_surface_formats(*this.device.physical_device, this.handle)
                 .map_err(|err| {
                     warn!("Unable to get surface formats: {err}");
 
@@ -121,7 +143,7 @@ impl Surface {
         unsafe {
             surface_ext.get_physical_device_surface_present_modes(
                 *this.device.physical_device,
-                this.surface,
+                this.handle,
             )
         }
         .inspect_err(|err| warn!("unable to get surface present modes: {err}"))
@@ -164,11 +186,12 @@ impl Debug for Surface {
     }
 }
 
+#[doc(hidden)]
 impl Deref for Surface {
-    type Target = vk::SurfaceKHR;
+    type Target = SurfaceRef;
 
     fn deref(&self) -> &Self::Target {
-        &self.surface
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 
@@ -182,7 +205,7 @@ impl Drop for Surface {
         let surface_ext = Device::expect_surface_ext(&self.device);
 
         unsafe {
-            surface_ext.destroy_surface(self.surface, None);
+            surface_ext.destroy_surface(self.handle, None);
         }
     }
 }

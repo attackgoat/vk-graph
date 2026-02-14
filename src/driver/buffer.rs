@@ -54,16 +54,50 @@ use std::sync::Mutex;
 /// [buffer]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
 /// [deref]: core::ops::Deref
 /// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
+#[repr(C)]
 pub struct Buffer {
     accesses: Mutex<BufferAccess>,
     allocation: ManuallyDrop<Allocation>,
-    buffer: vk::Buffer,
+
+    /// The device which owns this buffer resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub device: Arc<Device>,
+
+    #[cfg(not(doc))]
     device: Arc<Device>,
 
-    /// Information used to create this object.
+    /// The native Vulkan resource handle of this buffer.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::Buffer,
+
+    #[cfg(not(doc))]
+    handle: vk::Buffer,
+
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub info: BufferInfo,
 
+    #[cfg(not(doc))]
+    info: BufferInfo,
+
     /// A name for debugging purposes.
+    pub name: Option<String>,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct BufferRef {
+    accesses: Mutex<BufferAccess>,
+    allocation: ManuallyDrop<Allocation>,
+    pub device: Arc<Device>,
+    pub handle: vk::Buffer,
+    pub info: BufferInfo,
     pub name: Option<String>,
 }
 
@@ -86,7 +120,7 @@ impl Buffer {
     /// let info = BufferInfo::host_mem(SIZE, vk::BufferUsageFlags::UNIFORM_BUFFER);
     /// let buf = Buffer::create(&device, info)?;
     ///
-    /// assert_ne!(*buf, vk::Buffer::null());
+    /// assert_ne!(buf.handle, vk::Buffer::null());
     /// assert_eq!(buf.info.size, SIZE);
     /// # Ok(()) }
     /// ```
@@ -104,18 +138,18 @@ impl Buffer {
             .usage(info.usage)
             .sharing_mode(vk::SharingMode::CONCURRENT)
             .queue_family_indices(&device.physical_device.queue_family_indices);
-        let buffer = unsafe {
+        let handle = unsafe {
             device.create_buffer(&buffer_info, None).map_err(|err| {
                 warn!("unable to create buffer: {err}");
 
                 DriverError::Unsupported
             })?
         };
-        let mut requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+        let mut requirements = unsafe { device.get_buffer_memory_requirements(handle) };
         requirements.alignment = requirements.alignment.max(info.alignment);
 
         let allocation_scheme = if info.dedicated {
-            AllocationScheme::DedicatedBuffer(buffer)
+            AllocationScheme::DedicatedBuffer(handle)
         } else {
             AllocationScheme::GpuAllocatorManaged
         };
@@ -147,14 +181,14 @@ impl Buffer {
                     warn!("unable to allocate buffer memory: {err}");
 
                     unsafe {
-                        device.destroy_buffer(buffer, None);
+                        device.destroy_buffer(handle, None);
                     }
 
                     DriverError::from_alloc_err(err)
                 })
                 .and_then(|allocation| {
                     if let Err(err) = unsafe {
-                        device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                        device.bind_buffer_memory(handle, allocation.memory(), allocation.offset())
                     } {
                         warn!("unable to bind buffer memory: {err}");
 
@@ -163,7 +197,7 @@ impl Buffer {
                         }
 
                         unsafe {
-                            device.destroy_buffer(buffer, None);
+                            device.destroy_buffer(handle, None);
                         }
 
                         Err(DriverError::OutOfMemory)
@@ -173,13 +207,13 @@ impl Buffer {
                 })
         }?;
 
-        debug_assert_ne!(buffer, vk::Buffer::null());
+        debug_assert_ne!(handle, vk::Buffer::null());
 
         Ok(Self {
             accesses: Mutex::new(BufferAccess::new(info.size)),
             allocation: ManuallyDrop::new(allocation),
-            buffer,
             device,
+            handle,
             info,
             name: None,
         })
@@ -202,7 +236,7 @@ impl Buffer {
     /// const DATA: [u8; 4] = [0xfe, 0xed, 0xbe, 0xef];
     /// let buf = Buffer::create_from_slice(&device, vk::BufferUsageFlags::UNIFORM_BUFFER, &DATA)?;
     ///
-    /// assert_ne!(*buf, vk::Buffer::null());
+    /// assert_ne!(buf.handle, vk::Buffer::null());
     /// assert_eq!(buf.info.size, 4);
     /// assert_eq!(Buffer::mapped_slice(&buf), &DATA);
     /// # Ok(()) }
@@ -359,7 +393,7 @@ impl Buffer {
 
         unsafe {
             this.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(this.buffer),
+                &vk::BufferDeviceAddressInfo::default().buffer(this.handle),
             )
         }
     }
@@ -443,18 +477,19 @@ impl Buffer {
 impl Debug for Buffer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(name) = &self.name {
-            write!(f, "{} ({:?})", name, self.buffer)
+            write!(f, "{} ({:?})", name, self.handle)
         } else {
-            write!(f, "{:?}", self.buffer)
+            write!(f, "{:?}", self.handle)
         }
     }
 }
 
+#[doc(hidden)]
 impl Deref for Buffer {
-    type Target = vk::Buffer;
+    type Target = BufferRef;
 
     fn deref(&self) -> &Self::Target {
-        &self.buffer
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 
@@ -479,7 +514,7 @@ impl Drop for Buffer {
         .unwrap_or_else(|err| warn!("unable to free buffer allocation: {err}"));
 
         unsafe {
-            self.device.destroy_buffer(self.buffer, None);
+            self.device.destroy_buffer(self.handle, None);
         }
     }
 }

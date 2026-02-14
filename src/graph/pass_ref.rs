@@ -193,7 +193,7 @@ impl Acceleration<'_> {
                         .ty(info.ty)
                         .flags(info.flags)
                         .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                        .dst_acceleration_structure(*self.bindings[accel_struct])
+                        .dst_acceleration_structure(self.bindings[accel_struct].handle)
                         .geometries(&tls.geometries)
                         .scratch_data(scratch_addr)],
                     &[&tls.ranges],
@@ -247,7 +247,7 @@ impl Acceleration<'_> {
                             .ty(info.ty)
                             .flags(info.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(*self.bindings[accel_struct])
+                            .dst_acceleration_structure(self.bindings[accel_struct].handle)
                             .geometries(&tls.geometries)
                             .scratch_data(scratch_addr)],
                         &[range_base],
@@ -314,7 +314,7 @@ impl Acceleration<'_> {
                             .ty(info.build_data.ty)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(*self.bindings[info.accel_struct])
+                            .dst_acceleration_structure(self.bindings[info.accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -390,7 +390,7 @@ impl Acceleration<'_> {
                             .ty(info.build_data.ty)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(*self.bindings[info.accel_struct])
+                            .dst_acceleration_structure(self.bindings[info.accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_data.into()),
                     );
@@ -468,8 +468,8 @@ impl Acceleration<'_> {
                         .ty(info.ty)
                         .flags(info.flags)
                         .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                        .dst_acceleration_structure(*self.bindings[dst_accel_struct])
-                        .src_acceleration_structure(*self.bindings[src_accel_struct])
+                        .dst_acceleration_structure(self.bindings[dst_accel_struct].handle)
+                        .src_acceleration_structure(self.bindings[src_accel_struct].handle)
                         .geometries(&tls.geometries)
                         .scratch_data(scratch_addr)],
                     &[&tls.ranges],
@@ -525,8 +525,8 @@ impl Acceleration<'_> {
                             .ty(info.ty)
                             .flags(info.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .src_acceleration_structure(*self.bindings[src_accel_struct])
-                            .dst_acceleration_structure(*self.bindings[dst_accel_struct])
+                            .src_acceleration_structure(self.bindings[src_accel_struct].handle)
+                            .dst_acceleration_structure(self.bindings[dst_accel_struct].handle)
                             .geometries(&tls.geometries)
                             .scratch_data(scratch_addr)],
                         &[range_base],
@@ -593,8 +593,8 @@ impl Acceleration<'_> {
                             .ty(info.update_data.ty)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .dst_acceleration_structure(*self.bindings[info.dst_accel_struct])
-                            .src_acceleration_structure(*self.bindings[info.src_accel_struct])
+                            .dst_acceleration_structure(self.bindings[info.dst_accel_struct].handle)
+                            .src_acceleration_structure(self.bindings[info.src_accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -670,8 +670,8 @@ impl Acceleration<'_> {
                             .ty(info.update_data.ty)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .src_acceleration_structure(*self.bindings[info.src_accel_struct])
-                            .dst_acceleration_structure(*self.bindings[info.dst_accel_struct])
+                            .src_acceleration_structure(self.bindings[info.src_accel_struct].handle)
+                            .dst_acceleration_structure(self.bindings[info.dst_accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -1036,7 +1036,7 @@ bind!(RayTrace);
 ///         .record_cmd_buf(move |device, cmd_buf, bindings| {
 ///             let my_image = &bindings[my_image_node];
 ///
-///             assert_ne!(**my_image, vk::Image::null());
+///             assert_ne!(my_image.handle, vk::Image::null());
 ///             assert_eq!(my_image.info.width, 32);
 ///         });
 /// # Ok(()) }
@@ -1350,8 +1350,11 @@ impl Compute<'_> {
         let args_buf = args_buf.into();
 
         unsafe {
-            self.device
-                .cmd_dispatch_indirect(self.cmd_buf, *self.bindings[args_buf], args_offset);
+            self.device.cmd_dispatch_indirect(
+                self.cmd_buf,
+                self.bindings[args_buf].handle,
+                args_offset,
+            );
         }
 
         self
@@ -1695,7 +1698,7 @@ impl Draw<'_> {
         unsafe {
             self.device.cmd_bind_index_buffer(
                 self.cmd_buf,
-                *self.bindings[buffer],
+                self.bindings[buffer].handle,
                 offset,
                 index_ty,
             );
@@ -1766,7 +1769,7 @@ impl Draw<'_> {
             self.device.cmd_bind_vertex_buffers(
                 self.cmd_buf,
                 0,
-                from_ref(&self.bindings[buffer]),
+                from_ref(&self.bindings[buffer].handle),
                 from_ref(&offset),
             );
         }
@@ -1801,7 +1804,7 @@ impl Draw<'_> {
             for (buffer, offset) in buffer_offsets {
                 let buffer = buffer.into();
 
-                buffers.push(*self.bindings[buffer]);
+                buffers.push(self.bindings[buffer].handle);
                 offsets.push(offset);
             }
 
@@ -1959,7 +1962,7 @@ impl Draw<'_> {
         unsafe {
             self.device.cmd_draw_indexed_indirect(
                 self.cmd_buf,
-                *self.bindings[buffer],
+                self.bindings[buffer].handle,
                 offset,
                 draw_count,
                 stride,
@@ -1997,9 +2000,9 @@ impl Draw<'_> {
         unsafe {
             self.device.cmd_draw_indexed_indirect_count(
                 self.cmd_buf,
-                *self.bindings[buffer],
+                self.bindings[buffer].handle,
                 offset,
-                *self.bindings[count_buf],
+                self.bindings[count_buf].handle,
                 count_buf_offset,
                 max_draw_count,
                 stride,
@@ -2025,7 +2028,7 @@ impl Draw<'_> {
         unsafe {
             self.device.cmd_draw_indirect(
                 self.cmd_buf,
-                *self.bindings[buffer],
+                self.bindings[buffer].handle,
                 offset,
                 draw_count,
                 stride,
@@ -2054,9 +2057,9 @@ impl Draw<'_> {
         unsafe {
             self.device.cmd_draw_indirect_count(
                 self.cmd_buf,
-                *self.bindings[buffer],
+                self.bindings[buffer].handle,
                 offset,
-                *self.bindings[count_buf],
+                self.bindings[count_buf].handle,
                 count_buf_offset,
                 max_draw_count,
                 stride,
