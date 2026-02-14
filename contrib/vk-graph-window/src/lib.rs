@@ -4,6 +4,7 @@ pub use self::frame::FrameContext;
 
 use {
     log::{info, trace, warn},
+    std::{error, fmt, sync::Arc},
     vk_graph::{
         driver::{
             ash::vk,
@@ -16,7 +17,6 @@ use {
         pool::hash::HashPool,
         Display, DisplayError, DisplayInfoBuilder,
     },
-    std::{error, fmt, sync::Arc},
     winit::{
         application::ApplicationHandler,
         error::EventLoopError,
@@ -90,17 +90,27 @@ impl Window {
                 }
 
                 if let Some(v_sync) = self.data.v_sync {
-                    swapchain_info = if v_sync {
-                        swapchain_info.present_modes(vec![
-                            vk::PresentModeKHR::FIFO_RELAXED,
-                            vk::PresentModeKHR::FIFO,
-                        ])
-                    } else {
-                        swapchain_info.present_modes(vec![
-                            vk::PresentModeKHR::MAILBOX,
-                            vk::PresentModeKHR::IMMEDIATE,
-                        ])
-                    };
+                    let present_modes = Surface::present_modes(&surface)?;
+                    if !present_modes.is_empty() {
+                        let best_modes = if v_sync {
+                            [vk::PresentModeKHR::FIFO_RELAXED, vk::PresentModeKHR::FIFO].as_slice()
+                        } else {
+                            [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE].as_slice()
+                        };
+
+                        swapchain_info = swapchain_info.present_mode(
+                            best_modes
+                                .iter()
+                                .copied()
+                                .find(|best| present_modes.contains(best))
+                                .or_else(|| present_modes.get(0).copied())
+                                .ok_or_else(|| {
+                                    warn!("unsupported present modes: {present_modes:?}");
+
+                                    DriverError::Unsupported
+                                })?,
+                        );
+                    }
                 }
 
                 let swapchain = Swapchain::new(&self.device, surface, swapchain_info)?;

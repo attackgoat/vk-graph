@@ -147,7 +147,9 @@ where
             profiling::scope!("check aliases");
 
             for (item_info, item) in &self.buffers {
-                if item_info.mappable == info.mappable
+                if (item_info.dedicated & info.dedicated) == info.dedicated
+                    && item_info.host_read == info.host_read
+                    && item_info.host_write == info.host_write
                     && item_info.alignment >= info.alignment
                     && item_info.size >= info.size
                     && item_info.usage.contains(info.usage)

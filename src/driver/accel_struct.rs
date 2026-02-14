@@ -127,7 +127,7 @@ impl AccelerationStructure {
 
         let device = Arc::clone(device);
 
-        Ok(AccelerationStructure {
+        Ok(Self {
             access: Mutex::new(AccessType::Nothing),
             accel_struct: (accel_struct, buffer),
             device,

@@ -152,8 +152,10 @@ impl Pool<BufferInfo, Buffer> for FifoPool {
             // superset of usage flags)
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
-                if item.info.alignment >= info.alignment
-                    && item.info.mappable == info.mappable
+                if (item.info.dedicated & info.dedicated) == info.dedicated
+                    && item.info.host_read == info.host_read
+                    && item.info.host_write == info.host_write
+                    && item.info.alignment >= info.alignment
                     && item.info.size >= info.size
                     && item.info.usage.contains(info.usage)
                 {

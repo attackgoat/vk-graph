@@ -114,8 +114,15 @@ impl Buffer {
         let mut requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
         requirements.alignment = requirements.alignment.max(info.alignment);
 
-        let memory_location = if info.mappable {
+        let allocation_scheme = if info.dedicated {
+            AllocationScheme::DedicatedBuffer(buffer)
+        } else {
+            AllocationScheme::GpuAllocatorManaged
+        };
+        let location = if info.host_write {
             MemoryLocation::CpuToGpu
+        } else if info.host_read {
+            MemoryLocation::GpuToCpu
         } else {
             MemoryLocation::GpuOnly
         };
@@ -132,9 +139,9 @@ impl Buffer {
                 .allocate(&AllocationCreateDesc {
                     name: "buffer",
                     requirements,
-                    location: memory_location,
+                    location,
                     linear: true, // Buffers are always linear
-                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                    allocation_scheme,
                 })
                 .map_err(|err| {
                     warn!("unable to allocate buffer memory: {err}");
@@ -387,8 +394,8 @@ impl Buffer {
     #[profiling::function]
     pub fn mapped_slice(this: &Self) -> &[u8] {
         debug_assert!(
-            this.info.mappable,
-            "Buffer is not mappable - create using mappable flag"
+            this.info.host_read,
+            "Buffer is not readable - create using host_read flag"
         );
 
         &this.allocation.mapped_slice().unwrap()[0..this.info.size as usize]
@@ -425,8 +432,8 @@ impl Buffer {
     #[profiling::function]
     pub fn mapped_slice_mut(this: &mut Self) -> &mut [u8] {
         debug_assert!(
-            this.info.mappable,
-            "Buffer is not mappable - create using mappable flag"
+            this.info.host_write,
+            "Buffer is not writable - create using host_write flag"
         );
 
         &mut this.allocation.mapped_slice_mut().unwrap()[0..this.info.size as usize]
@@ -710,9 +717,25 @@ pub struct BufferInfo {
     #[builder(default = "1")]
     pub alignment: vk::DeviceSize,
 
-    /// Specifies a buffer whose memory is host visible and may be mapped.
+    /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the internal
+    /// memory allocation pool transient resources share.
+    ///
+    /// The driver may optimize access to dedicated buffers.
     #[builder(default)]
-    pub mappable: bool,
+    pub dedicated: bool,
+
+    /// Specifies a buffer whose memory is host visible and may be mapped.
+    ///
+    /// Memory optimal for CPU readback of data may be used.
+    #[builder(default)]
+    pub host_read: bool,
+
+    /// Specifies a buffer whose memory is host visible and may be mapped.
+    ///
+    /// Memory optimal for uploading data to the GPU and potentially for constant buffers may be
+    /// used.
+    #[builder(default)]
+    pub host_write: bool,
 
     /// Size in bytes of the buffer to be created.
     pub size: vk::DeviceSize,
@@ -730,7 +753,9 @@ impl BufferInfo {
     pub const fn device_mem(size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> BufferInfo {
         BufferInfo {
             alignment: 1,
-            mappable: false,
+            dedicated: false,
+            host_read: false,
+            host_write: false,
             size,
             usage,
         }
@@ -754,30 +779,17 @@ impl BufferInfo {
 
         BufferInfo {
             alignment: 1,
-            mappable: true,
+            dedicated: false,
+            host_read: true,
+            host_write: true,
             size,
             usage,
         }
     }
 
-    /// Specifies a non-mappable buffer with the given `size` and `usage` values.
-    #[allow(clippy::new_ret_no_self)]
-    #[deprecated = "Use BufferInfo::device_mem()"]
-    #[doc(hidden)]
-    pub fn new(size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> BufferInfoBuilder {
-        Self::device_mem(size, usage).to_builder()
-    }
-
-    /// Specifies a mappable buffer with the given `size` and `usage` values.
-    ///
-    /// # Note
-    ///
-    /// For convenience the given usage value will be bitwise OR'd with
-    /// `TRANSFER_DST | TRANSFER_SRC`.
-    #[deprecated = "Use BufferInfo::host_mem()"]
-    #[doc(hidden)]
-    pub fn new_mappable(size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> BufferInfoBuilder {
-        Self::host_mem(size, usage).to_builder()
+    /// Returns `true` if this information specifies host-accessible memory.
+    pub fn is_host_mem(&self) -> bool {
+        self.host_read | self.host_write
     }
 
     /// Converts a `BufferInfo` into a `BufferInfoBuilder`.
@@ -785,7 +797,9 @@ impl BufferInfo {
     pub fn to_builder(self) -> BufferInfoBuilder {
         BufferInfoBuilder {
             alignment: Some(self.alignment),
-            mappable: Some(self.mappable),
+            dedicated: Some(self.dedicated),
+            host_read: Some(self.host_read),
+            host_write: Some(self.host_write),
             size: Some(self.size),
             usage: Some(self.usage),
         }
@@ -809,9 +823,8 @@ impl BufferInfoBuilder {
             Ok(info) => info,
         };
 
-        assert_eq!(
-            res.alignment.count_ones(),
-            1,
+        assert!(
+            res.alignment.is_power_of_two(),
             "Alignment must be a power of two"
         );
 

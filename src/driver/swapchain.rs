@@ -251,7 +251,6 @@ impl Swapchain {
         Self::destroy_swapchain(&self.device, &mut self.old_swapchain);
 
         let surface_caps = Surface::capabilities(&self.surface)?;
-        let present_modes = Surface::present_modes(&self.surface)?;
 
         let desired_image_count =
             Self::clamp_desired_image_count(self.info.desired_image_count, surface_caps);
@@ -280,14 +279,6 @@ impl Swapchain {
             return Err(DriverError::Unsupported);
         }
 
-        let present_mode = self
-            .info
-            .present_modes
-            .iter()
-            .copied()
-            .find(|mode| present_modes.contains(mode))
-            .unwrap_or(vk::PresentModeKHR::FIFO);
-
         let pre_transform = if surface_caps
             .supported_transforms
             .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
@@ -311,7 +302,7 @@ impl Swapchain {
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(pre_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(present_mode)
+            .present_mode(self.info.present_mode)
             .clipped(true)
             .old_swapchain(self.swapchain)
             .image_array_layers(1);
@@ -364,9 +355,10 @@ impl Swapchain {
         self.suboptimal = false;
 
         info!(
-            "swapchain {}x{} {present_mode:?}x{} {:?} {image_usage:#?}",
+            "swapchain {}x{} {:?}x{} {:?} {image_usage:#?}",
             self.info.width,
             self.info.height,
+            self.info.present_mode,
             self.images.len(),
             self.info.surface.format,
         );
@@ -506,7 +498,7 @@ pub struct SwapchainInfo {
     /// The desired, but not guaranteed, number of images that will be in the created swapchain.
     ///
     /// More images introduces more display lag, but smoother animation.
-    #[builder(default = "3")]
+    #[builder(default = "2")]
     pub desired_image_count: u32,
 
     /// The initial height of the surface.
@@ -555,8 +547,8 @@ pub struct SwapchainInfo {
     ///
     /// * **Tearing**: No tearing will be observed.
     /// * **Also known as**: "Fast Vsync"
-    #[builder(default = vec![vk::PresentModeKHR::FIFO_RELAXED, vk::PresentModeKHR::FIFO])]
-    pub present_modes: Vec<vk::PresentModeKHR>,
+    #[builder(default = vk::PresentModeKHR::MAILBOX)]
+    pub present_mode: vk::PresentModeKHR,
 
     /// The initial width of the surface.
     pub width: u32,
@@ -571,7 +563,7 @@ impl SwapchainInfo {
             height,
             surface,
             desired_image_count: 3,
-            present_modes: vec![vk::PresentModeKHR::FIFO_RELAXED, vk::PresentModeKHR::FIFO],
+            present_mode: vk::PresentModeKHR::MAILBOX,
         }
     }
 
@@ -582,7 +574,7 @@ impl SwapchainInfo {
             desired_image_count: Some(self.desired_image_count),
             height: Some(self.height),
             surface: Some(self.surface),
-            present_modes: Some(self.present_modes),
+            present_mode: Some(self.present_mode),
             width: Some(self.width),
         }
     }
