@@ -228,9 +228,9 @@ impl AccelerationStructure {
     /// [_Ash_]: https://crates.io/crates/ash
     /// [_Erupt_]: https://crates.io/crates/erupt
     #[profiling::function]
-    pub fn access(this: &Self, access: AccessType) -> AccessType {
+    pub fn access(&self, access: AccessType) -> AccessType {
         #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-        let mut access_guard = this.access.lock();
+        let mut access_guard = self.access.lock();
 
         #[cfg(not(feature = "parking_lot"))]
         let mut access_guard = access_guard.unwrap();
@@ -261,13 +261,13 @@ impl AccelerationStructure {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn device_address(this: &Self) -> vk::DeviceAddress {
-        let accel_struct_ext = Device::expect_accel_struct_ext(&this.device);
+    pub fn device_address(&self) -> vk::DeviceAddress {
+        let accel_struct_ext = Device::expect_accel_struct_ext(&self.device);
 
         unsafe {
             accel_struct_ext.get_acceleration_structure_device_address(
                 &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                    .acceleration_structure(this.handle),
+                    .acceleration_structure(self.handle),
             )
         }
     }

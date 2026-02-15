@@ -352,20 +352,20 @@ impl RayTracePipeline {
     /// See
     /// [ray_trace.rs](https://github.com/attackgoat/vk-graph/blob/master/examples/ray_trace.rs)
     /// for a detail example which constructs a shader binding table buffer using this function.
-    pub fn group_handle(this: &Self, idx: usize) -> Result<&[u8], DriverError> {
+    pub fn group_handle(&self, idx: usize) -> &[u8] {
         let &RayTraceProperties {
             shader_group_handle_size,
             ..
-        } = this
+        } = self
             .device
             .physical_device
             .ray_trace_properties
             .as_ref()
-            .ok_or(DriverError::Unsupported)?;
+            .unwrap();
         let start = idx * shader_group_handle_size as usize;
         let end = start + shader_group_handle_size as usize;
 
-        Ok(&this.shader_group_handles[start..end])
+        &self.shader_group_handles[start..end]
     }
 
     /// Query ray trace pipeline shader group shader stack size.
@@ -374,24 +374,24 @@ impl RayTracePipeline {
     /// called from the specified shader group.
     #[profiling::function]
     pub fn group_stack_size(
-        this: &Self,
+        &self,
         group: u32,
         group_shader: vk::ShaderGroupShaderKHR,
     ) -> vk::DeviceSize {
         unsafe {
             // Safely use unchecked because ray_trace_ext is checked during pipeline creation
-            this.device
+            self.device
                 .ray_trace_ext
                 .as_ref()
                 .unwrap_unchecked()
-                .get_ray_tracing_shader_group_stack_size(this.handle, group, group_shader)
+                .get_ray_tracing_shader_group_stack_size(self.handle, group, group_shader)
         }
     }
 
     /// Sets the debugging name assigned to this pipeline.
-    pub fn with_name(mut this: Self, name: impl Into<String>) -> Self {
-        this.name = Some(name.into());
-        this
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 }
 

@@ -298,7 +298,7 @@ impl Image {
     /// [_Erupt_]: https://crates.io/crates/erupt
     #[profiling::function]
     pub fn access(
-        this: &Self,
+        &self,
         access: AccessType,
         mut access_range: vk::ImageSubresourceRange,
     ) -> impl Iterator<Item = (AccessType, vk::ImageSubresourceRange)> + '_ {
@@ -306,30 +306,30 @@ impl Image {
         {
             assert_aspect_mask_supported(access_range.aspect_mask);
 
-            assert!(format_aspect_mask(this.info.fmt).contains(access_range.aspect_mask));
+            assert!(format_aspect_mask(self.info.fmt).contains(access_range.aspect_mask));
         }
 
         if access_range.layer_count == vk::REMAINING_ARRAY_LAYERS {
-            debug_assert!(access_range.base_array_layer < this.info.array_layer_count);
+            debug_assert!(access_range.base_array_layer < self.info.array_layer_count);
 
-            access_range.layer_count = this.info.array_layer_count - access_range.base_array_layer
+            access_range.layer_count = self.info.array_layer_count - access_range.base_array_layer
         }
 
         debug_assert!(
-            access_range.base_array_layer + access_range.layer_count <= this.info.array_layer_count
+            access_range.base_array_layer + access_range.layer_count <= self.info.array_layer_count
         );
 
         if access_range.level_count == vk::REMAINING_MIP_LEVELS {
-            debug_assert!(access_range.base_mip_level < this.info.mip_level_count);
+            debug_assert!(access_range.base_mip_level < self.info.mip_level_count);
 
-            access_range.level_count = this.info.mip_level_count - access_range.base_mip_level
+            access_range.level_count = self.info.mip_level_count - access_range.base_mip_level
         }
 
         debug_assert!(
-            access_range.base_mip_level + access_range.level_count <= this.info.mip_level_count
+            access_range.base_mip_level + access_range.level_count <= self.info.mip_level_count
         );
 
-        let accesses = this.accesses.lock();
+        let accesses = self.accesses.lock();
 
         #[cfg(not(feature = "parking_lot"))]
         let accesses = accesses.unwrap();
@@ -338,10 +338,10 @@ impl Image {
     }
 
     #[profiling::function]
-    pub(super) fn clone_swapchain(this: &Self) -> Self {
+    pub(super) fn clone_swapchain(&self) -> Self {
         // Moves the image view cache from the current instance to the clone!
         #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-        let mut image_view_cache = this.image_view_cache.lock();
+        let mut image_view_cache = self.image_view_cache.lock();
 
         #[cfg(not(feature = "parking_lot"))]
         let mut image_view_cache = image_view_cache.unwrap();
@@ -350,28 +350,28 @@ impl Image {
 
         // Does NOT copy over the image accesses!
         // Force previous access to general to wait for presentation
-        let Self { handle, info, .. } = *this;
+        let Self { handle, info, .. } = *self;
         let accesses = ImageAccess::new(info, AccessType::General);
         let accesses = Mutex::new(accesses);
 
         Self {
             accesses,
             allocation: None,
-            device: Arc::clone(&this.device),
+            device: Arc::clone(&self.device),
             handle,
             image_view_cache: Mutex::new(image_view_cache),
             info,
-            name: this.name.clone(),
+            name: self.name.clone(),
         }
     }
 
     #[profiling::function]
-    fn drop_allocation(this: &Self, allocation: Allocation) {
+    fn drop_allocation(&self, allocation: Allocation) {
         {
             profiling::scope!("views");
 
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut image_view_cache = this.image_view_cache.lock();
+            let mut image_view_cache = self.image_view_cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
             let mut image_view_cache = image_view_cache.unwrap();
@@ -380,14 +380,14 @@ impl Image {
         }
 
         unsafe {
-            this.device.destroy_image(this.handle, None);
+            self.device.destroy_image(self.handle, None);
         }
 
         {
             profiling::scope!("deallocate");
 
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = this.device.allocator.lock();
+            let mut allocator = self.device.allocator.lock();
 
             #[cfg(not(feature = "parking_lot"))]
             let mut allocator = allocator.unwrap();
@@ -424,9 +424,9 @@ impl Image {
     }
 
     #[profiling::function]
-    pub(crate) fn view(this: &Self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
+    pub(crate) fn view(&self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
         #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-        let mut image_view_cache = this.image_view_cache.lock();
+        let mut image_view_cache = self.image_view_cache.lock();
 
         #[cfg(not(feature = "parking_lot"))]
         let mut image_view_cache = image_view_cache.unwrap();
@@ -435,7 +435,7 @@ impl Image {
             Entry::Occupied(entry) => entry.get().image_view,
             Entry::Vacant(entry) => {
                 entry
-                    .insert(ImageView::create(&this.device, info, this.handle)?)
+                    .insert(ImageView::create(&self.device, info, self.handle)?)
                     .image_view
             }
         })

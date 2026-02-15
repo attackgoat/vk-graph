@@ -45,12 +45,12 @@ pub struct SurfaceRef {
 
 impl Surface {
     /// Query surface capabilities
-    pub fn capabilities(this: &Self) -> Result<vk::SurfaceCapabilitiesKHR, DriverError> {
-        let surface_ext = Device::expect_surface_ext(&this.device);
+    pub fn capabilities(&self) -> Result<vk::SurfaceCapabilitiesKHR, DriverError> {
+        let surface_ext = Device::expect_surface_ext(&self.device);
 
         unsafe {
             surface_ext
-                .get_physical_device_surface_capabilities(*this.device.physical_device, this.handle)
+                .get_physical_device_surface_capabilities(*self.device.physical_device, self.handle)
         }
         .inspect_err(|err| warn!("unable to get surface capabilities: {err}"))
         .or(Err(DriverError::Unsupported))
@@ -98,13 +98,13 @@ impl Surface {
 
     /// Lists the supported surface formats.
     #[profiling::function]
-    pub fn formats(this: &Self) -> Result<Vec<vk::SurfaceFormatKHR>, DriverError> {
+    pub fn formats(&self) -> Result<Vec<vk::SurfaceFormatKHR>, DriverError> {
         unsafe {
-            this.device
+            self.device
                 .surface_ext
                 .as_ref()
                 .unwrap()
-                .get_physical_device_surface_formats(*this.device.physical_device, this.handle)
+                .get_physical_device_surface_formats(*self.device.physical_device, self.handle)
                 .map_err(|err| {
                     warn!("Unable to get surface formats: {err}");
 
@@ -137,13 +137,13 @@ impl Surface {
     }
 
     /// Query supported presentation modes.
-    pub fn present_modes(this: &Self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
-        let surface_ext = Device::expect_surface_ext(&this.device);
+    pub fn present_modes(&self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
+        let surface_ext = Device::expect_surface_ext(&self.device);
 
         unsafe {
             surface_ext.get_physical_device_surface_present_modes(
-                *this.device.physical_device,
-                this.handle,
+                *self.device.physical_device,
+                self.handle,
             )
         }
         .inspect_err(|err| warn!("unable to get surface present modes: {err}"))

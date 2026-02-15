@@ -616,9 +616,9 @@ impl GraphicPipeline {
     }
 
     /// Sets the debugging name assigned to this pipeline.
-    pub fn with_name(mut this: Self, name: impl Into<String>) -> Self {
-        this.name = Some(name.into());
-        this
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 }
 

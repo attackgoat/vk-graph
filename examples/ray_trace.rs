@@ -533,17 +533,17 @@ fn main() -> anyhow::Result<()> {
         .unwrap();
 
         let data = Buffer::mapped_slice_mut(&mut buf);
-        let rgen_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 0)?;
+        let rgen_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 0);
         data[0..rgen_handle.len()].copy_from_slice(rgen_handle);
 
-        let hit_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 1)?;
+        let hit_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 1);
         data[sbt_hit_start as usize..sbt_hit_start as usize + hit_handle.len()]
             .copy_from_slice(hit_handle);
 
-        let miss_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 2)?;
+        let miss_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 2);
         data[sbt_miss_start as usize..sbt_miss_start as usize + miss_handle.len()]
             .copy_from_slice(miss_handle);
-        let miss_shadow_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 3)?;
+        let miss_shadow_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 3);
         let sbt_miss_shadow_start = sbt_miss_start + shader_group_handle_alignment;
         data[sbt_miss_shadow_start as usize
             ..sbt_miss_shadow_start as usize + miss_shadow_handle.len()]

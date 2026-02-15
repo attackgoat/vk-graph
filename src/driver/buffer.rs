@@ -307,17 +307,17 @@ impl Buffer {
     /// [_Erupt_]: https://crates.io/crates/erupt
     #[profiling::function]
     pub fn access(
-        this: &Self,
+        &self,
         access: AccessType,
         access_range: impl Into<BufferSubresourceRange>,
     ) -> impl Iterator<Item = (AccessType, BufferSubresourceRange)> + '_ {
         let mut access_range: BufferSubresourceRange = access_range.into();
 
         if access_range.end == vk::WHOLE_SIZE {
-            access_range.end = this.info.size;
+            access_range.end = self.info.size;
         }
 
-        let accesses = this.accesses.lock();
+        let accesses = self.accesses.lock();
 
         #[cfg(not(feature = "parking_lot"))]
         let accesses = accesses.unwrap();
@@ -352,10 +352,9 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn copy_from_slice(this: &mut Self, offset: vk::DeviceSize, slice: impl AsRef<[u8]>) {
+    pub fn copy_from_slice(&mut self, offset: vk::DeviceSize, slice: impl AsRef<[u8]>) {
         let slice = slice.as_ref();
-        Self::mapped_slice_mut(this)[offset as _..offset as usize + slice.len()]
-            .copy_from_slice(slice);
+        self.mapped_slice_mut()[offset as _..offset as usize + slice.len()].copy_from_slice(slice);
     }
 
     /// Returns the device address of this object.
@@ -384,16 +383,16 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn device_address(this: &Self) -> vk::DeviceAddress {
+    pub fn device_address(&self) -> vk::DeviceAddress {
         debug_assert!(
-            this.info
+            self.info
                 .usage
                 .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
         );
 
         unsafe {
-            this.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(this.handle),
+            self.device.get_buffer_device_address(
+                &vk::BufferDeviceAddressInfo::default().buffer(self.handle),
             )
         }
     }
@@ -426,13 +425,13 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn mapped_slice(this: &Self) -> &[u8] {
+    pub fn mapped_slice(&self) -> &[u8] {
         debug_assert!(
-            this.info.host_read,
+            self.info.host_read,
             "Buffer is not readable - create using host_read flag"
         );
 
-        &this.allocation.mapped_slice().unwrap()[0..this.info.size as usize]
+        &self.allocation.mapped_slice().unwrap()[0..self.info.size as usize]
     }
 
     /// Returns a mapped mutable slice.
@@ -464,13 +463,13 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn mapped_slice_mut(this: &mut Self) -> &mut [u8] {
+    pub fn mapped_slice_mut(&mut self) -> &mut [u8] {
         debug_assert!(
-            this.info.host_write,
+            self.info.host_write,
             "Buffer is not writable - create using host_write flag"
         );
 
-        &mut this.allocation.mapped_slice_mut().unwrap()[0..this.info.size as usize]
+        &mut self.allocation.mapped_slice_mut().unwrap()[0..self.info.size as usize]
     }
 }
 
