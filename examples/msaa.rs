@@ -6,7 +6,7 @@ use {
     glam::{Mat4, Vec3},
     log::warn,
     std::{mem::size_of, sync::Arc},
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
     winit::{event::Event, keyboard::KeyCode},

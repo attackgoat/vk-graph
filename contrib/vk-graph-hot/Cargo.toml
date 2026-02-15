@@ -16,11 +16,12 @@ anyhow = "1.0"
 derive_builder = "0.13"
 log = "0.4"
 notify = "6.1"
-vk-graph = { path = "../.."}
+vk-graph = { path = "../..", default-features = false }
 vk-graph-window = { path = "../vk-graph-window" }
 shader-prepper = "0.3.0-pre.3"
-shaderc = "0.8"
+shaderc = "0.10"
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }
 pretty_env_logger = "0.5"
+vk-graph-prelude = { path = "../vk-graph-prelude" }

@@ -5,7 +5,7 @@ use {
     image::ImageReader,
     log::info,
     std::{io::Cursor, time::Instant},
-    vk_graph::prelude::LazyPool,
+    vk_graph::pool::lazy::LazyPool,
     vk_graph_fx::*,
     vk_graph_imgui::prelude::*,
     vk_graph_window::WindowBuilder,

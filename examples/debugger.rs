@@ -24,7 +24,7 @@
     To continue, uncomment line 30.
 */
 fn main() -> Result<(), vk_graph_window::WindowError> {
-    use {log::debug, std::sync::Arc, vk_graph::prelude::*, vk_graph_window::Window};
+    use {log::debug, std::sync::Arc, vk_graph_prelude::*, vk_graph_window::Window};
 
     // 👋, 🌎!
     //pretty_env_logger::init();

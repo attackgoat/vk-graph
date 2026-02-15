@@ -16,8 +16,8 @@ use {
         thread::{available_parallelism, sleep, spawn},
         time::{Duration, Instant},
     },
-    vk_graph::prelude::*,
     vk_graph_fx::BitmapFont,
+    vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
 };
 

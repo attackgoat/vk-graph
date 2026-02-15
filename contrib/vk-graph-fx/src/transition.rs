@@ -5,10 +5,11 @@
 use {
     log::trace,
     std::{collections::HashMap, sync::Arc},
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_shader_macros::include_glsl,
 };
 
+#[allow(missing_docs)]
 #[derive(Clone, Copy, Debug)]
 pub enum Transition {
     Angular {
@@ -381,6 +382,7 @@ impl Transition {
     }
 }
 
+/// TODO
 pub struct TransitionPipeline {
     cache: HashPool,
     device: Arc<Device>,
@@ -388,6 +390,7 @@ pub struct TransitionPipeline {
 }
 
 impl TransitionPipeline {
+    /// TODO
     pub fn new(device: &Arc<Device>) -> Self {
         let cache = HashPool::new(device);
         let device = Arc::clone(device);
@@ -400,6 +403,7 @@ impl TransitionPipeline {
         }
     }
 
+    /// TODO
     pub fn apply(
         &mut self,
         render_graph: &mut RenderGraph,
@@ -437,6 +441,7 @@ impl TransitionPipeline {
         dest_image
     }
 
+    /// TODO
     pub fn apply_to(
         &mut self,
         render_graph: &mut RenderGraph,

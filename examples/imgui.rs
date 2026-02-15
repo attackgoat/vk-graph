@@ -2,9 +2,9 @@ mod profile_with_puffin;
 
 use {
     clap::Parser,
-    vk_graph::prelude::*,
     vk_graph_fx::*,
     vk_graph_imgui::{Condition, ImGui},
+    vk_graph_prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
     winit::dpi::LogicalSize,
 };

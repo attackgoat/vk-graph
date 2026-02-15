@@ -5,7 +5,7 @@ use {
     log::error,
     std::sync::Arc,
     vk_graph::{
-        Display, DisplayError, DisplayInfo,
+        display::{Display, DisplayError, DisplayInfo},
         driver::{
             device::{Device, DeviceInfoBuilder},
             surface::Surface,
@@ -78,10 +78,10 @@ impl ApplicationHandler for Application {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                let mut swapchain_info = context.display.swapchain_info();
+                let mut swapchain_info = context.display.swapchain.info;
                 swapchain_info.width = size.width;
                 swapchain_info.height = size.height;
-                context.display.set_swapchain_info(swapchain_info);
+                context.display.update_swapchain(swapchain_info);
             }
             WindowEvent::RedrawRequested => {
                 if let Err(err) = context.draw() {

@@ -1,11 +1,4 @@
-use {
-    clap::Parser,
-    std::sync::Arc,
-    vk_graph::{
-        pool::alias::{Alias, AliasPool},
-        prelude::*,
-    },
-};
+use {clap::Parser, std::sync::Arc, vk_graph_prelude::*};
 
 /// This example demonstrates resource aliasing. Aliasing is a memory-efficiency optimization that
 /// may be used anywhere resources are leased and used in a render graph. Aliasing allows complex

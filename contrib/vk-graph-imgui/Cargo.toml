@@ -7,8 +7,8 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-bytemuck = "1.24"
+bytemuck = "1.25"
 imgui = "0.12"
 imgui-winit-support = "0.13"
-vk-graph = { path = "../.." }
+vk-graph-prelude = { path = "../vk-graph-prelude" }
 vk-shader-macros = "0.2"

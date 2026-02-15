@@ -1,3 +1,5 @@
+//! TODO
+
 use {
     super::{compile_shader_and_watch, create_watcher, shader::HotShader},
     log::info,
@@ -6,9 +8,14 @@ use {
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    vk_graph::prelude::*,
+    vk_graph::driver::{
+        device::Device,
+        ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup},
+        DriverError,
+    },
 };
 
+/// TODO
 #[derive(Debug)]
 pub struct HotRayTracePipeline {
     device: Arc<Device>,
@@ -20,6 +27,7 @@ pub struct HotRayTracePipeline {
 }
 
 impl HotRayTracePipeline {
+    /// TODO
     pub fn create<S>(
         device: &Arc<Device>,
         info: impl Into<RayTracePipelineInfo>,

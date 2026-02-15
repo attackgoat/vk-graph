@@ -1,3 +1,5 @@
+//! TODO
+
 pub use shaderc::{OptimizationLevel, SourceLanguage, SpirvVersion};
 
 use {
@@ -7,7 +9,7 @@ use {
     notify::{RecommendedWatcher, RecursiveMode, Watcher},
     shaderc::{CompileOptions, EnvVersion, ShaderKind, TargetEnv},
     std::path::{Path, PathBuf},
-    vk_graph::prelude::*,
+    vk_graph::driver::{ash::vk, shader::SpecializationInfo, DriverError},
 };
 
 /// Describes a shader program which runs on some pipeline stage.
@@ -257,8 +259,8 @@ impl HotShader {
             _ => unimplemented!("{:?}", self.stage),
         };
 
-        let mut additional_opts = CompileOptions::new().ok_or_else(|| {
-            error!("Unable to initialize compiler options");
+        let mut additional_opts = CompileOptions::new().map_err(|err| {
+            error!("Unable to initialize compiler options: {err:?}");
 
             DriverError::Unsupported
         })?;

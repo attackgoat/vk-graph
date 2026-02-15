@@ -6,7 +6,7 @@ use {
     core::f32,
     glam::{Vec4, vec3},
     std::sync::Arc,
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
     vk_shader_macros::glsl,
 };

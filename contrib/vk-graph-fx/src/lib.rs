@@ -1,3 +1,8 @@
+//! TODO
+
+#![warn(missing_docs)]
+
+/// TODO
 pub mod prelude {
     pub use super::{
         BitmapFont, BitmapGlyphColor, ComputePresenter, GraphicPresenter, ImageFormat, ImageLoader,

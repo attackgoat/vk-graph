@@ -38,7 +38,16 @@ use {
     clap::Parser,
     pak::{Pak, PakBuf},
     std::{sync::Arc, time::Instant},
-    vk_graph::prelude::*,
+    vk_graph::{
+        driver::{
+            ash::vk,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            image::ImageInfo,
+            shader::Shader,
+        },
+        graph::RenderGraph,
+        pool::{lazy::LazyPool, Pool as _},
+    },
     vk_graph_fx::*,
     vk_graph_window::WindowBuilder,
     winit::dpi::PhysicalSize,

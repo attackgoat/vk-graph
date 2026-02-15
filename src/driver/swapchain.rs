@@ -398,27 +398,6 @@ impl Swapchain {
         Ok(())
     }
 
-    /// Sets information about this swapchain.
-    ///
-    /// Previously acquired swapchain images should be discarded after calling this function.
-    pub fn set_info(&mut self, info: impl Into<SwapchainInfo>) {
-        let info: SwapchainInfo = info.into();
-
-        if self.info != info {
-            // attempt to reducing flickering when resizing windows on mac
-            #[cfg(target_os = "macos")]
-            if let Err(err) = unsafe { self.device.device_wait_idle() } {
-                warn!("device_wait_idle() failed: {err}");
-            }
-
-            self.info = info;
-
-            trace!("info: {:?}", self.info);
-
-            self.suboptimal = true;
-        }
-    }
-
     fn supported_surface_usage(
         &mut self,
         surface_capabilities: vk::ImageUsageFlags,
@@ -458,6 +437,27 @@ impl Swapchain {
         res &= !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
 
         Ok(res)
+    }
+
+    /// Updates the information which controls this swapchain.
+    ///
+    /// Previously acquired swapchain images should be discarded after calling this function.
+    pub fn update(&mut self, info: impl Into<SwapchainInfo>) {
+        let info: SwapchainInfo = info.into();
+
+        if self.info != info {
+            // attempt to reducing flickering when resizing windows on mac
+            #[cfg(target_os = "macos")]
+            if let Err(err) = unsafe { self.device.device_wait_idle() } {
+                warn!("device_wait_idle() failed: {err}");
+            }
+
+            self.info = info;
+
+            trace!("info: {:?}", self.info);
+
+            self.suboptimal = true;
+        }
     }
 }
 

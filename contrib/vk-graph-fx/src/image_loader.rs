@@ -1,6 +1,6 @@
 use {
     super::BitmapFont, anyhow::Context, bmfont::BMFont, log::info, std::sync::Arc,
-    vk_graph::prelude::*, vk_shader_macros::include_glsl,
+    vk_graph_prelude::*, vk_shader_macros::include_glsl,
 };
 
 #[cfg(debug_assertions)]
@@ -9,9 +9,16 @@ use log::warn;
 /// Describes the channels and pixel stride of an image format
 #[derive(Clone, Copy, Debug)]
 pub enum ImageFormat {
+    /// TODO
     R8,
+
+    /// TODO
     R8G8,
+
+    /// TODO
     R8G8B8,
+
+    /// TODO
     R8G8B8A8,
 }
 
@@ -26,15 +33,19 @@ impl ImageFormat {
     }
 }
 
+/// TODO
 #[derive(Debug)]
 pub struct ImageLoader {
     pool: HashPool,
     _decode_r_rg: Arc<ComputePipeline>,
     decode_rgb_rgba: Arc<ComputePipeline>,
+
+    /// TODO
     pub device: Arc<Device>,
 }
 
 impl ImageLoader {
+    /// TODO
     pub fn new(device: &Arc<Device>) -> Result<Self, DriverError> {
         Ok(Self {
             pool: HashPool::new(device),
@@ -103,6 +114,7 @@ impl ImageLoader {
         ))
     }
 
+    /// TODO
     #[allow(clippy::too_many_arguments)]
     pub fn decode_bitmap(
         &mut self,
@@ -231,6 +243,7 @@ impl ImageLoader {
         Ok(image)
     }
 
+    /// TODO
     pub fn decode_linear(
         &mut self,
         queue_family_index: usize,
@@ -251,6 +264,7 @@ impl ImageLoader {
         )
     }
 
+    /// TODO
     pub fn decode_srgb(
         &mut self,
         queue_family_index: usize,
@@ -271,6 +285,7 @@ impl ImageLoader {
         )
     }
 
+    /// TODO
     pub fn load_bitmap_font<'a>(
         &mut self,
         queue_family_index: usize,

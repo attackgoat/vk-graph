@@ -4,7 +4,7 @@ use {
     bytemuck::{cast, cast_slice},
     glam::{vec3, Mat4},
     std::sync::Arc,
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_shader_macros::include_glsl,
 };
 
@@ -29,6 +29,7 @@ pub struct BitmapFont {
 }
 
 impl BitmapFont {
+    /// TODO
     pub fn new(
         device: &Arc<Device>,
         font: BMFont,
@@ -104,6 +105,7 @@ impl BitmapFont {
         (position, size)
     }
 
+    /// TODO
     pub fn print(
         &mut self,
         graph: &mut RenderGraph,
@@ -117,6 +119,7 @@ impl BitmapFont {
     }
 
     // TODO: Better API, but not sure what, probably builder-something
+    /// TODO
     #[allow(clippy::too_many_arguments)]
     pub fn print_scale(
         &mut self,
@@ -132,6 +135,7 @@ impl BitmapFont {
     }
 
     // TODO: Better API, but not sure what, probably builder-something
+    /// TODO
     #[allow(clippy::too_many_arguments)]
     pub fn print_scale_scissor(
         &mut self,
@@ -229,9 +233,15 @@ impl BitmapFont {
     }
 }
 
+/// TODO
 pub enum BitmapGlyphColor {
+    /// TODO
     Outline(Color),
+
+    /// TODO
     Solid(Color),
+
+    /// TODO
     SolidOutline(Color, Color),
 }
 
@@ -290,6 +300,7 @@ impl From<[u8; 4]> for BitmapGlyphColor {
 
 pub use bmfont::CharPosition as BitmapGlyph;
 
+/// TODO
 pub trait Glyph {
     fn page_height(&self) -> u32;
     fn page_width(&self) -> u32;

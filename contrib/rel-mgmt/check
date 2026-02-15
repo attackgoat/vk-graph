@@ -20,45 +20,57 @@ cargo fmt --manifest-path contrib/vk-graph-egui/Cargo.toml && diff || fail "Unfo
 cargo fmt --manifest-path contrib/vk-graph-fx/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-fx)"
 cargo fmt --manifest-path contrib/vk-graph-hot/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-hot)"
 cargo fmt --manifest-path contrib/vk-graph-imgui/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-imgui)"
+cargo fmt --manifest-path contrib/vk-graph-prelude/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-prelude)"
+cargo fmt --manifest-path contrib/vk-graph-window/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-window)"
 cargo fmt --manifest-path examples/shader-toy/Cargo.toml && diff || fail "Unformatted rust code (shader-toy)"
 cargo fmt --manifest-path examples/skeletal-anim/Cargo.toml && diff || fail "Unformatted rust code (skeletal-anim)"
 cargo fmt --manifest-path examples/vr/Cargo.toml && diff || fail "Unformatted rust code (vr)"
 
-# Rust code errors
-echo "Checking vk-graph"
-cargo check --all-targets
-echo "Checking vk-graph (w/ parking_lot)"
-cargo check --all-targets --features parking_lot
-echo "Checking contrib/vk-graph-egui"
-cargo check --manifest-path contrib/vk-graph-egui/Cargo.toml --all-targets --all-features
-echo "Checking contrib/vk-graph-fx"
-cargo check --manifest-path contrib/vk-graph-fx/Cargo.toml --all-targets --all-features
-echo "Checking contrib/vk-graph-hot"
-cargo check --manifest-path contrib/vk-graph-hot/Cargo.toml --all-targets --all-features
-#echo "Checking contrib/vk-graph-imgui"
-#cargo check --manifest-path contrib/vk-graph-imgui/Cargo.toml --all-targets --all-features
-echo "Checking contrib/vk-graph-window"
-cargo check --manifest-path contrib/vk-graph-window/Cargo.toml --all-targets --all-features
-echo "Checking examples/shader-toy"
-cargo check --manifest-path examples/shader-toy/Cargo.toml --all-targets --all-features
-echo "Checking examples/skeletal-anim"
-cargo check --manifest-path examples/skeletal-anim/Cargo.toml --all-targets --all-features
-echo "Checking examples/vr"
-cargo check --manifest-path examples/vr/Cargo.toml --all-targets --all-features
+echo "Checking vk-graph" \
+    && cargo check --all-targets || fail \
+    && cargo clippy --all-targets || fail \
+    && echo "Checking vk-graph (w/ parking_lot)" \
+    && cargo check --all-targets --features parking_lot || fail \
+    && cargo clippy --all-targets --features parking_lot || fail
 
-# Rust code lints
-cargo clippy --all-targets
-cargo clippy --all-targets --features parking_lot
-cargo clippy --manifest-path contrib/vk-graph-egui/Cargo.toml --all-targets --all-features
-cargo clippy --manifest-path contrib/vk-graph-fx/Cargo.toml --all-targets --all-features
-cargo clippy --manifest-path contrib/vk-graph-hot/Cargo.toml --all-targets --all-features
-#cargo clippy --manifest-path contrib/vk-graph-imgui/Cargo.toml --all-targets --all-features
-cargo clippy --manifest-path examples/shader-toy/Cargo.toml --all-targets --all-features
-cargo clippy --manifest-path examples/skeletal-anim/Cargo.toml --all-targets --all-features
-cargo clippy --manifest-path examples/vr/Cargo.toml --all-targets --all-features
+echo "Checking contrib/vk-graph-egui" \
+    && cargo check --manifest-path contrib/vk-graph-egui/Cargo.toml || fail \
+    && cargo clippy --manifest-path contrib/vk-graph-egui/Cargo.toml || fail
+
+echo "Checking contrib/vk-graph-fx" \
+    && cargo check --manifest-path contrib/vk-graph-fx/Cargo.toml || fail \
+    && cargo clippy --manifest-path contrib/vk-graph-fx/Cargo.toml || fail
+
+echo "Checking contrib/vk-graph-hot" \
+    && cargo check --manifest-path contrib/vk-graph-hot/Cargo.toml || fail \
+    && cargo clippy --manifest-path contrib/vk-graph-hot/Cargo.toml || fail
+
+# echo "Checking contrib/vk-graph-imgui" \
+#     && cargo check --manifest-path contrib/vk-graph-imgui/Cargo.toml || fail \
+#     && cargo clippy --manifest-path contrib/vk-graph-imgui/Cargo.toml || fail
+
+echo "Checking contrib/vk-graph-prelude" \
+    && cargo check --manifest-path contrib/vk-graph-prelude/Cargo.toml || fail \
+    && cargo clippy --manifest-path contrib/vk-graph-prelude/Cargo.toml || fail
+
+echo "Checking contrib/vk-graph-window" \
+    && cargo check --manifest-path contrib/vk-graph-window/Cargo.toml || fail \
+    && cargo clippy --manifest-path contrib/vk-graph-window/Cargo.toml || fail
+
+echo "Checking examples/shader-toy" \
+    && cargo check --manifest-path examples/shader-toy/Cargo.toml || fail \
+    && cargo clippy --manifest-path examples/shader-toy/Cargo.toml || fail
+
+echo "Checking examples/skeletal-anim" \
+    && cargo check --manifest-path examples/skeletal-anim/Cargo.toml || fail \
+    && cargo clippy --manifest-path examples/skeletal-anim/Cargo.toml || fail
+
+echo "Checking examples/vr" \
+    && cargo check --manifest-path examples/vr/Cargo.toml || fail \
+    && cargo clippy --manifest-path examples/vr/Cargo.toml || fail
 
 # Rust code tests
-cargo test
+cargo test || fail
 
 # Check for semver breaking changes: if this fails you must update the crate version or fix the code
 cargo semver-checks check-release --default-features

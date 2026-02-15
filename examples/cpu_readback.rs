@@ -1,7 +1,7 @@
 use {
     clap::Parser,
     std::{sync::Arc, time::Instant},
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
 };
 
 /// Example demonstrating the steps to take when reading the results of buffer or image operations

@@ -1,3 +1,5 @@
+//! TODO
+
 use {
     super::{compile_shader_and_watch, create_watcher, shader::HotShader},
     log::info,
@@ -6,9 +8,14 @@ use {
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    vk_graph::prelude::*,
+    vk_graph::driver::{
+        device::Device,
+        graphic::{GraphicPipeline, GraphicPipelineInfo},
+        DriverError,
+    },
 };
 
+/// TODO
 #[derive(Debug)]
 pub struct HotGraphicPipeline {
     device: Arc<Device>,
@@ -19,6 +26,7 @@ pub struct HotGraphicPipeline {
 }
 
 impl HotGraphicPipeline {
+    /// TODO
     pub fn create<S>(
         device: &Arc<Device>,
         info: impl Into<GraphicPipelineInfo>,

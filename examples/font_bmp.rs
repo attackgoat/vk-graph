@@ -5,8 +5,8 @@ use {
     clap::Parser,
     image::ImageReader,
     std::{io::Cursor, sync::Arc, time::Instant},
-    vk_graph::prelude::*,
     vk_graph_fx::*,
+    vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
 };

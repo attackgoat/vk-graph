@@ -6,7 +6,7 @@ use {
     log::warn,
     std::{io::BufReader, mem::size_of, sync::Arc},
     tobj::{GPU_LOAD_OPTIONS, load_mtl_buf, load_obj_buf},
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
     winit::{event::Event, keyboard::KeyCode},

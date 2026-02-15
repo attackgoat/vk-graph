@@ -1,3 +1,8 @@
+//! TODO
+
+#![warn(missing_docs)]
+
+/// TODO
 pub mod prelude {
     pub use super::{egui, Egui};
 }
@@ -9,12 +14,15 @@ use {
     bytemuck::cast_slice,
     egui_winit::winit::{event::Event, window::Window},
     std::{borrow::Cow, collections::HashMap, sync::Arc},
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_shader_macros::include_glsl,
 };
 
+/// TODO
 pub struct Egui {
+    /// TODO
     pub ctx: egui::Context,
+
     egui_winit: egui_winit::State,
     textures: HashMap<egui::TextureId, Arc<Lease<Image>>>,
     cache: HashPool,
@@ -24,6 +32,7 @@ pub struct Egui {
 }
 
 impl Egui {
+    /// TODO
     pub fn new(device: &Arc<Device>, display_target: &dyn HasDisplayHandle) -> Self {
         let ppl = Arc::new(
             GraphicPipeline::create(
@@ -296,6 +305,7 @@ impl Egui {
         }
     }
 
+    /// TODO
     pub fn run(
         &mut self,
         window: &Window,
@@ -328,6 +338,7 @@ impl Egui {
         self.unbind_and_free(bound_tex, render_graph, &deltas);
     }
 
+    /// TODO
     pub fn register_texture(&mut self, tex: impl Into<AnyImageNode>) -> egui::TextureId {
         let id = egui::TextureId::User(self.next_tex_id);
         self.next_tex_id += 1;

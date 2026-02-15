@@ -2,13 +2,15 @@ use {
     bytemuck::cast_slice,
     glam::{vec3, Mat4},
     std::sync::Arc,
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_shader_macros::include_glsl,
 };
 
+/// TODO
 pub struct ComputePresenter([Arc<ComputePipeline>; 2]);
 
 impl ComputePresenter {
+    /// TODO
     pub fn new(device: &Arc<Device>) -> Result<Self, DriverError> {
         let pipeline1 = Arc::new(ComputePipeline::create(
             device,
@@ -24,6 +26,7 @@ impl ComputePresenter {
         Ok(Self([pipeline1, pipeline2]))
     }
 
+    /// TODO
     pub fn present_image(
         &self,
         graph: &mut RenderGraph,
@@ -46,6 +49,7 @@ impl ComputePresenter {
             });
     }
 
+    /// TODO
     pub fn present_images(
         &self,
         graph: &mut RenderGraph,
@@ -73,11 +77,13 @@ impl ComputePresenter {
     }
 }
 
+/// TODO
 pub struct GraphicPresenter {
     pipeline: Arc<GraphicPipeline>,
 }
 
 impl GraphicPresenter {
+    /// TODO
     pub fn new(device: &Arc<Device>) -> Result<Self, DriverError> {
         Ok(Self {
             pipeline: Arc::new(GraphicPipeline::create(
@@ -93,6 +99,7 @@ impl GraphicPresenter {
         })
     }
 
+    /// TODO
     pub fn present_image(
         &self,
         graph: &mut RenderGraph,

@@ -5,7 +5,7 @@ use {
     clap::Parser,
     half::f16,
     std::{mem::size_of, sync::Arc},
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_graph_window::{FrameContext, WindowBuilder},
     vk_shader_macros::glsl,
 };

@@ -1,3 +1,5 @@
+//! Resource leasing and pooling types.
+
 use {
     super::{
         driver::{
@@ -6,18 +8,18 @@ use {
             device::Device,
             image::Image,
             image_access_layout,
-            swapchain::{Swapchain, SwapchainImage, SwapchainInfo},
+            swapchain::{Swapchain, SwapchainError, SwapchainImage, SwapchainInfo},
         },
         graph::{RenderGraph, node::SwapchainImageNode},
         pool::Pool,
     },
-    crate::prelude::SwapchainError,
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{trace, warn},
     std::{
         error::Error,
         fmt::{Debug, Formatter},
+        ops::Deref,
         slice,
         sync::Arc,
         thread::panicking,
@@ -27,11 +29,37 @@ use {
 };
 
 /// A physical display interface.
+#[repr(C)]
 pub struct Display {
     exec_idx: usize,
     execs: Box<[Execution]>,
-    queue_family_idx: u32,
+
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub info: DisplayInfo,
+
+    #[cfg(not(doc))]
+    info: DisplayInfo,
+
+    /// The swapchain which supports this display.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub swapchain: Swapchain,
+
+    #[cfg(not(doc))]
     swapchain: Swapchain,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct DisplayRef {
+    exec_idx: usize,
+    execs: Box<[Execution]>,
+    pub info: DisplayInfo,
+    pub swapchain: Swapchain,
 }
 
 impl Display {
@@ -64,7 +92,7 @@ impl Display {
         Ok(Self {
             exec_idx: info.command_buffer_count,
             execs,
-            queue_family_idx: info.queue_family_index,
+            info,
             swapchain,
         })
     }
@@ -203,7 +231,7 @@ impl Display {
         resolver.record_unscheduled_passes(pool, &mut exec.cmd_buf)?;
 
         let queue =
-            exec.cmd_buf.device.queues[self.queue_family_idx as usize][queue_index as usize];
+            exec.cmd_buf.device.queues[self.info.queue_family_index as usize][queue_index as usize];
 
         unsafe {
             exec.cmd_buf
@@ -246,7 +274,7 @@ impl Display {
         self.swapchain.present_image(
             swapchain_image,
             slice::from_ref(&exec.swapchain_rendered),
-            self.queue_family_idx,
+            self.info.queue_family_index,
             queue_index,
         );
 
@@ -257,22 +285,26 @@ impl Display {
         Ok(())
     }
 
-    /// Sets information about the swapchain.
+    /// Updates the information which controls the swapchain.
     ///
     /// Previously acquired swapchain images should be discarded after calling this function.
-    pub fn set_swapchain_info(&mut self, info: impl Into<SwapchainInfo>) {
-        self.swapchain.set_info(info);
-    }
-
-    /// Gets information about the swapchain.
-    pub fn swapchain_info(&self) -> SwapchainInfo {
-        self.swapchain.info
+    pub fn update_swapchain(&mut self, info: impl Into<SwapchainInfo>) {
+        self.swapchain.update(info);
     }
 }
 
 impl Debug for Display {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Display")
+    }
+}
+
+#[doc(hidden)]
+impl Deref for Display {
+    type Target = DisplayRef;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 

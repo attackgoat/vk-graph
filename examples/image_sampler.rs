@@ -7,7 +7,7 @@ use {
         path::{Path, PathBuf},
         sync::Arc,
     },
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
 };

@@ -4,7 +4,7 @@ use {
     bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
     std::sync::Arc,
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
     vk_shader_macros::glsl,
     winit::dpi::LogicalSize,

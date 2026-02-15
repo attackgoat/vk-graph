@@ -1,8 +1,7 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::cast_slice, clap::Parser, std::sync::Arc, vk_graph::prelude::*,
-    vk_shader_macros::glsl,
+    bytemuck::cast_slice, clap::Parser, std::sync::Arc, vk_graph_prelude::*, vk_shader_macros::glsl,
 };
 
 /// This program demonstrates a single render pass which uses multiple executions to record a chain

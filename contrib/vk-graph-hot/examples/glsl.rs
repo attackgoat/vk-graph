@@ -1,8 +1,8 @@
 use {
     clap::Parser,
     std::path::PathBuf,
-    vk_graph::prelude::*,
     vk_graph_hot::prelude::*,
+    vk_graph_prelude::*,
     vk_graph_window::{Window, WindowError},
 };
 

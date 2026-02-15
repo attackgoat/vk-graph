@@ -5,7 +5,7 @@ use {
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3},
     std::sync::Arc,
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
 };

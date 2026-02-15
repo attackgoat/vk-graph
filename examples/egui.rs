@@ -1,7 +1,7 @@
 mod profile_with_puffin;
 
 use {
-    clap::Parser, vk_graph::prelude::*, vk_graph_egui::prelude::*, vk_graph_window::WindowBuilder,
+    clap::Parser, vk_graph_egui::prelude::*, vk_graph_prelude::*, vk_graph_window::WindowBuilder,
     winit::dpi::LogicalSize,
 };
 

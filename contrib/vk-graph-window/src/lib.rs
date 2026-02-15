@@ -1,11 +1,16 @@
+//! TODO
+
+#![warn(missing_docs)]
+
 mod frame;
 
 pub use self::frame::FrameContext;
 
 use {
-    log::{info, trace, warn},
+    log::{error, info, trace, warn},
     std::{error, fmt, sync::Arc},
     vk_graph::{
+        display::{Display, DisplayError, DisplayInfoBuilder},
         driver::{
             ash::vk,
             device::{Device, DeviceInfo},
@@ -15,7 +20,6 @@ use {
         },
         graph::RenderGraph,
         pool::hash::HashPool,
-        Display, DisplayError, DisplayInfoBuilder,
     },
     winit::{
         application::ApplicationHandler,
@@ -37,22 +41,29 @@ pub enum FullscreenMode {
     Exclusive,
 }
 
+/// TODO
 // #[derive(Debug)]
 pub struct Window {
     data: WindowData,
+
+    /// TODO
     pub device: Arc<Device>,
+
     event_loop: EventLoop<()>,
 }
 
 impl Window {
+    /// TODO
     pub fn new() -> Result<Self, WindowError> {
         Self::builder().build()
     }
 
+    /// TODO
     pub fn builder() -> WindowBuilder {
         WindowBuilder::default()
     }
 
+    /// TODO
     pub fn run<F>(self, draw_fn: F) -> Result<(), WindowError>
     where
         F: FnMut(FrameContext),
@@ -71,7 +82,7 @@ impl Window {
                 &mut self,
                 window: &winit::window::Window,
             ) -> Result<Display, DriverError> {
-                let surface = Surface::create(&self.device, &window, &window)?;
+                let surface = Surface::create(&self.device, window, window)?;
                 let surface_formats = Surface::formats(&surface)?;
                 let surface_format = self
                     .data
@@ -103,9 +114,13 @@ impl Window {
                                 .iter()
                                 .copied()
                                 .find(|best| present_modes.contains(best))
-                                .or_else(|| present_modes.get(0).copied())
+                                .or_else(|| {
+                                    warn!("requested present modes unsupported: {best_modes:?}");
+
+                                    present_modes.first().copied()
+                                })
                                 .ok_or_else(|| {
-                                    warn!("unsupported present modes: {present_modes:?}");
+                                    error!("display does not support presentation");
 
                                     DriverError::Unsupported
                                 })?,
@@ -311,16 +326,16 @@ impl Window {
                 mut f: impl FnMut(FrameContext),
             ) -> Result<bool, DisplayError> {
                 if let Some((width, height)) = self.display_resize.take() {
-                    let mut swapchain_info = self.display.swapchain_info();
+                    let mut swapchain_info = self.display.swapchain.info;
                     swapchain_info.width = width;
                     swapchain_info.height = height;
-                    self.display.set_swapchain_info(swapchain_info);
+                    self.display.update_swapchain(swapchain_info);
                 }
 
                 if let Some(swapchain_image) = self.display.acquire_next_image()? {
                     let mut render_graph = RenderGraph::new();
                     let swapchain_image = render_graph.bind_node(swapchain_image);
-                    let swapchain_info = self.display.swapchain_info();
+                    let swapchain_info = self.display.swapchain.info;
 
                     let mut will_exit = false;
 
@@ -396,6 +411,7 @@ impl AsRef<EventLoop<()>> for Window {
     }
 }
 
+/// TODO
 pub struct WindowBuilder {
     attributes: WindowAttributes,
     cmd_buf_count: usize,
@@ -407,6 +423,7 @@ pub struct WindowBuilder {
 }
 
 impl WindowBuilder {
+    /// TODO
     pub fn build(self) -> Result<Window, WindowError> {
         let event_loop = EventLoop::new()?;
         let device = Arc::new(Device::create_display(self.device_info, &event_loop)?);
@@ -557,9 +574,12 @@ struct WindowData {
     window_mode_override: Option<Option<FullscreenMode>>,
 }
 
+/// TODO
 #[derive(Debug)]
 pub enum WindowError {
+    /// TODO
     Driver(DriverError),
+    /// TODO
     EventLoop(EventLoopError),
 }
 

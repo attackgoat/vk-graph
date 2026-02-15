@@ -1,8 +1,13 @@
+//! TODO
+
+#![warn(missing_docs)]
+
 pub mod compute;
 pub mod graphic;
 pub mod ray_trace;
 pub mod shader;
 
+/// TODO
 pub mod prelude {
     pub use super::{
         compute::HotComputePipeline,
@@ -31,7 +36,10 @@ use {
             Arc, OnceLock,
         },
     },
-    vk_graph::prelude::*,
+    vk_graph::driver::{
+        shader::{Shader, ShaderBuilder},
+        DriverError,
+    },
 };
 
 struct CompiledShader {

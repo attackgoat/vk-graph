@@ -56,6 +56,7 @@ reqwest = { version = "0.12", features = ["blocking"] }
 vk-graph-fx = { path = "contrib/vk-graph-fx" }
 vk-graph-imgui = { path = "contrib/vk-graph-imgui" }
 vk-graph-egui = { path = "contrib/vk-graph-egui" }
+vk-graph-prelude = { path = "contrib/vk-graph-prelude" }
 vk-graph-window = { path = "contrib/vk-graph-window" }
 vk-shader-macros = "0.2"
 tobj = "4.0"

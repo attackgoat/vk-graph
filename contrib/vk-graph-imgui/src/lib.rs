@@ -1,3 +1,8 @@
+//! TODO
+
+#![warn(missing_docs)]
+
+/// TODO
 pub mod prelude {
     pub use super::{imgui, Condition, ImGui, Ui};
 }
@@ -12,10 +17,11 @@ use {
         {HiDpiMode, WinitPlatform},
     },
     std::{sync::Arc, time::Duration},
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_shader_macros::include_glsl,
 };
 
+/// TODO
 #[derive(Debug)]
 pub struct ImGui {
     context: Context,
@@ -25,6 +31,7 @@ pub struct ImGui {
 }
 
 impl ImGui {
+    /// TODO
     pub fn new(device: &Arc<Device>) -> Self {
         let mut context = Context::create();
         let platform = WinitPlatform::new(&mut context);
@@ -51,6 +58,7 @@ impl ImGui {
     }
 
     // TODO: This produces an image which is RGBA8 UNORM and has STORAGE set. *We* don't need storage here and should instead ask the user what settings to give the output image.....
+    /// TODO
     pub fn draw<P>(
         &mut self,
         dt: f32,

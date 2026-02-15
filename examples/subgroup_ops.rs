@@ -2,7 +2,7 @@ use {
     bytemuck::cast_slice,
     clap::Parser,
     std::{mem::size_of, sync::Arc, time::Instant},
-    vk_graph::prelude::*,
+    vk_graph_prelude::*,
     vk_shader_macros::glsl,
 };
 

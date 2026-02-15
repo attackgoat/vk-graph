@@ -7,10 +7,10 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-bytemuck = "1.14"
+bytemuck = "1.25"
 # TODO: Waiting for egui to update winit version
 egui = { git = "https://github.com/emilk/egui.git", rev = "3777b8d2741f298eaa1409dc08062902f7541990" } #{ version = "0.28", features = ["bytemuck"] }
 egui-winit = { git = "https://github.com/emilk/egui.git", rev = "3777b8d2741f298eaa1409dc08062902f7541990" } #"0.28"
-vk-graph = { path = "../.." }
+vk-graph-prelude = { path = "../vk-graph-prelude" }
 vk-graph-fx = { path = "../vk-graph-fx" }
 vk-shader-macros = "0.2"
