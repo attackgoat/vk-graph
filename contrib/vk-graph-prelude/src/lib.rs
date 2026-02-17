@@ -5,7 +5,7 @@
 pub use vk_graph::{
     display::{Display, DisplayError, DisplayInfo, DisplayInfoBuilder, ResolverPool},
     driver::{
-        AccessType, CommandBuffer, DriverError, Instance,
+        AccessType, CommandBuffer, DriverError,
         accel_struct::{
             AccelerationStructure, AccelerationStructureGeometry,
             AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
@@ -23,6 +23,7 @@ pub use vk_graph::{
         image::{
             Image, ImageInfo, ImageInfoBuilder, ImageViewInfo, ImageViewInfoBuilder, SampleCount,
         },
+        instance::{Instance, InstanceInfo, InstanceInfoBuilder},
         physical_device::{
             AccelerationStructureProperties, PhysicalDevice, RayQueryFeatures, RayTraceFeatures,
             RayTraceProperties, Vulkan10Features, Vulkan10Limits, Vulkan10Properties,

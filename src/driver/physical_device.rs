@@ -1,13 +1,14 @@
 //! Physical device resource types
 
 use {
-    super::{DriverError, Instance},
+    super::{DriverError, instance::Instance},
     ash::{ext, khr, vk},
     log::{debug, error},
     std::{
         collections::HashSet,
         ffi::{CStr, c_char},
         fmt::{Debug, Formatter},
+        iter::repeat_n,
         ops::Deref,
     },
 };
@@ -139,75 +140,202 @@ impl From<vk::PhysicalDeviceIndexTypeUint8FeaturesEXT<'_>> for IndexTypeUint8Fea
 }
 
 /// Structure which holds data about the physical hardware selected by the current device.
+#[repr(C)]
 pub struct PhysicalDevice {
     /// Describes the properties of the device which relate to acceleration structures, if
     /// available.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub accel_struct_properties: Option<AccelerationStructureProperties>,
 
+    #[cfg(not(doc))]
+    accel_struct_properties: Option<AccelerationStructureProperties>,
+
     /// Describes the properties of the device which relate to depth/stencil resolve operations.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub depth_stencil_resolve_properties: DepthStencilResolveProperties,
 
+    #[cfg(not(doc))]
+    depth_stencil_resolve_properties: DepthStencilResolveProperties,
+
     /// Describes the features of the physical device which are part of the Vulkan 1.0 base feature set.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub features_v1_0: Vulkan10Features,
 
+    #[cfg(not(doc))]
+    features_v1_0: Vulkan10Features,
+
     /// Describes the features of the physical device which are part of the Vulkan 1.1 base feature set.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub features_v1_1: Vulkan11Features,
 
+    #[cfg(not(doc))]
+    features_v1_1: Vulkan11Features,
+
     /// Describes the features of the physical device which are part of the Vulkan 1.2 base feature set.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub features_v1_2: Vulkan12Features,
 
+    #[cfg(not(doc))]
+    features_v1_2: Vulkan12Features,
+
+    /// The native Vulkan resource handle of this buffer.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::PhysicalDevice,
+
+    #[cfg(not(doc))]
+    handle: vk::PhysicalDevice,
+
     /// Describes the features of the physical device which relate to vertex indexing.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub index_type_uint8_features: IndexTypeUint8Features,
 
+    #[cfg(not(doc))]
+    index_type_uint8_features: IndexTypeUint8Features,
+
+    /// The Vulkan instance which owns this device.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub instance: Instance,
+
+    #[cfg(not(doc))]
+    instance: Instance,
+
     /// Memory properties of the physical device.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
 
+    #[cfg(not(doc))]
+    memory_properties: vk::PhysicalDeviceMemoryProperties,
+
     /// Device properties of the physical device which are part of the Vulkan 1.0 base feature set.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub properties_v1_0: Vulkan10Properties,
+
+    #[cfg(not(doc))]
+    properties_v1_0: Vulkan10Properties,
 
     /// Describes the properties of the physical device which are part of the Vulkan 1.1 base
     /// feature set.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub properties_v1_1: Vulkan11Properties,
+
+    #[cfg(not(doc))]
+    properties_v1_1: Vulkan11Properties,
 
     /// Describes the properties of the physical device which are part of the Vulkan 1.2 base
     /// feature set.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub properties_v1_2: Vulkan12Properties,
 
-    physical_device: vk::PhysicalDevice,
+    #[cfg(not(doc))]
+    properties_v1_2: Vulkan12Properties,
 
     /// Describes the queues offered by this physical device.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub queue_families: Box<[vk::QueueFamilyProperties]>,
+
+    #[cfg(not(doc))]
+    queue_families: Box<[vk::QueueFamilyProperties]>,
 
     pub(crate) queue_family_indices: Box<[u32]>,
 
     /// Describes the features of the device which relate to ray query, if available.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub ray_query_features: RayQueryFeatures,
 
+    #[cfg(not(doc))]
+    ray_query_features: RayQueryFeatures,
+
     /// Describes the features of the device which relate to ray tracing, if available.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub ray_trace_features: RayTraceFeatures,
 
+    #[cfg(not(doc))]
+    ray_trace_features: RayTraceFeatures,
+
     /// Describes the properties of the device which relate to ray tracing, if available.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub ray_trace_properties: Option<RayTraceProperties>,
 
+    #[cfg(not(doc))]
+    ray_trace_properties: Option<RayTraceProperties>,
+
     /// Describes the properties of the device which relate to min/max sampler filtering.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub sampler_filter_minmax_properties: SamplerFilterMinmaxProperties,
+
+    #[cfg(not(doc))]
+    sampler_filter_minmax_properties: SamplerFilterMinmaxProperties,
+}
+
+#[allow(missing_docs)]
+#[repr(C)]
+pub struct PhysicalDeviceRef {
+    pub accel_struct_properties: Option<AccelerationStructureProperties>,
+    pub depth_stencil_resolve_properties: DepthStencilResolveProperties,
+    pub features_v1_0: Vulkan10Features,
+    pub features_v1_1: Vulkan11Features,
+    pub features_v1_2: Vulkan12Features,
+    pub handle: vk::PhysicalDevice,
+    pub index_type_uint8_features: IndexTypeUint8Features,
+    pub instance: Instance,
+    pub memory_properties: vk::PhysicalDeviceMemoryProperties,
+    pub properties_v1_0: Vulkan10Properties,
+    pub properties_v1_1: Vulkan11Properties,
+    pub properties_v1_2: Vulkan12Properties,
+    pub queue_families: Box<[vk::QueueFamilyProperties]>,
+    pub(crate) queue_family_indices: Box<[u32]>,
+    pub ray_query_features: RayQueryFeatures,
+    pub ray_trace_features: RayTraceFeatures,
+    pub ray_trace_properties: Option<RayTraceProperties>,
     pub sampler_filter_minmax_properties: SamplerFilterMinmaxProperties,
 }
 
 impl PhysicalDevice {
     /// Creates a physical device wrapper which reports features and properties.
     #[profiling::function]
-    pub fn new(
-        instance: &Instance,
-        physical_device: vk::PhysicalDevice,
-    ) -> Result<Self, DriverError> {
-        if physical_device == vk::PhysicalDevice::null() {
+    pub(super) fn new(instance: Instance, handle: vk::PhysicalDevice) -> Result<Self, DriverError> {
+        if handle == vk::PhysicalDevice::null() {
             return Err(DriverError::InvalidData);
         }
 
         let (memory_properties, queue_families) = unsafe {
             (
-                instance.get_physical_device_memory_properties(physical_device),
-                instance.get_physical_device_queue_family_properties(physical_device),
+                instance.get_physical_device_memory_properties(handle),
+                instance.get_physical_device_queue_family_properties(handle),
             )
         };
 
@@ -241,7 +369,7 @@ impl PhysicalDevice {
             .push_next(&mut ray_query_features)
             .push_next(&mut ray_trace_features);
         unsafe {
-            get_physical_device_features2(physical_device, &mut features);
+            get_physical_device_features2(handle, &mut features);
         }
         let features_v1_0 = features.features.into();
         let features_v1_1 = features_v1_1.into();
@@ -265,7 +393,7 @@ impl PhysicalDevice {
             .push_next(&mut ray_trace_properties)
             .push_next(&mut sampler_filter_minmax_properties);
         unsafe {
-            get_physical_device_properties2(physical_device, &mut properties);
+            get_physical_device_properties2(handle, &mut properties);
         }
         let properties_v1_0: Vulkan10Properties = properties.properties.into();
         let properties_v1_1 = properties_v1_1.into();
@@ -275,7 +403,7 @@ impl PhysicalDevice {
 
         let extensions = unsafe {
             instance
-                .enumerate_device_extension_properties(physical_device)
+                .enumerate_device_extension_properties(handle)
                 .map_err(|err| {
                     error!("Unable to enumerate device extensions {err}");
 
@@ -335,9 +463,10 @@ impl PhysicalDevice {
             features_v1_0,
             features_v1_1,
             features_v1_2,
+            handle,
             index_type_uint8_features,
+            instance,
             memory_properties,
-            physical_device,
             properties_v1_0,
             properties_v1_1,
             properties_v1_2,
@@ -348,6 +477,123 @@ impl PhysicalDevice {
             ray_trace_properties,
             sampler_filter_minmax_properties,
         })
+    }
+
+    /// Prepares device creation information and calls the provided callback to allow an application
+    /// to control the device creation process.
+    ///
+    /// _Note:_  This is only useful for interoperting with other libraries as device creation is
+    /// normally handled by the [`Device::create_display`] and [`Device::create_headless`]
+    /// functions.
+    ///
+    /// # Safety
+    ///
+    /// This comes with all the caveats of using `ash` builder types, which are inherently
+    /// dangerous. Use with extreme caution.
+    #[profiling::function]
+    pub unsafe fn create_ash_device<F>(
+        &self,
+        display_window: bool,
+        create_fn: F,
+    ) -> ash::prelude::VkResult<ash::Device>
+    where
+        F: FnOnce(vk::DeviceCreateInfo) -> ash::prelude::VkResult<ash::Device>,
+    {
+        let mut enabled_ext_names = Vec::with_capacity(6);
+
+        if display_window {
+            enabled_ext_names.push(khr::swapchain::NAME.as_ptr());
+        }
+
+        if self.accel_struct_properties.is_some() {
+            enabled_ext_names.push(khr::acceleration_structure::NAME.as_ptr());
+            enabled_ext_names.push(khr::deferred_host_operations::NAME.as_ptr());
+        }
+
+        if self.ray_query_features.ray_query {
+            enabled_ext_names.push(khr::ray_query::NAME.as_ptr());
+        }
+
+        if self.ray_trace_features.ray_tracing_pipeline {
+            enabled_ext_names.push(khr::ray_tracing_pipeline::NAME.as_ptr());
+        }
+
+        if self.index_type_uint8_features.index_type_uint8 {
+            enabled_ext_names.push(ext::index_type_uint8::NAME.as_ptr());
+        }
+
+        let priorities = repeat_n(
+            1.0,
+            self.queue_families
+                .iter()
+                .map(|family| family.queue_count)
+                .max()
+                .unwrap_or_default() as _,
+        )
+        .collect::<Box<_>>();
+
+        let queue_infos = self
+            .queue_families
+            .iter()
+            .enumerate()
+            .map(|(idx, family)| {
+                let mut queue_info = vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(idx as _)
+                    .queue_priorities(&priorities[0..family.queue_count as usize]);
+                queue_info.queue_count = family.queue_count;
+
+                queue_info
+            })
+            .collect::<Box<_>>();
+
+        let ash::InstanceFnV1_1 {
+            get_physical_device_features2,
+            ..
+        } = self.instance.fp_v1_1();
+        let mut features_v1_1 = vk::PhysicalDeviceVulkan11Features::default();
+        let mut features_v1_2 = vk::PhysicalDeviceVulkan12Features::default();
+        let mut acceleration_structure_features =
+            vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let mut index_type_uint8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
+        let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+        let mut ray_trace_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+        let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut features_v1_1)
+            .push_next(&mut features_v1_2);
+
+        if self.accel_struct_properties.is_some() {
+            features = features.push_next(&mut acceleration_structure_features);
+        }
+
+        if self.ray_query_features.ray_query {
+            features = features.push_next(&mut ray_query_features);
+        }
+
+        if self.ray_trace_features.ray_tracing_pipeline {
+            features = features.push_next(&mut ray_trace_features);
+        }
+
+        if self.index_type_uint8_features.index_type_uint8 {
+            features = features.push_next(&mut index_type_uint8_features);
+        }
+
+        unsafe { get_physical_device_features2(self.handle, &mut features) };
+
+        let device_create_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_infos)
+            .enabled_extension_names(&enabled_ext_names)
+            .push_next(&mut features);
+
+        create_fn(device_create_info)
+    }
+
+    /// Lists the capabilities of a given format.
+    #[profiling::function]
+    pub fn format_properties(&self, format: vk::Format) -> vk::FormatProperties {
+        unsafe {
+            self.instance
+                .get_physical_device_format_properties(self.handle, format)
+        }
     }
 }
 
@@ -361,11 +607,12 @@ impl Debug for PhysicalDevice {
     }
 }
 
+#[doc(hidden)]
 impl Deref for PhysicalDevice {
-    type Target = vk::PhysicalDevice;
+    type Target = PhysicalDeviceRef;
 
     fn deref(&self) -> &Self::Target {
-        &self.physical_device
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 

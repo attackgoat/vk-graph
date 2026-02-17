@@ -4900,11 +4900,7 @@ impl RayTrace<'_> {
         assert!(self.dynamic_stack_size);
 
         unsafe {
-            // Safely use unchecked because ray_trace_ext is checked during pipeline creation
-            self.device
-                .ray_trace_ext
-                .as_ref()
-                .unwrap_unchecked()
+            Device::expect_ray_trace_ext(self.device)
                 .cmd_set_ray_tracing_pipeline_stack_size(self.cmd_buf, pipeline_stack_size);
         }
 
@@ -4967,21 +4963,16 @@ impl RayTrace<'_> {
         depth: u32,
     ) -> &Self {
         unsafe {
-            // Safely use unchecked because ray_trace_ext is checked during pipeline creation
-            self.device
-                .ray_trace_ext
-                .as_ref()
-                .unwrap_unchecked()
-                .cmd_trace_rays(
-                    self.cmd_buf,
-                    raygen_shader_binding_table,
-                    miss_shader_binding_table,
-                    hit_shader_binding_table,
-                    callable_shader_binding_table,
-                    width,
-                    height,
-                    depth,
-                );
+            Device::expect_ray_trace_ext(self.device).cmd_trace_rays(
+                self.cmd_buf,
+                raygen_shader_binding_table,
+                miss_shader_binding_table,
+                hit_shader_binding_table,
+                callable_shader_binding_table,
+                width,
+                height,
+                depth,
+            );
         }
 
         self
@@ -5006,19 +4997,14 @@ impl RayTrace<'_> {
         indirect_device_address: vk::DeviceAddress,
     ) -> &Self {
         unsafe {
-            // Safely use unchecked because ray_trace_ext is checked during pipeline creation
-            self.device
-                .ray_trace_ext
-                .as_ref()
-                .unwrap_unchecked()
-                .cmd_trace_rays_indirect(
-                    self.cmd_buf,
-                    raygen_shader_binding_table,
-                    miss_shader_binding_table,
-                    hit_shader_binding_table,
-                    callable_shader_binding_table,
-                    indirect_device_address,
-                )
+            Device::expect_ray_trace_ext(self.device).cmd_trace_rays_indirect(
+                self.cmd_buf,
+                raygen_shader_binding_table,
+                miss_shader_binding_table,
+                hit_shader_binding_table,
+                callable_shader_binding_table,
+                indirect_device_address,
+            )
         }
 
         self

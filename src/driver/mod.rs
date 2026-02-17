@@ -32,6 +32,7 @@ pub mod compute;
 pub mod device;
 pub mod graphic;
 pub mod image;
+pub mod instance;
 pub mod physical_device;
 pub mod ray_trace;
 pub mod render_pass;
@@ -42,10 +43,9 @@ pub mod swapchain;
 mod cmd_buf;
 mod descriptor_set;
 mod descriptor_set_layout;
-mod instance;
 
 pub use {
-    self::{cmd_buf::CommandBuffer, instance::Instance},
+    self::cmd_buf::CommandBuffer,
     ash::{self},
     vk_sync::AccessType,
 };
@@ -81,6 +81,8 @@ use {
     },
     vk_sync::ImageLayout,
 };
+
+//pub type Result<T> = Result<T, DriverError>;
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
     match fmt {

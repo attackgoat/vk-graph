@@ -1,7 +1,7 @@
 //! Native platform window surface types.
 
 use {
-    super::{DriverError, Instance, device::Device},
+    super::{DriverError, device::Device},
     ash::vk,
     ash_window::create_surface,
     log::warn,
@@ -49,8 +49,10 @@ impl Surface {
         let surface_ext = Device::expect_surface_ext(&self.device);
 
         unsafe {
-            surface_ext
-                .get_physical_device_surface_capabilities(*self.device.physical_device, self.handle)
+            surface_ext.get_physical_device_surface_capabilities(
+                self.device.physical_device.handle,
+                self.handle,
+            )
         }
         .inspect_err(|err| warn!("unable to get surface capabilities: {err}"))
         .or(Err(DriverError::Unsupported))
@@ -67,7 +69,7 @@ impl Surface {
         window: impl HasWindowHandle,
     ) -> Result<Self, DriverError> {
         let device = Arc::clone(device);
-        let instance = Device::instance(&device);
+
         let display_handle = display.display_handle().map_err(|err| {
             warn!("{err}");
 
@@ -78,10 +80,11 @@ impl Surface {
 
             DriverError::Unsupported
         })?;
+
         let handle = unsafe {
             create_surface(
-                Instance::entry(instance),
-                instance,
+                &device.physical_device.instance.entry,
+                &device.physical_device.instance,
                 display_handle.as_raw(),
                 window_handle.as_raw(),
                 None,
@@ -100,11 +103,11 @@ impl Surface {
     #[profiling::function]
     pub fn formats(&self) -> Result<Vec<vk::SurfaceFormatKHR>, DriverError> {
         unsafe {
-            self.device
-                .surface_ext
-                .as_ref()
-                .unwrap()
-                .get_physical_device_surface_formats(*self.device.physical_device, self.handle)
+            Device::expect_surface_ext(&self.device)
+                .get_physical_device_surface_formats(
+                    self.device.physical_device.handle,
+                    self.handle,
+                )
                 .map_err(|err| {
                     warn!("Unable to get surface formats: {err}");
 
@@ -138,16 +141,13 @@ impl Surface {
 
     /// Query supported presentation modes.
     pub fn present_modes(&self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
+        let physical_device = self.device.physical_device.handle;
         let surface_ext = Device::expect_surface_ext(&self.device);
+        let surface = self.handle;
 
-        unsafe {
-            surface_ext.get_physical_device_surface_present_modes(
-                *self.device.physical_device,
-                self.handle,
-            )
-        }
-        .inspect_err(|err| warn!("unable to get surface present modes: {err}"))
-        .or(Err(DriverError::Unsupported))
+        unsafe { surface_ext.get_physical_device_surface_present_modes(physical_device, surface) }
+            .inspect_err(|err| warn!("unable to get surface present modes: {err}"))
+            .or(Err(DriverError::Unsupported))
     }
 
     /// Helper function to automatically select the best sRGB format, if one is available.

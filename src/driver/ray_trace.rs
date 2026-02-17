@@ -147,6 +147,10 @@ impl RayTracePipeline {
     where
         S: Into<Shader>,
     {
+        if device.physical_device.ray_trace_properties.is_none() {
+            return Err(DriverError::Unsupported);
+        }
+
         let info = info.into();
         let shader_groups = shader_groups
             .into_iter()
@@ -254,10 +258,7 @@ impl RayTracePipeline {
                 dynamic_states.push(vk::DynamicState::RAY_TRACING_PIPELINE_STACK_SIZE_KHR);
             }
 
-            let ray_trace_ext = device
-                .ray_trace_ext
-                .as_ref()
-                .ok_or(DriverError::Unsupported)?;
+            let ray_trace_ext = Device::expect_ray_trace_ext(device);
             let handle = ray_trace_ext
                 .create_ray_tracing_pipelines(
                     vk::DeferredOperationKHR::null(),
@@ -380,11 +381,11 @@ impl RayTracePipeline {
     ) -> vk::DeviceSize {
         unsafe {
             // Safely use unchecked because ray_trace_ext is checked during pipeline creation
-            self.device
-                .ray_trace_ext
-                .as_ref()
-                .unwrap_unchecked()
-                .get_ray_tracing_shader_group_stack_size(self.handle, group, group_shader)
+            Device::expect_ray_trace_ext(&self.device).get_ray_tracing_shader_group_stack_size(
+                self.handle,
+                group,
+                group_shader,
+            )
         }
     }
 

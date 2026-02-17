@@ -1,7 +1,7 @@
 mod driver;
 
 use {
-    self::driver::{Instance, Swapchain},
+    self::driver::{Swapchain, XrInstance},
     bytemuck::{bytes_of, cast_slice, Pod, Zeroable},
     glam::{vec3, vec4, Mat3, Mat4, Quat, Vec2, Vec3},
     log::{debug, error, trace},
@@ -53,15 +53,15 @@ fn main() -> anyhow::Result<()> {
     trace!("Starting");
 
     // Initialize OpenXR and Vulkan
-    let mut instance = Instance::new().unwrap();
-    let device = Instance::device(&instance);
+    let mut instance = XrInstance::new().unwrap();
+    let device = XrInstance::device(&instance);
     let queue_family_index =
         device_queue_family_index(device, vk::QueueFlags::GRAPHICS | vk::QueueFlags::TRANSFER)
             .unwrap();
 
     // Start a VR session
     let (session, mut frame_wait, mut frame_stream) =
-        Instance::create_session(&instance, queue_family_index, 0).unwrap();
+        XrInstance::create_session(&instance, queue_family_index, 0).unwrap();
     let action_set = instance
         .create_action_set("input", "input pose information", 0)
         .unwrap();
@@ -217,7 +217,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        while let Some(event) = Instance::poll_event(&mut instance).unwrap() {
+        while let Some(event) = XrInstance::poll_event(&mut instance).unwrap() {
             use xr::Event::*;
             match event {
                 SessionStateChanged(e) => {

@@ -1,21 +1,22 @@
 //! Logical device resource types
 
 use {
-    super::{DriverError, Instance, physical_device::PhysicalDevice},
+    super::{
+        DriverError,
+        instance::{Instance, InstanceInfoBuilder},
+        physical_device::PhysicalDevice,
+    },
     ash::{ext, khr, vk},
-    ash_window::enumerate_required_extensions,
     derive_builder::{Builder, UninitializedFieldError},
     gpu_allocator::{
         AllocatorDebugSettings,
         vulkan::{Allocator, AllocatorCreateDesc},
     },
     log::{error, info, trace, warn},
-    raw_window_handle::HasDisplayHandle,
+    raw_window_handle::{HasDisplayHandle, RawDisplayHandle},
     std::{
-        cmp::Ordering,
         ffi::CStr,
         fmt::{Debug, Formatter},
-        iter::{empty, repeat_n},
         mem::{ManuallyDrop, forget},
         ops::Deref,
         thread::panicking,
@@ -29,174 +30,117 @@ use parking_lot::Mutex;
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
 
-/// Function type for selection of physical devices.
-pub type SelectPhysicalDeviceFn = dyn FnOnce(&[PhysicalDevice]) -> usize;
+// Copied from ash-window to change the signature
+fn enumerate_required_extensions(
+    display_handle: RawDisplayHandle,
+) -> Result<&'static [&'static CStr], DriverError> {
+    let extensions = match display_handle {
+        RawDisplayHandle::Windows(_) => {
+            const WINDOWS_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::win32_surface::NAME];
+            &WINDOWS_EXTS
+        }
+        RawDisplayHandle::Wayland(_) => {
+            const WAYLAND_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::wayland_surface::NAME];
+            &WAYLAND_EXTS
+        }
+        RawDisplayHandle::Xlib(_) => {
+            const XLIB_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::xlib_surface::NAME];
+            &XLIB_EXTS
+        }
+        RawDisplayHandle::Xcb(_) => {
+            const XCB_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::xcb_surface::NAME];
+            &XCB_EXTS
+        }
+        RawDisplayHandle::Android(_) => {
+            const ANDROID_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::android_surface::NAME];
+            &ANDROID_EXTS
+        }
+        RawDisplayHandle::AppKit(_) | RawDisplayHandle::UiKit(_) => {
+            const METAL_EXTS: [&CStr; 2] = [khr::surface::NAME, ext::metal_surface::NAME];
+            &METAL_EXTS
+        }
+        _ => return Err(DriverError::Unsupported),
+    };
+
+    Ok(extensions)
+}
+
+fn select_physical_device(
+    instance: &Instance,
+    mut index: usize,
+) -> Result<PhysicalDevice, DriverError> {
+    let mut physical_devices = Instance::physical_devices(instance)?;
+    if physical_devices.is_empty() {
+        warn!("no physical devices found");
+
+        return Err(DriverError::Unsupported);
+    }
+
+    if index >= physical_devices.len() {
+        index = 0;
+    }
+
+    let physical_device = physical_devices.remove(index);
+
+    Ok(physical_device)
+}
 
 /// Opaque handle to a device object.
+#[repr(C)]
 pub struct Device {
     accel_struct_ext: Option<khr::acceleration_structure::Device>,
 
     pub(super) allocator: ManuallyDrop<Mutex<Allocator>>,
 
     device: ash::Device,
-
-    /// Vulkan instance pointer, which includes useful functions.
-    instance: Instance,
-
     pipeline_cache: vk::PipelineCache,
 
     /// The physical device, which contains useful data about features, properties, and limits.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub physical_device: PhysicalDevice,
+
+    #[cfg(not(doc))]
+    physical_device: PhysicalDevice,
 
     /// The physical execution queues which all work will be submitted to.
     pub(crate) queues: Vec<Vec<vk::Queue>>,
 
-    pub(crate) ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
+    ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
+    surface_ext: Option<khr::surface::Instance>,
+    swapchain_ext: Option<khr::swapchain::Device>,
+}
 
-    pub(super) surface_ext: Option<khr::surface::Instance>,
-    pub(super) swapchain_ext: Option<khr::swapchain::Device>,
+#[doc(hidden)]
+#[repr(C)]
+pub struct DeviceRef {
+    accel_struct_ext: Option<khr::acceleration_structure::Device>,
+    pub(super) allocator: ManuallyDrop<Mutex<Allocator>>,
+    device: ash::Device,
+    pipeline_cache: vk::PipelineCache,
+    pub physical_device: PhysicalDevice,
+    pub(crate) queues: Vec<Vec<vk::Queue>>,
+    ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
+    surface_ext: Option<khr::surface::Instance>,
+    swapchain_ext: Option<khr::swapchain::Device>,
 }
 
 impl Device {
-    /// Prepares device creation information and calls the provided callback to allow an application
-    /// to control the device creation process.
-    ///
-    /// # Safety
-    ///
-    /// This is only required for interoperting with other libraries and comes with all the caveats
-    /// of using `ash` builder types, which are inherently dangerous. Use with extreme caution.
+    /// Constructs a new device using the given physical device.
     #[profiling::function]
-    pub unsafe fn create_ash_device<F>(
-        instance: &Instance,
-        physical_device: &PhysicalDevice,
-        display_window: bool,
-        create_fn: F,
-    ) -> ash::prelude::VkResult<ash::Device>
-    where
-        F: FnOnce(vk::DeviceCreateInfo) -> ash::prelude::VkResult<ash::Device>,
-    {
-        let mut enabled_ext_names = Vec::with_capacity(6);
-
-        if display_window {
-            enabled_ext_names.push(khr::swapchain::NAME.as_ptr());
-        }
-
-        if physical_device.accel_struct_properties.is_some() {
-            enabled_ext_names.push(khr::acceleration_structure::NAME.as_ptr());
-            enabled_ext_names.push(khr::deferred_host_operations::NAME.as_ptr());
-        }
-
-        if physical_device.ray_query_features.ray_query {
-            enabled_ext_names.push(khr::ray_query::NAME.as_ptr());
-        }
-
-        if physical_device.ray_trace_features.ray_tracing_pipeline {
-            enabled_ext_names.push(khr::ray_tracing_pipeline::NAME.as_ptr());
-        }
-
-        if physical_device.index_type_uint8_features.index_type_uint8 {
-            enabled_ext_names.push(ext::index_type_uint8::NAME.as_ptr());
-        }
-
-        let priorities = repeat_n(
-            1.0,
-            physical_device
-                .queue_families
-                .iter()
-                .map(|family| family.queue_count)
-                .max()
-                .unwrap_or_default() as _,
-        )
-        .collect::<Box<_>>();
-
-        let queue_infos = physical_device
-            .queue_families
-            .iter()
-            .enumerate()
-            .map(|(idx, family)| {
-                let mut queue_info = vk::DeviceQueueCreateInfo::default()
-                    .queue_family_index(idx as _)
-                    .queue_priorities(&priorities[0..family.queue_count as usize]);
-                queue_info.queue_count = family.queue_count;
-
-                queue_info
-            })
-            .collect::<Box<_>>();
-
-        let ash::InstanceFnV1_1 {
-            get_physical_device_features2,
-            ..
-        } = instance.fp_v1_1();
-        let mut features_v1_1 = vk::PhysicalDeviceVulkan11Features::default();
-        let mut features_v1_2 = vk::PhysicalDeviceVulkan12Features::default();
-        let mut acceleration_structure_features =
-            vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
-        let mut index_type_uint8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
-        let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-        let mut ray_trace_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
-        let mut features = vk::PhysicalDeviceFeatures2::default()
-            .push_next(&mut features_v1_1)
-            .push_next(&mut features_v1_2);
-
-        if physical_device.accel_struct_properties.is_some() {
-            features = features.push_next(&mut acceleration_structure_features);
-        }
-
-        if physical_device.ray_query_features.ray_query {
-            features = features.push_next(&mut ray_query_features);
-        }
-
-        if physical_device.ray_trace_features.ray_tracing_pipeline {
-            features = features.push_next(&mut ray_trace_features);
-        }
-
-        if physical_device.index_type_uint8_features.index_type_uint8 {
-            features = features.push_next(&mut index_type_uint8_features);
-        }
-
-        unsafe { get_physical_device_features2(**physical_device, &mut features) };
-
-        let device_create_info = vk::DeviceCreateInfo::default()
-            .queue_create_infos(&queue_infos)
-            .enabled_extension_names(&enabled_ext_names)
-            .push_next(&mut features);
-
-        create_fn(device_create_info)
-    }
-
-    #[profiling::function]
-    fn create(
-        instance: Instance,
-        select_physical_device: Box<SelectPhysicalDeviceFn>,
+    pub fn create(
+        physical_device: PhysicalDevice,
         display_window: bool,
     ) -> Result<Self, DriverError> {
-        let mut physical_devices = Instance::physical_devices(&instance)?;
-
-        if physical_devices.is_empty() {
-            error!("no supported devices found");
-
-            return Err(DriverError::Unsupported);
-        }
-
-        let mut phyical_device_idx = select_physical_device(&physical_devices);
-
-        if phyical_device_idx >= physical_devices.len() {
-            warn!("invalid device selected");
-
-            phyical_device_idx = 0;
-        }
-
-        let physical_device = physical_devices.remove(phyical_device_idx);
-
         let device = unsafe {
-            Self::create_ash_device(
-                &instance,
-                &physical_device,
-                display_window,
-                |device_create_info| {
-                    instance.create_device(*physical_device, &device_create_info, None)
-                },
-            )
+            physical_device.create_ash_device(display_window, |device_create_info| {
+                physical_device.instance.create_device(
+                    physical_device.handle,
+                    &device_create_info,
+                    None,
+                )
+            })
         }
         .map_err(|err| {
             error!("unable to create device: {err}");
@@ -206,7 +150,7 @@ impl Device {
 
         info!("created {}", physical_device.properties_v1_0.device_name);
 
-        Self::load(instance, physical_device, device, display_window)
+        Self::load(physical_device, device, display_window)
     }
 
     /// Constructs a new device using the given configuration.
@@ -214,39 +158,43 @@ impl Device {
     pub fn create_headless(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
         let DeviceInfo {
             debug,
-            select_physical_device,
+            physical_device_index,
         } = info.into();
-        let instance = Instance::create(debug, empty())?;
+        let instance_info = InstanceInfoBuilder::default().debug(debug);
+        let instance = Instance::load(instance_info)?;
+        let physical_device = select_physical_device(&instance, physical_device_index)?;
 
-        Self::create(instance, select_physical_device, false)
+        Self::create(physical_device, false)
     }
 
     /// Constructs a new device using the given configuration.
     #[profiling::function]
     pub fn create_display(
         info: impl Into<DeviceInfo>,
-        display_handle: &impl HasDisplayHandle,
+        display_handle: impl HasDisplayHandle,
     ) -> Result<Self, DriverError> {
         let DeviceInfo {
             debug,
-            select_physical_device,
+            physical_device_index,
         } = info.into();
         let display_handle = display_handle.display_handle().map_err(|err| {
-            warn!("{err}");
+            warn!("unable to get display handle: {err}");
 
             DriverError::Unsupported
         })?;
-        let required_extensions = enumerate_required_extensions(display_handle.as_raw())
-            .map_err(|err| {
-                warn!("{err}");
+        let extension_names =
+            enumerate_required_extensions(display_handle.as_raw()).map_err(|err| {
+                warn!("unable to enumerate window extensions: {err}");
 
                 DriverError::Unsupported
-            })?
-            .iter()
-            .map(|ext| unsafe { CStr::from_ptr(*ext as *const _) });
-        let instance = Instance::create(debug, required_extensions)?;
+            })?;
+        let instance_info = InstanceInfoBuilder::default()
+            .debug(debug)
+            .extension_names(extension_names);
+        let instance = Instance::load(instance_info)?;
+        let physical_device = select_physical_device(&instance, physical_device_index)?;
 
-        Self::create(instance, select_physical_device, true)
+        Self::create(physical_device, true)
     }
 
     pub(crate) fn create_fence(this: &Self, signaled: bool) -> Result<vk::Fence, DriverError> {
@@ -289,6 +237,18 @@ impl Device {
             .expect("VK_KHR_acceleration_structure")
     }
 
+    /// Helper for times when you already know that the device supports the ray tracing pipeline
+    /// extension.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [Self.physical_device.ray_trace_properties] is `None`.
+    pub(crate) fn expect_ray_trace_ext(this: &Self) -> &khr::ray_tracing_pipeline::Device {
+        this.ray_trace_ext
+            .as_ref()
+            .expect("VK_KHR_ray_tracing_pipeline")
+    }
+
     /// Helper for times when you already know that the instance supports the surface extension.
     ///
     /// # Panics
@@ -310,21 +270,20 @@ impl Device {
     /// Loads and existing `ash` Vulkan device that may have been created by other means.
     #[profiling::function]
     pub fn load(
-        instance: Instance,
         physical_device: PhysicalDevice,
         device: ash::Device,
         display_window: bool,
     ) -> Result<Self, DriverError> {
-        let debug = Instance::is_debug(&instance);
+        let debug = physical_device.instance.info.debug;
         let mut debug_settings = AllocatorDebugSettings::default();
         debug_settings.log_leaks_on_shutdown = debug;
         debug_settings.log_memory_information = debug;
         debug_settings.log_allocations = debug;
 
         let allocator = Allocator::new(&AllocatorCreateDesc {
-            instance: (*instance).clone(),
+            instance: (*physical_device.instance).clone(),
             device: device.clone(),
-            physical_device: *physical_device,
+            physical_device: physical_device.handle,
             debug_settings,
             buffer_device_address: true,
             allocation_sizes: Default::default(),
@@ -348,17 +307,19 @@ impl Device {
             queues.push(queue_family);
         }
 
-        let surface_ext = display_window
-            .then(|| khr::surface::Instance::new(Instance::entry(&instance), &instance));
-        let swapchain_ext = display_window.then(|| khr::swapchain::Device::new(&instance, &device));
+        let surface_ext = display_window.then(|| {
+            khr::surface::Instance::new(&physical_device.instance.entry, &physical_device.instance)
+        });
+        let swapchain_ext =
+            display_window.then(|| khr::swapchain::Device::new(&physical_device.instance, &device));
         let accel_struct_ext = physical_device
             .accel_struct_properties
             .is_some()
-            .then(|| khr::acceleration_structure::Device::new(&instance, &device));
+            .then(|| khr::acceleration_structure::Device::new(&physical_device.instance, &device));
         let ray_trace_ext = physical_device
             .ray_trace_features
             .ray_tracing_pipeline
-            .then(|| khr::ray_tracing_pipeline::Device::new(&instance, &device));
+            .then(|| khr::ray_tracing_pipeline::Device::new(&physical_device.instance, &device));
 
         let pipeline_cache =
             unsafe { device.create_pipeline_cache(&vk::PipelineCacheCreateInfo::default(), None) }
@@ -372,7 +333,6 @@ impl Device {
             accel_struct_ext,
             allocator: ManuallyDrop::new(Mutex::new(allocator)),
             device,
-            instance,
             pipeline_cache,
             physical_device,
             queues,
@@ -380,15 +340,6 @@ impl Device {
             surface_ext,
             swapchain_ext,
         })
-    }
-
-    /// Lists the physical device's format capabilities.
-    #[profiling::function]
-    pub fn format_properties(this: &Self, format: vk::Format) -> vk::FormatProperties {
-        unsafe {
-            this.instance
-                .get_physical_device_format_properties(*this.physical_device, format)
-        }
     }
 
     /// Lists the physical device's image format capabilities.
@@ -404,14 +355,17 @@ impl Device {
         flags: vk::ImageCreateFlags,
     ) -> Result<Option<vk::ImageFormatProperties>, DriverError> {
         unsafe {
-            match this.instance.get_physical_device_image_format_properties(
-                *this.physical_device,
-                format,
-                ty,
-                tiling,
-                usage,
-                flags,
-            ) {
+            match this
+                .physical_device
+                .instance
+                .get_physical_device_image_format_properties(
+                    this.physical_device.handle,
+                    format,
+                    ty,
+                    tiling,
+                    usage,
+                    flags,
+                ) {
                 Ok(properties) => Ok(Some(properties)),
                 Err(err) if err == vk::Result::ERROR_FORMAT_NOT_SUPPORTED => {
                     // We don't log this condition because it is normal for unsupported
@@ -423,11 +377,6 @@ impl Device {
                 _ => Err(DriverError::OutOfMemory),
             }
         }
-    }
-
-    /// Provides a reference to the Vulkan instance used by this device.
-    pub fn instance(this: &Self) -> &Instance {
-        &this.instance
     }
 
     pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
@@ -487,7 +436,16 @@ impl Debug for Device {
     }
 }
 
+#[doc(hidden)]
 impl Deref for Device {
+    type Target = DeviceRef;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self as *const Self as *const Self::Target) }
+    }
+}
+
+impl Deref for DeviceRef {
     type Target = ash::Device;
 
     fn deref(&self) -> &Self::Target {
@@ -527,9 +485,10 @@ impl Drop for Device {
 }
 
 /// Information used to create a [`Device`] instance.
-#[derive(Builder)]
+#[derive(Builder, Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[builder(
     build_fn(private, name = "fallible_build", error = "DeviceInfoBuilderError"),
+    derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
 #[non_exhaustive]
@@ -546,105 +505,60 @@ pub struct DeviceInfo {
     ///
     /// ## Platform-specific
     ///
-    /// **macOS:** Has no effect.
+    /// **macOS:** Has no effect unless the `loaded` feature is enabled.
     #[builder(default)]
     pub debug: bool,
 
-    /// Callback function used to select a [`PhysicalDevice`] from the available devices. The
-    /// callback must return the index of the selected device.
-    #[builder(default = "Box::new(DeviceInfo::discrete_gpu)")]
-    pub select_physical_device: Box<SelectPhysicalDeviceFn>,
+    /// Index of the [`PhysicalDevice`] from the available devices. See
+    /// [`Instance::physical_devices`].
+    #[builder(default)]
+    pub physical_device_index: usize,
 }
 
 impl DeviceInfo {
-    /// Specifies default device information.
-    #[allow(clippy::new_ret_no_self)]
-    #[deprecated = "Use DeviceInfo::default()"]
-    #[doc(hidden)]
-    pub fn new() -> DeviceInfoBuilder {
-        Default::default()
+    /// A helper function which prioritizes selection of lower-power integrated GPU devices.
+    #[profiling::function]
+    pub fn integrated_gpu_index(physical_devices: &[PhysicalDevice]) -> usize {
+        Self::pick_best_gpu(
+            physical_devices,
+            &[
+                vk::PhysicalDeviceType::INTEGRATED_GPU,
+                vk::PhysicalDeviceType::DISCRETE_GPU,
+                vk::PhysicalDeviceType::VIRTUAL_GPU,
+                vk::PhysicalDeviceType::CPU,
+                vk::PhysicalDeviceType::OTHER,
+            ],
+        )
     }
 
-    /// A builtin [`DeviceInfo::select_physical_device`] function which prioritizes selection of
-    /// lower-power integrated GPU devices.
+    /// A helper function which prioritizes selection of higher-performance discrete GPU devices.
     #[profiling::function]
-    pub fn integrated_gpu(physical_devices: &[PhysicalDevice]) -> usize {
-        assert!(!physical_devices.is_empty());
-
-        let mut physical_devices = physical_devices.iter().enumerate().collect::<Box<_>>();
-
-        if physical_devices.len() == 1 {
-            return 0;
-        }
-
-        fn device_type(ty: vk::PhysicalDeviceType) -> usize {
-            match ty {
-                vk::PhysicalDeviceType::INTEGRATED_GPU => 0,
-                vk::PhysicalDeviceType::VIRTUAL_GPU => 1,
-                vk::PhysicalDeviceType::CPU => 2,
-                vk::PhysicalDeviceType::DISCRETE_GPU => 3,
-                _ => 4,
-            }
-        }
-
-        physical_devices.sort_unstable_by(|(_, lhs), (_, rhs)| {
-            let lhs_device_ty = device_type(lhs.properties_v1_0.device_type);
-            let rhs_device_ty = device_type(rhs.properties_v1_0.device_type);
-            let device_ty = lhs_device_ty.cmp(&rhs_device_ty);
-
-            if device_ty != Ordering::Equal {
-                return device_ty;
-            }
-
-            // TODO: Select the device with the most memory
-
-            Ordering::Equal
-        });
-
-        let (idx, _) = physical_devices[0];
-
-        idx
+    pub fn discrete_gpu_index(physical_devices: &[PhysicalDevice]) -> usize {
+        Self::pick_best_gpu(
+            physical_devices,
+            &[
+                vk::PhysicalDeviceType::DISCRETE_GPU,
+                vk::PhysicalDeviceType::VIRTUAL_GPU,
+                vk::PhysicalDeviceType::INTEGRATED_GPU,
+                vk::PhysicalDeviceType::CPU,
+                vk::PhysicalDeviceType::OTHER,
+            ],
+        )
     }
 
-    /// A builtin [`DeviceInfo::select_physical_device`] function which prioritizes selection of
-    /// higher-performance discrete GPU devices.
-    #[profiling::function]
-    pub fn discrete_gpu(physical_devices: &[PhysicalDevice]) -> usize {
-        assert!(!physical_devices.is_empty());
-
-        let mut physical_devices = physical_devices.iter().enumerate().collect::<Box<_>>();
-
-        if physical_devices.len() == 1 {
-            return 0;
-        }
-
-        fn device_type(ty: vk::PhysicalDeviceType) -> usize {
-            match ty {
-                vk::PhysicalDeviceType::DISCRETE_GPU => 0,
-                vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
-                vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
-                vk::PhysicalDeviceType::CPU => 3,
-                _ => 4,
+    fn pick_best_gpu(
+        physical_devices: &[PhysicalDevice],
+        best: &[vk::PhysicalDeviceType],
+    ) -> usize {
+        for best in best.iter().copied() {
+            for (idx, physical_device) in physical_devices.iter().enumerate() {
+                if physical_device.properties_v1_0.device_type == best {
+                    return idx;
+                }
             }
         }
 
-        physical_devices.sort_unstable_by(|(_, lhs), (_, rhs)| {
-            let lhs_device_ty = device_type(lhs.properties_v1_0.device_type);
-            let rhs_device_ty = device_type(rhs.properties_v1_0.device_type);
-            let device_ty = lhs_device_ty.cmp(&rhs_device_ty);
-
-            if device_ty != Ordering::Equal {
-                return device_ty;
-            }
-
-            // TODO: Select the device with the most memory
-
-            Ordering::Equal
-        });
-
-        let (idx, _) = physical_devices[0];
-
-        idx
+        0
     }
 
     /// Converts a `DeviceInfo` into a `DeviceInfoBuilder`.
@@ -652,25 +566,7 @@ impl DeviceInfo {
     pub fn to_builder(self) -> DeviceInfoBuilder {
         DeviceInfoBuilder {
             debug: Some(self.debug),
-            select_physical_device: Some(self.select_physical_device),
-        }
-    }
-}
-
-impl Debug for DeviceInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DeviceInfo")
-            .field("debug", &self.debug)
-            .field("select_physical_device", &"fn")
-            .finish()
-    }
-}
-
-impl Default for DeviceInfo {
-    fn default() -> Self {
-        Self {
-            debug: false,
-            select_physical_device: Box::new(DeviceInfo::discrete_gpu),
+            physical_device_index: Some(self.physical_device_index),
         }
     }
 }

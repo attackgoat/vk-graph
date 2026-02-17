@@ -107,7 +107,7 @@ fn fill_depth_image(
 
     // Sometimes required because support is not 100% common: Check min/max reduction support
     // https://vulkan.gpuinfo.org/listdevicescoverage.php?extension=VK_EXT_sampler_filter_minmax&platform=all
-    let fmt_props = Device::format_properties(device, fmt);
+    let fmt_props = device.physical_device.format_properties(fmt);
     if !fmt_props.optimal_tiling_features.contains(
         vk::FormatFeatureFlags::SAMPLED_IMAGE
             | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR

@@ -14,18 +14,18 @@ use {
             vk::{self, Handle as _},
         },
         device::Device,
-        physical_device::PhysicalDevice,
+        instance::Instance as VkInstance,
     },
 };
 
-pub struct Instance {
+pub struct XrInstance {
     device: Arc<Device>,
     event_buf: xr::EventDataBuffer,
     instance: xr::Instance,
     system: xr::SystemId,
 }
 
-impl Instance {
+impl XrInstance {
     const VK_TARGET_VERSION: u32 = vk::make_api_version(
         0,
         Self::XR_TARGET_VERSION.major() as _,
@@ -121,7 +121,7 @@ impl Instance {
         let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
 
         unsafe {
-            let vk_entry = ash::Entry::load().map_err(|err| {
+            let entry = ash::Entry::load().map_err(|err| {
                 error!("Vulkan entry point: {err}");
 
                 InstanceCreateError::VulkanUnsupported
@@ -132,7 +132,7 @@ impl Instance {
                     unsafe extern "system" fn(T, *const i8) -> Option<unsafe extern "system" fn()>;
                 type AshFn = Fn<vk::Instance>;
                 type OpenXrFn = Fn<*const c_void>;
-                transmute::<AshFn, OpenXrFn>(vk_entry.static_fn().get_instance_proc_addr)
+                transmute::<AshFn, OpenXrFn>(entry.static_fn().get_instance_proc_addr)
             };
 
             let vk_instance = {
@@ -155,14 +155,14 @@ impl Instance {
                     })?;
                 let vk_instance = vk::Instance::from_raw(vk_instance as _);
 
-                vk_graph::driver::Instance::load(vk_entry, vk_instance).map_err(|err| {
+                VkInstance::from_entry(entry, vk_instance).map_err(|err| {
                     error!("Vulkan instance load: {err}");
 
                     InstanceCreateError::VulkanUnsupported
                 })?
             };
 
-            let vk_physical_device = vk::PhysicalDevice::from_raw(
+            let physical_device = vk::PhysicalDevice::from_raw(
                 xr_instance
                     .vulkan_graphics_device(system, vk_instance.handle().as_raw() as _)
                     .map_err(|err| {
@@ -171,20 +171,20 @@ impl Instance {
                         InstanceCreateError::OpenXRUnsupported
                     })? as _,
             );
-            let vk_physical_device = PhysicalDevice::new(&vk_instance, vk_physical_device)
+            let physical_device = VkInstance::physical_device(&vk_instance, physical_device)
                 .map_err(|err| {
                     error!("Vulkan physical device: {err}");
 
                     InstanceCreateError::VulkanUnsupported
                 })?;
 
-            let device =
-                Device::create_ash_device(&vk_instance, &vk_physical_device, true, |create_info| {
+            let ash_device = physical_device
+                .create_ash_device(true, |create_info| {
                     let device = xr_instance
                         .create_vulkan_device(
                             system,
                             get_instance_proc_addr,
-                            vk_physical_device.as_raw() as _,
+                            physical_device.handle.as_raw() as _,
                             &create_info as *const _ as *const _,
                         )
                         .map_err(|err| {
@@ -202,13 +202,13 @@ impl Instance {
 
                     InstanceCreateError::VulkanUnsupported
                 })?;
-            let device = Arc::new(
-                Device::load(vk_instance, vk_physical_device, device, true).map_err(|err| {
+            let device = Arc::new(Device::load(physical_device, ash_device, true).map_err(
+                |err| {
                     error!("Vulkan device: {err}");
 
                     InstanceCreateError::VulkanUnsupported
-                })?,
-            );
+                },
+            )?);
             let event_buf = xr::EventDataBuffer::new();
 
             Ok(Self {
@@ -230,14 +230,12 @@ impl Instance {
         xr::FrameWaiter,
         xr::FrameStream<xr::Vulkan>,
     )> {
-        let vk_instance = Device::instance(&this.device);
-
         unsafe {
             this.instance.create_session::<xr::Vulkan>(
                 this.system,
                 &xr::vulkan::SessionCreateInfo {
-                    instance: vk_instance.handle().as_raw() as _,
-                    physical_device: this.device.physical_device.as_raw() as _,
+                    instance: this.device.physical_device.instance.handle().as_raw() as _,
+                    physical_device: this.device.physical_device.handle.as_raw() as _,
                     device: this.device.handle().as_raw() as _,
                     queue_family_index,
                     queue_index,
@@ -272,13 +270,13 @@ impl Instance {
     }
 }
 
-impl Debug for Instance {
+impl Debug for XrInstance {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Instance")
     }
 }
 
-impl Deref for Instance {
+impl Deref for XrInstance {
     type Target = xr::Instance;
 
     fn deref(&self) -> &Self::Target {
