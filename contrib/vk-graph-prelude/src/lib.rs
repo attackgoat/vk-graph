@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 
 pub use vk_graph::{
+    Bind, ClearColorValue, RenderGraph, Unbind,
     display::{Display, DisplayError, DisplayInfo, DisplayInfoBuilder, ResolverPool},
     driver::{
         AccessType, CommandBuffer, DriverError,
@@ -40,15 +41,12 @@ pub use vk_graph::{
             Swapchain, SwapchainError, SwapchainImage, SwapchainInfo, SwapchainInfoBuilder,
         },
     },
-    graph::{
-        Bind, ClearColorValue, RenderGraph, Unbind,
-        node::{
-            AccelerationStructureLeaseNode, AccelerationStructureNode,
-            AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode,
-            ImageLeaseNode, ImageNode, SwapchainImageNode,
-        },
-        pass_ref::{PassRef, PipelinePassRef},
+    node::{
+        AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
+        AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode,
+        SwapchainImageNode,
     },
+    pass_ref::{PassRef, PipelinePassRef},
     pool::{
         Lease, Pool, PoolInfo, PoolInfoBuilder,
         alias::{Alias, AliasPool},

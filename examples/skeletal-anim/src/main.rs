@@ -26,8 +26,8 @@ use {
             shader::Shader,
             AccessType, DriverError,
         },
-        graph::RenderGraph,
         pool::{hash::HashPool, lazy::LazyPool, Pool as _},
+        RenderGraph,
     },
     vk_graph_window::{WindowBuilder, WindowError},
 };

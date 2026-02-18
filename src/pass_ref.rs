@@ -63,7 +63,7 @@ pub type DescriptorSetIndex = u32;
 /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::graph::RenderGraph;
+/// # use vk_graph::RenderGraph;
 /// # use vk_graph::driver::shader::Shader;
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
@@ -103,7 +103,7 @@ impl Acceleration<'_> {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, AccelerationStructureInfo, DeviceOrHostAddress};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
@@ -1024,8 +1024,8 @@ bind!(RayTrace);
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::image::{Image, ImageInfo};
-/// # use vk_graph::graph::RenderGraph;
-/// # use vk_graph::graph::node::ImageNode;
+/// # use vk_graph::RenderGraph;
+/// # use vk_graph::node::ImageNode;
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
@@ -1164,7 +1164,7 @@ impl Index<AnyImageNode> for Bindings<'_> {
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
 /// # use vk_graph::driver::shader::{Shader};
-/// # use vk_graph::graph::RenderGraph;
+/// # use vk_graph::RenderGraph;
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 /// # let info = ComputePipelineInfo::default();
@@ -1218,7 +1218,7 @@ impl Compute<'_> {
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::STORAGE_BUFFER);
@@ -1304,7 +1304,7 @@ impl Compute<'_> {
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::STORAGE_BUFFER);
@@ -1404,7 +1404,7 @@ impl Compute<'_> {
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let info = ComputePipelineInfo::default();
@@ -1466,7 +1466,7 @@ impl Compute<'_> {
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let info = ComputePipelineInfo::default();
@@ -1600,7 +1600,7 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
 /// # use vk_graph::driver::image::{Image, ImageInfo};
-/// # use vk_graph::graph::RenderGraph;
+/// # use vk_graph::RenderGraph;
 /// # use vk_graph::driver::shader::Shader;
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
@@ -1644,7 +1644,7 @@ impl Draw<'_> {
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let my_frag_code = [0u8; 1];
@@ -1722,7 +1722,7 @@ impl Draw<'_> {
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
@@ -1901,7 +1901,7 @@ impl Draw<'_> {
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let my_frag_code = [0u8; 1];
@@ -2111,7 +2111,7 @@ impl Draw<'_> {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
@@ -2180,7 +2180,7 @@ impl Draw<'_> {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
@@ -4691,7 +4691,7 @@ impl PipelinePassRef<'_, RayTracePipeline> {
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
 /// # use vk_graph::driver::shader::Shader;
-/// # use vk_graph::graph::RenderGraph;
+/// # use vk_graph::RenderGraph;
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
 /// # let info = RayTracePipelineInfo::default();
@@ -4762,7 +4762,7 @@ impl RayTrace<'_> {
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
     /// # use vk_graph::driver::shader::Shader;
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let shader = [0u8; 1];
@@ -4833,7 +4833,7 @@ impl RayTrace<'_> {
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
     /// # use vk_graph::driver::shader::Shader;
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let shader = [0u8; 1];
@@ -4926,7 +4926,7 @@ impl RayTrace<'_> {
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
     /// # use vk_graph::driver::shader::Shader;
-    /// # use vk_graph::graph::RenderGraph;
+    /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
     /// # let shader = [0u8; 1];

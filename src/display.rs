@@ -2,6 +2,7 @@
 
 use {
     super::{
+        RenderGraph,
         driver::{
             CommandBuffer, CommandBufferInfo, DescriptorPool, DescriptorPoolInfo, DriverError,
             RenderPass, RenderPassInfo,
@@ -10,7 +11,7 @@ use {
             image_access_layout,
             swapchain::{Swapchain, SwapchainError, SwapchainImage, SwapchainInfo},
         },
-        graph::{RenderGraph, node::SwapchainImageNode},
+        node::SwapchainImageNode,
         pool::Pool,
     },
     ash::vk,

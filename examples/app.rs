@@ -5,13 +5,13 @@ use {
     log::error,
     std::sync::Arc,
     vk_graph::{
+        RenderGraph,
         display::{Display, DisplayError, DisplayInfo},
         driver::{
             device::{Device, DeviceInfoBuilder},
             surface::Surface,
             swapchain::{Swapchain, SwapchainInfo},
         },
-        graph::RenderGraph,
         pool::hash::HashPool,
     },
     winit::{

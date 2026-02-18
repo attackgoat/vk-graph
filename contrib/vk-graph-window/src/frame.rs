@@ -1,9 +1,6 @@
 use {
     std::sync::Arc,
-    vk_graph::{
-        driver::device::Device,
-        graph::{node::SwapchainImageNode, RenderGraph},
-    },
+    vk_graph::{driver::device::Device, node::SwapchainImageNode, RenderGraph},
     winit::{dpi::PhysicalPosition, event::Event, window::Window},
 };
 

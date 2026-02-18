@@ -18,8 +18,8 @@ use {
             swapchain::{Swapchain, SwapchainInfo},
             DriverError,
         },
-        graph::RenderGraph,
         pool::hash::HashPool,
+        RenderGraph,
     },
     winit::{
         application::ApplicationHandler,

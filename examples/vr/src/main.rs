@@ -29,8 +29,8 @@ use {
             image::{Image, ImageInfo},
             AccessType,
         },
-        graph::RenderGraph,
         pool::{lazy::LazyPool, Pool as _},
+        RenderGraph,
     },
     vk_graph_hot::{graphic::HotGraphicPipeline, shader::HotShader},
 };
