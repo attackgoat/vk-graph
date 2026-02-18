@@ -8,38 +8,22 @@ use {
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     std::{
         fmt::{Debug, Formatter},
-        ops::Deref,
         sync::Arc,
         thread::panicking,
     },
 };
 
 /// Smart pointer handle to a [`vk::SurfaceKHR`] object.
-#[repr(C)]
+#[readonly::make]
 pub struct Surface {
     /// The device which owns this buffer resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
     pub device: Arc<Device>,
-
-    #[cfg(not(doc))]
-    device: Arc<Device>,
 
     /// The native Vulkan resource handle of this surface.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub handle: vk::SurfaceKHR,
-
-    #[cfg(not(doc))]
-    handle: vk::SurfaceKHR,
-}
-
-#[doc(hidden)]
-#[repr(C)]
-pub struct SurfaceRef {
-    pub device: Arc<Device>,
     pub handle: vk::SurfaceKHR,
 }
 
@@ -183,15 +167,6 @@ impl Surface {
 impl Debug for Surface {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Surface")
-    }
-}
-
-#[doc(hidden)]
-impl Deref for Surface {
-    type Target = SurfaceRef;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 

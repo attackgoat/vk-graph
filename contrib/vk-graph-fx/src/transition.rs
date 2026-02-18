@@ -469,7 +469,8 @@ impl TransitionPipeline {
 
         // TODO: Handle displacement and luma in an if case, below
         render_graph
-            .begin_pass(format!("transition {transition_ty:?}"))
+            .begin_cmd_buf()
+            .with_name(format!("transition {transition_ty:?}"))
             .bind_pipeline(&pipeline)
             .read_descriptor(0, a_image)
             .read_descriptor(1, b_image)

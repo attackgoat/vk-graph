@@ -1,4 +1,4 @@
-//! TODO
+//! Vulkan initialization types
 
 use {
     super::{DriverError, physical_device::PhysicalDevice},
@@ -158,18 +158,10 @@ pub struct Instance {
     inner: Arc<InstanceInner>,
 }
 
-#[doc(hidden)]
-#[repr(C)]
-pub struct InstanceRef {
-    pub entry: ash::Entry,
-    pub info: InstanceInfo,
-    inner: Arc<InstanceInner>,
-}
-
 impl Instance {
     /// Creates a new Vulkan instance.
     #[profiling::function]
-    pub fn load(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
+    pub fn new(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
         let info = info.into();
 
         // Required to enable non-uniform descriptor indexing (bindless)
@@ -338,11 +330,6 @@ impl Instance {
         })
     }
 
-    /// Returns the `ash` entrypoint for Vulkan functions.
-    pub fn entry(this: &Self) -> &ash::Entry {
-        &this.entry
-    }
-
     fn debug_extension_names(
         #[cfg_attr(target_os = "macos", allow(unused_variables))] debug: bool,
     ) -> Vec<&'static CStr> {
@@ -373,11 +360,6 @@ impl Instance {
         res
     }
 
-    /// Returns `true` if this instance was created with debug layers enabled.
-    pub fn is_debug(this: &Self) -> bool {
-        this.inner.debug_utils.is_some()
-    }
-
     /// Returns a wrapper structure for a physical device of this instance.
     #[profiling::function]
     pub fn physical_device(
@@ -403,7 +385,9 @@ impl Instance {
 
     /// Returns the available physical devices of this instance.
     #[profiling::function]
-    pub fn physical_devices(this: &Self) -> Result<Vec<PhysicalDevice>, DriverError> {
+    pub fn physical_devices(
+        this: &Self,
+    ) -> Result<impl IntoIterator<Item = PhysicalDevice>, DriverError> {
         let physical_devices = unsafe { this.enumerate_physical_devices() }.map_err(|err| {
             error!("unable to enumerate physical devices: {err}");
 
@@ -441,8 +425,7 @@ impl Instance {
 
                     supports_vulkan_1_2
                 })
-            })
-            .collect())
+            }))
     }
 }
 
@@ -454,19 +437,10 @@ impl Debug for Instance {
 
 #[doc(hidden)]
 impl Deref for Instance {
-    type Target = InstanceRef;
+    type Target = ReadOnlyInstance;
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*(self as *const Self as *const Self::Target) }
-    }
-}
-
-#[doc(hidden)]
-impl Deref for InstanceRef {
-    type Target = ash::Instance;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner.instance
     }
 }
 
@@ -558,6 +532,7 @@ struct InstanceInner {
     _debug_callback: Option<vk::DebugReportCallbackEXT>,
     #[allow(deprecated)] // TODO: Remove? Look into this....
     _debug_loader: Option<ext::debug_report::Instance>,
+    #[allow(dead_code)]
     debug_utils: Option<ext::debug_utils::Instance>,
     instance: ash::Instance,
 }
@@ -578,5 +553,45 @@ impl Drop for InstanceInner {
 
             self.instance.destroy_instance(None);
         }
+    }
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct ReadOnlyInstance {
+    pub entry: ash::Entry,
+    pub info: InstanceInfo,
+    inner: Arc<InstanceInner>,
+}
+
+#[doc(hidden)]
+impl Deref for ReadOnlyInstance {
+    type Target = ash::Instance;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner.instance
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::*, std::mem::offset_of};
+
+    #[test]
+    pub fn instance_repr_c() {
+        // HACK: The readonly crate uses a private implementation and so we can't further deref it
+        // into the native object type. Because of this the ReadOnly part is manually implemented.
+        assert_eq!(
+            offset_of!(Instance, entry),
+            offset_of!(ReadOnlyInstance, entry),
+        );
+        assert_eq!(
+            offset_of!(Instance, info),
+            offset_of!(ReadOnlyInstance, info),
+        );
+        assert_eq!(
+            offset_of!(Instance, inner),
+            offset_of!(ReadOnlyInstance, inner),
+        );
     }
 }

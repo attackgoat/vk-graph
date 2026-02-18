@@ -84,7 +84,8 @@ fn main() -> Result<(), WindowError> {
 
         frame
             .render_graph
-            .begin_pass("Triangle Example")
+            .begin_cmd_buf()
+            .with_name("Triangle Example")
             .bind_pipeline(&triangle_pipeline)
             .access_node(index_node, AccessType::IndexBuffer)
             .access_node(vertex_node, AccessType::VertexBuffer)

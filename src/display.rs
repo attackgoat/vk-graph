@@ -269,8 +269,7 @@ impl Display {
         let elapsed = Instant::now() - started;
         trace!("🔜🔜🔜 vkQueueSubmit took {} μs", elapsed.as_micros(),);
 
-        let swapchain_image =
-            SwapchainImage::clone_swapchain(resolver.swapchain_image(swapchain_image));
+        let swapchain_image = resolver.swapchain_image(swapchain_image).clone();
 
         self.swapchain.present_image(
             swapchain_image,

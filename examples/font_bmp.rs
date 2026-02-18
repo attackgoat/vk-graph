@@ -137,7 +137,8 @@ fn main() -> anyhow::Result<()> {
         let elapsed_time = Instant::now() - start_time;
         frame
             .render_graph
-            .begin_pass("smoke")
+            .begin_cmd_buf()
+            .with_name("smoke")
             .bind_pipeline(&smoke_pipeline)
             .write_descriptor(0, image_node)
             .record_compute(move |compute, _| {

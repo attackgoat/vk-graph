@@ -121,7 +121,7 @@ impl ImGui {
         let framebuffer_scale = draw_data.framebuffer_scale;
 
         if draw_data.draw_lists_count() == 0 {
-            render_graph.clear_color_image(image);
+            render_graph.clear_color_image(image, [0f32; 4]);
 
             return image;
         }
@@ -185,7 +185,8 @@ impl ImGui {
                 self.platform.hidpi_factor() as f32 / window.inner_size().height as f32;
 
             render_graph
-                .begin_pass("imgui")
+                .begin_cmd_buf()
+                .with_name("imgui")
                 .bind_pipeline(&self.pipeline)
                 .access_node(index_buf, AccessType::IndexBuffer)
                 .access_node(vertex_buf, AccessType::VertexBuffer)

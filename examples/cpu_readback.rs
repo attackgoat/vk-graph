@@ -12,9 +12,9 @@ fn main() -> Result<(), DriverError> {
     // For this example we create a headless device, but the same thing works using a window
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::create_headless(device_info)?);
+    let device = Arc::new(Device::new(device_info)?);
 
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
 
     let src_buf = render_graph.bind_node(Buffer::create_from_slice(
         &device,

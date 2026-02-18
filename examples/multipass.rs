@@ -88,7 +88,8 @@ fn main() -> anyhow::Result<()> {
         // Depth Prepass
         frame
             .render_graph
-            .begin_pass("Depth Prepass")
+            .begin_cmd_buf()
+            .with_name("Depth Prepass")
             .bind_pipeline(&prepass)
             .set_depth_stencil(write)
             .read_descriptor(0, camera_buf)
@@ -118,7 +119,8 @@ fn main() -> anyhow::Result<()> {
         // Renders a golden orb on an un-cleared swapchain image
         frame
             .render_graph
-            .begin_pass("funky shape PBR")
+            .begin_cmd_buf()
+            .with_name("funky shape PBR")
             .bind_pipeline(&pbr)
             .set_depth_stencil(write)
             .read_descriptor(0, camera_buf)
@@ -146,7 +148,8 @@ fn main() -> anyhow::Result<()> {
         // Renders a solid color wherever the golden orb did not draw
         frame
             .render_graph
-            .begin_pass("fill background")
+            .begin_cmd_buf()
+            .with_name("fill background")
             .bind_pipeline(&fill_background)
             .set_depth_stencil(read)
             .load_depth_stencil(depth_stencil)
@@ -166,8 +169,7 @@ fn best_depth_stencil_format(device: &Device) -> vk::Format {
         vk::Format::D16_UNORM_S8_UINT,
         vk::Format::D32_SFLOAT_S8_UINT,
     ] {
-        let format_props = Device::image_format_properties(
-            device,
+        let format_props = device.physical_device.image_format_properties(
             format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -277,7 +279,7 @@ fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape
     )?);
 
     // We will use a temporary render graph to copy host data to the GPU
-    let mut graph = RenderGraph::new();
+    let mut graph = RenderGraph::default();
 
     // Bind things to the graph
     let index_buf_host = graph.bind_node(index_buf_host);

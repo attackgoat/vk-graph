@@ -30,6 +30,7 @@ parking_lot = { version = "0.12", optional = true }
 paste = "1.0"
 profiling = "1.0"
 raw-window-handle = "0.6"
+readonly = "0.2"
 spirq = "1.2"
 vk-sync = { version = "0.5", package = "vk-sync-fork" } # // SEE: https://github.com/gwihlidal/vk-sync-rs/pull/4 -> https://github.com/expenses/vk-sync-rs
 

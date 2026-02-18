@@ -19,10 +19,10 @@ use {
 fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::create_headless(device_info)?);
+    let device = Arc::new(Device::new(device_info)?);
     let size = 4;
 
     // The 4x4 depth image will have pixels that look like this:
@@ -129,7 +129,9 @@ fn fill_depth_image(
     );
 
     // Not required, but good practice: Check image format support
-    let image_fmt_props = Device::image_format_properties(device, fmt, ty, tiling, usage, flags)?
+    let image_fmt_props = device
+        .physical_device
+        .image_format_properties(fmt, ty, tiling, usage, flags)?
         .ok_or(DriverError::Unsupported)?;
     if size > image_fmt_props.max_extent.width || size > image_fmt_props.max_extent.height {
         // In this case you might use a smaller image
@@ -174,7 +176,8 @@ fn reduce_depth_image(
     let reduced_image = render_graph.bind_node(Image::create(device, reduced_info)?);
 
     render_graph
-        .begin_pass("Reduce depth image")
+        .begin_cmd_buf()
+        .with_name("Reduce depth image")
         .bind_pipeline(&Arc::new(ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),

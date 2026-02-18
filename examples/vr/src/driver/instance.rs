@@ -179,7 +179,7 @@ impl XrInstance {
                 })?;
 
             let ash_device = physical_device
-                .create_ash_device(true, |create_info| {
+                .create_ash_device(|create_info| {
                     let device = xr_instance
                         .create_vulkan_device(
                             system,
@@ -202,13 +202,13 @@ impl XrInstance {
 
                     InstanceCreateError::VulkanUnsupported
                 })?;
-            let device = Arc::new(Device::load(physical_device, ash_device, true).map_err(
-                |err| {
+            let device = Arc::new(
+                Device::from_ash_device(ash_device, physical_device).map_err(|err| {
                     error!("Vulkan device: {err}");
 
                     InstanceCreateError::VulkanUnsupported
-                },
-            )?);
+                })?,
+            );
             let event_buf = xr::EventDataBuffer::new();
 
             Ok(Self {

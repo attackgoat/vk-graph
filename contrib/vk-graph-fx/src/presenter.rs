@@ -40,7 +40,8 @@ impl ComputePresenter {
         // TODO: Notice non-sRGB images and run a different pipeline
 
         graph
-            .begin_pass("present (from compute)")
+            .begin_cmd_buf()
+            .with_name("present (from compute)")
             .bind_pipeline(&self.0[0])
             .read_descriptor(0, image)
             .write_descriptor(1, swapchain)
@@ -66,7 +67,8 @@ impl ComputePresenter {
         // TODO: Notice non-sRGB images and run a different pipeline
 
         graph
-            .begin_pass("present (from compute)")
+            .begin_cmd_buf()
+            .with_name("present (from compute)")
             .bind_pipeline(&self.0[1])
             .read_descriptor((0, [0]), top_image)
             .read_descriptor((0, [1]), bottom_image)
@@ -122,7 +124,8 @@ impl GraphicPresenter {
         ));
 
         graph
-            .begin_pass("present (from graphic)")
+            .begin_cmd_buf()
+            .with_name("present (from graphic)")
             .bind_pipeline(&self.pipeline)
             .read_descriptor(0, image)
             .store_color(0, swapchain)

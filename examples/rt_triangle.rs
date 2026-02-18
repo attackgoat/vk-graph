@@ -322,7 +322,7 @@ fn main() -> anyhow::Result<()> {
             .unwrap()
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
-        let mut render_graph = RenderGraph::new();
+        let mut render_graph = RenderGraph::default();
         let index_node = render_graph.bind_node(&index_buf);
         let vertex_node = render_graph.bind_node(&vertex_buf);
         let blas_node = render_graph.bind_node(&blas);
@@ -341,7 +341,8 @@ fn main() -> anyhow::Result<()> {
             let scratch_data = render_graph.node_device_address(scratch_buf);
 
             render_graph
-                .begin_pass("Build BLAS")
+                .begin_cmd_buf()
+                .with_name("Build BLAS")
                 .access_node(index_node, AccessType::AccelerationStructureBuildRead)
                 .access_node(vertex_node, AccessType::AccelerationStructureBuildRead)
                 .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
@@ -367,7 +368,8 @@ fn main() -> anyhow::Result<()> {
             let tlas_node = render_graph.bind_node(&tlas);
 
             render_graph
-                .begin_pass("Build TLAS")
+                .begin_cmd_buf()
+                .with_name("Build TLAS")
                 .access_node(blas_node, AccessType::AccelerationStructureBuildRead)
                 .access_node(instance_node, AccessType::AccelerationStructureBuildRead)
                 .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
@@ -394,7 +396,8 @@ fn main() -> anyhow::Result<()> {
 
         frame
             .render_graph
-            .begin_pass("ray-traced triangle")
+            .begin_cmd_buf()
+            .with_name("ray-traced triangle")
             .bind_pipeline(&ray_trace_pipeline)
             .access_node(
                 blas_node,
@@ -418,7 +421,7 @@ fn main() -> anyhow::Result<()> {
                     1,
                 );
             })
-            .submit_pass();
+            .end_cmd_buf();
     })?;
 
     Ok(())

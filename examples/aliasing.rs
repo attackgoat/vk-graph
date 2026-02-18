@@ -18,7 +18,7 @@ fn main() -> Result<(), DriverError> {
 
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::create_headless(device_info)?);
+    let device = Arc::new(Device::new(device_info)?);
 
     // We wrap HashPool in an AliasPool container to enable resource aliasing
     let mut pool = AliasPool::new(HashPool::new(&device));
@@ -36,7 +36,7 @@ fn main() -> Result<(), DriverError> {
     let image2 = pool.alias(image_info)?;
     assert!(Arc::ptr_eq(&image1, &image2));
 
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
 
     // Binding these images to any render graph will produce the same physical nodes
     let image1 = render_graph.bind_node(image1);

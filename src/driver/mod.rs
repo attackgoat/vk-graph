@@ -1,4 +1,4 @@
-//! [Vulkan 1.2](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/index.html) interface
+//! [Vulkan](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/index.html) interface
 //! based on smart pointers.
 //!
 //! # Resources

@@ -66,10 +66,10 @@ pub type DescriptorSetIndex = u32;
 /// # use vk_graph::RenderGraph;
 /// # use vk_graph::driver::shader::Shader;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
-/// # let mut my_graph = RenderGraph::new();
+/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let mut my_graph = RenderGraph::default();
 /// # let info = AccelerationStructureInfo::blas(1);
-/// my_graph.begin_pass("my acceleration pass")
+/// my_graph.begin_cmd_buf().with_name("my acceleration pass")
 ///         .record_acceleration(move |acceleration, bindings| {
 ///             // During this closure we have access to the acceleration methods!
 ///         });
@@ -106,8 +106,8 @@ impl Acceleration<'_> {
     /// # use vk_graph::RenderGraph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
-    /// # let mut my_graph = RenderGraph::new();
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let mut my_graph = RenderGraph::default();
     /// # let info = AccelerationStructureInfo::blas(1);
     /// # let blas_accel_struct = AccelerationStructure::create(&device, info)?;
     /// # let blas_node = my_graph.bind_node(blas_accel_struct);
@@ -120,7 +120,7 @@ impl Acceleration<'_> {
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
     /// # let index_node = my_graph.bind_node(my_idx_buf);
     /// # let vertex_node = my_graph.bind_node(my_vtx_buf);
-    /// my_graph.begin_pass("my acceleration pass")
+    /// my_graph.begin_cmd_buf().with_name("my acceleration pass")
     ///         .read_node(index_node)
     ///         .read_node(vertex_node)
     ///         .write_node(blas_node)
@@ -1027,12 +1027,12 @@ bind!(RayTrace);
 /// # use vk_graph::RenderGraph;
 /// # use vk_graph::node::ImageNode;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
 /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
 /// # let image = Image::create(&device, info)?;
-/// # let mut my_graph = RenderGraph::new();
+/// # let mut my_graph = RenderGraph::default();
 /// # let my_image_node = my_graph.bind_node(image);
-/// my_graph.begin_pass("custom vulkan commands")
+/// my_graph.begin_cmd_buf().with_name("custom vulkan commands")
 ///         .record_cmd_buf(move |device, cmd_buf, bindings| {
 ///             let my_image = &bindings[my_image_node];
 ///
@@ -1166,12 +1166,12 @@ impl Index<AnyImageNode> for Bindings<'_> {
 /// # use vk_graph::driver::shader::{Shader};
 /// # use vk_graph::RenderGraph;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
 /// # let info = ComputePipelineInfo::default();
 /// # let shader = Shader::new_compute([0u8; 1].as_slice());
 /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
-/// # let mut my_graph = RenderGraph::new();
-/// my_graph.begin_pass("my compute pass")
+/// # let mut my_graph = RenderGraph::default();
+/// my_graph.begin_cmd_buf().with_name("my compute pass")
 ///         .bind_pipeline(&my_compute_pipeline)
 ///         .record_compute(move |compute, bindings| {
 ///             // During this closure we have access to the compute methods!
@@ -1220,15 +1220,15 @@ impl Compute<'_> {
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::STORAGE_BUFFER);
     /// # let my_buf = Buffer::create(&device, buf_info)?;
     /// # let info = ComputePipelineInfo::default();
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
-    /// # let mut my_graph = RenderGraph::new();
+    /// # let mut my_graph = RenderGraph::default();
     /// # let my_buf_node = my_graph.bind_node(my_buf);
-    /// my_graph.begin_pass("fill my_buf_node with data")
+    /// my_graph.begin_cmd_buf().with_name("fill my_buf_node with data")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .write_descriptor(0, my_buf_node)
     ///         .record_compute(move |compute, bindings| {
@@ -1306,13 +1306,13 @@ impl Compute<'_> {
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::STORAGE_BUFFER);
     /// # let my_buf = Buffer::create(&device, buf_info)?;
     /// # let info = ComputePipelineInfo::default();
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
-    /// # let mut my_graph = RenderGraph::new();
+    /// # let mut my_graph = RenderGraph::default();
     /// # let my_buf_node = my_graph.bind_node(my_buf);
     /// const CMD_SIZE: usize = size_of::<vk::DispatchIndirectCommand>();
     ///
@@ -1329,7 +1329,7 @@ impl Compute<'_> {
     /// let args_buf = Buffer::create_from_slice(&device, args_buf_flags, cmd_data)?;
     /// let args_buf_node = my_graph.bind_node(args_buf);
     ///
-    /// my_graph.begin_pass("fill my_buf_node with data")
+    /// my_graph.begin_cmd_buf().with_name("fill my_buf_node with data")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .read_node(args_buf_node)
     ///         .write_descriptor(0, my_buf_node)
@@ -1406,12 +1406,12 @@ impl Compute<'_> {
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let info = ComputePipelineInfo::default();
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
-    /// # let mut my_graph = RenderGraph::new();
-    /// my_graph.begin_pass("compute the ultimate question")
+    /// # let mut my_graph = RenderGraph::default();
+    /// my_graph.begin_cmd_buf().with_name("compute the ultimate question")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .record_compute(move |compute, bindings| {
     ///             compute.push_constants(&[42])
@@ -1468,12 +1468,12 @@ impl Compute<'_> {
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let info = ComputePipelineInfo::default();
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
-    /// # let mut my_graph = RenderGraph::new();
-    /// my_graph.begin_pass("calculate the wow factor")
+    /// # let mut my_graph = RenderGraph::default();
+    /// my_graph.begin_cmd_buf().with_name("calculate the wow factor")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .record_compute(move |compute, bindings| {
     ///             compute.push_constants(&[0x00, 0x00])
@@ -1603,17 +1603,17 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor
 /// # use vk_graph::RenderGraph;
 /// # use vk_graph::driver::shader::Shader;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
 /// # let my_frag_code = [0u8; 1];
 /// # let my_vert_code = [0u8; 1];
 /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
 /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
 /// # let info = GraphicPipelineInfo::default();
 /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
-/// # let mut my_graph = RenderGraph::new();
+/// # let mut my_graph = RenderGraph::default();
 /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
 /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
-/// my_graph.begin_pass("my draw pass")
+/// my_graph.begin_cmd_buf().with_name("my draw pass")
 ///         .bind_pipeline(&my_graphic_pipeline)
 ///         .store_color(0, swapchain_image)
 ///         .record_subpass(move |subpass, bindings| {
@@ -1646,14 +1646,14 @@ impl Draw<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
     /// # let info = GraphicPipelineInfo::default();
     /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
-    /// # let mut my_graph = RenderGraph::new();
+    /// # let mut my_graph = RenderGraph::default();
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::INDEX_BUFFER);
@@ -1662,7 +1662,7 @@ impl Draw<'_> {
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
     /// # let my_idx_buf = my_graph.bind_node(my_idx_buf);
     /// # let my_vtx_buf = my_graph.bind_node(my_vtx_buf);
-    /// my_graph.begin_pass("my indexed geometry draw pass")
+    /// my_graph.begin_cmd_buf().with_name("my indexed geometry draw pass")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_idx_buf)
@@ -1724,7 +1724,7 @@ impl Draw<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
     /// # let my_frag_code = [0u8; 1];
@@ -1733,11 +1733,11 @@ impl Draw<'_> {
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
     /// # let info = GraphicPipelineInfo::default();
     /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
-    /// # let mut my_graph = RenderGraph::new();
+    /// # let mut my_graph = RenderGraph::default();
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
     /// # let my_vtx_buf = my_graph.bind_node(my_vtx_buf);
-    /// my_graph.begin_pass("my unindexed geometry draw pass")
+    /// my_graph.begin_cmd_buf().with_name("my unindexed geometry draw pass")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_vtx_buf)
@@ -1903,14 +1903,14 @@ impl Draw<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
     /// # let info = GraphicPipelineInfo::default();
     /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
-    /// # let mut my_graph = RenderGraph::new();
+    /// # let mut my_graph = RenderGraph::default();
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::INDEX_BUFFER);
     /// # let my_idx_buf = Buffer::create(&device, buf_info)?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
@@ -1936,7 +1936,7 @@ impl Draw<'_> {
     /// let buf = Buffer::create_from_slice(&device, buf_flags, cmd_data)?;
     /// let buf_node = my_graph.bind_node(buf);
     ///
-    /// my_graph.begin_pass("draw a single triangle")
+    /// my_graph.begin_cmd_buf().with_name("draw a single triangle")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_idx_buf)
@@ -2114,7 +2114,7 @@ impl Draw<'_> {
     /// # use vk_graph::RenderGraph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
@@ -2123,9 +2123,9 @@ impl Draw<'_> {
     /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = Image::create(&device, info)?;
-    /// # let mut my_graph = RenderGraph::new();
+    /// # let mut my_graph = RenderGraph::default();
     /// # let swapchain_image = my_graph.bind_node(swapchain_image);
-    /// my_graph.begin_pass("draw a quad")
+    /// my_graph.begin_cmd_buf().with_name("draw a quad")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .record_subpass(move |subpass, bindings| {
@@ -2183,7 +2183,7 @@ impl Draw<'_> {
     /// # use vk_graph::RenderGraph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
@@ -2192,9 +2192,9 @@ impl Draw<'_> {
     /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = Image::create(&device, info)?;
-    /// # let mut my_graph = RenderGraph::new();
+    /// # let mut my_graph = RenderGraph::default();
     /// # let swapchain_image = my_graph.bind_node(swapchain_image);
-    /// my_graph.begin_pass("draw a quad")
+    /// my_graph.begin_cmd_buf().with_name("draw a quad")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .record_subpass(move |subpass, bindings| {
@@ -2355,11 +2355,11 @@ pub struct PassRef<'a> {
 }
 
 impl<'a> PassRef<'a> {
-    pub(super) fn new(graph: &'a mut RenderGraph, name: String) -> PassRef<'a> {
+    pub(super) fn new(graph: &'a mut RenderGraph) -> PassRef<'a> {
         let pass_idx = graph.passes.len();
         graph.passes.push(Pass {
             execs: vec![Default::default()], // We start off with a default execution!
-            name,
+            name: None,
         });
 
         Self {
@@ -2474,6 +2474,17 @@ impl<'a> PassRef<'a> {
         binding.bind(self)
     }
 
+    /// Finalize the recording of this pass and return to the `RenderGraph` where you may record
+    /// additional passes.
+    pub fn end_cmd_buf(self) -> &'a mut RenderGraph {
+        // If nothing was done in this pass we can just ignore it
+        if self.exec_idx == 0 {
+            self.graph.passes.pop();
+        }
+
+        self.graph
+    }
+
     /// Returns information used to crate a node.
     pub fn node_info<N>(&self, node: N) -> <N as Information>::Info
     where
@@ -2576,15 +2587,14 @@ impl<'a> PassRef<'a> {
         self
     }
 
-    /// Finalize the recording of this pass and return to the `RenderGraph` where you may record
-    /// additional passes.
-    pub fn submit_pass(self) -> &'a mut RenderGraph {
-        // If nothing was done in this pass we can just ignore it
-        if self.exec_idx == 0 {
-            self.graph.passes.pop();
+    /// Sets a debugging name, but only in debug builds
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            self.as_mut().name = Some(name.into());
         }
 
-        self.graph
+        self
     }
 
     /// Informs the pass that the next recorded command buffer will write the given `node` using
@@ -2780,6 +2790,11 @@ where
         self.pass.graph.bind_node(binding)
     }
 
+    /// Finalizes a pass and returns the render graph so that additional passes may be added.
+    pub fn end_cmd_buf(self) -> &'a mut RenderGraph {
+        self.pass.end_cmd_buf()
+    }
+
     /// Returns information used to crate a node.
     pub fn node_info<N>(&self, node: N) -> <N as Information>::Info
     where
@@ -2927,11 +2942,6 @@ where
     {
         let access = <T as Access>::DEFAULT_READ;
         self.access_node_subrange_mut(node, access, subresource);
-    }
-
-    /// Finalizes a pass and returns the render graph so that additional passes may be added.
-    pub fn submit_pass(self) -> &'a mut RenderGraph {
-        self.pass.submit_pass()
     }
 
     /// Informs the pass that the next recorded command buffer will write the given `node` at the
@@ -4693,15 +4703,15 @@ impl PipelinePassRef<'_, RayTracePipeline> {
 /// # use vk_graph::driver::shader::Shader;
 /// # use vk_graph::RenderGraph;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
 /// # let info = RayTracePipelineInfo::default();
 /// # let my_miss_code = [0u8; 1];
 /// # let my_ray_trace_pipeline = Arc::new(RayTracePipeline::create(&device, info,
 ///     [Shader::new_miss(my_miss_code.as_slice())],
 ///     [RayTraceShaderGroup::new_general(0)],
 /// )?);
-/// # let mut my_graph = RenderGraph::new();
-/// my_graph.begin_pass("my ray trace pass")
+/// # let mut my_graph = RenderGraph::default();
+/// my_graph.begin_cmd_buf().with_name("my ray trace pass")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
 ///         .record_ray_trace(move |ray_trace, bindings| {
 ///             // During this closure we have access to the ray trace methods!
@@ -4764,7 +4774,7 @@ impl RayTrace<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let shader = [0u8; 1];
     /// # let info = RayTracePipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
@@ -4776,8 +4786,8 @@ impl RayTrace<'_> {
     /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let mut my_graph = RenderGraph::new();
-    /// my_graph.begin_pass("draw a cornell box")
+    /// # let mut my_graph = RenderGraph::default();
+    /// my_graph.begin_cmd_buf().with_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
     ///         .record_ray_trace(move |ray_trace, bindings| {
     ///             ray_trace.push_constants(&[0xcb])
@@ -4835,7 +4845,7 @@ impl RayTrace<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let shader = [0u8; 1];
     /// # let info = RayTracePipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
@@ -4847,8 +4857,8 @@ impl RayTrace<'_> {
     /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let mut my_graph = RenderGraph::new();
-    /// my_graph.begin_pass("draw a cornell box")
+    /// # let mut my_graph = RenderGraph::default();
+    /// my_graph.begin_cmd_buf().with_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
     ///         .record_ray_trace(move |ray_trace, bindings| {
     ///             ray_trace.push_constants(&[0xcb, 0xff])
@@ -4928,7 +4938,7 @@ impl RayTrace<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::RenderGraph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let shader = [0u8; 1];
     /// # let info = RayTracePipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
@@ -4940,8 +4950,8 @@ impl RayTrace<'_> {
     /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let mut my_graph = RenderGraph::new();
-    /// my_graph.begin_pass("draw a cornell box")
+    /// # let mut my_graph = RenderGraph::default();
+    /// my_graph.begin_cmd_buf().with_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
     ///         .record_ray_trace(move |ray_trace, bindings| {
     ///             ray_trace.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);

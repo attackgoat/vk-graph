@@ -28,7 +28,8 @@ fn main() -> Result<(), WindowError> {
 
         let mut pass = frame
             .render_graph
-            .begin_pass("Test")
+            .begin_cmd_buf()
+            .with_name("Test")
             .bind_pipeline(&pipeline)
             .access_node(draw_buf_node, AccessType::IndirectBuffer);
 
@@ -49,7 +50,7 @@ fn create_images(device: &Arc<Device>) -> Result<Vec<Arc<Image>>, DriverError> {
     let mut textures = Vec::with_capacity(64);
 
     let (b, a) = (0.0, 1.0);
-    let mut graph = RenderGraph::new();
+    let mut graph = RenderGraph::default();
     for y in 0..8 {
         for x in 0..8 {
             let texture = Arc::new(Image::create(
@@ -64,7 +65,7 @@ fn create_images(device: &Arc<Device>) -> Result<Vec<Arc<Image>>, DriverError> {
             let texture_node = graph.bind_node(&texture);
             let r = y as f32 / 7.0;
             let g = x as f32 / 7.0;
-            graph.clear_color_image_value(texture_node, [r, g, b, a]);
+            graph.clear_color_image(texture_node, [r, g, b, a]);
             textures.push(texture);
         }
     }

@@ -101,7 +101,7 @@ fn main() -> anyhow::Result<()> {
                 let t = 12.0 * ((Instant::now() - started_at).as_millis() % 32) as f32;
 
                 // Clear a new image to a cycling color
-                let mut render_graph = RenderGraph::new();
+                let mut render_graph = RenderGraph::default();
                 let image = render_graph.bind_node(
                     pool.lease(ImageInfo::image_2d(
                         10,
@@ -111,7 +111,7 @@ fn main() -> anyhow::Result<()> {
                     ))
                     .unwrap(),
                 );
-                render_graph.clear_color_image_value(
+                render_graph.clear_color_image(
                     image,
                     [
                         (t.sin() * 127.0 + 128.0) as u8,
@@ -152,7 +152,9 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        frame.render_graph.clear_color_image(frame.swapchain_image);
+        frame
+            .render_graph
+            .clear_color_image(frame.swapchain_image, [0f32; 4]);
 
         for (image_idx, image) in images.iter().enumerate() {
             let image = frame.render_graph.bind_node(image);
@@ -246,7 +248,7 @@ fn load_font(device: &Arc<Device>) -> anyhow::Result<BitmapFont> {
     )
     .unwrap();
 
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
     let page_0 = render_graph.bind_node(page_0);
     let temp_buf = render_graph.bind_node(temp_buf);
     render_graph.copy_buffer_to_image(temp_buf, page_0);

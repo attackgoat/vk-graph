@@ -241,7 +241,8 @@ fn main() -> anyhow::Result<()> {
         if input.key_held(KeyCode::Tab) {
             frame
                 .render_graph
-                .begin_pass("DEBUG")
+                .begin_cmd_buf()
+                .with_name("DEBUG")
                 .bind_pipeline(&debug_pipeline)
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                 .access_descriptor(
@@ -274,7 +275,8 @@ fn main() -> anyhow::Result<()> {
             if use_geometry_shader {
                 frame
                     .render_graph
-                    .begin_pass("Shadow (Using geometry shader)")
+                    .begin_cmd_buf()
+                    .with_name("Shadow (Using geometry shader)")
                     .bind_pipeline(&shadow_pipeline)
                     .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                     .access_descriptor(0, light_uniform_buf, AccessType::AnyShaderReadUniformBuffer)
@@ -318,7 +320,8 @@ fn main() -> anyhow::Result<()> {
 
                     frame
                         .render_graph
-                        .begin_pass("Shadow")
+                        .begin_cmd_buf()
+                        .with_name("Shadow")
                         .bind_pipeline(&shadow_pipeline)
                         .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                         .access_descriptor(
@@ -358,15 +361,17 @@ fn main() -> anyhow::Result<()> {
                     // separable box blur filter which approximates a gaussian blur
                     frame
                         .render_graph
-                        .begin_pass("Blur X")
+                        .begin_cmd_buf()
+                        .with_name("Blur X")
                         .bind_pipeline(&blur_x_pipeline)
                         .read_descriptor(0, shadow_faces_node)
                         .write_descriptor(1, temp_image)
                         .record_compute(move |compute, _| {
                             compute.dispatch(1, CUBEMAP_SIZE, 6);
                         })
-                        .submit_pass()
-                        .begin_pass("Blur Y")
+                        .end_cmd_buf()
+                        .begin_cmd_buf()
+                        .with_name("Blur Y")
                         .bind_pipeline(&blur_y_pipeline)
                         .read_descriptor(0, temp_image)
                         .write_descriptor(1, shadow_faces_node)
@@ -379,7 +384,8 @@ fn main() -> anyhow::Result<()> {
             // Render the scene directly to the swapchain using the shadow map from the above pass
             frame
                 .render_graph
-                .begin_pass("Mesh objects")
+                .begin_cmd_buf()
+                .with_name("Mesh objects")
                 .bind_pipeline(&mesh_pipeline)
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                 .access_descriptor(
@@ -426,8 +432,7 @@ fn best_2d_optimal_format(
     flags: vk::ImageCreateFlags,
 ) -> vk::Format {
     for format in formats {
-        let format_props = Device::image_format_properties(
-            device,
+        let format_props = device.physical_device.image_format_properties(
             *format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,

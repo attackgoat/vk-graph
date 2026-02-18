@@ -90,7 +90,8 @@ fn main() -> anyhow::Result<()> {
 
         frame
             .render_graph
-            .begin_pass("Mesh with ray-query shadows")
+            .begin_cmd_buf()
+            .with_name("Mesh with ray-query shadows")
             .bind_pipeline(&gfx_pipeline)
             .access_node(ground_mesh_index_buf, AccessType::IndexBuffer)
             .access_node(ground_mesh_vertex_buf, AccessType::VertexBuffer)
@@ -129,8 +130,7 @@ fn best_2d_optimal_format(
     flags: vk::ImageCreateFlags,
 ) -> vk::Format {
     for format in formats {
-        let format_props = Device::image_format_properties(
-            device,
+        let format_props = device.physical_device.image_format_properties(
             *format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -177,7 +177,7 @@ fn create_blas(
     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
     let size = AccelerationStructure::size_of(device, &info);
 
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
     let blas = render_graph.bind_node(AccelerationStructure::create(
         device,
         AccelerationStructureInfo::blas(size.create_size),
@@ -201,7 +201,7 @@ fn create_blas(
     )?);
     let scratch_data = render_graph.node_device_address(scratch_buf);
 
-    let mut pass = render_graph.begin_pass("Build BLAS");
+    let mut pass = render_graph.begin_cmd_buf().with_name("Build BLAS");
 
     for model in models.iter().copied() {
         let index_buf = pass.bind_node(&model.index_buf);
@@ -386,7 +386,8 @@ fn create_tlas(
     let instance_buf = render_graph.bind_node(instance_buf);
 
     render_graph
-        .begin_pass("Build TLAS")
+        .begin_cmd_buf()
+        .with_name("Build TLAS")
         .access_node(blas, AccessType::AccelerationStructureBuildRead)
         .access_node(instance_buf, AccessType::AccelerationStructureBuildRead)
         .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)

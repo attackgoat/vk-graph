@@ -12,7 +12,7 @@ use {
     derive_builder::{Builder, UninitializedFieldError},
     log::{Level::Trace, log_enabled, trace, warn},
     ordered_float::OrderedFloat,
-    std::{collections::HashSet, ffi::CString, ops::Deref, sync::Arc, thread::panicking},
+    std::{collections::HashSet, ffi::CString, sync::Arc, thread::panicking},
 };
 
 const RGBA_COLOR_COMPONENTS: vk::ColorComponentFlags = vk::ColorComponentFlags::from_raw(
@@ -346,7 +346,7 @@ impl From<UninitializedFieldError> for DepthStencilModeBuilderError {
 ///
 /// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
 #[derive(Debug)]
-#[repr(C)]
+#[readonly::make]
 pub struct GraphicPipeline {
     pub(crate) descriptor_bindings: DescriptorBindingMap,
     pub(crate) descriptor_info: PipelineDescriptorInfo,
@@ -354,18 +354,12 @@ pub struct GraphicPipeline {
     /// The device which owns this buffer resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub device: Arc<Device>,
 
-    #[cfg(not(doc))]
-    device: Arc<Device>,
-
     /// Information used to create this object.
-    #[cfg(doc)]
+    #[readonly]
     pub info: GraphicPipelineInfo,
-
-    #[cfg(not(doc))]
-    info: GraphicPipelineInfo,
 
     pub(crate) input_attachments: Box<[u32]>,
     pub(crate) layout: vk::PipelineLayout,
@@ -373,21 +367,6 @@ pub struct GraphicPipeline {
     /// A descriptive name used in debugging messages.
     pub name: Option<String>,
 
-    pub(crate) push_constants: Vec<vk::PushConstantRange>,
-    pub(crate) shader_modules: Vec<vk::ShaderModule>,
-    pub(super) state: GraphicPipelineState,
-}
-
-#[doc(hidden)]
-#[repr(C)]
-pub struct GraphicPipelineRef {
-    pub(crate) descriptor_bindings: DescriptorBindingMap,
-    pub(crate) descriptor_info: PipelineDescriptorInfo,
-    pub device: Arc<Device>,
-    pub info: GraphicPipelineInfo,
-    pub(crate) input_attachments: Box<[u32]>,
-    pub(crate) layout: vk::PipelineLayout,
-    pub name: Option<String>,
     pub(crate) push_constants: Vec<vk::PushConstantRange>,
     pub(crate) shader_modules: Vec<vk::ShaderModule>,
     pub(super) state: GraphicPipelineState,
@@ -415,7 +394,7 @@ impl GraphicPipeline {
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// // shader code is raw SPIR-V code as bytes
@@ -486,7 +465,7 @@ impl GraphicPipeline {
         let descriptor_sets_layouts = descriptor_info
             .layouts
             .values()
-            .map(|descriptor_set_layout| **descriptor_set_layout)
+            .map(|descriptor_set_layout| descriptor_set_layout.handle)
             .collect::<Box<[_]>>();
 
         let push_constants = shaders
@@ -619,15 +598,6 @@ impl GraphicPipeline {
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
-    }
-}
-
-#[doc(hidden)]
-impl Deref for GraphicPipeline {
-    type Target = GraphicPipelineRef;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 
@@ -838,7 +808,7 @@ pub(super) struct MultisampleState {
 pub(super) struct Stage {
     pub flags: vk::ShaderStageFlags,
     pub module: vk::ShaderModule,
-    pub name: CString,
+    pub name: CString, // TODO
     pub specialization_info: Option<SpecializationInfo>,
 }
 

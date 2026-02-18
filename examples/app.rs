@@ -44,7 +44,7 @@ impl ApplicationHandler for Application {
 
         let args = Args::parse();
         let device_info = DeviceInfoBuilder::default().debug(args.debug);
-        let device = Arc::new(Device::create_display(device_info, &window).unwrap());
+        let device = Arc::new(Device::from_display(&window, device_info).unwrap());
 
         let surface = Surface::create(&device, &window, &window).unwrap();
         let surface_formats = Surface::formats(&surface).unwrap();
@@ -114,11 +114,11 @@ struct Context {
 impl Context {
     fn draw(&mut self) -> Result<(), DisplayError> {
         if let Some(swapchain_image) = self.display.acquire_next_image()? {
-            let mut render_graph = RenderGraph::new();
+            let mut render_graph = RenderGraph::default();
             let swapchain_image = render_graph.bind_node(swapchain_image);
 
             // Rendering goes here!
-            render_graph.clear_color_image_value(swapchain_image, [1.0, 0.0, 1.0]);
+            render_graph.clear_color_image(swapchain_image, [1.0, 0.0, 1.0]);
 
             self.window.pre_present_notify();
             self.display

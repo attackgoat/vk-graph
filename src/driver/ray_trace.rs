@@ -11,7 +11,7 @@ use {
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::warn,
-    std::{ffi::CString, ops::Deref, sync::Arc, thread::panicking},
+    std::{ffi::CString, sync::Arc, thread::panicking},
 };
 
 /// Smart pointer handle to a [pipeline] object.
@@ -29,7 +29,7 @@ use {
 /// [deref]: core::ops::Deref
 /// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
 #[derive(Debug)]
-#[repr(C)]
+#[readonly::make]
 pub struct RayTracePipeline {
     pub(crate) descriptor_bindings: DescriptorBindingMap,
     pub(crate) descriptor_info: PipelineDescriptorInfo,
@@ -37,48 +37,24 @@ pub struct RayTracePipeline {
     /// The device which owns this buffer resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub device: Arc<Device>,
-
-    #[cfg(not(doc))]
-    device: Arc<Device>,
 
     /// The native Vulkan resource handle of this pipeline.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub handle: vk::Pipeline,
 
-    #[cfg(not(doc))]
-    handle: vk::Pipeline,
-
     /// Information used to create this object.
-    #[cfg(doc)]
+    #[readonly]
     pub info: RayTracePipelineInfo,
-
-    #[cfg(not(doc))]
-    info: RayTracePipelineInfo,
 
     pub(crate) layout: vk::PipelineLayout,
 
     /// A descriptive name used in debugging messages.
     pub name: Option<String>,
 
-    pub(crate) push_constants: Vec<vk::PushConstantRange>,
-    shader_modules: Vec<vk::ShaderModule>,
-    shader_group_handles: Vec<u8>,
-}
-
-#[doc(hidden)]
-#[repr(C)]
-pub struct RayTracePipelineRef {
-    pub(crate) descriptor_bindings: DescriptorBindingMap,
-    pub(crate) descriptor_info: PipelineDescriptorInfo,
-    pub device: Arc<Device>,
-    pub handle: vk::Pipeline,
-    pub info: RayTracePipelineInfo,
-    pub(crate) layout: vk::PipelineLayout,
-    pub name: Option<String>,
     pub(crate) push_constants: Vec<vk::PushConstantRange>,
     shader_modules: Vec<vk::ShaderModule>,
     shader_group_handles: Vec<u8>,
@@ -109,7 +85,7 @@ impl RayTracePipeline {
     /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let my_rgen_code = [0u8; 1];
     /// # let my_chit_code = [0u8; 1];
     /// # let my_miss_code = [0u8; 1];
@@ -179,17 +155,17 @@ impl RayTracePipeline {
         }
 
         let descriptor_info = PipelineDescriptorInfo::create(device, &descriptor_bindings)?;
-        let descriptor_set_layout_handles = descriptor_info
+        let layouts = descriptor_info
             .layouts
             .values()
-            .map(|descriptor_set_layout| **descriptor_set_layout)
+            .map(|layout| layout.handle)
             .collect::<Box<[_]>>();
 
         unsafe {
             let layout = device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
-                        .set_layouts(&descriptor_set_layout_handles)
+                        .set_layouts(&layouts)
                         .push_constant_ranges(&push_constants),
                     None,
                 )
@@ -393,15 +369,6 @@ impl RayTracePipeline {
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
-    }
-}
-
-#[doc(hidden)]
-impl Deref for RayTracePipeline {
-    type Target = RayTracePipelineRef;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 

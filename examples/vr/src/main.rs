@@ -268,7 +268,7 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        let mut render_graph = RenderGraph::new();
+        let mut render_graph = RenderGraph::default();
         let depth_image = render_graph.bind_node(
             pool.lease(ImageInfo::image_2d_array(
                 resolution.width,
@@ -340,7 +340,7 @@ fn main() -> anyhow::Result<()> {
             render_graph.bind_node(buf)
         };
 
-        render_graph.clear_color_image_value(swapchain_image, [0x00, 0x00, 0x00, 0xff]);
+        render_graph.clear_color_image(swapchain_image, [0x00, 0x00, 0x00, 0xff]);
 
         if let Some(location) = left_hand_location {
             let index_buf = render_graph.bind_node(&lincoln_hand_left.index_buf);
@@ -352,7 +352,8 @@ fn main() -> anyhow::Result<()> {
             let push_consts = PushConstants::new(model_transform);
 
             render_graph
-                .begin_pass("Left hand")
+                .begin_cmd_buf()
+                .with_name("Left hand")
                 .bind_pipeline(hands_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                 .set_multiview(VIEW_MASK, VIEW_MASK)
@@ -396,7 +397,8 @@ fn main() -> anyhow::Result<()> {
             let push_consts = PushConstants::new(model_transform);
 
             render_graph
-                .begin_pass("Right hand")
+                .begin_cmd_buf()
+                .with_name("Right hand")
                 .bind_pipeline(hands_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                 .set_multiview(VIEW_MASK, VIEW_MASK)
@@ -438,7 +440,8 @@ fn main() -> anyhow::Result<()> {
             let push_consts = PushConstants::new(Mat4::IDENTITY);
 
             render_graph
-                .begin_pass("Woolly Mammoth")
+                .begin_cmd_buf()
+                .with_name("Woolly Mammoth")
                 .bind_pipeline(mammoth_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                 .set_multiview(VIEW_MASK, VIEW_MASK)
@@ -759,7 +762,7 @@ fn load_texture(
         ),
     )?);
 
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
     let staging_buf = render_graph.bind_node(staging_buf);
     let texture_image = render_graph.bind_node(&texture);
     render_graph.copy_buffer_to_image(staging_buf, texture_image);

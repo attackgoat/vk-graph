@@ -101,7 +101,8 @@ fn draw_triangle(
 
     frame
         .render_graph
-        .begin_pass("Triangle")
+        .begin_cmd_buf()
+        .with_name("Triangle")
         .bind_pipeline(pipeline)
         .load_color(0, frame.swapchain_image)
         .store_color(0, frame.swapchain_image)

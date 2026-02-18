@@ -76,7 +76,7 @@ pub struct HotShader {
     /// # use vk_graph::driver::shader::{SpecializationInfo};
     /// # use vk_graph_hot::shader::HotShader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new_headless(DeviceInfo::default())?);
     /// # let my_shader_code = [0u8; 1];
     /// // We instead specify 42 for MY_COUNT:
     /// let shader = HotShader::new_fragment(my_shader_code.as_slice())

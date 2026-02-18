@@ -58,7 +58,8 @@ fn main() -> Result<(), WindowError> {
 
         let mut pass = frame
             .render_graph
-            .begin_pass("splat mips")
+            .begin_cmd_buf()
+            .with_name("splat mips")
             .bind_pipeline(&splat);
 
         for mip_level in 0..mip_level_count {
@@ -145,7 +146,7 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
         ],
     )?);
 
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
     let image_info = image.info;
     let image = render_graph.bind_node(image);
 
@@ -154,7 +155,8 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
     // new pass for each level the Vulkan framebuffer would be set to the size of the first image.
     for mip_level in 0..image_info.mip_level_count {
         render_graph
-            .begin_pass("fill mip levels")
+            .begin_cmd_buf()
+            .with_name("fill mip levels")
             .bind_pipeline(&vertical_gradient)
             .store_color_as(
                 0,

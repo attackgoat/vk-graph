@@ -34,7 +34,8 @@ fn main() -> Result<(), WindowError> {
     window.run(|frame| {
         frame
             .render_graph
-            .begin_pass("make some noise")
+            .begin_cmd_buf()
+            .with_name("make some noise")
             .bind_pipeline(pipeline.hot())
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)

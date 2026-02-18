@@ -91,7 +91,8 @@ fn main() -> anyhow::Result<()> {
 
         let mut pass = frame
             .render_graph
-            .begin_pass("cube")
+            .begin_cmd_buf()
+            .with_name("cube")
             .bind_pipeline(if will_render_msaa {
                 &mesh_msaa_pipeline
             } else {
@@ -168,8 +169,7 @@ fn main() -> anyhow::Result<()> {
 
 fn best_depth_format(device: &Device) -> vk::Format {
     for format in [vk::Format::D32_SFLOAT, vk::Format::D16_UNORM] {
-        let format_props = Device::image_format_properties(
-            device,
+        let format_props = device.physical_device.image_format_properties(
             format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,

@@ -206,7 +206,8 @@ impl BitmapFont {
         }
 
         let mut pass = graph
-            .begin_pass("text")
+            .begin_cmd_buf()
+            .with_name("text")
             .bind_pipeline(&self.pipeline)
             .access_node(vertex_buf, AccessType::IndexBuffer)
             .load_color(0, image)

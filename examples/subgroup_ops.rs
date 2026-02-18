@@ -31,7 +31,7 @@ fn main() -> Result<(), DriverError> {
 
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::create_headless(device_info)?);
+    let device = Arc::new(Device::new(device_info)?);
     let Vulkan11Properties {
         subgroup_size,
         subgroup_supported_operations,
@@ -66,7 +66,7 @@ fn exclusive_sum(
     scan_pipeline: &Arc<ComputePipeline>,
     input_data: &[u32],
 ) -> Result<Vec<u32>, DriverError> {
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
 
     let input_buf = render_graph.bind_node(Buffer::create_from_slice(
         device,
@@ -95,7 +95,8 @@ fn exclusive_sum(
 
     if reduce_count > 0 {
         render_graph
-            .begin_pass("exclusive sum reduce")
+            .begin_cmd_buf()
+            .with_name("exclusive sum reduce")
             .bind_pipeline(reduce_pipeline)
             .read_descriptor(0, input_buf)
             .write_descriptor(1, workgroup_buf)
@@ -105,7 +106,8 @@ fn exclusive_sum(
     }
 
     render_graph
-        .begin_pass("exclusive sum scan")
+        .begin_cmd_buf()
+        .with_name("exclusive sum scan")
         .bind_pipeline(scan_pipeline)
         .read_descriptor(0, workgroup_buf)
         .read_descriptor(1, input_buf)

@@ -9,7 +9,7 @@ use {
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{trace, warn},
-    std::{ffi::CString, ops::Deref, sync::Arc, thread::panicking},
+    std::{ffi::CString, sync::Arc, thread::panicking},
 };
 
 /// Smart pointer handle to a [pipeline] object.
@@ -24,7 +24,7 @@ use {
 /// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
 /// [deref]: core::ops::Deref
 #[derive(Debug)]
-#[repr(C)]
+#[readonly::make]
 pub struct ComputePipeline {
     pub(crate) descriptor_bindings: DescriptorBindingMap,
     pub(crate) descriptor_info: PipelineDescriptorInfo,
@@ -32,46 +32,24 @@ pub struct ComputePipeline {
     /// The device which owns this buffer resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub device: Arc<Device>,
-
-    #[cfg(not(doc))]
-    device: Arc<Device>,
 
     pub(crate) layout: vk::PipelineLayout,
 
     /// The native Vulkan resource handle of this pipeline.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub handle: vk::Pipeline,
 
-    #[cfg(not(doc))]
-    handle: vk::Pipeline,
-
     /// Information used to create this object.
-    #[cfg(doc)]
+    #[readonly]
     pub info: ComputePipelineInfo,
-
-    #[cfg(not(doc))]
-    info: ComputePipelineInfo,
 
     /// A descriptive name used in debugging messages.
     pub name: Option<String>,
 
-    pub(crate) push_constants: Option<vk::PushConstantRange>,
-}
-
-#[doc(hidden)]
-#[repr(C)]
-pub struct ComputePipelineRef {
-    pub(crate) descriptor_bindings: DescriptorBindingMap,
-    pub(crate) descriptor_info: PipelineDescriptorInfo,
-    pub device: Arc<Device>,
-    pub(crate) layout: vk::PipelineLayout,
-    pub handle: vk::Pipeline,
-    pub info: ComputePipelineInfo,
-    pub name: Option<String>,
     pub(crate) push_constants: Option<vk::PushConstantRange>,
 }
 
@@ -94,7 +72,7 @@ impl ComputePipeline {
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let my_shader_code = [0u8; 1];
     /// // my_shader_code is raw SPIR-V code as bytes
     /// let shader = Shader::new_compute(my_shader_code.as_slice());
@@ -129,7 +107,7 @@ impl ComputePipeline {
         let descriptor_set_layouts = descriptor_info
             .layouts
             .values()
-            .map(|descriptor_set_layout| **descriptor_set_layout)
+            .map(|descriptor_set_layout| descriptor_set_layout.handle)
             .collect::<Box<[_]>>();
 
         unsafe {
@@ -211,15 +189,6 @@ impl ComputePipeline {
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
-    }
-}
-
-#[doc(hidden)]
-impl Deref for ComputePipeline {
-    type Target = ComputePipelineRef;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 

@@ -204,14 +204,14 @@ impl Resolver {
 
         let lhs_pipeline = first_graphic_pipeline(lhs);
         if lhs_pipeline.is_none() {
-            trace!("  {} is not graphic", lhs.name,);
+            trace!("  {} is not graphic", lhs.name());
 
             return false;
         }
 
         let rhs_pipeline = first_graphic_pipeline(rhs);
         if rhs_pipeline.is_none() {
-            trace!("  {} is not graphic", rhs.name,);
+            trace!("  {} is not graphic", rhs.name());
 
             return false;
         }
@@ -1669,7 +1669,7 @@ impl Resolver {
             // only care about one pass at a time here
             let pass = &mut self.graph.passes[pass_idx];
 
-            trace!("leasing [{pass_idx}: {}]", pass.name);
+            trace!("leasing [{pass_idx}: {}]", pass.name());
 
             let descriptor_pool = Self::lease_descriptor_pool(pool, pass)?;
             let mut exec_descriptor_sets = HashMap::with_capacity(
@@ -1770,7 +1770,8 @@ impl Resolver {
 
                     debug!(
                         "attempting to merge [{idx}: {}] with [{end}: {}]",
-                        pass.name, other.name
+                        pass.name(),
+                        other.name()
                     );
 
                     if Self::allow_merge_passes(&pass, other) {
@@ -1781,8 +1782,14 @@ impl Resolver {
                 }
 
                 if log_enabled!(Trace) && start != end {
-                    trace!("merging {} passes into [{idx}: {}]", end - start, pass.name);
+                    trace!(
+                        "merging {} passes into [{idx}: {}]",
+                        end - start,
+                        pass.name()
+                    );
                 }
+
+                let mut name = pass.name.take().unwrap_or_default();
 
                 // Grow the merged pass once, not per merge
                 {
@@ -1790,20 +1797,22 @@ impl Resolver {
                     let mut execs_additional = 0;
                     for idx in start..end {
                         let other = passes[schedule[idx]].as_ref().unwrap();
-                        name_additional += other.name.len() + 3;
+                        name_additional += other.name().len() + 3;
                         execs_additional += other.execs.len();
                     }
 
-                    pass.name.reserve(name_additional);
+                    name.reserve(name_additional);
                     pass.execs.reserve(execs_additional);
                 }
 
                 for idx in start..end {
                     let mut other = passes[schedule[idx]].take().unwrap();
-                    pass.name.push_str(" + ");
-                    pass.name.push_str(other.name.as_str());
+                    name.push_str(" + ");
+                    name.push_str(other.name());
                     pass.execs.append(&mut other.execs);
                 }
+
+                pass.name = Some(name);
 
                 self.graph.passes.push(pass);
                 idx += 1 + end - start;
@@ -2395,11 +2404,11 @@ impl Resolver {
             return Ok(());
         }
 
-        // Print some handy details or hit a breakpoint if you set the flag
-        #[cfg(debug_assertions)]
-        if log_enabled!(Debug) && self.graph.debug {
-            debug!("resolving the following graph:\n\n{:#?}\n\n", self.graph);
-        }
+        // // Print some handy details or hit a breakpoint if you set the flag
+        // #[cfg(debug_assertions)]
+        // if log_enabled!(Debug) && self.graph.debug {
+        //     debug!("resolving the following graph:\n\n{:#?}\n\n", self.graph);
+        // }
 
         debug_assert!(
             schedule.passes.windows(2).all(|w| w[0] <= w[1]),
@@ -2419,7 +2428,7 @@ impl Resolver {
             let physical_pass = &mut self.physical_passes[pass_idx];
             let is_graphic = physical_pass.render_pass.is_some();
 
-            trace!("recording pass [{}: {}]", pass_idx, pass.name);
+            trace!("recording pass [{}: {}]", pass_idx, pass.name());
 
             if !physical_pass.exec_descriptor_sets.is_empty() {
                 Self::write_descriptor_sets(cmd_buf, &self.graph.bindings, pass, physical_pass)?;
@@ -2726,7 +2735,7 @@ impl Resolver {
             {
                 trace!(
                     "  pass [{pass_idx}: {}] is dependent",
-                    self.graph.passes[pass_idx].name
+                    self.graph.passes[pass_idx].name()
                 );
 
                 debug_assert!(unscheduled[pass_idx]);
@@ -2762,7 +2771,7 @@ impl Resolver {
 
                         trace!(
                             "  pass [{pass_idx}: {}] is dependent",
-                            self.graph.passes[pass_idx].name
+                            self.graph.passes[pass_idx].name()
                         );
 
                         for node_idx in schedule.access_cache.dependent_nodes(pass_idx) {
@@ -2789,7 +2798,7 @@ impl Resolver {
                             .passes
                             .iter()
                             .copied()
-                            .map(|idx| format!("[{}: {}]", idx, self.graph.passes[idx].name))
+                            .map(|idx| format!("[{}: {}]", idx, self.graph.passes[idx].name()))
                             .collect::<Vec<_>>()
                             .join(", ")
                     );
@@ -2808,7 +2817,7 @@ impl Resolver {
                             unscheduled
                                 .iter()
                                 .copied()
-                                .map(|idx| format!("[{}: {}]", idx, self.graph.passes[idx].name))
+                                .map(|idx| format!("[{}: {}]", idx, self.graph.passes[idx].name()))
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         );
@@ -2825,7 +2834,7 @@ impl Resolver {
                                 .map(|(idx, pass)| format!(
                                     "[{}: {}]",
                                     idx + end_pass_idx,
-                                    pass.name
+                                    pass.name()
                                 ))
                                 .collect::<Vec<_>>()
                                 .join(", ")
@@ -3005,7 +3014,7 @@ impl Resolver {
                 let (descriptor_info, _) = pipeline
                         .descriptor_bindings()
                         .get(&Descriptor { set: descriptor_set_idx, binding: dst_binding })
-                        .unwrap_or_else(|| panic!("descriptor {descriptor_set_idx}.{dst_binding}[{binding_offset}] specified in recorded execution of pass \"{}\" was not discovered through shader reflection", &pass.name));
+                        .unwrap_or_else(|| panic!("descriptor {descriptor_set_idx}.{dst_binding}[{binding_offset}] specified in recorded execution of pass \"{}\" was not discovered through shader reflection", pass.name()));
                 let descriptor_type = descriptor_info.descriptor_type();
                 let bound_node = &bindings[*node_idx];
                 if let Some(image) = bound_node.as_driver_image() {

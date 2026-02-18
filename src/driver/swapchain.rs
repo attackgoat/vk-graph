@@ -16,25 +16,17 @@ use {
 
 /// Provides the ability to present rendering results to a [`Surface`].
 #[derive(Debug)]
-#[repr(C)]
+#[readonly::make]
 pub struct Swapchain {
     /// The device which owns this buffer resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
     pub device: Arc<Device>,
-
-    #[cfg(not(doc))]
-    device: Arc<Device>,
 
     /// The native Vulkan resource handle of this swapchain.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
     pub handle: vk::SwapchainKHR,
-
-    #[cfg(not(doc))]
-    handle: vk::SwapchainKHR,
 
     handle_prev: vk::SwapchainKHR,
     images: Box<[SwapchainImage]>,
@@ -42,33 +34,13 @@ pub struct Swapchain {
     /// Information used to create this resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
     pub info: SwapchainInfo,
-
-    #[cfg(not(doc))]
-    info: SwapchainInfo,
 
     suboptimal: bool,
 
     /// The surface which supports this swapchain.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub surface: Surface,
-
-    #[cfg(not(doc))]
-    surface: Surface,
-}
-
-#[doc(hidden)]
-#[repr(C)]
-pub struct SwapchainRef {
-    pub device: Arc<Device>,
-    pub handle: vk::SwapchainKHR,
-    handle_prev: vk::SwapchainKHR,
-    images: Box<[SwapchainImage]>,
-    pub info: SwapchainInfo,
-    suboptimal: bool,
     pub surface: Surface,
 }
 
@@ -134,8 +106,7 @@ impl Swapchain {
 
                     assert!(image_idx < self.images.len());
 
-                    let image = unsafe { self.images.get_unchecked(image_idx) };
-                    let image = SwapchainImage::clone_swapchain(image);
+                    let image = unsafe { self.images.get_unchecked(image_idx) }.clone();
 
                     return Ok(replace(
                         unsafe { self.images.get_unchecked_mut(image_idx) },
@@ -410,21 +381,23 @@ impl Swapchain {
                 continue;
             }
 
-            if Device::image_format_properties(
-                &self.device,
-                self.info.surface.format,
-                vk::ImageType::TYPE_2D,
-                vk::ImageTiling::OPTIMAL,
-                usage,
-                vk::ImageCreateFlags::empty(),
-            )
-            .inspect_err(|err| {
-                warn!(
-                    "unable to get image format properties: {:?} {:?} {err}",
-                    self.info.surface.format, usage
+            if self
+                .device
+                .physical_device
+                .image_format_properties(
+                    self.info.surface.format,
+                    vk::ImageType::TYPE_2D,
+                    vk::ImageTiling::OPTIMAL,
+                    usage,
+                    vk::ImageCreateFlags::empty(),
                 )
-            })?
-            .is_none()
+                .inspect_err(|err| {
+                    warn!(
+                        "unable to get image format properties: {:?} {:?} {err}",
+                        self.info.surface.format, usage
+                    )
+                })?
+                .is_none()
             {
                 continue;
             }
@@ -461,15 +434,6 @@ impl Swapchain {
     }
 }
 
-#[doc(hidden)]
-impl Deref for Swapchain {
-    type Target = SwapchainRef;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
-    }
-}
-
 impl Drop for Swapchain {
     #[profiling::function]
     fn drop(&mut self) {
@@ -503,13 +467,13 @@ pub struct SwapchainImage {
     image_idx: u32,
 }
 
-impl SwapchainImage {
-    pub(crate) fn clone_swapchain(this: &Self) -> Self {
+impl Clone for SwapchainImage {
+    fn clone(&self) -> Self {
         let Self {
             exec_idx,
             image,
             image_idx,
-        } = this;
+        } = self;
 
         Self {
             exec_idx: *exec_idx,

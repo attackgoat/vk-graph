@@ -333,7 +333,7 @@ impl Window {
                 }
 
                 if let Some(swapchain_image) = self.display.acquire_next_image()? {
-                    let mut render_graph = RenderGraph::new();
+                    let mut render_graph = RenderGraph::default();
                     let swapchain_image = render_graph.bind_node(swapchain_image);
                     let swapchain_info = self.display.swapchain.info;
 
@@ -426,7 +426,7 @@ impl WindowBuilder {
     /// TODO
     pub fn build(self) -> Result<Window, WindowError> {
         let event_loop = EventLoop::new()?;
-        let device = Arc::new(Device::create_display(self.device_info, &event_loop)?);
+        let device = Arc::new(Device::from_display(&event_loop, self.device_info)?);
 
         Ok(Window {
             data: WindowData {

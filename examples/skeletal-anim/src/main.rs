@@ -125,7 +125,8 @@ fn main() -> Result<(), WindowError> {
 
         frame
             .render_graph
-            .begin_pass("🦴")
+            .begin_cmd_buf()
+            .with_name("🦴")
             .bind_pipeline(&pipeline)
             .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
             .access_node(index_buf, AccessType::IndexBuffer)
@@ -194,7 +195,7 @@ fn load_texture(
     )?);
 
     // Copy the host-accessible pixels into the device-only image
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
     let image_node = render_graph.bind_node(&image);
     let buffer_node = render_graph.bind_node(&buffer);
     render_graph.copy_buffer_to_image(buffer_node, image_node);
@@ -447,7 +448,7 @@ impl Model {
         )?);
 
         // Copy the host-accessible staging buffers to device-only buffers
-        let mut render_graph = RenderGraph::new();
+        let mut render_graph = RenderGraph::default();
         let index_staging_buf_node = render_graph.bind_node(index_staging_buf);
         let vertex_staging_buf_node = render_graph.bind_node(vertex_staging_buf);
         let index_buf_node = render_graph.bind_node(&index_buf);

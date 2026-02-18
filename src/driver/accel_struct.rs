@@ -8,7 +8,6 @@ use {
     std::{
         ffi::c_void,
         mem::{replace, size_of_val},
-        ops::Deref,
         sync::Arc,
         thread::panicking,
     },
@@ -40,7 +39,7 @@ use std::sync::Mutex;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
 /// # const SIZE: vk::DeviceSize = 1024;
 /// # let info = AccelerationStructureInfo::blas(SIZE);
 /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
@@ -52,58 +51,35 @@ use std::sync::Mutex;
 /// [deref]: core::ops::Deref
 /// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
 #[derive(Debug)]
-#[repr(C)]
+#[readonly::make]
 pub struct AccelerationStructure {
     access: Mutex<AccessType>,
 
     /// The native Vulkan resource handle of the buffer which supports this acceleration structure.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub buffer: Buffer,
-
-    #[cfg(not(doc))]
-    buffer: Buffer,
 
     /// The device which owns this buffer resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub device: Arc<Device>,
-
-    #[cfg(not(doc))]
-    device: Arc<Device>,
 
     /// The native Vulkan resource handle of this acceleration structure.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub handle: vk::AccelerationStructureKHR,
-
-    #[cfg(not(doc))]
-    handle: vk::AccelerationStructureKHR,
 
     /// Information used to create this object.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub info: AccelerationStructureInfo,
-
-    #[cfg(not(doc))]
-    info: AccelerationStructureInfo,
 
     /// A name for debugging purposes.
-    pub name: Option<String>,
-}
-
-#[doc(hidden)]
-#[repr(C)]
-pub struct AccelerationStructureRef {
-    access: Mutex<AccessType>,
-    pub buffer: Buffer,
-    pub device: Arc<Device>,
-    pub handle: vk::AccelerationStructureKHR,
-    pub info: AccelerationStructureInfo,
     pub name: Option<String>,
 }
 
@@ -121,7 +97,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// const SIZE: vk::DeviceSize = 1024;
     /// let info = AccelerationStructureInfo::blas(SIZE);
     /// let accel_struct = AccelerationStructure::create(&device, info)?;
@@ -205,7 +181,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # const SIZE: vk::DeviceSize = 1024;
     /// # let info = AccelerationStructureInfo::blas(SIZE);
     /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
@@ -251,7 +227,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # const SIZE: vk::DeviceSize = 1024;
     /// # let info = AccelerationStructureInfo::blas(SIZE);
     /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
@@ -293,7 +269,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, DeviceOrHostAddress};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let my_geom_triangles = AccelerationStructureGeometryData::Triangles {
     /// #     index_addr: DeviceOrHostAddress::DeviceAddress(0),
     /// #     index_type: vk::IndexType::UINT32,
@@ -370,15 +346,6 @@ impl AccelerationStructure {
                 update_size: sizes.update_scratch_size,
             }
         })
-    }
-}
-
-#[doc(hidden)]
-impl Deref for AccelerationStructure {
-    type Target = AccelerationStructureRef;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 

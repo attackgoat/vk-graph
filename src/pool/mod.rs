@@ -31,7 +31,7 @@
 //! # use vk_graph::pool::{Pool};
 //! # use vk_graph::pool::lazy::{LazyPool};
 //! # fn main() -> Result<(), DriverError> {
-//! # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+//! # let device = Arc::new(Device::new(DeviceInfo::default())?);
 //! let mut pool = LazyPool::new(&device);
 //!
 //! let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);

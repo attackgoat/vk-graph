@@ -2,13 +2,14 @@ use {
     super::{DriverError, device::Device},
     ash::vk,
     log::warn,
-    std::{ops::Deref, sync::Arc, thread::panicking},
+    std::{sync::Arc, thread::panicking},
 };
 
 #[derive(Debug)]
+#[readonly::make]
 pub struct DescriptorSetLayout {
-    device: Arc<Device>,
-    descriptor_set_layout: vk::DescriptorSetLayout,
+    pub device: Arc<Device>,
+    pub handle: vk::DescriptorSetLayout,
 }
 
 impl DescriptorSetLayout {
@@ -18,7 +19,7 @@ impl DescriptorSetLayout {
         info: &vk::DescriptorSetLayoutCreateInfo,
     ) -> Result<Self, DriverError> {
         let device = Arc::clone(device);
-        let descriptor_set_layout = unsafe {
+        let handle = unsafe {
             device
                 .create_descriptor_set_layout(info, None)
                 .map_err(|err| {
@@ -28,18 +29,7 @@ impl DescriptorSetLayout {
                 })
         }?;
 
-        Ok(Self {
-            device,
-            descriptor_set_layout,
-        })
-    }
-}
-
-impl Deref for DescriptorSetLayout {
-    type Target = vk::DescriptorSetLayout;
-
-    fn deref(&self) -> &Self::Target {
-        &self.descriptor_set_layout
+        Ok(Self { device, handle })
     }
 }
 
@@ -51,8 +41,7 @@ impl Drop for DescriptorSetLayout {
         }
 
         unsafe {
-            self.device
-                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device.destroy_descriptor_set_layout(self.handle, None);
         }
     }
 }

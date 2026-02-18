@@ -30,12 +30,10 @@ fn main() -> anyhow::Result<()> {
                 ))
                 .unwrap(),
         );
+        frame.render_graph.clear_color_image(img, [0., 1., 0., 1.]);
         frame
             .render_graph
-            .clear_color_image_value(img, [0., 1., 0., 1.]);
-        frame
-            .render_graph
-            .clear_color_image_value(frame.swapchain_image, [0., 0., 0., 1.]);
+            .clear_color_image(frame.swapchain_image, [0., 0., 0., 1.]);
 
         let id = egui.register_texture(img);
 

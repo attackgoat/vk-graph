@@ -44,7 +44,7 @@ Features of the render graph:
 
 ```rust
 render_graph
-    .begin_pass("Fancy new algorithm for shading a moving character who is actively on fire")
+    .begin_cmd_buf().with_name("Fancy new algorithm for shading a moving character who is actively on fire")
     .bind_pipeline(&gfx_pipeline)
     .read_descriptor(0, some_image)
     .read_descriptor(1, another_image)

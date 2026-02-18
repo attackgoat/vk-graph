@@ -285,7 +285,8 @@ impl Egui {
                         ((clip_rect.max.y - clip_rect.min.y) * pixels_per_point) as u32;
 
                     render_graph
-                        .begin_pass("Egui pass")
+                        .begin_cmd_buf()
+                        .with_name("Egui pass")
                         .bind_pipeline(&self.ppl)
                         .access_node(idx_buf, AccessType::IndexBuffer)
                         .access_node(vert_buf, AccessType::VertexBuffer)

@@ -164,7 +164,7 @@ impl DescriptorPool {
 
         let mut create_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(this.descriptor_pool)
-            .set_layouts(from_ref(layout));
+            .set_layouts(from_ref(&layout.handle));
         create_info.descriptor_set_count = count;
 
         Ok(unsafe {

@@ -69,7 +69,9 @@ fn select_physical_device(
     instance: &Instance,
     mut index: usize,
 ) -> Result<PhysicalDevice, DriverError> {
-    let mut physical_devices = Instance::physical_devices(instance)?;
+    let mut physical_devices = Instance::physical_devices(instance)?
+        .into_iter()
+        .collect::<Vec<_>>();
     if physical_devices.is_empty() {
         warn!("no physical devices found");
 
@@ -112,89 +114,19 @@ pub struct Device {
     swapchain_ext: Option<khr::swapchain::Device>,
 }
 
-#[doc(hidden)]
-#[repr(C)]
-pub struct DeviceRef {
-    accel_struct_ext: Option<khr::acceleration_structure::Device>,
-    pub(super) allocator: ManuallyDrop<Mutex<Allocator>>,
-    device: ash::Device,
-    pipeline_cache: vk::PipelineCache,
-    pub physical_device: PhysicalDevice,
-    pub(crate) queues: Vec<Vec<vk::Queue>>,
-    ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
-    surface_ext: Option<khr::surface::Instance>,
-    swapchain_ext: Option<khr::swapchain::Device>,
-}
-
 impl Device {
-    /// Constructs a new device using the given physical device.
-    #[profiling::function]
-    pub fn create(
-        physical_device: PhysicalDevice,
-        display_window: bool,
-    ) -> Result<Self, DriverError> {
-        let device = unsafe {
-            physical_device.create_ash_device(display_window, |device_create_info| {
-                physical_device.instance.create_device(
-                    physical_device.handle,
-                    &device_create_info,
-                    None,
-                )
-            })
-        }
-        .map_err(|err| {
-            error!("unable to create device: {err}");
-
-            DriverError::Unsupported
-        })?;
-
-        info!("created {}", physical_device.properties_v1_0.device_name);
-
-        Self::load(physical_device, device, display_window)
-    }
-
     /// Constructs a new device using the given configuration.
     #[profiling::function]
-    pub fn create_headless(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
+    pub fn new(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
         let DeviceInfo {
             debug,
             physical_device_index,
         } = info.into();
         let instance_info = InstanceInfoBuilder::default().debug(debug);
-        let instance = Instance::load(instance_info)?;
+        let instance = Instance::new(instance_info)?;
         let physical_device = select_physical_device(&instance, physical_device_index)?;
 
-        Self::create(physical_device, false)
-    }
-
-    /// Constructs a new device using the given configuration.
-    #[profiling::function]
-    pub fn create_display(
-        info: impl Into<DeviceInfo>,
-        display_handle: impl HasDisplayHandle,
-    ) -> Result<Self, DriverError> {
-        let DeviceInfo {
-            debug,
-            physical_device_index,
-        } = info.into();
-        let display_handle = display_handle.display_handle().map_err(|err| {
-            warn!("unable to get display handle: {err}");
-
-            DriverError::Unsupported
-        })?;
-        let extension_names =
-            enumerate_required_extensions(display_handle.as_raw()).map_err(|err| {
-                warn!("unable to enumerate window extensions: {err}");
-
-                DriverError::Unsupported
-            })?;
-        let instance_info = InstanceInfoBuilder::default()
-            .debug(debug)
-            .extension_names(extension_names);
-        let instance = Instance::load(instance_info)?;
-        let physical_device = select_physical_device(&instance, physical_device_index)?;
-
-        Self::create(physical_device, true)
+        Self::from_physical_device(physical_device)
     }
 
     pub(crate) fn create_fence(this: &Self, signaled: bool) -> Result<vk::Fence, DriverError> {
@@ -269,10 +201,9 @@ impl Device {
 
     /// Loads and existing `ash` Vulkan device that may have been created by other means.
     #[profiling::function]
-    pub fn load(
-        physical_device: PhysicalDevice,
+    pub fn from_ash_device(
         device: ash::Device,
-        display_window: bool,
+        physical_device: PhysicalDevice,
     ) -> Result<Self, DriverError> {
         let debug = physical_device.instance.info.debug;
         let mut debug_settings = AllocatorDebugSettings::default();
@@ -307,11 +238,12 @@ impl Device {
             queues.push(queue_family);
         }
 
-        let surface_ext = display_window.then(|| {
+        let surface_ext = physical_device.display.then(|| {
             khr::surface::Instance::new(&physical_device.instance.entry, &physical_device.instance)
         });
-        let swapchain_ext =
-            display_window.then(|| khr::swapchain::Device::new(&physical_device.instance, &device));
+        let swapchain_ext = physical_device
+            .display
+            .then(|| khr::swapchain::Device::new(&physical_device.instance, &device));
         let accel_struct_ext = physical_device
             .accel_struct_properties
             .is_some()
@@ -342,41 +274,57 @@ impl Device {
         })
     }
 
-    /// Lists the physical device's image format capabilities.
-    ///
-    /// A result of `None` indicates the format is not supported.
+    /// Constructs a new device using the given configuration.
     #[profiling::function]
-    pub fn image_format_properties(
-        this: &Self,
-        format: vk::Format,
-        ty: vk::ImageType,
-        tiling: vk::ImageTiling,
-        usage: vk::ImageUsageFlags,
-        flags: vk::ImageCreateFlags,
-    ) -> Result<Option<vk::ImageFormatProperties>, DriverError> {
-        unsafe {
-            match this
-                .physical_device
-                .instance
-                .get_physical_device_image_format_properties(
-                    this.physical_device.handle,
-                    format,
-                    ty,
-                    tiling,
-                    usage,
-                    flags,
-                ) {
-                Ok(properties) => Ok(Some(properties)),
-                Err(err) if err == vk::Result::ERROR_FORMAT_NOT_SUPPORTED => {
-                    // We don't log this condition because it is normal for unsupported
-                    // formats to be checked - we use the result to inform callers they
-                    // cannot use those formats.
+    pub fn from_display(
+        display_handle: impl HasDisplayHandle,
+        info: impl Into<DeviceInfo>,
+    ) -> Result<Self, DriverError> {
+        let DeviceInfo {
+            debug,
+            physical_device_index,
+        } = info.into();
+        let display_handle = display_handle.display_handle().map_err(|err| {
+            warn!("unable to get display handle: {err}");
 
-                    Ok(None)
-                }
-                _ => Err(DriverError::OutOfMemory),
-            }
+            DriverError::Unsupported
+        })?;
+        let extension_names =
+            enumerate_required_extensions(display_handle.as_raw()).map_err(|err| {
+                warn!("unable to enumerate window extensions: {err}");
+
+                DriverError::Unsupported
+            })?;
+        let instance_info = InstanceInfoBuilder::default()
+            .debug(debug)
+            .extension_names(extension_names);
+        let instance = Instance::new(instance_info)?;
+        let physical_device = select_physical_device(&instance, physical_device_index)?;
+
+        Self::from_physical_device(physical_device)
+    }
+
+    /// Constructs a new device using the given physical device.
+    #[profiling::function]
+    pub fn from_physical_device(physical_device: PhysicalDevice) -> Result<Self, DriverError> {
+        let device = unsafe {
+            physical_device.create_ash_device(|device_create_info| {
+                physical_device.instance.create_device(
+                    physical_device.handle,
+                    &device_create_info,
+                    None,
+                )
+            })
         }
+        .map_err(|err| {
+            error!("unable to create device: {err}");
+
+            DriverError::Unsupported
+        })?;
+
+        info!("created {}", physical_device.properties_v1_0.device_name);
+
+        Self::from_ash_device(device, physical_device)
     }
 
     pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
@@ -438,18 +386,10 @@ impl Debug for Device {
 
 #[doc(hidden)]
 impl Deref for Device {
-    type Target = DeviceRef;
+    type Target = ReadOnlyDevice;
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*(self as *const Self as *const Self::Target) }
-    }
-}
-
-impl Deref for DeviceRef {
-    type Target = ash::Device;
-
-    fn deref(&self) -> &Self::Target {
-        &self.device
     }
 }
 
@@ -602,12 +542,76 @@ impl From<UninitializedFieldError> for DeviceInfoBuilderError {
     }
 }
 
+#[doc(hidden)]
+#[repr(C)]
+pub struct ReadOnlyDevice {
+    accel_struct_ext: Option<khr::acceleration_structure::Device>,
+    pub(super) allocator: ManuallyDrop<Mutex<Allocator>>,
+    device: ash::Device,
+    pipeline_cache: vk::PipelineCache,
+    pub physical_device: PhysicalDevice,
+    pub(crate) queues: Vec<Vec<vk::Queue>>,
+    ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
+    surface_ext: Option<khr::surface::Instance>,
+    swapchain_ext: Option<khr::swapchain::Device>,
+}
+
+impl Deref for ReadOnlyDevice {
+    type Target = ash::Device;
+
+    fn deref(&self) -> &Self::Target {
+        &self.device
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, std::mem::offset_of};
 
     type Info = DeviceInfo;
     type Builder = DeviceInfoBuilder;
+
+    #[test]
+    pub fn device_repr_c() {
+        // HACK: The readonly crate uses a private implementation and so we can't further deref it
+        // into the native object type. Because of this the ReadOnly part is manually implemented.
+        assert_eq!(
+            offset_of!(Device, accel_struct_ext),
+            offset_of!(ReadOnlyDevice, accel_struct_ext),
+        );
+        assert_eq!(
+            offset_of!(Device, allocator),
+            offset_of!(ReadOnlyDevice, allocator),
+        );
+        assert_eq!(
+            offset_of!(Device, device),
+            offset_of!(ReadOnlyDevice, device),
+        );
+        assert_eq!(
+            offset_of!(Device, pipeline_cache),
+            offset_of!(ReadOnlyDevice, pipeline_cache),
+        );
+        assert_eq!(
+            offset_of!(Device, physical_device),
+            offset_of!(ReadOnlyDevice, physical_device),
+        );
+        assert_eq!(
+            offset_of!(Device, queues),
+            offset_of!(ReadOnlyDevice, queues),
+        );
+        assert_eq!(
+            offset_of!(Device, ray_trace_ext),
+            offset_of!(ReadOnlyDevice, ray_trace_ext),
+        );
+        assert_eq!(
+            offset_of!(Device, surface_ext),
+            offset_of!(ReadOnlyDevice, surface_ext),
+        );
+        assert_eq!(
+            offset_of!(Device, swapchain_ext),
+            offset_of!(ReadOnlyDevice, swapchain_ext),
+        );
+    }
 
     #[test]
     pub fn device_info() {

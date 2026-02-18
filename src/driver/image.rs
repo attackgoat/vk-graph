@@ -13,7 +13,7 @@ use {
         collections::{HashMap, hash_map::Entry},
         fmt::{Debug, Formatter},
         mem::{replace, take},
-        ops::{Deref, DerefMut},
+        ops::DerefMut,
         sync::Arc,
         thread::panicking,
     },
@@ -81,7 +81,7 @@ pub(crate) fn image_subresource_range_intersects(
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::image::{Image, ImageInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
 /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
 /// # let my_image = Image::create(&device, info)?;
 /// # let my_subresource_range = vk::ImageSubresourceRange::default();
@@ -92,7 +92,7 @@ pub(crate) fn image_subresource_range_intersects(
 /// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkImage.html
 /// [deref]: core::ops::Deref
 /// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
-#[repr(C)]
+#[readonly::make]
 pub struct Image {
     accesses: Mutex<ImageAccess<AccessType>>,
     allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
@@ -100,20 +100,14 @@ pub struct Image {
     /// The device which owns this image resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub device: Arc<Device>,
-
-    #[cfg(not(doc))]
-    device: Arc<Device>,
 
     /// The native Vulkan resource handle of this image.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub handle: vk::Image,
-
-    #[cfg(not(doc))]
-    handle: vk::Image,
 
     #[allow(clippy::type_complexity)]
     image_view_cache: Mutex<HashMap<ImageViewInfo, ImageView>>,
@@ -121,25 +115,10 @@ pub struct Image {
     /// Information used to create this resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub info: ImageInfo,
-
-    #[cfg(not(doc))]
-    info: ImageInfo,
 
     /// A name for debugging purposes.
-    pub name: Option<String>,
-}
-
-#[doc(hidden)]
-#[repr(C)]
-pub struct ImageRef {
-    accesses: Mutex<ImageAccess<AccessType>>,
-    allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
-    pub device: Arc<Device>,
-    pub handle: vk::Image,
-    image_view_cache: Mutex<HashMap<ImageViewInfo, ImageView>>,
-    pub info: ImageInfo,
     pub name: Option<String>,
 }
 
@@ -157,7 +136,7 @@ impl Image {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// let image = Image::create(&device, info)?;
     ///
@@ -274,7 +253,7 @@ impl Image {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
     /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
     /// # let my_image = Image::create(&device, info)?;
     /// # let my_subresource_range = vk::ImageSubresourceRange::default();
@@ -339,6 +318,8 @@ impl Image {
 
     #[profiling::function]
     pub(super) fn clone_swapchain(&self) -> Self {
+        debug_assert!(self.allocation.is_none());
+
         // Moves the image view cache from the current instance to the clone!
         #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
         let mut image_view_cache = self.image_view_cache.lock();
@@ -351,11 +332,9 @@ impl Image {
         // Does NOT copy over the image accesses!
         // Force previous access to general to wait for presentation
         let Self { handle, info, .. } = *self;
-        let accesses = ImageAccess::new(info, AccessType::General);
-        let accesses = Mutex::new(accesses);
 
         Self {
-            accesses,
+            accesses: Mutex::new(ImageAccess::new(info, AccessType::General)),
             allocation: None,
             device: Arc::clone(&self.device),
             handle,
@@ -449,15 +428,6 @@ impl Debug for Image {
         } else {
             write!(f, "{:?}", self.handle)
         }
-    }
-}
-
-#[doc(hidden)]
-impl Deref for Image {
-    type Target = ImageRef;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 

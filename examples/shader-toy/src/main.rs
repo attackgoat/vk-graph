@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
         .context("FLOCKAROO_IMG_FRAG")?,
     );
 
-    let mut render_graph = RenderGraph::new();
+    let mut render_graph = RenderGraph::default();
     let blank_image = render_graph.bind_node(
         cache
             .lease(ImageInfo::image_2d(
@@ -167,9 +167,9 @@ fn main() -> anyhow::Result<()> {
     );
 
     render_graph
-        .clear_color_image_value(framebuffer_image, [1.0, 1.0, 0.0, 1.0])
-        .clear_color_image_value(blank_image, [0.0, 0.0, 0.0, 1.0])
-        .clear_color_image_value(temp_image, [0.0, 1.0, 0.0, 1.0]);
+        .clear_color_image(framebuffer_image, [1.0, 1.0, 0.0, 1.0])
+        .clear_color_image(blank_image, [0.0, 0.0, 0.0, 1.0])
+        .clear_color_image(temp_image, [0.0, 1.0, 0.0, 1.0]);
 
     let mut framebuffer_image_binding = Some(render_graph.unbind_node(framebuffer_image));
     let mut blank_image_binding = Some(render_graph.unbind_node(blank_image));
@@ -290,7 +290,8 @@ fn main() -> anyhow::Result<()> {
             // Fill a buffer using a single-pass CFD pipeline where previous output feeds next input
             frame
                 .render_graph
-                .begin_pass("Buffer A")
+                .begin_cmd_buf()
+                .with_name("Buffer A")
                 .bind_pipeline(&buffer_pipeline)
                 .read_descriptor(0, input)
                 .read_descriptor(1, noise_image)
@@ -305,7 +306,8 @@ fn main() -> anyhow::Result<()> {
             // Make the CFD look more like paint with a second pass
             frame
                 .render_graph
-                .begin_pass("Image")
+                .begin_cmd_buf()
+                .with_name("Image")
                 .bind_pipeline(&image_pipeline)
                 .read_descriptor(0, output)
                 .store_color(0, input)

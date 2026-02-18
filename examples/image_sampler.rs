@@ -68,7 +68,8 @@ fn main() -> anyhow::Result<()> {
         let gulf_image = frame.render_graph.bind_node(&gulf_image);
         frame
             .render_graph
-            .begin_pass("Draw gulf image to swapchain")
+            .begin_cmd_buf()
+            .with_name("Draw gulf image to swapchain")
             .bind_pipeline(&pipelines[pipeline_index])
             .read_descriptor(0, gulf_image)
             .store_color(0, frame.swapchain_image)
@@ -241,7 +242,7 @@ fn read_image(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Ar
     )?);
 
     {
-        let mut render_graph = RenderGraph::new();
+        let mut render_graph = RenderGraph::default();
         let image = render_graph.bind_node(&image);
         let image_buf = render_graph.bind_node(Buffer::create_from_slice(
             device,
