@@ -22,7 +22,7 @@ pub trait Edge<Graph> {
     type Result;
 }
 
-macro_rules! graph_edge {
+macro_rules! node {
     ($src:ty => $dst:ty) => {
         impl Edge<Graph> for $src {
             type Result = $dst;
@@ -32,31 +32,31 @@ macro_rules! graph_edge {
 
 // Edges that can be bound as nodes to the render graph:
 // Ex: Graph::bind_node(&mut self, binding: X) -> Y
-graph_edge!(AccelerationStructure => AccelerationStructureNode);
-graph_edge!(Arc<AccelerationStructure> => AccelerationStructureNode);
-graph_edge!(Lease<AccelerationStructure> => AccelerationStructureLeaseNode);
-graph_edge!(Arc<Lease<AccelerationStructure>> => AccelerationStructureLeaseNode);
-graph_edge!(Buffer => BufferNode);
-graph_edge!(Arc<Buffer> => BufferNode);
-graph_edge!(Lease<Buffer> => BufferLeaseNode);
-graph_edge!(Arc<Lease<Buffer>> => BufferLeaseNode);
-graph_edge!(Image => ImageNode);
-graph_edge!(Arc<Image> => ImageNode);
-graph_edge!(Lease<Image> => ImageLeaseNode);
-graph_edge!(Arc<Lease<Image>> => ImageLeaseNode);
-graph_edge!(SwapchainImage => SwapchainImageNode);
+node!(AccelerationStructure => AccelerationStructureNode);
+node!(Arc<AccelerationStructure> => AccelerationStructureNode);
+node!(Lease<AccelerationStructure> => AccelerationStructureLeaseNode);
+node!(Arc<Lease<AccelerationStructure>> => AccelerationStructureLeaseNode);
+node!(Buffer => BufferNode);
+node!(Arc<Buffer> => BufferNode);
+node!(Lease<Buffer> => BufferLeaseNode);
+node!(Arc<Lease<Buffer>> => BufferLeaseNode);
+node!(Image => ImageNode);
+node!(Arc<Image> => ImageNode);
+node!(Lease<Image> => ImageLeaseNode);
+node!(Arc<Lease<Image>> => ImageLeaseNode);
+node!(SwapchainImage => SwapchainImageNode);
 
 // Edges that can be unbound from the render graph:
 // Ex: Graph::unbind_node(&mut self, node: X) -> Y
-graph_edge!(AccelerationStructureNode => Arc<AccelerationStructure>);
-graph_edge!(AccelerationStructureLeaseNode => Arc<Lease<AccelerationStructure>>);
-graph_edge!(BufferNode => Arc<Buffer>);
-graph_edge!(BufferLeaseNode => Arc<Lease<Buffer>>);
-graph_edge!(ImageNode => Arc<Image>);
-graph_edge!(ImageLeaseNode => Arc<Lease<Image>>);
-graph_edge!(SwapchainImageNode => SwapchainImage);
+node!(AccelerationStructureNode => Arc<AccelerationStructure>);
+node!(AccelerationStructureLeaseNode => Arc<Lease<AccelerationStructure>>);
+node!(BufferNode => Arc<Buffer>);
+node!(BufferLeaseNode => Arc<Lease<Buffer>>);
+node!(ImageNode => Arc<Image>);
+node!(ImageLeaseNode => Arc<Lease<Image>>);
+node!(SwapchainImageNode => SwapchainImage);
 
-macro_rules! graph_edge_borrow {
+macro_rules! node_ref {
     ($src:ty => $dst:ty) => {
         impl<'a> Edge<Graph> for &'a $src {
             type Result = $dst;
@@ -64,16 +64,16 @@ macro_rules! graph_edge_borrow {
     };
 }
 
-graph_edge_borrow!(Arc<AccelerationStructure> => AccelerationStructureNode);
-graph_edge_borrow!(Arc<Lease<AccelerationStructure>> => AccelerationStructureLeaseNode);
-graph_edge_borrow!(Arc<Buffer> => BufferNode);
-graph_edge_borrow!(Arc<Lease<Buffer>> => BufferLeaseNode);
-graph_edge_borrow!(Arc<Image> => ImageNode);
-graph_edge_borrow!(Arc<Lease<Image>> => ImageLeaseNode);
+node_ref!(Arc<AccelerationStructure> => AccelerationStructureNode);
+node_ref!(Arc<Lease<AccelerationStructure>> => AccelerationStructureLeaseNode);
+node_ref!(Arc<Buffer> => BufferNode);
+node_ref!(Arc<Lease<Buffer>> => BufferLeaseNode);
+node_ref!(Arc<Image> => ImageNode);
+node_ref!(Arc<Lease<Image>> => ImageLeaseNode);
 
 // Specialized edges for pipelines added to a pass:
 // Ex: PassRef::bind_pipeline(&mut self, pipeline: X) -> PipelineCommandRef
-macro_rules! pipeline_edge {
+macro_rules! pipeline {
     ($name:ident) => {
         paste::paste! {
             impl<'a> Edge<CommandRef<'a>> for &'a Arc<[<$name Pipeline>]> {
@@ -91,11 +91,11 @@ macro_rules! pipeline_edge {
     };
 }
 
-pipeline_edge!(Compute);
-pipeline_edge!(Graphic);
-pipeline_edge!(RayTrace);
+pipeline!(Compute);
+pipeline!(Graphic);
+pipeline!(RayTrace);
 
-macro_rules! resolver_edge {
+macro_rules! resolve {
     ($src:ident -> $dst:ident) => {
         impl Edge<Resolver> for $src {
             type Result = $dst;
@@ -103,6 +103,6 @@ macro_rules! resolver_edge {
     };
 }
 
-// Edges that can be unbound from a resolved render graph:
+// Edges that can be unbound from a resolved graph:
 // (You get the full real actual swapchain image woo hoo!)
-resolver_edge!(SwapchainImageNode -> SwapchainImage);
+resolve!(SwapchainImageNode -> SwapchainImage);

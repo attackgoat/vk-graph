@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
             .write_descriptor(0, image_node)
             .record_pipeline(move |compute, _| {
                 compute
-                    .push_constants(&elapsed_time.as_secs_f32().to_ne_bytes())
+                    .push_constants(0, &elapsed_time.as_secs_f32().to_ne_bytes())
                     .dispatch(frame.width.div_ceil(subgroup_size), frame.height, 1);
             });
 

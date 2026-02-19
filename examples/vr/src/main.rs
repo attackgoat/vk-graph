@@ -144,7 +144,9 @@ fn main() -> anyhow::Result<()> {
     let woolly_mammoth_dir = example_assets_dir.join("woolly-mammoth");
 
     if metadata(&lincoln_hands_dir).is_err() {
-        panic!("Asset submodule missing! You must first initialize the submodules and then update them using:\ngit submodule init\ngit submodule update");
+        panic!(
+            "Asset submodule missing! You must first initialize the submodules and then update them using:\ngit submodule init\ngit submodule update"
+        );
     }
 
     // Load a model and textures for the left hand
@@ -380,9 +382,9 @@ fn main() -> anyhow::Result<()> {
                 )
                 .record_pipeline(move |pipeline, _| {
                     pipeline
-                        .bind_index_buffer(index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(vertex_buf)
-                        .push_constants(bytes_of(&push_consts))
+                        .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, vertex_buf, 0)
+                        .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_left.index_count, 1, 0, 0, 0);
                 });
         }
@@ -425,9 +427,9 @@ fn main() -> anyhow::Result<()> {
                 )
                 .record_pipeline(move |pipeline, _| {
                     pipeline
-                        .bind_index_buffer(index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(vertex_buf)
-                        .push_constants(bytes_of(&push_consts))
+                        .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, vertex_buf, 0)
+                        .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_right.index_count, 1, 0, 0, 0);
                 });
         }
@@ -463,9 +465,9 @@ fn main() -> anyhow::Result<()> {
                 )
                 .record_pipeline(move |pipeline, _| {
                     pipeline
-                        .bind_index_buffer(index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(vertex_buf)
-                        .push_constants(bytes_of(&push_consts))
+                        .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, vertex_buf, 0)
+                        .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_right.index_count, 1, 0, 0, 0);
                 });
         }

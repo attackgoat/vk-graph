@@ -277,71 +277,7 @@ impl Compute<'_> {
     /// my_graph.begin_cmd().with_name("compute the ultimate question")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .record_pipeline(move |compute, bindings| {
-    ///             compute.push_constants(&[42])
-    ///                    .dispatch(1, 1, 1);
-    ///         });
-    /// # Ok(()) }
-    /// ```
-    ///
-    /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
-    pub fn push_constants(&self, data: &[u8]) -> &Self {
-        self.push_constants_offset(0, data)
-    }
-
-    /// Updates push constants starting at the given `offset`.
-    ///
-    /// Behaves similary to [`Compute::push_constants`] except that `offset` describes the position
-    /// at which `data` updates the push constants of the currently bound pipeline. This may be used
-    /// to update a subset or single field of previously set push constant data.
-    ///
-    /// # Device limitations
-    ///
-    /// See
-    /// [`device.physical_device.props.limits.max_push_constants_size`](vk::PhysicalDeviceLimits)
-    /// for the limits of the current device. You may also check [gpuinfo.org] for a listing of
-    /// reported limits on other devices.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```
-    /// # vk_shader_macros::glsl!(r#"
-    /// #version 450
-    /// #pragma shader_stage(compute)
-    ///
-    /// layout(push_constant) uniform PushConstants {
-    ///     layout(offset = 0) uint some_val1;
-    ///     layout(offset = 4) uint some_val2;
-    /// } push_constants;
-    ///
-    /// void main() {
-    ///     // TODO: Add bindings to read/write things!
-    /// }
-    /// # "#);
-    /// ```
-    ///
-    /// ```no_run
-    /// # use std::sync::Arc;
-    /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
-    /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
-    /// # use vk_graph::driver::shader::{Shader};
-    /// # use vk_graph::Graph;
-    /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
-    /// # let info = ComputePipelineInfo::default();
-    /// # let shader = Shader::new_compute([0u8; 1].as_slice());
-    /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
-    /// # let mut my_graph = Graph::default();
-    /// my_graph.begin_cmd().with_name("calculate the wow factor")
-    ///         .bind_pipeline(&my_compute_pipeline)
-    ///         .record_pipeline(move |compute, bindings| {
-    ///             compute.push_constants(&[0x00, 0x00])
-    ///                    .dispatch(1, 1, 1)
-    ///                    .push_constants_offset(4, &[0xff])
+    ///             compute.push_constants(0, &[42])
     ///                    .dispatch(1, 1, 1);
     ///         });
     /// # Ok(()) }
@@ -349,7 +285,7 @@ impl Compute<'_> {
     ///
     /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
     #[profiling::function]
-    pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
+    pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
         if let Some(push_const) = self.pipeline.push_constants {
             // Determine the range of the overall pipline push constants which overlap with `data`
             let push_const_end = push_const.offset + push_const.size;

@@ -476,7 +476,7 @@ impl TransitionPipeline {
             .read_descriptor(1, b_image)
             .write_descriptor(2, dest_image)
             .record_pipeline(move |compute, _| {
-                compute.push_constants(push_consts.as_slice());
+                compute.push_constants(0, &push_consts);
                 compute.dispatch(dest_info.width, dest_info.height, 1);
             });
     }

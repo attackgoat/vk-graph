@@ -99,9 +99,9 @@ fn main() -> anyhow::Result<()> {
             .store_depth_stencil(depth_stencil)
             .record_pipeline(move |pipeline, _| {
                 pipeline
-                    .bind_index_buffer(index_buf, vk::IndexType::UINT16)
-                    .bind_vertex_buffer(vertex_buf)
-                    .push_constants(bytes_of(&obj_pos))
+                    .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
+                    .bind_vertex_buffer(0, vertex_buf, 0)
+                    .push_constants(0, bytes_of(&obj_pos))
                     .draw_indexed(funky_shape.index_count, 1, 0, 0, 0);
             });
 
@@ -132,9 +132,9 @@ fn main() -> anyhow::Result<()> {
             .store_color(0, frame.swapchain_image)
             .record_pipeline(move |pipeline, _| {
                 pipeline
-                    .bind_index_buffer(index_buf, vk::IndexType::UINT16)
-                    .bind_vertex_buffer(vertex_buf)
-                    .push_constants(&push_const_data)
+                    .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
+                    .bind_vertex_buffer(0, vertex_buf, 0)
+                    .push_constants(0, &push_const_data)
                     .draw_indexed(funky_shape.index_count, 1, 0, 0, 0);
             });
 

@@ -109,13 +109,13 @@ fn main() -> anyhow::Result<()> {
             .store_color(0, frame.swapchain_image)
             .record_pipeline(move |pipeline, _| {
                 pipeline
-                    .bind_index_buffer(model_mesh_index_buf, vk::IndexType::UINT32)
-                    .bind_vertex_buffer(model_mesh_vertex_buf)
+                    .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
+                    .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
                     .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
 
                 pipeline
-                    .bind_index_buffer(ground_mesh_index_buf, vk::IndexType::UINT32)
-                    .bind_vertex_buffer(ground_mesh_vertex_buf)
+                    .bind_index_buffer(ground_mesh_index_buf, 0, vk::IndexType::UINT32)
+                    .bind_vertex_buffer(0, ground_mesh_vertex_buf, 0)
                     .draw_indexed(ground_mesh.index_count, 1, 0, 0, 0);
             });
     })?;

@@ -158,8 +158,8 @@ fn main() -> anyhow::Result<()> {
 
         pass.record_pipeline(move |pipeline, _| {
             pipeline
-                .bind_vertex_buffer(cube_vertex_buf)
-                .push_constants(bytes_of(&world_transform))
+                .bind_vertex_buffer(0, cube_vertex_buf, 0)
+                .push_constants(0, bytes_of(&world_transform))
                 .draw(cube_mesh.vertex_count, 1, 0, 0);
         });
     })?;

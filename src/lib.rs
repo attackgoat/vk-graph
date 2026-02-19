@@ -1,11 +1,11 @@
 /*!
 
-This crate provides a high performance [Vulkan](https://www.vulkan.org/) graphics driver using smart
-pointers.
+This crate provides a high performance [Vulkan](https://www.vulkan.org/) graphics driver with
+automatic resource management and execution.
 
-Driver resources (_buffers, images, and acceleration structures_) and shader pipelines are used with
-the provided graph structure to compose any type of graphics algorithm. Some implementations of
-common graphics patterns are provided in the `contrib` directory.
+The provided graph structure may be used to compose any type of graphics algorithm using driver
+resources (_buffers, images, and acceleration structures_) and shader pipelines. Some
+implementations of common graphics patterns are provided in the `contrib` directory.
 
 # Getting Sarted
 
@@ -38,6 +38,29 @@ fn main() -> Result<(), DriverError> {
 
     // Do stuff...
     # Ok(())
+}
+```
+
+## _Optional_: Full control of device selection, window handling, etc
+
+```no_run
+use vk_graph::driver::device::{Device, DeviceInfo};
+use vk_graph::driver::instance::{Instance, InstanceInfo};
+use vk_graph::driver::DriverError;
+
+fn main() -> Result<(), DriverError> {
+    let instance = Instance::new(InstanceInfo::default())?;
+    let physical_devices = Instance::physical_devices(&instance)?;
+    let best_index = physical_devices.iter().enumerate()...;
+    let best_gpu = physical_device[best_index];
+
+    assert!(best_gpu.properties_v1_0.limits.max_push_constants_size > 128);
+
+    let device = Device::from_physical_device(best_gpu)?;
+
+    // ... Or use winit manually similar to the usage in vk_graph_window ...
+    // let info = DeviceInfoBuilder::default().physical_device_index(0);
+    // let device = Device::from_display(&my_window, info)?;
 }
 ```
 
@@ -91,7 +114,7 @@ For example, a graphics pipeline:
 # let device = Arc::new(Device::new(DeviceInfo::default())?);
 # let my_frag_code = [0u8; 1];
 # let my_vert_code = [0u8; 1];
-// shader code is raw SPIR-V code as bytes
+// shader code is SPIR-V in u32 format
 let vert = Shader::new_vertex(my_vert_code.as_slice());
 let frag = Shader::new_fragment(my_frag_code.as_slice());
 let info = GraphicPipelineInfo::default();
@@ -100,8 +123,23 @@ let my_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
 ```
 
 _Note:_ dtolnay's read-only public field deref pattern
-(_[Link](https://github.com/dtolnay/case-studies/blob/master/readonly-fields/README.md)_) is used to
+(_[link](https://github.com/dtolnay/case-studies/blob/master/readonly-fields/README.md)_) is used to
 make the information of each resource easily available and immutable.
+
+```no_run
+# use std::sync::Arc;
+# use ash::vk;
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# fn main() -> Result<(), DriverError> {
+# let device = Arc::new(Device::new(DeviceInfo::default())?);
+let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::empty());
+let my_image = Image::create(&device, info)?;
+
+// Note: info is a field provided through the Deref trait and is immutable!
+assert_eq!(8, my_image.info.width);
+# Ok(()) }
 
 ## Pooling
 
@@ -264,7 +302,7 @@ graph
     .begin_cmd().with_name("My compute pass")
     .bind_pipeline(&my_compute_pipeline)
     .record_pipeline(|compute, _| {
-        compute.push_constants(&42u32.to_ne_bytes())
+        compute.push_constants(0, &42u32.to_ne_bytes())
                .dispatch(128, 1, 1);
     });
 # Ok(()) }
@@ -344,7 +382,6 @@ mod cmd_ref;
 mod edge;
 mod info;
 mod resolver;
-mod swapchain;
 
 pub use self::{
     bind::{Bind, Unbind},

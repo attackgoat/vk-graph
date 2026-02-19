@@ -195,10 +195,10 @@ impl ImGui {
                 .store_color(0, image)
                 .record_pipeline(move |pipeline, _| {
                     pipeline
-                        .push_constants_offset(0, &window_width.to_ne_bytes())
-                        .push_constants_offset(4, &window_height.to_ne_bytes())
-                        .bind_index_buffer(index_buf, vk::IndexType::UINT16)
-                        .bind_vertex_buffer(vertex_buf);
+                        .push_constants(0, &window_width.to_ne_bytes())
+                        .push_constants(4, &window_height.to_ne_bytes())
+                        .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
+                        .bind_vertex_buffer(0, vertex_buf, 0);
 
                     for (index_count, clip_rect, first_index, vertex_offset) in draw_cmds {
                         let clip_rect = [
@@ -211,13 +211,18 @@ impl ImGui {
                         let y = clip_rect[1].floor() as i32;
                         let width = (clip_rect[2] - clip_rect[0]).ceil() as u32;
                         let height = (clip_rect[3] - clip_rect[1]).ceil() as u32;
-                        pipeline.set_scissor(x, y, width, height).draw_indexed(
-                            index_count as _,
-                            1,
-                            first_index as _,
-                            vertex_offset as _,
-                            0,
-                        );
+                        pipeline
+                            .set_scissor(&vk::Rect2D {
+                                offset: vk::Offset2D { x, y },
+                                extent: vk::Extent2D { width, height },
+                            })
+                            .draw_indexed(
+                                index_count as _,
+                                1,
+                                first_index as _,
+                                vertex_offset as _,
+                                0,
+                            );
                     }
                 });
         }

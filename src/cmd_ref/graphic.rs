@@ -14,7 +14,7 @@ use {
     },
     ash::vk,
     log::trace,
-    std::{cell::RefCell, ops::Range, sync::Arc},
+    std::{cell::RefCell, slice, sync::Arc},
     vk_sync::AccessType,
 };
 
@@ -67,6 +67,9 @@ pub struct Graphic<'a> {
 impl Graphic<'_> {
     /// Bind an index buffer to the current pass.
     ///
+    /// `offset` is the starting offset in bytes within `buffer` used in index buffer address
+    /// calculations.
+    ///
     /// # Examples
     ///
     /// Basic usage:
@@ -104,30 +107,18 @@ impl Graphic<'_> {
     ///         .read_node(my_idx_buf)
     ///         .read_node(my_vtx_buf)
     ///         .record_pipeline(move |pipeline, bindings| {
-    ///             pipeline.bind_index_buffer(my_idx_buf, vk::IndexType::UINT16)
-    ///                     .bind_vertex_buffer(my_vtx_buf)
+    ///             pipeline.bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
+    ///                     .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///                     .draw_indexed(42, 1, 0, 0, 0);
     ///         });
     /// # Ok(()) }
     /// ```
+    #[profiling::function]
     pub fn bind_index_buffer(
         &self,
         buffer: impl Into<AnyBufferNode>,
-        index_ty: vk::IndexType,
-    ) -> &Self {
-        self.bind_index_buffer_offset(buffer, index_ty, 0)
-    }
-
-    /// Bind an index buffer to the current pass.
-    ///
-    /// Behaves similarly to `bind_index_buffer` except that `offset` is the starting offset in
-    /// bytes within `buffer` used in index buffer address calculations.
-    #[profiling::function]
-    pub fn bind_index_buffer_offset(
-        &self,
-        buffer: impl Into<AnyBufferNode>,
-        index_ty: vk::IndexType,
         offset: vk::DeviceSize,
+        index_ty: vk::IndexType,
     ) -> &Self {
         let buffer = buffer.into();
 
@@ -144,6 +135,8 @@ impl Graphic<'_> {
     }
 
     /// Bind a vertex buffer to the current pass.
+    ///
+    /// The vertex input binding is updated to start at `offset` from the start of `buffer`.
     ///
     /// # Examples
     ///
@@ -178,35 +171,26 @@ impl Graphic<'_> {
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_vtx_buf)
     ///         .record_pipeline(move |pipeline, bindings| {
-    ///             pipeline.bind_vertex_buffer(my_vtx_buf)
+    ///             pipeline.bind_vertex_buffer(0, my_vtx_buf, 0)
     ///                     .draw(42, 1, 0, 0);
     ///         });
     /// # Ok(()) }
     /// ```
-    pub fn bind_vertex_buffer(&self, buffer: impl Into<AnyBufferNode>) -> &Self {
-        self.bind_vertex_buffer_offset(buffer, 0)
-    }
-
-    /// Bind a vertex buffer to the current pass.
-    ///
-    /// Behaves similarly to `bind_vertex_buffer` except the vertex input binding is updated to
-    /// start at `offset` from the start of `buffer`.
     #[profiling::function]
-    pub fn bind_vertex_buffer_offset(
+    pub fn bind_vertex_buffer(
         &self,
+        binding: u32,
         buffer: impl Into<AnyBufferNode>,
         offset: vk::DeviceSize,
     ) -> &Self {
-        use std::slice::from_ref;
-
         let buffer = buffer.into();
 
         unsafe {
             self.device.cmd_bind_vertex_buffers(
                 self.cmd_buf,
-                0,
-                from_ref(&self.bindings[buffer].handle),
-                from_ref(&offset),
+                binding,
+                slice::from_ref(&self.bindings[buffer].handle),
+                slice::from_ref(&offset),
             );
         }
 
@@ -379,8 +363,8 @@ impl Graphic<'_> {
     ///         .read_node(my_vtx_buf)
     ///         .read_node(buf_node)
     ///         .record_pipeline(move |pipeline, bindings| {
-    ///             pipeline.bind_index_buffer(my_idx_buf, vk::IndexType::UINT16)
-    ///                     .bind_vertex_buffer(my_vtx_buf)
+    ///             pipeline.bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
+    ///                     .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///                     .draw_indexed_indirect(buf_node, 0, 1, 0);
     ///         });
     /// # Ok(()) }
@@ -565,78 +549,7 @@ impl Graphic<'_> {
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .record_pipeline(move |pipeline, bindings| {
-    ///             pipeline.push_constants(&[42])
-    ///                     .draw(6, 1, 0, 0);
-    ///         });
-    /// # Ok(()) }
-    /// ```
-    ///
-    /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
-    pub fn push_constants(&self, data: &[u8]) -> &Self {
-        self.push_constants_offset(0, data)
-    }
-
-    /// Updates push constants starting at the given `offset`.
-    ///
-    /// Behaves similary to [`Draw::push_constants`] except that `offset` describes the position at
-    /// which `data` updates the push constants of the currently bound pipeline. This may be used to
-    /// update a subset or single field of previously set push constant data.
-    ///
-    /// # Device limitations
-    ///
-    /// See
-    /// [`device.physical_device.props.limits.max_push_constants_size`](vk::PhysicalDeviceLimits)
-    /// for the limits of the current device. You may also check [gpuinfo.org] for a listing of
-    /// reported limits on other devices.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```
-    /// # vk_shader_macros::glsl!(r#"
-    /// #version 450
-    /// #pragma shader_stage(compute)
-    ///
-    /// layout(push_constant) uniform PushConstants {
-    ///     layout(offset = 0) uint some_val1;
-    ///     layout(offset = 4) uint some_val2;
-    /// } push_constants;
-    ///
-    /// void main() {
-    ///     // TODO: Add code!
-    /// }
-    /// # "#);
-    /// ```
-    ///
-    /// ```no_run
-    /// # use std::sync::Arc;
-    /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
-    /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
-    /// # use vk_graph::driver::image::{Image, ImageInfo};
-    /// # use vk_graph::Graph;
-    /// # use vk_graph::driver::shader::Shader;
-    /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
-    /// # let my_frag_code = [0u8; 1];
-    /// # let my_vert_code = [0u8; 1];
-    /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
-    /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
-    /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
-    /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
-    /// # let swapchain_image = Image::create(&device, info)?;
-    /// # let mut my_graph = Graph::default();
-    /// # let swapchain_image = my_graph.bind_node(swapchain_image);
-    /// my_graph.begin_cmd().with_name("draw a quad")
-    ///         .bind_pipeline(&my_graphic_pipeline)
-    ///         .store_color(0, swapchain_image)
-    ///         .record_pipeline(move |pipeline, bindings| {
-    ///             pipeline.push_constants(&[0x00, 0x00])
-    ///                     .draw(6, 1, 0, 0)
-    ///                     .push_constants_offset(4, &[0xff])
+    ///             pipeline.push_constants(0, &[42])
     ///                     .draw(6, 1, 0, 0);
     ///         });
     /// # Ok(()) }
@@ -644,7 +557,7 @@ impl Graphic<'_> {
     ///
     /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
     #[profiling::function]
-    pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
+    pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
         for push_const in self.pipeline.push_constants.iter() {
             // Determine the range of the overall pipline push constants which overlap with `data`
             let push_const_end = push_const.offset + push_const.size;
@@ -675,16 +588,10 @@ impl Graphic<'_> {
 
     /// Set scissor rectangle dynamically for a pass.
     #[profiling::function]
-    pub fn set_scissor(&self, x: i32, y: i32, width: u32, height: u32) -> &Self {
+    pub fn set_scissor(&self, scissor: &vk::Rect2D) -> &Self {
         unsafe {
-            self.device.cmd_set_scissor(
-                self.cmd_buf,
-                0,
-                &[vk::Rect2D {
-                    extent: vk::Extent2D { width, height },
-                    offset: vk::Offset2D { x, y },
-                }],
-            );
+            self.device
+                .cmd_set_scissor(self.cmd_buf, 0, slice::from_ref(scissor));
         }
 
         self
@@ -701,19 +608,16 @@ impl Graphic<'_> {
         S: Into<vk::Rect2D>,
     {
         thread_local! {
-            static SCISSORS: RefCell<Vec<vk::Rect2D>> = Default::default();
+            static TLS: RefCell<Vec<vk::Rect2D>> = Default::default();
         }
 
-        SCISSORS.with_borrow_mut(|scissors_vec| {
-            scissors_vec.clear();
-
-            for scissor in scissors {
-                scissors_vec.push(scissor.into());
-            }
+        TLS.with_borrow_mut(|tls| {
+            tls.clear();
+            tls.extend(scissors.into_iter().map(Into::into));
 
             unsafe {
                 self.device
-                    .cmd_set_scissor(self.cmd_buf, first_scissor, scissors_vec.as_slice());
+                    .cmd_set_scissor(self.cmd_buf, first_scissor, tls);
             }
         });
 
@@ -722,27 +626,10 @@ impl Graphic<'_> {
 
     /// Set the viewport dynamically for a pass.
     #[profiling::function]
-    pub fn set_viewport(
-        &self,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        depth: Range<f32>,
-    ) -> &Self {
+    pub fn set_viewport(&self, viewport: &vk::Viewport) -> &Self {
         unsafe {
-            self.device.cmd_set_viewport(
-                self.cmd_buf,
-                0,
-                &[vk::Viewport {
-                    x,
-                    y,
-                    width,
-                    height,
-                    min_depth: depth.start,
-                    max_depth: depth.end,
-                }],
-            );
+            self.device
+                .cmd_set_viewport(self.cmd_buf, 0, slice::from_ref(viewport));
         }
 
         self
@@ -759,22 +646,16 @@ impl Graphic<'_> {
         V: Into<vk::Viewport>,
     {
         thread_local! {
-            static VIEWPORTS: RefCell<Vec<vk::Viewport>> = Default::default();
+            static TLS: RefCell<Vec<vk::Viewport>> = Default::default();
         }
 
-        VIEWPORTS.with_borrow_mut(|viewports_vec| {
-            viewports_vec.clear();
-
-            for viewport in viewports {
-                viewports_vec.push(viewport.into());
-            }
+        TLS.with_borrow_mut(|tls| {
+            tls.clear();
+            tls.extend(viewports.into_iter().map(Into::into));
 
             unsafe {
-                self.device.cmd_set_viewport(
-                    self.cmd_buf,
-                    first_viewport,
-                    viewports_vec.as_slice(),
-                );
+                self.device
+                    .cmd_set_viewport(self.cmd_buf, first_viewport, tls);
             }
         });
 

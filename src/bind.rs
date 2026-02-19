@@ -1,7 +1,7 @@
 use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, BufferLeaseNode, BufferNode,
-        Graph, ImageLeaseNode, ImageNode,
+        Graph, ImageLeaseNode, ImageNode, SwapchainImageNode,
     },
     crate::{
         driver::{
@@ -12,49 +12,6 @@ use {
     },
     std::{fmt::Debug, sync::Arc},
 };
-
-// #[derive(Debug)]
-// pub enum AnyBufferBinding<'a> {
-//     Buffer(&'a Arc<Buffer>),
-//     BufferLease(&'a Lease<Buffer>),
-// }
-
-// impl<'a> From<&'a Arc<Buffer>> for AnyBufferBinding<'a> {
-//     fn from(buffer: &'a Arc<Buffer>) -> Self {
-//         Self::Buffer(buffer)
-//     }
-// }
-
-// impl<'a> From<&'a Lease<Buffer>> for AnyBufferBinding<'a> {
-//     fn from(buffer: &'a Lease<Buffer>) -> Self {
-//         Self::BufferLease(buffer)
-//     }
-// }
-
-// #[derive(Debug)]
-// pub enum AnyImageBinding<'a> {
-//     Image(&'a Arc<Image>),
-//     ImageLease(&'a Lease<Image>),
-//     SwapchainImage(&'a SwapchainImage),
-// }
-
-// impl<'a> From<&'a Arc<Image>> for AnyImageBinding<'a> {
-//     fn from(image: &'a Arc<Image>) -> Self {
-//         Self::Image(image)
-//     }
-// }
-
-// impl<'a> From<&'a Lease<Image>> for AnyImageBinding<'a> {
-//     fn from(image: &'a Lease<Image>) -> Self {
-//         Self::ImageLease(image)
-//     }
-// }
-
-// impl<'a> From<&'a SwapchainImage> for AnyImageBinding<'a> {
-//     fn from(image: &'a SwapchainImage) -> Self {
-//         Self::SwapchainImage(image)
-//     }
-// }
 
 /// A trait for resources which may be bound to a `Graph`.
 ///
@@ -104,6 +61,19 @@ impl Binding {
         })
     }
 
+    pub(super) fn as_swapchain_image(&self) -> Option<&SwapchainImage> {
+        if let Self::SwapchainImage(binding, true) = self {
+            Some(binding)
+        } else if let Self::SwapchainImage(_, false) = self {
+            // User code might try this - but it is a programmer error
+            // to access a binding after it has been unbound so dont
+            None
+        } else {
+            // The private code in this module should prevent this branch
+            unreachable!();
+        }
+    }
+
     pub(super) fn is_bound(&self) -> bool {
         match self {
             Self::AccelerationStructure(_, is_bound) => *is_bound,
@@ -126,6 +96,20 @@ impl Binding {
             Self::ImageLease(_, is_bound) => is_bound,
             Self::SwapchainImage(_, is_bound) => is_bound,
         } = false;
+    }
+}
+
+impl Bind<&mut Graph, SwapchainImageNode> for SwapchainImage {
+    fn bind(self, graph: &mut Graph) -> SwapchainImageNode {
+        // We will return a new node
+        let res = SwapchainImageNode::new(graph.bindings.len());
+
+        //trace!("Node {}: {:?}", res.idx, &self);
+
+        let binding = Binding::SwapchainImage(Box::new(self), true);
+        graph.bindings.push(binding);
+
+        res
     }
 }
 
@@ -290,7 +274,7 @@ bind_lease!(Buffer);
 ///
 /// See [`Graph::unbind_node`] for details.
 pub trait Unbind<Graph, Binding> {
-    /// Unbinds the resource from a graph-like object.
+    /// Unbinds the resource from a graph.
     ///
     /// Returns the original Binding object.
     fn unbind(self, graph: &mut Graph) -> Binding;

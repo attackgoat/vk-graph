@@ -388,7 +388,7 @@ fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         .read_descriptor((0, [4]), images[4])
         .record_pipeline(|compute, _| {
             compute
-                .push_constants(&0f32.to_ne_bytes())
+                .push_constants(0, &0f32.to_ne_bytes())
                 .dispatch(64, 64, 1);
         });
 }
@@ -464,7 +464,7 @@ fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .write_descriptor((0, [4]), images[4])
         .record_pipeline(|compute, _| {
             compute
-                .push_constants(&5u32.to_ne_bytes())
+                .push_constants(0, &5u32.to_ne_bytes())
                 .dispatch(64, 64, 1);
         });
 }
@@ -592,7 +592,7 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .store_color(0, image)
         .record_pipeline(|pipeline, _| {
             pipeline
-                .push_constants(&5u32.to_ne_bytes())
+                .push_constants(0, &5u32.to_ne_bytes())
                 .draw(1, 1, 0, 0);
         });
 }

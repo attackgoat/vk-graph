@@ -169,10 +169,13 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
             )
             .record_pipeline(|pipeline, _| {
                 pipeline
-                    .push_constants(bytes_of(&PushConstants {
-                        a: vec3(0.0, 1.0, 1.0).extend(f32::NAN),
-                        b: vec3(1.0, 0.0, 1.0).extend(f32::NAN),
-                    }))
+                    .push_constants(
+                        0,
+                        bytes_of(&PushConstants {
+                            a: vec3(0.0, 1.0, 1.0).extend(f32::NAN),
+                            b: vec3(1.0, 0.0, 1.0).extend(f32::NAN),
+                        }),
+                    )
                     .draw(6, 1, 0, 0);
             });
     }

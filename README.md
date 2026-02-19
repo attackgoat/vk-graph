@@ -4,7 +4,8 @@
 [![Docs.rs](https://docs.rs/vk-graph/badge.svg)](https://docs.rs/vk-graph)
 [![LoC](https://tokei.rs/b1/github/attackgoat/vk-graph?category=code)](https://github.com/attackgoat/vk-graph)
 
-_vk-graph_ is a high-performance Vulkan driver with automatic resource management and execution.
+_vk-graph_ is a high-performance Vulkan graphics driver with automatic resource management and
+execution.
 
 ```toml
 [dependencies]

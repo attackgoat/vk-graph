@@ -108,7 +108,9 @@ fn draw_triangle(
         .store_color(0, frame.swapchain_image)
         .access_node(vertex_buf, AccessType::VertexBuffer)
         .record_pipeline(move |pipeline, _| {
-            pipeline.bind_vertex_buffer(vertex_buf).draw(3, 1, 0, 0);
+            pipeline
+                .bind_vertex_buffer(0, vertex_buf, 0)
+                .draw(3, 1, 0, 0);
         });
 }
 

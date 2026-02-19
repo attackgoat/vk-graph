@@ -139,9 +139,9 @@ fn main() -> Result<(), WindowError> {
             .clear_depth_stencil(depth_image)
             .record_pipeline(move |pipeline, _| {
                 pipeline
-                    .bind_index_buffer(index_buf, vk::IndexType::UINT16)
-                    .bind_vertex_buffer(vertex_buf)
-                    .push_constants(bytes_of(&Mat4::IDENTITY))
+                    .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
+                    .bind_vertex_buffer(0, vertex_buf, 0)
+                    .push_constants(0, bytes_of(&Mat4::IDENTITY))
                     .draw_indexed(character.index_count, 1, 0, 0, 0);
             });
     })

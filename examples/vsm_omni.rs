@@ -261,13 +261,13 @@ fn main() -> anyhow::Result<()> {
                 .store_depth_stencil(depth_image)
                 .record_pipeline(move |pipeline, _| {
                     pipeline
-                        .bind_index_buffer(model_mesh_index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(model_mesh_vertex_buf)
-                        .push_constants(cast_slice(&model_transform))
+                        .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
+                        .push_constants(0, cast_slice(&model_transform))
                         .draw_indexed(model_mesh.index_count, 1, 0, 0, 0)
-                        .bind_index_buffer(cube_mesh_index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(cube_mesh_vertex_buf)
-                        .push_constants(cast_slice(&cube_transform))
+                        .bind_index_buffer(cube_mesh_index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, cube_mesh_vertex_buf, 0)
+                        .push_constants(0, cast_slice(&cube_transform))
                         .draw_indexed(cube_mesh.index_count, 1, 0, 0, 0);
                 });
         } else {
@@ -289,13 +289,13 @@ fn main() -> anyhow::Result<()> {
                     .clear_depth_stencil(shadow_depth_image)
                     .record_pipeline(move |pipeline, _| {
                         pipeline
-                            .bind_index_buffer(model_shadow_index_buf, vk::IndexType::UINT32)
-                            .bind_vertex_buffer(model_shadow_vertex_buf)
-                            .push_constants(cast_slice(&model_transform))
+                            .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
+                            .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
+                            .push_constants(0, cast_slice(&model_transform))
                             .draw_indexed(model_shadow.index_count, 1, 0, 0, 0)
-                            .bind_index_buffer(cube_shadow_index_buf, vk::IndexType::UINT32)
-                            .bind_vertex_buffer(cube_shadow_vertex_buf)
-                            .push_constants(cast_slice(&cube_transform))
+                            .bind_index_buffer(cube_shadow_index_buf, 0, vk::IndexType::UINT32)
+                            .bind_vertex_buffer(0, cube_shadow_vertex_buf, 0)
+                            .push_constants(0, cast_slice(&cube_transform))
                             .draw_indexed(cube_shadow.index_count, 1, 0, 0, 0);
                     });
             } else {
@@ -343,13 +343,13 @@ fn main() -> anyhow::Result<()> {
                         .clear_depth_stencil(shadow_depth_image)
                         .record_pipeline(move |pipeline, _| {
                             pipeline
-                                .bind_index_buffer(model_shadow_index_buf, vk::IndexType::UINT32)
-                                .bind_vertex_buffer(model_shadow_vertex_buf)
-                                .push_constants(cast_slice(&model_transform))
+                                .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
+                                .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
+                                .push_constants(0, cast_slice(&model_transform))
                                 .draw_indexed(model_shadow.index_count, 1, 0, 0, 0)
-                                .bind_index_buffer(cube_shadow_index_buf, vk::IndexType::UINT32)
-                                .bind_vertex_buffer(cube_shadow_vertex_buf)
-                                .push_constants(cast_slice(&cube_transform))
+                                .bind_index_buffer(cube_shadow_index_buf, 0, vk::IndexType::UINT32)
+                                .bind_vertex_buffer(0, cube_shadow_vertex_buf, 0)
+                                .push_constants(0, cast_slice(&cube_transform))
                                 .draw_indexed(cube_shadow.index_count, 1, 0, 0, 0);
                         });
                 }
@@ -410,13 +410,13 @@ fn main() -> anyhow::Result<()> {
                 .clear_depth_stencil(depth_image)
                 .record_pipeline(move |pipeline, _| {
                     pipeline
-                        .bind_index_buffer(model_mesh_index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(model_mesh_vertex_buf)
-                        .push_constants(cast_slice(&model_transform))
+                        .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
+                        .push_constants(0, cast_slice(&model_transform))
                         .draw_indexed(model_mesh.index_count, 1, 0, 0, 0)
-                        .bind_index_buffer(cube_mesh_index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(cube_mesh_vertex_buf)
-                        .push_constants(cast_slice(&cube_transform))
+                        .bind_index_buffer(cube_mesh_index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, cube_mesh_vertex_buf, 0)
+                        .push_constants(0, cast_slice(&cube_transform))
                         .draw_indexed(cube_mesh.index_count, 1, 0, 0, 0);
                 });
         }

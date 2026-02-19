@@ -154,80 +154,7 @@ impl RayTrace<'_> {
     /// my_graph.begin_cmd().with_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
     ///         .record_pipeline(move |pipeline, bindings| {
-    ///             pipeline.push_constants(&[0xcb])
-    ///                     .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
-    ///         });
-    /// # Ok(()) }
-    /// ```
-    ///
-    /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
-    pub fn push_constants(&self, data: &[u8]) -> &Self {
-        self.push_constants_offset(0, data)
-    }
-
-    /// Updates push constants starting at the given `offset`.
-    ///
-    /// Behaves similary to [`RayTrace::push_constants`] except that `offset` describes the position
-    /// at which `data` updates the push constants of the currently bound pipeline. This may be used
-    /// to update a subset or single field of previously set push constant data.
-    ///
-    /// # Device limitations
-    ///
-    /// See
-    /// [`device.physical_device.props.limits.max_push_constants_size`](vk::PhysicalDeviceLimits)
-    /// for the limits of the current device. You may also check [gpuinfo.org] for a listing of
-    /// reported limits on other devices.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```
-    /// # vk_shader_macros::glsl!(target: vulkan1_2, r#"
-    /// #version 460
-    /// #pragma shader_stage(closest)
-    ///
-    /// layout(push_constant) uniform PushConstants {
-    ///     layout(offset = 0) uint some_val1;
-    ///     layout(offset = 4) uint some_val2;
-    /// } push_constants;
-    ///
-    /// void main()
-    /// {
-    ///     // TODO: Add bindings to write things!
-    /// }
-    /// # "#);
-    /// ```
-    ///
-    /// ```no_run
-    /// # use std::sync::Arc;
-    /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
-    /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
-    /// # use vk_graph::driver::shader::Shader;
-    /// # use vk_graph::Graph;
-    /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
-    /// # let shader = [0u8; 1];
-    /// # let info = RayTracePipelineInfo::default();
-    /// # let my_miss_code = [0u8; 1];
-    /// # let my_ray_trace_pipeline = Arc::new(RayTracePipeline::create(&device, info,
-    /// #     [Shader::new_miss(my_miss_code.as_slice())],
-    /// #     [RayTraceShaderGroup::new_general(0)],
-    /// # )?);
-    /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let mut my_graph = Graph::default();
-    /// my_graph.begin_cmd().with_name("draw a cornell box")
-    ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_pipeline(move |pipeline, bindings| {
-    ///             pipeline.push_constants(&[0xcb, 0xff])
-    ///                     .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1)
-    ///                     .push_constants_offset(4, &[0xae])
+    ///             pipeline.push_constants(0, &[0xcb])
     ///                     .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
@@ -235,7 +162,7 @@ impl RayTrace<'_> {
     ///
     /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
     #[profiling::function]
-    pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
+    pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
         for push_const in self.pipeline.push_constants.iter() {
             let push_const_end = push_const.offset + push_const.size;
             let data_end = offset + data.len() as u32;
@@ -273,8 +200,10 @@ impl RayTrace<'_> {
         #[cfg(debug_assertions)]
         assert!(self.dynamic_stack_size);
 
+        let ray_trace_ext = Device::expect_ray_trace_ext(self.device);
+
         unsafe {
-            Device::expect_ray_trace_ext(self.device)
+            ray_trace_ext
                 .cmd_set_ray_tracing_pipeline_stack_size(self.cmd_buf, pipeline_stack_size);
         }
 
@@ -336,8 +265,10 @@ impl RayTrace<'_> {
         height: u32,
         depth: u32,
     ) -> &Self {
+        let ray_trace_ext = Device::expect_ray_trace_ext(self.device);
+
         unsafe {
-            Device::expect_ray_trace_ext(self.device).cmd_trace_rays(
+            ray_trace_ext.cmd_trace_rays(
                 self.cmd_buf,
                 raygen_shader_binding_table,
                 miss_shader_binding_table,
@@ -370,8 +301,10 @@ impl RayTrace<'_> {
         callable_shader_binding_table: &vk::StridedDeviceAddressRegionKHR,
         indirect_device_address: vk::DeviceAddress,
     ) -> &Self {
+        let ray_trace_ext = Device::expect_ray_trace_ext(self.device);
+
         unsafe {
-            Device::expect_ray_trace_ext(self.device).cmd_trace_rays_indirect(
+            ray_trace_ext.cmd_trace_rays_indirect(
                 self.cmd_buf,
                 raygen_shader_binding_table,
                 miss_shader_binding_table,

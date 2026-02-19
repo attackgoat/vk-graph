@@ -219,16 +219,19 @@ impl BitmapFont {
 
         pass.record_pipeline(move |pipeline, _| {
             if let Some((x, y, width, height)) = scissor {
-                pipeline.set_scissor(x, y, width, height);
+                pipeline.set_scissor(&vk::Rect2D {
+                    offset: vk::Offset2D { x, y },
+                    extent: vk::Extent2D { width, height },
+                });
             }
 
             pipeline
-                .push_constants(cast_slice(&transform.to_cols_array()))
-                .push_constants_offset(64, &(1.0 / image_info.width as f32).to_ne_bytes())
-                .push_constants_offset(68, &(1.0 / image_info.height as f32).to_ne_bytes())
-                .push_constants_offset(80, &color_to_unorm(color.solid()))
-                .push_constants_offset(96, &color_to_unorm(color.outline()))
-                .bind_vertex_buffer(vertex_buf)
+                .push_constants(0, cast_slice(&transform.to_cols_array()))
+                .push_constants(64, &(1.0 / image_info.width as f32).to_ne_bytes())
+                .push_constants(68, &(1.0 / image_info.height as f32).to_ne_bytes())
+                .push_constants(80, &color_to_unorm(color.solid()))
+                .push_constants(96, &color_to_unorm(color.outline()))
+                .bind_vertex_buffer(0, vertex_buf, 0)
                 .draw(vertex_count, 1, 0, 0);
         });
     }

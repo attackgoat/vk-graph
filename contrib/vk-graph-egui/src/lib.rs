@@ -276,13 +276,11 @@ impl Egui {
 
                     let num_indices = mesh.indices.len() as u32;
 
-                    let clip_x = (clip_rect.min.x * pixels_per_point) as i32;
-                    let clip_y = (clip_rect.min.y * pixels_per_point) as i32;
+                    let x = (clip_rect.min.x * pixels_per_point) as i32;
+                    let y = (clip_rect.min.y * pixels_per_point) as i32;
 
-                    let clip_width =
-                        ((clip_rect.max.x - clip_rect.min.x) * pixels_per_point) as u32;
-                    let clip_height =
-                        ((clip_rect.max.y - clip_rect.min.y) * pixels_per_point) as u32;
+                    let width = ((clip_rect.max.x - clip_rect.min.x) * pixels_per_point) as u32;
+                    let height = ((clip_rect.max.y - clip_rect.min.y) * pixels_per_point) as u32;
 
                     render_graph
                         .begin_cmd()
@@ -295,10 +293,13 @@ impl Egui {
                         .store_color(0, target)
                         .record_pipeline(move |pipeline, _| {
                             pipeline
-                                .bind_index_buffer(idx_buf, vk::IndexType::UINT32)
-                                .bind_vertex_buffer(vert_buf)
-                                .push_constants(cast_slice(&[push_constants]))
-                                .set_scissor(clip_x, clip_y, clip_width, clip_height)
+                                .bind_index_buffer(idx_buf, 0, vk::IndexType::UINT32)
+                                .bind_vertex_buffer(0, vert_buf, 0)
+                                .push_constants(0, cast_slice(&[push_constants]))
+                                .set_scissor(&vk::Rect2D {
+                                    offset: vk::Offset2D { x, y },
+                                    extent: vk::Extent2D { width, height },
+                                })
                                 .draw_indexed(num_indices, 1, 0, 0, 0);
                         });
                 }

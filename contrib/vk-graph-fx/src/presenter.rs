@@ -132,7 +132,7 @@ impl GraphicPresenter {
             .record_pipeline(move |pipeline, _| {
                 // Draw a quad with implicit vertices (no buffer)
                 pipeline
-                    .push_constants(cast_slice(&transform.to_cols_array()))
+                    .push_constants(0, cast_slice(&transform.to_cols_array()))
                     .draw(6, 1, 0, 0);
             });
     }

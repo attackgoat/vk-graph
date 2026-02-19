@@ -300,7 +300,7 @@ fn main() -> anyhow::Result<()> {
                 .store_color(0, output)
                 .record_pipeline(move |pipeline, _| {
                     pipeline
-                        .push_constants(bytes_of(&push_consts))
+                        .push_constants(0, bytes_of(&push_consts))
                         .draw(6, 1, 0, 0);
                 });
 
@@ -314,7 +314,7 @@ fn main() -> anyhow::Result<()> {
                 .store_color(0, input)
                 .record_pipeline(move |pipeline, _| {
                     pipeline
-                        .push_constants(bytes_of(&push_consts))
+                        .push_constants(0, bytes_of(&push_consts))
                         .draw(6, 1, 0, 0);
                 });
 
