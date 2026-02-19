@@ -91,7 +91,7 @@ impl Egui {
     fn bind_and_update_textures(
         &mut self,
         deltas: &egui::TexturesDelta,
-        render_graph: &mut RenderGraph,
+        render_graph: &mut Graph,
     ) -> HashMap<egui::TextureId, AnyImageNode> {
         let mut bound_tex = deltas
             .set
@@ -189,7 +189,7 @@ impl Egui {
     fn unbind_and_free(
         &mut self,
         bound_tex: HashMap<egui::TextureId, AnyImageNode>,
-        render_graph: &mut RenderGraph,
+        render_graph: &mut Graph,
         deltas: &egui::TexturesDelta,
     ) {
         // Unbind textures
@@ -213,7 +213,7 @@ impl Egui {
         &mut self,
         shapes: Vec<egui::epaint::ClippedShape>,
         bound_tex: &HashMap<egui::TextureId, AnyImageNode>,
-        render_graph: &mut RenderGraph,
+        render_graph: &mut Graph,
         target: impl Into<AnyImageNode>,
     ) {
         let target = target.into();
@@ -285,7 +285,7 @@ impl Egui {
                         ((clip_rect.max.y - clip_rect.min.y) * pixels_per_point) as u32;
 
                     render_graph
-                        .begin_cmd_buf()
+                        .begin_cmd()
                         .with_name("Egui pass")
                         .bind_pipeline(&self.ppl)
                         .access_node(idx_buf, AccessType::IndexBuffer)
@@ -293,12 +293,13 @@ impl Egui {
                         .access_descriptor((0, 0), *texture, AccessType::FragmentShaderReadOther)
                         .load_color(0, target)
                         .store_color(0, target)
-                        .record_subpass(move |subpass, _| {
-                            subpass.bind_index_buffer(idx_buf, vk::IndexType::UINT32);
-                            subpass.bind_vertex_buffer(vert_buf);
-                            subpass.push_constants(cast_slice(&[push_constants]));
-                            subpass.set_scissor(clip_x, clip_y, clip_width, clip_height);
-                            subpass.draw_indexed(num_indices, 1, 0, 0, 0);
+                        .record_pipeline(move |pipeline, _| {
+                            pipeline
+                                .bind_index_buffer(idx_buf, vk::IndexType::UINT32)
+                                .bind_vertex_buffer(vert_buf)
+                                .push_constants(cast_slice(&[push_constants]))
+                                .set_scissor(clip_x, clip_y, clip_width, clip_height)
+                                .draw_indexed(num_indices, 1, 0, 0, 0);
                         });
                 }
                 _ => panic!("Primitiv callback not yet supported."),
@@ -312,7 +313,7 @@ impl Egui {
         window: &Window,
         events: &[Event<()>],
         target: impl Into<AnyImageNode>,
-        render_graph: &mut RenderGraph,
+        render_graph: &mut Graph,
         ui_fn: impl FnMut(&egui::Context),
     ) {
         // Update events and generate shapes and texture deltas.

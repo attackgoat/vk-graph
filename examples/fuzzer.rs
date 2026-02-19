@@ -34,9 +34,9 @@ use {
 type Operation = fn(&mut FrameContext, &mut HashPool);
 
 static OPERATIONS: &[Operation] = &[
-    record_compute_array_bind,
-    record_compute_bindless,
-    record_compute_no_op,
+    record_pipeline_array_bind,
+    record_pipeline_bindless,
+    record_pipeline_no_op,
     record_graphic_bindless,
     record_graphic_load_store,
     record_graphic_msaa_depth_stencil,
@@ -268,7 +268,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
 
     let pass = frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("build acceleration structures");
 
     // TODO: AccessType for these is funky, should be access_node?
@@ -310,7 +310,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     });
 }
 
-fn record_compute_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
+fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = compute_pipeline(
         "array_bind",
         frame.device,
@@ -378,7 +378,7 @@ fn record_compute_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         .clear_color_image(images[2], [0f32; 4])
         .clear_color_image(images[3], [0f32; 4])
         .clear_color_image(images[4], [0f32; 4])
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("array-bind")
         .bind_pipeline(&pipeline)
         .read_descriptor((0, [0]), images[0])
@@ -386,14 +386,14 @@ fn record_compute_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         .read_descriptor((0, [2]), images[2])
         .read_descriptor((0, [3]), images[3])
         .read_descriptor((0, [4]), images[4])
-        .record_compute(|compute, _| {
+        .record_pipeline(|compute, _| {
             compute
                 .push_constants(&0f32.to_ne_bytes())
                 .dispatch(64, 64, 1);
         });
 }
 
-fn record_compute_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
+fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = compute_pipeline(
         "bindless",
         frame.device,
@@ -454,7 +454,7 @@ fn record_compute_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
 
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("compute-bindless")
         .bind_pipeline(&pipeline)
         .write_descriptor((0, [0]), images[0])
@@ -462,14 +462,14 @@ fn record_compute_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .write_descriptor((0, [2]), images[2])
         .write_descriptor((0, [3]), images[3])
         .write_descriptor((0, [4]), images[4])
-        .record_compute(|compute, _| {
+        .record_pipeline(|compute, _| {
             compute
                 .push_constants(&5u32.to_ne_bytes())
                 .dispatch(64, 64, 1);
         });
 }
 
-fn record_compute_no_op(frame: &mut FrameContext, _: &mut HashPool) {
+fn record_pipeline_no_op(frame: &mut FrameContext, _: &mut HashPool) {
     let pipeline = compute_pipeline(
         "no_op",
         frame.device,
@@ -489,10 +489,10 @@ fn record_compute_no_op(frame: &mut FrameContext, _: &mut HashPool) {
     );
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("no-op")
         .bind_pipeline(&pipeline)
-        .record_compute(|compute, _| {
+        .record_pipeline(|compute, _| {
             compute.dispatch(1, 1, 1);
         });
 }
@@ -580,7 +580,7 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .clear_color_image(images[2], [0f32; 4])
         .clear_color_image(images[3], [0f32; 4])
         .clear_color_image(images[4], [0f32; 4])
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("graphic-bindless")
         .bind_pipeline(&pipeline)
         .read_descriptor((0, [0]), images[0])
@@ -590,8 +590,10 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .read_descriptor((0, [4]), images[4])
         .clear_color(0, image)
         .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.push_constants(&5u32.to_ne_bytes()).draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline
+                .push_constants(&5u32.to_ne_bytes())
+                .draw(1, 1, 0, 0);
         });
 }
 
@@ -626,13 +628,13 @@ fn record_graphic_load_store(frame: &mut FrameContext, _: &mut HashPool) {
 
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("load-store")
         .bind_pipeline(&pipeline)
         .load_color(0, frame.swapchain_image)
         .store_color(0, frame.swapchain_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 
@@ -798,7 +800,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
 
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("msaa-depth-stencil")
         .bind_pipeline(&pipeline)
         .set_depth_stencil(depth_stencil_mode)
@@ -811,8 +813,8 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             Some(depth_resolve_mode),
             Some(ResolveMode::SampleZero),
         )
-        .record_subpass(|subpass, _| {
-            subpass.draw(3, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(3, 1, 0, 0);
         });
 }
 
@@ -830,7 +832,7 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
     // Pass "a" stores color0 which "b" compatibly loads; so these two will get merged
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
@@ -859,12 +861,12 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
             .as_slice(),
         ))
         .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("b")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
@@ -894,8 +896,8 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
         ))
         .load_color(0, image)
         .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 
@@ -921,7 +923,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
 
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
@@ -950,12 +952,12 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
             .as_slice(),
         ))
         .store_color(0, image_0)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("b")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
@@ -988,12 +990,12 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .load_color(0, image_0)
         .store_color(0, image_0)
         .store_color(1, image_1)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("c")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
@@ -1023,8 +1025,8 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         ))
         .clear_color(0, image_0)
         .store_color(0, image_0)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 
@@ -1051,7 +1053,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
     // Pass "a" stores color0+depth which "b" compatibly loads; so these two will get merged
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
@@ -1081,12 +1083,12 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         ))
         .store_color(0, color_image)
         .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
@@ -1114,8 +1116,8 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         ))
         .load_depth_stencil(depth_image)
         .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 
@@ -1142,7 +1144,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
     // Pass "a" stores color0+depth which "b" compatibly loads; so these two will get merged
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
@@ -1169,12 +1171,12 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
             .as_slice(),
         ))
         .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
@@ -1205,8 +1207,8 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         .store_color(0, color_image)
         .load_depth_stencil(depth_image)
         .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 
@@ -1223,7 +1225,7 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
 
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
@@ -1250,12 +1252,12 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
             .as_slice(),
         ))
         .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
@@ -1283,8 +1285,8 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
         ))
         .load_depth_stencil(depth_image)
         .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 
@@ -1352,22 +1354,22 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
     // Pass "a" stores color 0 which "b" compatibly inputs; so these two will get merged
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("a")
         .bind_pipeline(&pipeline_a)
         .clear_color(0, image)
         .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("b")
         .bind_pipeline(&pipeline_b)
         .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 
@@ -1412,21 +1414,21 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
     // These two passes have common writes but are otherwise regular - they won't get merged
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("c")
         .bind_pipeline(&pipeline)
         .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("d")
         .bind_pipeline(&pipeline)
         .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 
@@ -1488,25 +1490,25 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
     // b should have a pipeline barrier (on the clear we just did) before the pass starts.
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("a")
         .bind_pipeline(&pipeline)
         .clear_color(0, frame.swapchain_image)
         .store_color(0, frame.swapchain_image)
         .read_descriptor(0, images[0])
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("b")
         .bind_pipeline(&pipeline)
         .load_color(0, frame.swapchain_image)
         .store_color(0, frame.swapchain_image)
         .read_descriptor(0, images[1])
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .record_pipeline(|pipeline, _| {
+            pipeline.draw(1, 1, 0, 0);
         });
 }
 

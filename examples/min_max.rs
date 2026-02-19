@@ -19,7 +19,7 @@ use {
 fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
     let device = Arc::new(Device::new(device_info)?);
@@ -87,7 +87,7 @@ fn main() -> Result<(), DriverError> {
 
 fn fill_depth_image(
     device: &Arc<Device>,
-    render_graph: &mut RenderGraph,
+    render_graph: &mut Graph,
     size: u32,
 ) -> Result<ImageNode, DriverError> {
     let info = ImageInfo::image_2d(
@@ -157,7 +157,7 @@ fn fill_depth_image(
 
 fn reduce_depth_image(
     device: &Arc<Device>,
-    render_graph: &mut RenderGraph,
+    render_graph: &mut Graph,
     depth_image: ImageNode,
     reduction_mode: vk::SamplerReductionMode,
 ) -> Result<ImageNode, DriverError> {
@@ -176,7 +176,7 @@ fn reduce_depth_image(
     let reduced_image = render_graph.bind_node(Image::create(device, reduced_info)?);
 
     render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("Reduce depth image")
         .bind_pipeline(&Arc::new(ComputePipeline::create(
             device,
@@ -206,7 +206,7 @@ fn reduce_depth_image(
         )?))
         .read_descriptor(0, depth_image)
         .write_descriptor(1, reduced_image)
-        .record_compute(move |compute, _| {
+        .record_pipeline(move |compute, _| {
             compute.dispatch(reduced_info.width, reduced_info.height, 1);
         });
 
@@ -215,7 +215,7 @@ fn reduce_depth_image(
 
 fn copy_image_to_buffer(
     device: &Arc<Device>,
-    render_graph: &mut RenderGraph,
+    render_graph: &mut Graph,
     reduced_image: ImageNode,
 ) -> Result<Arc<Buffer>, DriverError> {
     let reduced_info = render_graph.node_info(reduced_image);

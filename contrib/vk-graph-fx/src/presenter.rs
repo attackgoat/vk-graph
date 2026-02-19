@@ -29,7 +29,7 @@ impl ComputePresenter {
     /// TODO
     pub fn present_image(
         &self,
-        graph: &mut RenderGraph,
+        graph: &mut Graph,
         image: impl Into<AnyImageNode>,
         swapchain: SwapchainImageNode,
     ) {
@@ -40,12 +40,12 @@ impl ComputePresenter {
         // TODO: Notice non-sRGB images and run a different pipeline
 
         graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("present (from compute)")
             .bind_pipeline(&self.0[0])
             .read_descriptor(0, image)
             .write_descriptor(1, swapchain)
-            .record_compute(move |compute, _| {
+            .record_pipeline(move |compute, _| {
                 compute.dispatch(swapchain_info.width, swapchain_info.height, 1);
             });
     }
@@ -53,7 +53,7 @@ impl ComputePresenter {
     /// TODO
     pub fn present_images(
         &self,
-        graph: &mut RenderGraph,
+        graph: &mut Graph,
         top_image: impl Into<AnyImageNode>,
         bottom_image: impl Into<AnyImageNode>,
         swapchain: SwapchainImageNode,
@@ -67,13 +67,13 @@ impl ComputePresenter {
         // TODO: Notice non-sRGB images and run a different pipeline
 
         graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("present (from compute)")
             .bind_pipeline(&self.0[1])
             .read_descriptor((0, [0]), top_image)
             .read_descriptor((0, [1]), bottom_image)
             .write_descriptor(1, swapchain)
-            .record_compute(move |compute, _| {
+            .record_pipeline(move |compute, _| {
                 compute.dispatch(swapchain_info.width, swapchain_info.height, 1);
             });
     }
@@ -104,7 +104,7 @@ impl GraphicPresenter {
     /// TODO
     pub fn present_image(
         &self,
-        graph: &mut RenderGraph,
+        graph: &mut Graph,
         image: impl Into<AnyImageNode>,
         swapchain: SwapchainImageNode,
     ) {
@@ -124,15 +124,16 @@ impl GraphicPresenter {
         ));
 
         graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("present (from graphic)")
             .bind_pipeline(&self.pipeline)
             .read_descriptor(0, image)
             .store_color(0, swapchain)
-            .record_subpass(move |subpass, _| {
+            .record_pipeline(move |pipeline, _| {
                 // Draw a quad with implicit vertices (no buffer)
-                subpass.push_constants(cast_slice(&transform.to_cols_array()));
-                subpass.draw(6, 1, 0, 0);
+                pipeline
+                    .push_constants(cast_slice(&transform.to_cols_array()))
+                    .draw(6, 1, 0, 0);
             });
     }
 }

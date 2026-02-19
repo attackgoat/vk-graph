@@ -14,7 +14,7 @@ fn main() -> Result<(), DriverError> {
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
     let device = Arc::new(Device::new(device_info)?);
 
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
 
     let src_buf = render_graph.bind_node(Buffer::create_from_slice(
         &device,

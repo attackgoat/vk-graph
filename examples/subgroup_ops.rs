@@ -66,7 +66,7 @@ fn exclusive_sum(
     scan_pipeline: &Arc<ComputePipeline>,
     input_data: &[u32],
 ) -> Result<Vec<u32>, DriverError> {
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
 
     let input_buf = render_graph.bind_node(Buffer::create_from_slice(
         device,
@@ -95,24 +95,24 @@ fn exclusive_sum(
 
     if reduce_count > 0 {
         render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("exclusive sum reduce")
             .bind_pipeline(reduce_pipeline)
             .read_descriptor(0, input_buf)
             .write_descriptor(1, workgroup_buf)
-            .record_compute(move |compute, _| {
+            .record_pipeline(move |compute, _| {
                 compute.dispatch(reduce_count, 1, 1);
             });
     }
 
     render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("exclusive sum scan")
         .bind_pipeline(scan_pipeline)
         .read_descriptor(0, workgroup_buf)
         .read_descriptor(1, input_buf)
         .write_descriptor(2, output_buf)
-        .record_compute(move |compute, _| {
+        .record_pipeline(move |compute, _| {
             compute.dispatch(workgroup_count, 1, 1);
         });
 

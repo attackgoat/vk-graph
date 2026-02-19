@@ -30,11 +30,11 @@ fn main() -> Result<(), WindowError> {
     window.run(|frame| {
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("make some noise")
             .bind_pipeline(pipeline.hot())
             .write_descriptor(0, frame.swapchain_image)
-            .record_compute(move |compute, _| {
+            .record_pipeline(move |compute, _| {
                 compute.push_constants(&frame_index.to_ne_bytes()).dispatch(
                     frame.width,
                     frame.height,

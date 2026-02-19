@@ -406,7 +406,7 @@ impl TransitionPipeline {
     /// TODO
     pub fn apply(
         &mut self,
-        render_graph: &mut RenderGraph,
+        render_graph: &mut Graph,
         a_image: impl Into<AnyImageNode>,
         b_image: impl Into<AnyImageNode>,
         transition: Transition,
@@ -444,7 +444,7 @@ impl TransitionPipeline {
     /// TODO
     pub fn apply_to(
         &mut self,
-        render_graph: &mut RenderGraph,
+        render_graph: &mut Graph,
         a_image: impl Into<AnyImageNode>,
         b_image: impl Into<AnyImageNode>,
         dest_image: impl Into<AnyImageNode>,
@@ -469,13 +469,13 @@ impl TransitionPipeline {
 
         // TODO: Handle displacement and luma in an if case, below
         render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name(format!("transition {transition_ty:?}"))
             .bind_pipeline(&pipeline)
             .read_descriptor(0, a_image)
             .read_descriptor(1, b_image)
             .write_descriptor(2, dest_image)
-            .record_compute(move |compute, _| {
+            .record_pipeline(move |compute, _| {
                 compute.push_constants(push_consts.as_slice());
                 compute.dispatch(dest_info.width, dest_info.height, 1);
             });

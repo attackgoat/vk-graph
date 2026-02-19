@@ -1,7 +1,7 @@
 use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, BufferLeaseNode, BufferNode,
-        ImageLeaseNode, ImageNode, RenderGraph,
+        Graph, ImageLeaseNode, ImageNode,
     },
     crate::{
         driver::{
@@ -56,9 +56,9 @@ use {
 //     }
 // }
 
-/// A trait for resources which may be bound to a `RenderGraph`.
+/// A trait for resources which may be bound to a `Graph`.
 ///
-/// See [`RenderGraph::bind_node`] and
+/// See [`Graph::bind_node`] and
 /// [`PassRef::bind_pipeline`](super::pass_ref::PassRef::bind_pipeline) for details.
 pub trait Bind<Graph, Node> {
     /// Binds the resource to a graph-like object.
@@ -132,9 +132,9 @@ impl Binding {
 macro_rules! bind {
     ($name:ident) => {
         paste::paste! {
-            impl Bind<&mut RenderGraph, [<$name Node>]> for $name {
+            impl Bind<&mut Graph, [<$name Node>]> for $name {
                 #[profiling::function]
-                fn bind(self, graph: &mut RenderGraph) -> [<$name Node>] {
+                fn bind(self, graph: &mut Graph) -> [<$name Node>] {
                     // In this function we are binding a new item (Image or Buffer or etc)
 
                     // We will return a new node
@@ -146,8 +146,8 @@ macro_rules! bind {
                 }
             }
 
-            impl<'a> Bind<&mut RenderGraph, [<$name Node>]> for &'a Arc<$name> {
-                fn bind(self, graph: &mut RenderGraph) -> [<$name Node>] {
+            impl<'a> Bind<&mut Graph, [<$name Node>]> for &'a Arc<$name> {
+                fn bind(self, graph: &mut Graph) -> [<$name Node>] {
                     // In this function we are binding a borrowed binding (&Arc<Image> or
                     // &Arc<Buffer> or etc)
 
@@ -155,9 +155,9 @@ macro_rules! bind {
                 }
             }
 
-            impl Bind<&mut RenderGraph, [<$name Node>]> for Arc<$name> {
+            impl Bind<&mut Graph, [<$name Node>]> for Arc<$name> {
                 #[profiling::function]
-                fn bind(self, graph: &mut RenderGraph) -> [<$name Node>] {
+                fn bind(self, graph: &mut Graph) -> [<$name Node>] {
                     // In this function we are binding an existing binding (Arc<Image> or
                     // Arc<Buffer> or etc)
 
@@ -210,9 +210,9 @@ bind!(Buffer);
 macro_rules! bind_lease {
     ($name:ident) => {
         paste::paste! {
-            impl Bind<&mut RenderGraph, [<$name LeaseNode>]> for Lease<$name> {
+            impl Bind<&mut Graph, [<$name LeaseNode>]> for Lease<$name> {
                 #[profiling::function]
-                fn bind(self, graph: &mut RenderGraph) -> [<$name LeaseNode>] {
+                fn bind(self, graph: &mut Graph) -> [<$name LeaseNode>] {
                     // In this function we are binding a new lease (Lease<Image> or Lease<Buffer> or
                     // etc)
 
@@ -225,8 +225,8 @@ macro_rules! bind_lease {
                 }
             }
 
-            impl<'a> Bind<&mut RenderGraph, [<$name LeaseNode>]> for &'a Arc<Lease<$name>> {
-                fn bind(self, graph: &mut RenderGraph) -> [<$name LeaseNode>] {
+            impl<'a> Bind<&mut Graph, [<$name LeaseNode>]> for &'a Arc<Lease<$name>> {
+                fn bind(self, graph: &mut Graph) -> [<$name LeaseNode>] {
                     // In this function we are binding a borrowed binding (&Arc<Lease<Image>> or
                     // &Arc<Lease<Buffer>> or etc)
 
@@ -234,9 +234,9 @@ macro_rules! bind_lease {
                 }
             }
 
-            impl Bind<&mut RenderGraph, [<$name LeaseNode>]> for Arc<Lease<$name>> {
+            impl Bind<&mut Graph, [<$name LeaseNode>]> for Arc<Lease<$name>> {
                 #[profiling::function]
-                fn bind(self, graph: &mut RenderGraph) -> [<$name LeaseNode>] {
+                fn bind(self, graph: &mut Graph) -> [<$name LeaseNode>] {
                     // In this function we are binding an existing lease binding
                     // (Arc<Lease<Image>> or Arc<Lease<Buffer>> or etc)
 
@@ -286,9 +286,9 @@ bind_lease!(AccelerationStructure);
 bind_lease!(Image);
 bind_lease!(Buffer);
 
-/// A trait for resources which may be unbound from a `RenderGraph`.
+/// A trait for resources which may be unbound from a `Graph`.
 ///
-/// See [`RenderGraph::unbind_node`] for details.
+/// See [`Graph::unbind_node`] for details.
 pub trait Unbind<Graph, Binding> {
     /// Unbinds the resource from a graph-like object.
     ///

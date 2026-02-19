@@ -2,7 +2,7 @@
 
 use {
     super::{
-        RenderGraph,
+        Graph,
         driver::{
             CommandBuffer, CommandBufferInfo, DescriptorPool, DescriptorPoolInfo, DriverError,
             RenderPass, RenderPassInfo,
@@ -148,7 +148,7 @@ impl Display {
     pub fn present_image(
         &mut self,
         pool: &mut impl ResolverPool,
-        render_graph: RenderGraph,
+        render_graph: Graph,
         swapchain_image: SwapchainImageNode,
         queue_index: u32,
     ) -> Result<(), DisplayError> {

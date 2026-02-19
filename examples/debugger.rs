@@ -178,10 +178,10 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
         */
         frame
             .render_graph
-            .begin_cmd_buf().with_name("This doesn't look good...")
+            .begin_cmd().with_name("This doesn't look good...")
             .bind_pipeline(&compute_pipeline)
             .write_descriptor(42, image)
-            .record_compute(|compute, _| {
+            .record_pipeline(|compute, _| {
                 compute.dispatch(1024, 1024, 1);
             });
 

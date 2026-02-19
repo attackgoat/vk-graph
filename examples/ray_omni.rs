@@ -90,7 +90,7 @@ fn main() -> anyhow::Result<()> {
 
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("Mesh with ray-query shadows")
             .bind_pipeline(&gfx_pipeline)
             .access_node(ground_mesh_index_buf, AccessType::IndexBuffer)
@@ -107,13 +107,13 @@ fn main() -> anyhow::Result<()> {
             .clear_depth_stencil(depth_image)
             .clear_color_value(0, frame.swapchain_image, [0xff, 0xff, 0xff, 0xff])
             .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass
+            .record_pipeline(move |pipeline, _| {
+                pipeline
                     .bind_index_buffer(model_mesh_index_buf, vk::IndexType::UINT32)
                     .bind_vertex_buffer(model_mesh_vertex_buf)
                     .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
 
-                subpass
+                pipeline
                     .bind_index_buffer(ground_mesh_index_buf, vk::IndexType::UINT32)
                     .bind_vertex_buffer(ground_mesh_vertex_buf)
                     .draw_indexed(ground_mesh.index_count, 1, 0, 0, 0);
@@ -177,7 +177,7 @@ fn create_blas(
     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
     let size = AccelerationStructure::size_of(device, &info);
 
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
     let blas = render_graph.bind_node(AccelerationStructure::create(
         device,
         AccelerationStructureInfo::blas(size.create_size),
@@ -201,7 +201,7 @@ fn create_blas(
     )?);
     let scratch_data = render_graph.node_device_address(scratch_buf);
 
-    let mut pass = render_graph.begin_cmd_buf().with_name("Build BLAS");
+    let mut pass = render_graph.begin_cmd().with_name("Build BLAS");
 
     for model in models.iter().copied() {
         let index_buf = pass.bind_node(&model.index_buf);
@@ -316,7 +316,7 @@ fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverE
 fn create_tlas(
     device: &Arc<Device>,
     pool: &mut LazyPool,
-    render_graph: &mut RenderGraph,
+    render_graph: &mut Graph,
     blas: &Arc<AccelerationStructure>,
 ) -> Result<AccelerationStructureLeaseNode, DriverError> {
     let instances = [vk::AccelerationStructureInstanceKHR {
@@ -386,7 +386,7 @@ fn create_tlas(
     let instance_buf = render_graph.bind_node(instance_buf);
 
     render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("Build TLAS")
         .access_node(blas, AccessType::AccelerationStructureBuildRead)
         .access_node(instance_buf, AccessType::AccelerationStructureBuildRead)

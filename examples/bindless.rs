@@ -28,7 +28,7 @@ fn main() -> Result<(), WindowError> {
 
         let mut pass = frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("Test")
             .bind_pipeline(&pipeline)
             .access_node(draw_buf_node, AccessType::IndirectBuffer);
@@ -40,8 +40,8 @@ fn main() -> Result<(), WindowError> {
 
         pass.clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass.draw_indirect(draw_buf_node, 0, 64, 16);
+            .record_pipeline(move |pipeline, _| {
+                pipeline.draw_indirect(draw_buf_node, 0, 64, 16);
             });
     })
 }
@@ -50,7 +50,7 @@ fn create_images(device: &Arc<Device>) -> Result<Vec<Arc<Image>>, DriverError> {
     let mut textures = Vec::with_capacity(64);
 
     let (b, a) = (0.0, 1.0);
-    let mut graph = RenderGraph::default();
+    let mut graph = Graph::default();
     for y in 0..8 {
         for x in 0..8 {
             let texture = Arc::new(Image::create(

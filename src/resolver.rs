@@ -1,8 +1,8 @@
 use {
     super::{
-        Area, Attachment, Binding, Bindings, ExecutionPipeline, Node, NodeIndex, Pass, RenderGraph,
+        Area, Attachment, Binding, Bindings, Command, ExecutionPipeline, Graph, Node, NodeIndex,
+        cmd_ref::{Subresource, SubresourceAccess},
         node::SwapchainImageNode,
-        pass_ref::{Subresource, SubresourceAccess},
     },
     crate::{
         driver::{
@@ -88,7 +88,7 @@ impl AccessCache {
             .flat_map(move |node_idx| self.dependent_passes(node_idx, end_pass_idx))
     }
 
-    fn update(&mut self, graph: &RenderGraph, end_pass_idx: usize) {
+    fn update(&mut self, graph: &Graph, end_pass_idx: usize) {
         self.binding_count = graph.bindings.len();
 
         let cache_len = self.binding_count * end_pass_idx;
@@ -112,7 +112,7 @@ impl AccessCache {
             nodes.fill(true);
             nodes.resize(self.binding_count, true);
 
-            for (pass_idx, pass) in graph.passes[0..end_pass_idx].iter().enumerate() {
+            for (pass_idx, pass) in graph.cmds[0..end_pass_idx].iter().enumerate() {
                 let pass_start = pass_idx * self.binding_count;
                 let mut read_count = 0;
 
@@ -175,13 +175,13 @@ impl Drop for PhysicalPass {
 /// <https://github.com/EmbarkStudios/kajiya>
 #[derive(Debug)]
 pub struct Resolver {
-    pub(super) graph: RenderGraph,
+    pub(super) graph: Graph,
     physical_passes: Vec<PhysicalPass>,
 }
 
 impl Resolver {
-    pub(super) fn new(graph: RenderGraph) -> Self {
-        let physical_passes = Vec::with_capacity(graph.passes.len());
+    pub(super) fn new(graph: Graph) -> Self {
+        let physical_passes = Vec::with_capacity(graph.cmds.len());
 
         Self {
             graph,
@@ -190,8 +190,8 @@ impl Resolver {
     }
 
     #[profiling::function]
-    fn allow_merge_passes(lhs: &Pass, rhs: &Pass) -> bool {
-        fn first_graphic_pipeline(pass: &Pass) -> Option<&GraphicPipeline> {
+    fn allow_merge_passes(lhs: &Command, rhs: &Command) -> bool {
+        fn first_graphic_pipeline(pass: &Command) -> Option<&GraphicPipeline> {
             pass.execs
                 .first()
                 .and_then(|exec| exec.pipeline.as_ref().map(ExecutionPipeline::as_graphic))
@@ -388,7 +388,7 @@ impl Resolver {
     fn begin_render_pass(
         cmd_buf: &CommandBuffer,
         bindings: &[Binding],
-        pass: &Pass,
+        pass: &Command,
         physical_pass: &mut PhysicalPass,
         render_area: Area,
     ) -> Result<(), DriverError> {
@@ -685,14 +685,14 @@ impl Resolver {
     /// will stall the GPU while the fences are waited on. It is preferrable to wait a few frame so
     /// that the fences will have already been signalled.
     pub fn is_resolved(&self) -> bool {
-        self.graph.passes.is_empty()
+        self.graph.cmds.is_empty()
     }
 
     #[allow(clippy::type_complexity)]
     #[profiling::function]
     fn lease_descriptor_pool<P>(
         pool: &mut P,
-        pass: &Pass,
+        pass: &Command,
     ) -> Result<Option<Lease<DescriptorPool>>, DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool>,
@@ -799,7 +799,7 @@ impl Resolver {
     where
         P: Pool<RenderPassInfo, RenderPass>,
     {
-        let pass = &self.graph.passes[pass_idx];
+        let pass = &self.graph.cmds[pass_idx];
         let (mut color_attachment_count, mut depth_stencil_attachment_count) = (0, 0);
         for exec in &pass.execs {
             color_attachment_count = color_attachment_count
@@ -1277,7 +1277,7 @@ impl Resolver {
                         }
 
                         // Second look in previous passes of the entire render graph
-                        for prev_subpass in self.graph.passes[0..pass_idx]
+                        for prev_subpass in self.graph.cmds[0..pass_idx]
                             .iter()
                             .rev()
                             .flat_map(|pass| pass.execs.iter().rev())
@@ -1667,7 +1667,7 @@ impl Resolver {
             // At the time this function runs the pass will already have been optimized into a
             // larger pass made out of anything that might have been merged into it - so we
             // only care about one pass at a time here
-            let pass = &mut self.graph.passes[pass_idx];
+            let pass = &mut self.graph.cmds[pass_idx];
 
             trace!("leasing [{pass_idx}: {}]", pass.name());
 
@@ -1747,13 +1747,13 @@ impl Resolver {
     #[profiling::function]
     fn merge_scheduled_passes(&mut self, schedule: &mut Vec<usize>) {
         thread_local! {
-            static PASSES: RefCell<Vec<Option<Pass>>> = Default::default();
+            static PASSES: RefCell<Vec<Option<Command>>> = Default::default();
         }
 
         PASSES.with_borrow_mut(|passes| {
             debug_assert!(passes.is_empty());
 
-            passes.extend(self.graph.passes.drain(..).map(Some));
+            passes.extend(self.graph.cmds.drain(..).map(Some));
 
             let mut idx = 0;
 
@@ -1814,12 +1814,12 @@ impl Resolver {
 
                 pass.name = Some(name);
 
-                self.graph.passes.push(pass);
+                self.graph.cmds.push(pass);
                 idx += 1 + end - start;
             }
 
             // Reschedule passes
-            schedule.truncate(self.graph.passes.len());
+            schedule.truncate(self.graph.cmds.len());
 
             for (idx, pass_idx) in schedule.iter_mut().enumerate() {
                 *pass_idx = idx;
@@ -1827,7 +1827,7 @@ impl Resolver {
 
             // Add the remaining passes back into the graph for later
             for pass in passes.drain(..).flatten() {
-                self.graph.passes.push(pass);
+                self.graph.cmds.push(pass);
             }
         });
     }
@@ -1851,7 +1851,7 @@ impl Resolver {
         let node_idx = node.index();
         let mut res = Default::default();
 
-        'pass: for pass in self.graph.passes.iter() {
+        'pass: for pass in self.graph.cmds.iter() {
             for exec in pass.execs.iter() {
                 if exec.accesses.contains_key(&node_idx) {
                     res |= pass
@@ -2131,7 +2131,7 @@ impl Resolver {
     fn record_image_layout_transitions(
         cmd_buf: &CommandBuffer,
         bindings: &mut [Binding],
-        pass: &mut Pass,
+        pass: &mut Command,
     ) {
         use std::slice::from_ref;
 
@@ -2357,11 +2357,11 @@ impl Resolver {
 
         debug_assert!(self.graph.bindings.get(node_idx).is_some());
 
-        if self.graph.passes.is_empty() {
+        if self.graph.cmds.is_empty() {
             return Ok(());
         }
 
-        let end_pass_idx = self.graph.passes.len();
+        let end_pass_idx = self.graph.cmds.len();
         self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)
     }
 
@@ -2421,7 +2421,7 @@ impl Resolver {
         self.lease_scheduled_resources(pool, &schedule.passes)?;
 
         for pass_idx in schedule.passes.iter().copied() {
-            let pass = &mut self.graph.passes[pass_idx];
+            let pass = &mut self.graph.cmds[pass_idx];
 
             profiling::scope!("Pass", &pass.name);
 
@@ -2532,7 +2532,7 @@ impl Resolver {
         }
 
         thread_local! {
-            static PASSES: RefCell<Vec<Pass>> = Default::default();
+            static PASSES: RefCell<Vec<Command>> = Default::default();
         }
 
         PASSES.with_borrow_mut(|passes| {
@@ -2541,10 +2541,10 @@ impl Resolver {
             // We have to keep the bindings and pipelines alive until the gpu is done
             schedule.passes.sort_unstable();
             while let Some(schedule_idx) = schedule.passes.pop() {
-                debug_assert!(!self.graph.passes.is_empty());
+                debug_assert!(!self.graph.cmds.is_empty());
 
-                while let Some(pass) = self.graph.passes.pop() {
-                    let pass_idx = self.graph.passes.len();
+                while let Some(pass) = self.graph.cmds.pop() {
+                    let pass_idx = self.graph.cmds.len();
 
                     if pass_idx == schedule_idx {
                         // This was a scheduled pass - store it!
@@ -2564,7 +2564,7 @@ impl Resolver {
             debug_assert!(self.physical_passes.is_empty());
 
             // Put the other passes back for future resolves
-            self.graph.passes.extend(passes.drain(..).rev());
+            self.graph.cmds.extend(passes.drain(..).rev());
         });
 
         log::trace!("Recorded passes");
@@ -2582,7 +2582,7 @@ impl Resolver {
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
     {
-        if self.graph.passes.is_empty() {
+        if self.graph.cmds.is_empty() {
             return Ok(());
         }
 
@@ -2593,16 +2593,16 @@ impl Resolver {
         SCHEDULE.with_borrow_mut(|schedule| {
             schedule
                 .access_cache
-                .update(&self.graph, self.graph.passes.len());
+                .update(&self.graph, self.graph.cmds.len());
             schedule.passes.clear();
-            schedule.passes.extend(0..self.graph.passes.len());
+            schedule.passes.extend(0..self.graph.cmds.len());
 
-            self.record_scheduled_passes(pool, cmd_buf, schedule, self.graph.passes.len())
+            self.record_scheduled_passes(pool, cmd_buf, schedule, self.graph.cmds.len())
         })
     }
 
     #[profiling::function]
-    fn render_area(bindings: &[Binding], pass: &Pass) -> Area {
+    fn render_area(bindings: &[Binding], pass: &Command) -> Area {
         // set_render_area was not specified so we're going to guess using the minimum common
         // attachment extents
         let first_exec = pass.execs.first().unwrap();
@@ -2735,7 +2735,7 @@ impl Resolver {
             {
                 trace!(
                     "  pass [{pass_idx}: {}] is dependent",
-                    self.graph.passes[pass_idx].name()
+                    self.graph.cmds[pass_idx].name()
                 );
 
                 debug_assert!(unscheduled[pass_idx]);
@@ -2771,7 +2771,7 @@ impl Resolver {
 
                         trace!(
                             "  pass [{pass_idx}: {}] is dependent",
-                            self.graph.passes[pass_idx].name()
+                            self.graph.cmds[pass_idx].name()
                         );
 
                         for node_idx in schedule.access_cache.dependent_nodes(pass_idx) {
@@ -2798,7 +2798,7 @@ impl Resolver {
                             .passes
                             .iter()
                             .copied()
-                            .map(|idx| format!("[{}: {}]", idx, self.graph.passes[idx].name()))
+                            .map(|idx| format!("[{}: {}]", idx, self.graph.cmds[idx].name()))
                             .collect::<Vec<_>>()
                             .join(", ")
                     );
@@ -2817,18 +2817,18 @@ impl Resolver {
                             unscheduled
                                 .iter()
                                 .copied()
-                                .map(|idx| format!("[{}: {}]", idx, self.graph.passes[idx].name()))
+                                .map(|idx| format!("[{}: {}]", idx, self.graph.cmds[idx].name()))
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         );
                     }
 
-                    if end_pass_idx < self.graph.passes.len() {
+                    if end_pass_idx < self.graph.cmds.len() {
                         // These passes existing on the graph but are not being considered right
                         // now because we've been told to stop work at the "end_pass_idx" point
                         trace!(
                             "ignoring: {}",
-                            self.graph.passes[end_pass_idx..]
+                            self.graph.cmds[end_pass_idx..]
                                 .iter()
                                 .enumerate()
                                 .map(|(idx, pass)| format!(
@@ -2974,7 +2974,7 @@ impl Resolver {
     fn write_descriptor_sets(
         cmd_buf: &CommandBuffer,
         bindings: &[Binding],
-        pass: &Pass,
+        pass: &Command,
         physical_pass: &PhysicalPass,
     ) -> Result<(), DriverError> {
         struct IndexWrite<'a> {

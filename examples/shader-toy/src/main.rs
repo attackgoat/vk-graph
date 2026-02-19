@@ -46,7 +46,7 @@ use {
             shader::Shader,
         },
         pool::{lazy::LazyPool, Pool as _},
-        RenderGraph,
+        Graph,
     },
     vk_graph_fx::*,
     vk_graph_window::WindowBuilder,
@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
         .context("FLOCKAROO_IMG_FRAG")?,
     );
 
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
     let blank_image = render_graph.bind_node(
         cache
             .lease(ImageInfo::image_2d(
@@ -290,7 +290,7 @@ fn main() -> anyhow::Result<()> {
             // Fill a buffer using a single-pass CFD pipeline where previous output feeds next input
             frame
                 .render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("Buffer A")
                 .bind_pipeline(&buffer_pipeline)
                 .read_descriptor(0, input)
@@ -298,22 +298,24 @@ fn main() -> anyhow::Result<()> {
                 .read_descriptor(2, flowers_image)
                 .read_descriptor(3, blank_image)
                 .store_color(0, output)
-                .record_subpass(move |subpass, _| {
-                    subpass.push_constants(bytes_of(&push_consts));
-                    subpass.draw(6, 1, 0, 0);
+                .record_pipeline(move |pipeline, _| {
+                    pipeline
+                        .push_constants(bytes_of(&push_consts))
+                        .draw(6, 1, 0, 0);
                 });
 
             // Make the CFD look more like paint with a second pass
             frame
                 .render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("Image")
                 .bind_pipeline(&image_pipeline)
                 .read_descriptor(0, output)
                 .store_color(0, input)
-                .record_subpass(move |subpass, _| {
-                    subpass.push_constants(bytes_of(&push_consts));
-                    subpass.draw(6, 1, 0, 0);
+                .record_pipeline(move |pipeline, _| {
+                    pipeline
+                        .push_constants(bytes_of(&push_consts))
+                        .draw(6, 1, 0, 0);
                 });
 
             // Done!

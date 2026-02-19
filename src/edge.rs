@@ -1,8 +1,8 @@
 use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, BufferLeaseNode, BufferNode,
-        ImageLeaseNode, ImageNode, RenderGraph, Resolver, SwapchainImageNode,
-        pass_ref::{PassRef, PipelinePassRef},
+        Graph, ImageLeaseNode, ImageNode, Resolver, SwapchainImageNode,
+        cmd_ref::{CommandRef, PipelineCommandRef},
     },
     crate::{
         driver::{
@@ -24,14 +24,14 @@ pub trait Edge<Graph> {
 
 macro_rules! graph_edge {
     ($src:ty => $dst:ty) => {
-        impl Edge<RenderGraph> for $src {
+        impl Edge<Graph> for $src {
             type Result = $dst;
         }
     };
 }
 
 // Edges that can be bound as nodes to the render graph:
-// Ex: RenderGraph::bind_node(&mut self, binding: X) -> Y
+// Ex: Graph::bind_node(&mut self, binding: X) -> Y
 graph_edge!(AccelerationStructure => AccelerationStructureNode);
 graph_edge!(Arc<AccelerationStructure> => AccelerationStructureNode);
 graph_edge!(Lease<AccelerationStructure> => AccelerationStructureLeaseNode);
@@ -47,7 +47,7 @@ graph_edge!(Arc<Lease<Image>> => ImageLeaseNode);
 graph_edge!(SwapchainImage => SwapchainImageNode);
 
 // Edges that can be unbound from the render graph:
-// Ex: RenderGraph::unbind_node(&mut self, node: X) -> Y
+// Ex: Graph::unbind_node(&mut self, node: X) -> Y
 graph_edge!(AccelerationStructureNode => Arc<AccelerationStructure>);
 graph_edge!(AccelerationStructureLeaseNode => Arc<Lease<AccelerationStructure>>);
 graph_edge!(BufferNode => Arc<Buffer>);
@@ -58,7 +58,7 @@ graph_edge!(SwapchainImageNode => SwapchainImage);
 
 macro_rules! graph_edge_borrow {
     ($src:ty => $dst:ty) => {
-        impl<'a> Edge<RenderGraph> for &'a $src {
+        impl<'a> Edge<Graph> for &'a $src {
             type Result = $dst;
         }
     };
@@ -72,20 +72,20 @@ graph_edge_borrow!(Arc<Image> => ImageNode);
 graph_edge_borrow!(Arc<Lease<Image>> => ImageLeaseNode);
 
 // Specialized edges for pipelines added to a pass:
-// Ex: PassRef::bind_pipeline(&mut self, pipeline: X) -> PipelinePassRef
+// Ex: PassRef::bind_pipeline(&mut self, pipeline: X) -> PipelineCommandRef
 macro_rules! pipeline_edge {
     ($name:ident) => {
         paste::paste! {
-            impl<'a> Edge<PassRef<'a>> for &'a Arc<[<$name Pipeline>]> {
-                type Result = PipelinePassRef<'a, [<$name Pipeline>]>;
+            impl<'a> Edge<CommandRef<'a>> for &'a Arc<[<$name Pipeline>]> {
+                type Result = PipelineCommandRef<'a, [<$name Pipeline>]>;
             }
 
-            impl<'a> Edge<PassRef<'a>> for Arc<[<$name Pipeline>]> {
-                type Result = PipelinePassRef<'a, [<$name Pipeline>]>;
+            impl<'a> Edge<CommandRef<'a>> for Arc<[<$name Pipeline>]> {
+                type Result = PipelineCommandRef<'a, [<$name Pipeline>]>;
             }
 
-            impl<'a> Edge<PassRef<'a>> for [<$name Pipeline>] {
-                type Result = PipelinePassRef<'a, [<$name Pipeline>]>;
+            impl<'a> Edge<CommandRef<'a>> for [<$name Pipeline>] {
+                type Result = PipelineCommandRef<'a, [<$name Pipeline>]>;
             }
         }
     };

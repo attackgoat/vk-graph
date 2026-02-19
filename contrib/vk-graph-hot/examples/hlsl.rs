@@ -34,12 +34,12 @@ fn main() -> Result<(), WindowError> {
     window.run(|frame| {
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("make some noise")
             .bind_pipeline(pipeline.hot())
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
+            .record_pipeline(move |graphic, _| {
                 subpass
                     .push_constants_offset(0, &frame_index.to_ne_bytes())
                     .push_constants_offset(4, &frame.width.to_ne_bytes())

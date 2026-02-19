@@ -1,6 +1,6 @@
 use {
     std::sync::Arc,
-    vk_graph::{driver::device::Device, node::SwapchainImageNode, RenderGraph},
+    vk_graph::{driver::device::Device, node::SwapchainImageNode, Graph},
     winit::{dpi::PhysicalPosition, event::Event, window::Window},
 };
 
@@ -32,7 +32,7 @@ pub struct FrameContext<'a> {
     /// A render graph which rendering commands should be recorded into.
     ///
     /// Make sure to write to `swapchain_image` as part of this graph.
-    pub render_graph: &'a mut RenderGraph,
+    pub render_graph: &'a mut Graph,
 
     /// A pre-bound image node for the swapchain image to be drawn.
     pub swapchain_image: SwapchainImageNode,

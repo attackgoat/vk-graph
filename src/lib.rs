@@ -132,7 +132,7 @@ let my_image = pool.lease(info)?;
 
 # Render Graph Operations
 
-All rendering in _vk-graph_ is performed using a [`RenderGraph`] composed of user-specified passes,
+All rendering in _vk-graph_ is performed using a [`Graph`] composed of user-specified passes,
 which may include pipelines and read/write access to resources. Recorded passes are automatically
 optimized before submission to the graphics hardware.
 
@@ -158,7 +158,7 @@ it as a node. Bound nodes may only be used with the graphs they were bound to. N
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
-# use vk_graph::RenderGraph;
+# use vk_graph::Graph;
 # use vk_graph::pool::{Pool};
 # use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
@@ -167,7 +167,7 @@ it as a node. Bound nodes may only be used with the graphs they were bound to. N
 # let buffer = Buffer::create(&device, info)?;
 # let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
 # let image = Image::create(&device, info)?;
-# let mut graph = RenderGraph::default();
+# let mut graph = Graph::default();
 println!("{:?}", buffer); // Buffer
 println!("{:?}", image); // Image
 
@@ -210,7 +210,7 @@ Example:
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
-# use vk_graph::RenderGraph;
+# use vk_graph::Graph;
 # use vk_graph::pool::{Pool};
 # use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
@@ -219,11 +219,11 @@ Example:
 # let buffer = Buffer::create(&device, info)?;
 # let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
 # let image = Image::create(&device, info)?;
-let mut graph = RenderGraph::default();
+let mut graph = Graph::default();
 let buffer_node = graph.bind_node(buffer);
 let image_node = graph.bind_node(image);
 graph
-    .begin_cmd_buf().with_name("Do some raw Vulkan or interop with another Vulkan library")
+    .begin_cmd().with_name("Do some raw Vulkan or interop with another Vulkan library")
     .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
         // I always run first!
     })
@@ -252,18 +252,18 @@ Pipeline instances may be bound to a [`PassRef`] in order to execute the associa
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
 # use vk_graph::driver::shader::{Shader};
-# use vk_graph::RenderGraph;
+# use vk_graph::Graph;
 # fn main() -> Result<(), DriverError> {
 # let device = Arc::new(Device::new(DeviceInfo::default())?);
 # let my_shader_code = [0u8; 1];
 # let info = ComputePipelineInfo::default();
 # let shader = Shader::new_compute(my_shader_code.as_slice());
 # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
-# let mut graph = RenderGraph::default();
+# let mut graph = Graph::default();
 graph
-    .begin_cmd_buf().with_name("My compute pass")
+    .begin_cmd().with_name("My compute pass")
     .bind_pipeline(&my_compute_pipeline)
-    .record_compute(|compute, _| {
+    .record_pipeline(|compute, _| {
         compute.push_constants(&42u32.to_ne_bytes())
                .dispatch(128, 1, 1);
     });
@@ -326,7 +326,7 @@ layout.
 [`PassRef`]: graph::pass_ref::PassRef
 [`RayTracePipeline::create`]: driver::ray_trace::RayTracePipeline::create
 [`RayTracePipelineInfo`]: driver::ray_trace::RayTracePipelineInfo
-[`RenderGraph`]: graph::RenderGraph
+[`Graph`]: graph::Graph
 [`ShaderBuilder::image_sampler`]: driver::shader::ShaderBuilder::image_sampler
 [`ShaderBuilder::vertex_input`]: driver::shader::ShaderBuilder::vertex_input
 
@@ -337,32 +337,33 @@ layout.
 pub mod display;
 pub mod driver;
 pub mod node;
-pub mod pass_ref;
 pub mod pool;
 
-mod binding;
+mod bind;
+mod cmd_ref;
 mod edge;
 mod info;
 mod resolver;
 mod swapchain;
 
 pub use self::{
-    binding::{Bind, Unbind},
+    bind::{Bind, Unbind},
+    cmd_ref::CommandRef,
     resolver::Resolver,
 };
 
 use {
     self::{
-        binding::Binding,
+        bind::Binding,
+        cmd_ref::{AttachmentIndex, Bindings, Descriptor, SubresourceAccess, ViewType},
         edge::Edge,
-        info::Information,
+        info::Info,
         node::Node,
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
             AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode,
             ImageLeaseNode, ImageNode, SwapchainImageNode,
         },
-        pass_ref::{AttachmentIndex, Bindings, Descriptor, PassRef, SubresourceAccess, ViewType},
     },
     crate::driver::{
         DescriptorBindingMap,
@@ -608,12 +609,12 @@ impl ExecutionPipeline {
 }
 
 #[derive(Debug)]
-struct Pass {
+struct Command {
     execs: Vec<Execution>,
     name: Option<String>,
 }
 
-impl Pass {
+impl Command {
     fn descriptor_pools_sizes(
         &self,
     ) -> impl Iterator<Item = &HashMap<u32, HashMap<vk::DescriptorType, u32>>> {
@@ -630,28 +631,28 @@ impl Pass {
 
 /// A composable graph of render pass operations.
 ///
-/// `RenderGraph` instances are are intended for one-time use.
+/// `Graph` instances are are intended for one-time use.
 ///
 /// The design of this code originated with a combination of
 /// [`PassBuilder`](https://github.com/EmbarkStudios/kajiya/blob/main/crates/lib/kajiya-rg/src/pass_builder.rs)
 /// and
 /// [`render_graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/render_graph.cpp).
 #[derive(Debug, Default)]
-pub struct RenderGraph {
+pub struct Graph {
     bindings: Vec<Binding>,
-    passes: Vec<Pass>,
+    cmds: Vec<Command>,
 }
 
-impl RenderGraph {
-    /// Constructs a new `RenderGraph`.
+impl Graph {
+    /// Constructs a new `Graph`.
     #[deprecated = "use default function instead"]
     pub fn new() -> Self {
         Default::default()
     }
 
-    /// Begins a new pass.
-    pub fn begin_cmd_buf(&mut self) -> PassRef<'_> {
-        PassRef::new(self)
+    /// Allocates and begins writing a new command.
+    pub fn begin_cmd(&mut self) -> CommandRef<'_> {
+        CommandRef::new(self)
     }
 
     /// Binds a Vulkan acceleration structure, buffer, or image to this graph.
@@ -738,7 +739,7 @@ impl RenderGraph {
         let src_node = src_node.into();
         let dst_node = dst_node.into();
 
-        let mut pass = self.begin_cmd_buf().with_name("blit image");
+        let mut pass = self.begin_cmd().with_name("blit image");
 
         for region in regions.as_ref() {
             pass = pass
@@ -770,7 +771,7 @@ impl RenderGraph {
                 );
             }
         })
-        .end_cmd_buf()
+        .end_cmd()
     }
 
     /// Clear a color image.
@@ -785,7 +786,7 @@ impl RenderGraph {
         let image_info = self.node_info(image_node);
         let image_view_info = image_info.default_view_info();
 
-        self.begin_cmd_buf()
+        self.begin_cmd()
             .with_name("clear color")
             .access_node_subrange(image_node, AccessType::TransferWrite, image_view_info)
             .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
@@ -799,7 +800,7 @@ impl RenderGraph {
                     &[image_view_info.into()],
                 );
             })
-            .end_cmd_buf()
+            .end_cmd()
     }
 
     /// Clears a depth/stencil image.
@@ -814,7 +815,7 @@ impl RenderGraph {
         let image_info = self.node_info(image_node);
         let image_view_info = image_info.default_view_info();
 
-        self.begin_cmd_buf()
+        self.begin_cmd()
             .with_name("clear depth/stencil")
             .access_node_subrange(image_node, AccessType::TransferWrite, image_view_info)
             .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
@@ -826,7 +827,7 @@ impl RenderGraph {
                     &[image_view_info.into()],
                 );
             })
-            .end_cmd_buf()
+            .end_cmd()
     }
 
     /// Copy data between buffers
@@ -875,7 +876,7 @@ impl RenderGraph {
         #[cfg(debug_assertions)]
         let (src_size, dst_size) = (self.node_info(src_node).size, self.node_info(dst_node).size);
 
-        let mut pass = self.begin_cmd_buf().with_name("copy buffer");
+        let mut pass = self.begin_cmd().with_name("copy buffer");
 
         for region in regions.as_ref() {
             #[cfg(debug_assertions)]
@@ -913,7 +914,7 @@ impl RenderGraph {
                 device.cmd_copy_buffer(cmd_buf, src_buf, dst_buf, regions.as_ref());
             }
         })
-        .end_cmd_buf()
+        .end_cmd()
     }
 
     /// Copy data from a buffer into an image.
@@ -970,7 +971,7 @@ impl RenderGraph {
         let dst_node = dst_node.into();
         let dst_info = self.node_info(dst_node);
 
-        let mut pass = self.begin_cmd_buf().with_name("copy buffer to image");
+        let mut pass = self.begin_cmd().with_name("copy buffer to image");
 
         for region in regions.as_ref() {
             let block_bytes_size = format_texel_block_size(dst_info.fmt);
@@ -1006,7 +1007,7 @@ impl RenderGraph {
                 );
             }
         })
-        .end_cmd_buf()
+        .end_cmd()
     }
 
     /// Copy all layers of a source image to a destination image.
@@ -1069,7 +1070,7 @@ impl RenderGraph {
         let src_node = src_node.into();
         let dst_node = dst_node.into();
 
-        let mut pass = self.begin_cmd_buf().with_name("copy image");
+        let mut pass = self.begin_cmd().with_name("copy image");
 
         for region in regions.as_ref() {
             pass = pass
@@ -1100,7 +1101,7 @@ impl RenderGraph {
                 );
             }
         })
-        .end_cmd_buf()
+        .end_cmd()
     }
 
     /// Copy image data into a buffer.
@@ -1159,7 +1160,7 @@ impl RenderGraph {
         let src_info = self.node_info(src_node);
         let dst_node = dst_node.into();
 
-        let mut pass = self.begin_cmd_buf().with_name("copy image to buffer");
+        let mut pass = self.begin_cmd().with_name("copy image to buffer");
 
         for region in regions.as_ref() {
             let block_bytes_size = format_texel_block_size(src_info.fmt);
@@ -1195,7 +1196,7 @@ impl RenderGraph {
                 );
             }
         })
-        .end_cmd_buf()
+        .end_cmd()
     }
 
     /// Fill a region of a buffer with a fixed value.
@@ -1217,7 +1218,7 @@ impl RenderGraph {
     ) -> &mut Self {
         let buffer_node = buffer_node.into();
 
-        self.begin_cmd_buf()
+        self.begin_cmd()
             .with_name("fill buffer")
             .access_node_subrange(buffer_node, AccessType::TransferWrite, region.clone())
             .record_cmd_buf(move |device, cmd_buf, bindings| {
@@ -1233,7 +1234,7 @@ impl RenderGraph {
                     );
                 }
             })
-            .end_cmd_buf()
+            .end_cmd()
     }
 
     /// Returns the index of the first pass which accesses a given node
@@ -1241,7 +1242,7 @@ impl RenderGraph {
     fn first_node_access_pass_index(&self, node: impl Node) -> Option<usize> {
         let node_idx = node.index();
 
-        for (pass_idx, pass) in self.passes.iter().enumerate() {
+        for (pass_idx, pass) in self.cmds.iter().enumerate() {
             for exec in pass.execs.iter() {
                 if exec.accesses.contains_key(&node_idx) {
                     return Some(pass_idx);
@@ -1268,11 +1269,11 @@ impl RenderGraph {
     }
 
     /// Returns information used to crate a node.
-    pub fn node_info<N>(&self, node: N) -> <N as Information>::Info
+    pub fn node_info<N>(&self, node: N) -> <N as Info>::Info
     where
-        N: Information,
+        N: Info,
     {
-        node.get(self)
+        node.info(&self.bindings)
     }
 
     /// Finalizes the graph and provides an object with functions for submitting the resulting
@@ -1280,7 +1281,7 @@ impl RenderGraph {
     #[profiling::function]
     pub fn resolve(mut self) -> Resolver {
         // The final execution of each pass has no function
-        for pass in &mut self.passes {
+        for pass in &mut self.cmds {
             pass.execs.pop();
         }
 
@@ -1320,7 +1321,7 @@ impl RenderGraph {
             );
         }
 
-        self.begin_cmd_buf()
+        self.begin_cmd()
             .with_name("update buffer")
             .access_node_subrange(buffer_node, AccessType::TransferWrite, offset..data_end)
             .record_cmd_buf(move |device, cmd_buf, bindings| {
@@ -1330,6 +1331,6 @@ impl RenderGraph {
                     device.cmd_update_buffer(cmd_buf, buffer, offset, data.as_ref());
                 }
             })
-            .end_cmd_buf()
+            .end_cmd()
     }
 }

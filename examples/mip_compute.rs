@@ -18,7 +18,7 @@ fn main() -> Result<(), DriverError> {
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
     let device = Arc::new(Device::new(device_info)?);
 
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
 
     let depth_pyramid = render_graph.bind_node(Image::create(
         &device,
@@ -51,7 +51,7 @@ fn main() -> Result<(), DriverError> {
     render_graph.copy_buffer_to_image(depth_buf, depth_pyramid);
 
     let mut pass = render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("update depth pyramid")
         .bind_pipeline(ComputePipeline::create(
             &device,
@@ -105,7 +105,7 @@ fn main() -> Result<(), DriverError> {
                     .base_mip_level(mip_level)
                     .mip_level_count(1),
             )
-            .record_compute(move |compute, _| {
+            .record_pipeline(move |compute, _| {
                 compute.dispatch(
                     depth_info.width >> mip_level,
                     depth_info.height >> mip_level,

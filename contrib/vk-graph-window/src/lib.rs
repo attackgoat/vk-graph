@@ -19,7 +19,7 @@ use {
             DriverError,
         },
         pool::hash::HashPool,
-        RenderGraph,
+        Graph,
     },
     winit::{
         application::ApplicationHandler,
@@ -333,7 +333,7 @@ impl Window {
                 }
 
                 if let Some(swapchain_image) = self.display.acquire_next_image()? {
-                    let mut render_graph = RenderGraph::default();
+                    let mut render_graph = Graph::default();
                     let swapchain_image = render_graph.bind_node(swapchain_image);
                     let swapchain_info = self.display.swapchain.info;
 

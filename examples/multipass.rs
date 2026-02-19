@@ -37,7 +37,7 @@ const GOLD: Material = Material {
 };
 
 /// The example demonstrates leasing resources (images and buffers) and composing rendering
-/// operations with just a few lines of RenderGraph builder-pattern code.
+/// operations with just a few lines of Graph builder-pattern code.
 ///
 /// Also shown:
 /// - Basic PBR rendering (from Sascha Willems)
@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
         // Depth Prepass
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("Depth Prepass")
             .bind_pipeline(&prepass)
             .set_depth_stencil(write)
@@ -97,8 +97,8 @@ fn main() -> anyhow::Result<()> {
             .access_node(vertex_buf, AccessType::VertexBuffer)
             .clear_depth_stencil(depth_stencil)
             .store_depth_stencil(depth_stencil)
-            .record_subpass(move |subpass, _| {
-                subpass
+            .record_pipeline(move |pipeline, _| {
+                pipeline
                     .bind_index_buffer(index_buf, vk::IndexType::UINT16)
                     .bind_vertex_buffer(vertex_buf)
                     .push_constants(bytes_of(&obj_pos))
@@ -119,7 +119,7 @@ fn main() -> anyhow::Result<()> {
         // Renders a golden orb on an un-cleared swapchain image
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("funky shape PBR")
             .bind_pipeline(&pbr)
             .set_depth_stencil(write)
@@ -130,8 +130,8 @@ fn main() -> anyhow::Result<()> {
             .load_depth_stencil(depth_stencil)
             .store_depth_stencil(depth_stencil)
             .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass
+            .record_pipeline(move |pipeline, _| {
+                pipeline
                     .bind_index_buffer(index_buf, vk::IndexType::UINT16)
                     .bind_vertex_buffer(vertex_buf)
                     .push_constants(&push_const_data)
@@ -148,15 +148,15 @@ fn main() -> anyhow::Result<()> {
         // Renders a solid color wherever the golden orb did not draw
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("fill background")
             .bind_pipeline(&fill_background)
             .set_depth_stencil(read)
             .load_depth_stencil(depth_stencil)
             .load_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass.draw(6, 1, 0, 0);
+            .record_pipeline(move |pipeline, _| {
+                pipeline.draw(6, 1, 0, 0);
             });
     })?;
 
@@ -187,7 +187,7 @@ fn best_depth_stencil_format(device: &Device) -> vk::Format {
 }
 
 fn bind_camera_buf(
-    render_graph: &mut RenderGraph,
+    render_graph: &mut Graph,
     pool: &mut LazyPool,
     camera: Camera,
     model: Mat4,
@@ -203,7 +203,7 @@ fn bind_camera_buf(
     render_graph.bind_node(buf)
 }
 
-fn bind_light_buf(render_graph: &mut RenderGraph, pool: &mut LazyPool) -> BufferLeaseNode {
+fn bind_light_buf(render_graph: &mut Graph, pool: &mut LazyPool) -> BufferLeaseNode {
     let mut buf = pool
         .lease(BufferInfo::host_mem(
             64,
@@ -279,7 +279,7 @@ fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape
     )?);
 
     // We will use a temporary render graph to copy host data to the GPU
-    let mut graph = RenderGraph::default();
+    let mut graph = Graph::default();
 
     // Bind things to the graph
     let index_buf_host = graph.bind_node(index_buf_host);

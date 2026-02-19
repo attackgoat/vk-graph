@@ -3,7 +3,7 @@
 #![warn(missing_docs)]
 
 pub use vk_graph::{
-    Bind, ClearColorValue, RenderGraph, Unbind,
+    Bind, ClearColorValue, CommandRef, Graph, Unbind,
     display::{Display, DisplayError, DisplayInfo, DisplayInfoBuilder, ResolverPool},
     driver::{
         AccessType, CommandBuffer, DriverError,
@@ -46,7 +46,6 @@ pub use vk_graph::{
         AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode,
         SwapchainImageNode,
     },
-    pass_ref::{PassRef, PipelinePassRef},
     pool::{
         Lease, Pool, PoolInfo, PoolInfoBuilder,
         alias::{Alias, AliasPool},

@@ -668,7 +668,7 @@ fn main() -> anyhow::Result<()> {
             .unwrap()
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
-        let mut render_graph = RenderGraph::default();
+        let mut render_graph = Graph::default();
         let index_node = render_graph.bind_node(&index_buf);
         let vertex_node = render_graph.bind_node(&vertex_buf);
         let blas_node = render_graph.bind_node(&blas);
@@ -687,7 +687,7 @@ fn main() -> anyhow::Result<()> {
             let scratch_data = render_graph.node_device_address(scratch_buf);
 
             render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("Build BLAS")
                 .access_node(index_node, AccessType::AccelerationStructureBuildRead)
                 .access_node(vertex_node, AccessType::AccelerationStructureBuildRead)
@@ -714,7 +714,7 @@ fn main() -> anyhow::Result<()> {
             let tlas_node = render_graph.bind_node(&tlas);
 
             render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("Build TLAS")
                 .access_node(blas_node, AccessType::AccelerationStructureBuildRead)
                 .access_node(instance_node, AccessType::AccelerationStructureBuildRead)
@@ -850,7 +850,7 @@ fn main() -> anyhow::Result<()> {
 
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("basic ray tracer")
             .bind_pipeline(&ray_trace_pipeline)
             .access_node(
@@ -873,8 +873,8 @@ fn main() -> anyhow::Result<()> {
                 AccessType::RayTracingShaderReadOther,
             )
             .access_descriptor(6, material_buf_node, AccessType::RayTracingShaderReadOther)
-            .record_ray_trace(move |ray_trace, _| {
-                ray_trace.trace_rays(
+            .record_pipeline(move |pipeline, _| {
+                pipeline.trace_rays(
                     &sbt_rgen,
                     &sbt_miss,
                     &sbt_hit,
@@ -884,7 +884,7 @@ fn main() -> anyhow::Result<()> {
                     1,
                 );
             })
-            .end_cmd_buf()
+            .end_cmd()
             .copy_image(image_node, frame.swapchain_image);
     })?;
 

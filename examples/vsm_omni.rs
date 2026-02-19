@@ -241,7 +241,7 @@ fn main() -> anyhow::Result<()> {
         if input.key_held(KeyCode::Tab) {
             frame
                 .render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("DEBUG")
                 .bind_pipeline(&debug_pipeline)
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
@@ -259,8 +259,8 @@ fn main() -> anyhow::Result<()> {
                 .store_color(0, frame.swapchain_image)
                 .clear_depth_stencil(depth_image)
                 .store_depth_stencil(depth_image)
-                .record_subpass(move |subpass, _| {
-                    subpass
+                .record_pipeline(move |pipeline, _| {
+                    pipeline
                         .bind_index_buffer(model_mesh_index_buf, vk::IndexType::UINT32)
                         .bind_vertex_buffer(model_mesh_vertex_buf)
                         .push_constants(cast_slice(&model_transform))
@@ -275,7 +275,7 @@ fn main() -> anyhow::Result<()> {
             if use_geometry_shader {
                 frame
                     .render_graph
-                    .begin_cmd_buf()
+                    .begin_cmd()
                     .with_name("Shadow (Using geometry shader)")
                     .bind_pipeline(&shadow_pipeline)
                     .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
@@ -287,8 +287,8 @@ fn main() -> anyhow::Result<()> {
                     .clear_color_value(0, shadow_faces_node, [light.range, light.range, 0.0, 0.0])
                     .store_color(0, shadow_faces_node)
                     .clear_depth_stencil(shadow_depth_image)
-                    .record_subpass(move |subpass, _| {
-                        subpass
+                    .record_pipeline(move |pipeline, _| {
+                        pipeline
                             .bind_index_buffer(model_shadow_index_buf, vk::IndexType::UINT32)
                             .bind_vertex_buffer(model_shadow_vertex_buf)
                             .push_constants(cast_slice(&model_transform))
@@ -320,7 +320,7 @@ fn main() -> anyhow::Result<()> {
 
                     frame
                         .render_graph
-                        .begin_cmd_buf()
+                        .begin_cmd()
                         .with_name("Shadow")
                         .bind_pipeline(&shadow_pipeline)
                         .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
@@ -341,8 +341,8 @@ fn main() -> anyhow::Result<()> {
                         )
                         .store_color_as(0, shadow_faces_node, shadow_faces_view_info)
                         .clear_depth_stencil(shadow_depth_image)
-                        .record_subpass(move |subpass, _| {
-                            subpass
+                        .record_pipeline(move |pipeline, _| {
+                            pipeline
                                 .bind_index_buffer(model_shadow_index_buf, vk::IndexType::UINT32)
                                 .bind_vertex_buffer(model_shadow_vertex_buf)
                                 .push_constants(cast_slice(&model_transform))
@@ -361,21 +361,21 @@ fn main() -> anyhow::Result<()> {
                     // separable box blur filter which approximates a gaussian blur
                     frame
                         .render_graph
-                        .begin_cmd_buf()
+                        .begin_cmd()
                         .with_name("Blur X")
                         .bind_pipeline(&blur_x_pipeline)
                         .read_descriptor(0, shadow_faces_node)
                         .write_descriptor(1, temp_image)
-                        .record_compute(move |compute, _| {
+                        .record_pipeline(move |compute, _| {
                             compute.dispatch(1, CUBEMAP_SIZE, 6);
                         })
-                        .end_cmd_buf()
-                        .begin_cmd_buf()
+                        .end_cmd()
+                        .begin_cmd()
                         .with_name("Blur Y")
                         .bind_pipeline(&blur_y_pipeline)
                         .read_descriptor(0, temp_image)
                         .write_descriptor(1, shadow_faces_node)
-                        .record_compute(move |compute, _| {
+                        .record_pipeline(move |compute, _| {
                             compute.dispatch(CUBEMAP_SIZE, 1, 6);
                         });
                 }
@@ -384,7 +384,7 @@ fn main() -> anyhow::Result<()> {
             // Render the scene directly to the swapchain using the shadow map from the above pass
             frame
                 .render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("Mesh objects")
                 .bind_pipeline(&mesh_pipeline)
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
@@ -408,8 +408,8 @@ fn main() -> anyhow::Result<()> {
                 .clear_color(0, frame.swapchain_image)
                 .store_color(0, frame.swapchain_image)
                 .clear_depth_stencil(depth_image)
-                .record_subpass(move |subpass, _| {
-                    subpass
+                .record_pipeline(move |pipeline, _| {
+                    pipeline
                         .bind_index_buffer(model_mesh_index_buf, vk::IndexType::UINT32)
                         .bind_vertex_buffer(model_mesh_vertex_buf)
                         .push_constants(cast_slice(&model_transform))

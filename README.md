@@ -30,7 +30,7 @@ fn main() -> Result<(), WindowError> {
 ## Usage
 
 _vk-graph_ provides a fully-generic render graph structure for simple and statically
-typed access to all the resources used while rendering. The `RenderGraph` structure allows Vulkan
+typed access to all the resources used while rendering. The `Graph` structure allows Vulkan
 smart pointer resources to be bound as "nodes" which may be used anywhere in a graph. The graph
 itself is not tied to swapchain access and may be used to execute general command streams.
 
@@ -43,17 +43,19 @@ Features of the render graph:
  - Optional [shader hot-reload](contrib/vk-graph-hot/README.md) from disk
 
 ```rust
-render_graph
-    .begin_cmd_buf().with_name("Fancy new algorithm for shading a moving character who is actively on fire")
+graph
+    .begin_cmd()
+    .with_name("Fancy new algorithm for shading a moving character who is actively on fire")
     .bind_pipeline(&gfx_pipeline)
     .read_descriptor(0, some_image)
     .read_descriptor(1, another_image)
     .read_descriptor(3, some_buf)
     .clear_color(0, swapchain_image)
     .store_color(0, swapchain_image)
-    .record_subpass(move |subpass| {
-        subpass.push_constants(some_u8_slice);
-        subpass.draw(6, 1, 0, 0);
+    .record_pipeline(move |pipeline| {
+        pipeline
+            .push_constants(some_u8_slice)
+            .draw(6, 1, 0, 0);
     });
 ```
 ### Debug Logging

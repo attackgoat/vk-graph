@@ -91,7 +91,7 @@ fn main() -> anyhow::Result<()> {
 
         let mut pass = frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("cube")
             .bind_pipeline(if will_render_msaa {
                 &mesh_msaa_pipeline
@@ -156,8 +156,8 @@ fn main() -> anyhow::Result<()> {
                 .store_color(0, frame.swapchain_image);
         }
 
-        pass.record_subpass(move |subpass, _| {
-            subpass
+        pass.record_pipeline(move |pipeline, _| {
+            pipeline
                 .bind_vertex_buffer(cube_vertex_buf)
                 .push_constants(bytes_of(&world_transform))
                 .draw(cube_mesh.vertex_count, 1, 0, 0);

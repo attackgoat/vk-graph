@@ -137,11 +137,11 @@ fn main() -> anyhow::Result<()> {
         let elapsed_time = Instant::now() - start_time;
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("smoke")
             .bind_pipeline(&smoke_pipeline)
             .write_descriptor(0, image_node)
-            .record_compute(move |compute, _| {
+            .record_pipeline(move |compute, _| {
                 compute
                     .push_constants(&elapsed_time.as_secs_f32().to_ne_bytes())
                     .dispatch(frame.width.div_ceil(subgroup_size), frame.height, 1);

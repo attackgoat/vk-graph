@@ -5,7 +5,7 @@ use {
     log::error,
     std::sync::Arc,
     vk_graph::{
-        RenderGraph,
+        Graph,
         display::{Display, DisplayError, DisplayInfo},
         driver::{
             device::{Device, DeviceInfoBuilder},
@@ -114,7 +114,7 @@ struct Context {
 impl Context {
     fn draw(&mut self) -> Result<(), DisplayError> {
         if let Some(swapchain_image) = self.display.acquire_next_image()? {
-            let mut render_graph = RenderGraph::default();
+            let mut render_graph = Graph::default();
             let swapchain_image = render_graph.bind_node(swapchain_image);
 
             // Rendering goes here!

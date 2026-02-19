@@ -1,10 +1,10 @@
 use {
-    super::{Bind, Binding, RenderGraph, SwapchainImageNode},
+    super::{Bind, Binding, Graph, SwapchainImageNode},
     crate::driver::swapchain::SwapchainImage,
 };
 
-impl Bind<&mut RenderGraph, SwapchainImageNode> for SwapchainImage {
-    fn bind(self, graph: &mut RenderGraph) -> SwapchainImageNode {
+impl Bind<&mut Graph, SwapchainImageNode> for SwapchainImage {
+    fn bind(self, graph: &mut Graph) -> SwapchainImageNode {
         // We will return a new node
         let res = SwapchainImageNode::new(graph.bindings.len());
 

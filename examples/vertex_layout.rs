@@ -101,14 +101,14 @@ fn draw_triangle(
 
     frame
         .render_graph
-        .begin_cmd_buf()
+        .begin_cmd()
         .with_name("Triangle")
         .bind_pipeline(pipeline)
         .load_color(0, frame.swapchain_image)
         .store_color(0, frame.swapchain_image)
         .access_node(vertex_buf, AccessType::VertexBuffer)
-        .record_subpass(move |subpass, _| {
-            subpass.bind_vertex_buffer(vertex_buf).draw(3, 1, 0, 0);
+        .record_pipeline(move |pipeline, _| {
+            pipeline.bind_vertex_buffer(vertex_buf).draw(3, 1, 0, 0);
         });
 }
 

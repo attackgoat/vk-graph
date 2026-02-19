@@ -58,7 +58,7 @@ fn main() -> Result<(), WindowError> {
 
         let mut pass = frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("splat mips")
             .bind_pipeline(&splat);
 
@@ -77,8 +77,8 @@ fn main() -> Result<(), WindowError> {
                 .load_color(0, frame.swapchain_image)
                 .store_color(0, frame.swapchain_image)
                 .set_render_area(stripe_x as _, 0, stripe_width, swapchain_info.height)
-                .record_subpass(|subpass, _| {
-                    subpass.draw(6, 1, 0, 0);
+                .record_pipeline(|pipeline, _| {
+                    pipeline.draw(6, 1, 0, 0);
                 });
         }
     })
@@ -146,7 +146,7 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
         ],
     )?);
 
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
     let image_info = image.info;
     let image = render_graph.bind_node(image);
 
@@ -155,7 +155,7 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
     // new pass for each level the Vulkan framebuffer would be set to the size of the first image.
     for mip_level in 0..image_info.mip_level_count {
         render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("fill mip levels")
             .bind_pipeline(&vertical_gradient)
             .store_color_as(
@@ -167,8 +167,8 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
                     .base_mip_level(mip_level)
                     .mip_level_count(1),
             )
-            .record_subpass(|subpass, _| {
-                subpass
+            .record_pipeline(|pipeline, _| {
+                pipeline
                     .push_constants(bytes_of(&PushConstants {
                         a: vec3(0.0, 1.0, 1.0).extend(f32::NAN),
                         b: vec3(1.0, 0.0, 1.0).extend(f32::NAN),

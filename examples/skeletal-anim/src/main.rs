@@ -27,7 +27,7 @@ use {
             AccessType, DriverError,
         },
         pool::{hash::HashPool, lazy::LazyPool, Pool as _},
-        RenderGraph,
+        Graph,
     },
     vk_graph_window::{WindowBuilder, WindowError},
 };
@@ -125,7 +125,7 @@ fn main() -> Result<(), WindowError> {
 
         frame
             .render_graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("🦴")
             .bind_pipeline(&pipeline)
             .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
@@ -137,8 +137,8 @@ fn main() -> Result<(), WindowError> {
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
             .clear_depth_stencil(depth_image)
-            .record_subpass(move |subpass, _| {
-                subpass
+            .record_pipeline(move |pipeline, _| {
+                pipeline
                     .bind_index_buffer(index_buf, vk::IndexType::UINT16)
                     .bind_vertex_buffer(vertex_buf)
                     .push_constants(bytes_of(&Mat4::IDENTITY))
@@ -195,7 +195,7 @@ fn load_texture(
     )?);
 
     // Copy the host-accessible pixels into the device-only image
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
     let image_node = render_graph.bind_node(&image);
     let buffer_node = render_graph.bind_node(&buffer);
     render_graph.copy_buffer_to_image(buffer_node, image_node);
@@ -448,7 +448,7 @@ impl Model {
         )?);
 
         // Copy the host-accessible staging buffers to device-only buffers
-        let mut render_graph = RenderGraph::default();
+        let mut render_graph = Graph::default();
         let index_staging_buf_node = render_graph.bind_node(index_staging_buf);
         let vertex_staging_buf_node = render_graph.bind_node(vertex_staging_buf);
         let index_buf_node = render_graph.bind_node(&index_buf);

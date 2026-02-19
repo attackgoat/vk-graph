@@ -30,7 +30,7 @@ use {
             AccessType,
         },
         pool::{lazy::LazyPool, Pool as _},
-        RenderGraph,
+        Graph,
     },
     vk_graph_hot::{graphic::HotGraphicPipeline, shader::HotShader},
 };
@@ -268,7 +268,7 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        let mut render_graph = RenderGraph::default();
+        let mut render_graph = Graph::default();
         let depth_image = render_graph.bind_node(
             pool.lease(ImageInfo::image_2d_array(
                 resolution.width,
@@ -352,7 +352,7 @@ fn main() -> anyhow::Result<()> {
             let push_consts = PushConstants::new(model_transform);
 
             render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("Left hand")
                 .bind_pipeline(hands_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
@@ -378,8 +378,8 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_subpass(move |subpass, _| {
-                    subpass
+                .record_pipeline(move |pipeline, _| {
+                    pipeline
                         .bind_index_buffer(index_buf, vk::IndexType::UINT32)
                         .bind_vertex_buffer(vertex_buf)
                         .push_constants(bytes_of(&push_consts))
@@ -397,7 +397,7 @@ fn main() -> anyhow::Result<()> {
             let push_consts = PushConstants::new(model_transform);
 
             render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("Right hand")
                 .bind_pipeline(hands_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
@@ -423,8 +423,8 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_subpass(move |subpass, _| {
-                    subpass
+                .record_pipeline(move |pipeline, _| {
+                    pipeline
                         .bind_index_buffer(index_buf, vk::IndexType::UINT32)
                         .bind_vertex_buffer(vertex_buf)
                         .push_constants(bytes_of(&push_consts))
@@ -440,7 +440,7 @@ fn main() -> anyhow::Result<()> {
             let push_consts = PushConstants::new(Mat4::IDENTITY);
 
             render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("Woolly Mammoth")
                 .bind_pipeline(mammoth_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
@@ -461,8 +461,8 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_subpass(move |subpass, _| {
-                    subpass
+                .record_pipeline(move |pipeline, _| {
+                    pipeline
                         .bind_index_buffer(index_buf, vk::IndexType::UINT32)
                         .bind_vertex_buffer(vertex_buf)
                         .push_constants(bytes_of(&push_consts))
@@ -762,7 +762,7 @@ fn load_texture(
         ),
     )?);
 
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
     let staging_buf = render_graph.bind_node(staging_buf);
     let texture_image = render_graph.bind_node(&texture);
     render_graph.copy_buffer_to_image(staging_buf, texture_image);

@@ -65,8 +65,8 @@ impl ImGui {
         events: &[Event<()>],
         window: &Window,
         pool: &mut P,
-        render_graph: &mut RenderGraph,
-        ui_func: impl FnOnce(&mut Ui, &mut P, &mut RenderGraph),
+        render_graph: &mut Graph,
+        ui_func: impl FnOnce(&mut Ui, &mut P, &mut Graph),
     ) -> ImageLeaseNode
     where
         P: Pool<BufferInfo, Buffer> + Pool<ImageInfo, Image>,
@@ -185,7 +185,7 @@ impl ImGui {
                 self.platform.hidpi_factor() as f32 / window.inner_size().height as f32;
 
             render_graph
-                .begin_cmd_buf()
+                .begin_cmd()
                 .with_name("imgui")
                 .bind_pipeline(&self.pipeline)
                 .access_node(index_buf, AccessType::IndexBuffer)
@@ -193,8 +193,8 @@ impl ImGui {
                 .read_descriptor(0, font_atlas_image)
                 .clear_color(0, image)
                 .store_color(0, image)
-                .record_subpass(move |subpass, _| {
-                    subpass
+                .record_pipeline(move |pipeline, _| {
+                    pipeline
                         .push_constants_offset(0, &window_width.to_ne_bytes())
                         .push_constants_offset(4, &window_height.to_ne_bytes())
                         .bind_index_buffer(index_buf, vk::IndexType::UINT16)
@@ -211,8 +211,7 @@ impl ImGui {
                         let y = clip_rect[1].floor() as i32;
                         let width = (clip_rect[2] - clip_rect[0]).ceil() as u32;
                         let height = (clip_rect[3] - clip_rect[1]).ceil() as u32;
-                        subpass.set_scissor(x, y, width, height);
-                        subpass.draw_indexed(
+                        pipeline.set_scissor(x, y, width, height).draw_indexed(
                             index_count as _,
                             1,
                             first_index as _,
@@ -226,7 +225,7 @@ impl ImGui {
         image
     }
 
-    fn lease_font_atlas_image<P>(&mut self, pool: &mut P, render_graph: &mut RenderGraph)
+    fn lease_font_atlas_image<P>(&mut self, pool: &mut P, render_graph: &mut Graph)
     where
         P: Pool<BufferInfo, Buffer> + Pool<ImageInfo, Image>,
     {

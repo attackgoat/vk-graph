@@ -108,7 +108,7 @@ impl BitmapFont {
     /// TODO
     pub fn print(
         &mut self,
-        graph: &mut RenderGraph,
+        graph: &mut Graph,
         image: impl Into<AnyImageNode>,
         x: f32,
         y: f32,
@@ -123,7 +123,7 @@ impl BitmapFont {
     #[allow(clippy::too_many_arguments)]
     pub fn print_scale(
         &mut self,
-        graph: &mut RenderGraph,
+        graph: &mut Graph,
         image: impl Into<AnyImageNode>,
         x: f32,
         y: f32,
@@ -139,7 +139,7 @@ impl BitmapFont {
     #[allow(clippy::too_many_arguments)]
     pub fn print_scale_scissor(
         &mut self,
-        graph: &mut RenderGraph,
+        graph: &mut Graph,
         image: impl Into<AnyImageNode>,
         x: f32,
         y: f32,
@@ -206,7 +206,7 @@ impl BitmapFont {
         }
 
         let mut pass = graph
-            .begin_cmd_buf()
+            .begin_cmd()
             .with_name("text")
             .bind_pipeline(&self.pipeline)
             .access_node(vertex_buf, AccessType::IndexBuffer)
@@ -217,12 +217,12 @@ impl BitmapFont {
             pass = pass.read_descriptor((0, [idx as _]), *page_node);
         }
 
-        pass.record_subpass(move |subpass, _| {
+        pass.record_pipeline(move |pipeline, _| {
             if let Some((x, y, width, height)) = scissor {
-                subpass.set_scissor(x, y, width, height);
+                pipeline.set_scissor(x, y, width, height);
             }
 
-            subpass
+            pipeline
                 .push_constants(cast_slice(&transform.to_cols_array()))
                 .push_constants_offset(64, &(1.0 / image_info.width as f32).to_ne_bytes())
                 .push_constants_offset(68, &(1.0 / image_info.height as f32).to_ne_bytes())

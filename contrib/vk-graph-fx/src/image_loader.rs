@@ -144,7 +144,7 @@ impl ImageLoader {
             warn!("unused data");
         }
 
-        let mut render_graph = RenderGraph::default();
+        let mut render_graph = Graph::default();
         let image =
             render_graph.bind_node(self.create_image(format, width, height, is_srgb, false)?);
 
@@ -204,17 +204,17 @@ impl ImageLoader {
                 let dispatch_x = (width + 3) >> 2;
                 let dispatch_y = height;
                 render_graph
-                    .begin_cmd_buf()
+                    .begin_cmd()
                     .with_name("Decode RGB image")
                     .bind_pipeline(&self.decode_rgb_rgba)
                     .read_descriptor(0, pixel_buf)
                     .write_descriptor(1, temp_image)
-                    .record_compute(move |compute, _| {
+                    .record_pipeline(move |compute, _| {
                         compute
                             .push_constants(&(pixel_buf_stride >> 2).to_ne_bytes())
                             .dispatch(dispatch_x, dispatch_y, 1);
                     })
-                    .end_cmd_buf()
+                    .end_cmd()
                     .copy_image(temp_image, image);
             }
             ImageFormat::R8G8 | ImageFormat::R8G8B8A8 => {

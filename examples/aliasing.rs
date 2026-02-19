@@ -36,7 +36,7 @@ fn main() -> Result<(), DriverError> {
     let image2 = pool.alias(image_info)?;
     assert!(Arc::ptr_eq(&image1, &image2));
 
-    let mut render_graph = RenderGraph::default();
+    let mut render_graph = Graph::default();
 
     // Binding these images to any render graph will produce the same physical nodes
     let image1 = render_graph.bind_node(image1);

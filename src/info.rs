@@ -1,37 +1,37 @@
 use {
     super::{
-        AccelerationStructureLeaseNode, AccelerationStructureNode, BufferLeaseNode, BufferNode,
-        ImageLeaseNode, ImageNode, RenderGraph, SwapchainImageNode,
+        AccelerationStructureLeaseNode, AccelerationStructureNode, Binding, BufferLeaseNode,
+        BufferNode, ImageLeaseNode, ImageNode, SwapchainImageNode,
     },
     crate::driver::{
         accel_struct::AccelerationStructureInfo, buffer::BufferInfo, image::ImageInfo,
     },
 };
 
-pub trait Information {
+pub trait Info {
     type Info;
 
-    fn get(self, graph: &RenderGraph) -> Self::Info;
+    fn info(self, bindings: &[Binding]) -> Self::Info;
 }
 
-macro_rules! information {
+macro_rules! info {
     ($name:ident: $src:ident -> $dst:ident) => {
         paste::paste! {
-            impl Information for $src {
+            impl Info for $src {
                 type Info = $dst;
 
-                fn get(self, graph: &RenderGraph) -> $dst {
-                    graph.bindings[self.idx].[<as_ $name>]().unwrap().info
+                fn info(self, bindings: &[Binding]) -> $dst {
+                    bindings[self.idx].[<as_ $name>]().unwrap().info
                 }
             }
         }
     };
 }
 
-information!(acceleration_structure: AccelerationStructureNode -> AccelerationStructureInfo);
-information!(acceleration_structure_lease: AccelerationStructureLeaseNode -> AccelerationStructureInfo);
-information!(buffer: BufferNode -> BufferInfo);
-information!(buffer_lease: BufferLeaseNode -> BufferInfo);
-information!(image: ImageNode -> ImageInfo);
-information!(image_lease: ImageLeaseNode -> ImageInfo);
-information!(swapchain_image: SwapchainImageNode -> ImageInfo);
+info!(acceleration_structure: AccelerationStructureNode -> AccelerationStructureInfo);
+info!(acceleration_structure_lease: AccelerationStructureLeaseNode -> AccelerationStructureInfo);
+info!(buffer: BufferNode -> BufferInfo);
+info!(buffer_lease: BufferLeaseNode -> BufferInfo);
+info!(image: ImageNode -> ImageInfo);
+info!(image_lease: ImageLeaseNode -> ImageInfo);
+info!(swapchain_image: SwapchainImageNode -> ImageInfo);

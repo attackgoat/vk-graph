@@ -1,7 +1,7 @@
 //! Bindings for Vulkan smart-pointer resources.
 
 use {
-    super::{Information, NodeIndex, RenderGraph, Unbind},
+    super::{Binding, Graph, Info, NodeIndex, Unbind},
     crate::{
         driver::{
             accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -32,13 +32,13 @@ impl Clone for AnyAccelerationStructureNode {
 
 impl Copy for AnyAccelerationStructureNode {}
 
-impl Information for AnyAccelerationStructureNode {
+impl Info for AnyAccelerationStructureNode {
     type Info = AccelerationStructureInfo;
 
-    fn get(self, graph: &RenderGraph) -> Self::Info {
+    fn info(self, bindings: &[Binding]) -> Self::Info {
         match self {
-            Self::AccelerationStructure(node) => node.get(graph),
-            Self::AccelerationStructureLease(node) => node.get(graph),
+            Self::AccelerationStructure(node) => node.info(bindings),
+            Self::AccelerationStructureLease(node) => node.info(bindings),
         }
     }
 }
@@ -82,13 +82,13 @@ impl Clone for AnyBufferNode {
 
 impl Copy for AnyBufferNode {}
 
-impl Information for AnyBufferNode {
+impl Info for AnyBufferNode {
     type Info = BufferInfo;
 
-    fn get(self, graph: &RenderGraph) -> Self::Info {
+    fn info(self, bindings: &[Binding]) -> Self::Info {
         match self {
-            Self::Buffer(node) => node.get(graph),
-            Self::BufferLease(node) => node.get(graph),
+            Self::Buffer(node) => node.info(bindings),
+            Self::BufferLease(node) => node.info(bindings),
         }
     }
 }
@@ -137,14 +137,14 @@ impl Clone for AnyImageNode {
 
 impl Copy for AnyImageNode {}
 
-impl Information for AnyImageNode {
+impl Info for AnyImageNode {
     type Info = ImageInfo;
 
-    fn get(self, graph: &RenderGraph) -> Self::Info {
+    fn info(self, bindings: &[Binding]) -> Self::Info {
         match self {
-            Self::Image(node) => node.get(graph),
-            Self::ImageLease(node) => node.get(graph),
-            Self::SwapchainImage(node) => node.get(graph),
+            Self::Image(node) => node.info(bindings),
+            Self::ImageLease(node) => node.info(bindings),
+            Self::SwapchainImage(node) => node.info(bindings),
         }
     }
 }
@@ -177,7 +177,7 @@ impl Node for AnyImageNode {
     }
 }
 
-/// A Vulkan resource which has been bound to a [`RenderGraph`] using [`RenderGraph::bind_node`].
+/// A Vulkan resource which has been bound to a [`Graph`] using [`Graph::bind_node`].
 pub trait Node: Copy {
     /// The internal node index of this bound resource.
     fn index(self) -> NodeIndex;
@@ -228,8 +228,8 @@ node!(SwapchainImage);
 macro_rules! node_unbind {
     ($name:ident) => {
         paste::paste! {
-            impl Unbind<RenderGraph, Arc<$name>> for [<$name Node>] {
-                fn unbind(self, graph: &mut RenderGraph) -> Arc<$name> {
+            impl Unbind<Graph, Arc<$name>> for [<$name Node>] {
+                fn unbind(self, graph: &mut Graph) -> Arc<$name> {
                     let binding = &mut graph.bindings[self.idx];
                     let res = Arc::clone(
                         binding
@@ -252,8 +252,8 @@ node_unbind!(Image);
 macro_rules! node_unbind_lease {
     ($name:ident) => {
         paste::paste! {
-            impl Unbind<RenderGraph, Arc<Lease<$name>>> for [<$name LeaseNode>] {
-                fn unbind(self, graph: &mut RenderGraph) -> Arc<Lease<$name>> {
+            impl Unbind<Graph, Arc<Lease<$name>>> for [<$name LeaseNode>] {
+                fn unbind(self, graph: &mut Graph) -> Arc<Lease<$name>> {
                     let binding = &mut graph.bindings[self.idx];
                     let res = Arc::clone(
                         binding
