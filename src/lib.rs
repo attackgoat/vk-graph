@@ -41,29 +41,6 @@ fn main() -> Result<(), DriverError> {
 }
 ```
 
-## _Optional_: Full control of device selection, window handling, etc
-
-```no_run
-use vk_graph::driver::device::{Device, DeviceInfo};
-use vk_graph::driver::instance::{Instance, InstanceInfo};
-use vk_graph::driver::DriverError;
-
-fn main() -> Result<(), DriverError> {
-    let instance = Instance::new(InstanceInfo::default())?;
-    let physical_devices = Instance::physical_devices(&instance)?;
-    let best_index = physical_devices.iter().enumerate()...;
-    let best_gpu = physical_device[best_index];
-
-    assert!(best_gpu.properties_v1_0.limits.max_push_constants_size > 128);
-
-    let device = Device::from_physical_device(best_gpu)?;
-
-    // ... Or use winit manually similar to the usage in vk_graph_window ...
-    // let info = DeviceInfoBuilder::default().physical_device_index(0);
-    // let device = Device::from_display(&my_window, info)?;
-}
-```
-
 # Resources and Pipelines
 
 All resources and pipelines, as well as the driver itself, use shared reference tracking to keep

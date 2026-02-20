@@ -238,7 +238,7 @@ impl RayTracePipeline {
             let handle = ray_trace_ext
                 .create_ray_tracing_pipelines(
                     vk::DeferredOperationKHR::null(),
-                    Device::pipeline_cache(device),
+                    device.pipeline_cache,
                     &[vk::RayTracingPipelineCreateInfoKHR::default()
                         .stages(&shader_stages)
                         .groups(&shader_groups)
@@ -395,11 +395,7 @@ impl Drop for RayTracePipeline {
 /// Information used to create a [`RayTracePipeline`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(
-        private,
-        name = "fallible_build",
-        error = "RayTracePipelineInfoBuilderError"
-    ),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -494,15 +490,6 @@ impl RayTracePipelineInfoBuilder {
         let res = unsafe { res.unwrap_unchecked() };
 
         res
-    }
-}
-
-#[derive(Debug)]
-struct RayTracePipelineInfoBuilderError;
-
-impl From<UninitializedFieldError> for RayTracePipelineInfoBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
     }
 }
 

@@ -9,7 +9,7 @@ use {
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{trace, warn},
-    std::{ffi::CString, sync::Arc, thread::panicking},
+    std::{ffi::CString, slice, sync::Arc, thread::panicking},
 };
 
 /// Smart pointer handle to a [pipeline] object.
@@ -87,8 +87,6 @@ impl ComputePipeline {
         info: impl Into<ComputePipelineInfo>,
         shader: impl Into<Shader>,
     ) -> Result<Self, DriverError> {
-        use std::slice::from_ref;
-
         trace!("create");
 
         let device = Arc::clone(device);
@@ -141,7 +139,7 @@ impl ComputePipeline {
 
             let push_constants = shader.push_constant_range();
             if let Some(push_constants) = &push_constants {
-                layout_info = layout_info.push_constant_ranges(from_ref(push_constants));
+                layout_info = layout_info.push_constant_ranges(slice::from_ref(push_constants));
             }
 
             let layout = device
@@ -153,13 +151,13 @@ impl ComputePipeline {
 
                     DriverError::Unsupported
                 })?;
-            let pipeline_info = vk::ComputePipelineCreateInfo::default()
+            let create_info = vk::ComputePipelineCreateInfo::default()
                 .stage(stage_create_info)
                 .layout(layout);
             let handle = device
                 .create_compute_pipelines(
-                    Device::pipeline_cache(&device),
-                    from_ref(&pipeline_info),
+                    device.pipeline_cache,
+                    slice::from_ref(&create_info),
                     None,
                 )
                 .map_err(|(_, err)| {
@@ -209,11 +207,7 @@ impl Drop for ComputePipeline {
 /// Information used to create a [`ComputePipeline`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(
-        private,
-        name = "fallible_build",
-        error = "ComputePipelineInfoBuilderError"
-    ),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -283,15 +277,6 @@ impl ComputePipelineInfoBuilder {
         let res = unsafe { res.unwrap_unchecked() };
 
         res
-    }
-}
-
-#[derive(Debug)]
-struct ComputePipelineInfoBuilderError;
-
-impl From<UninitializedFieldError> for ComputePipelineInfoBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
     }
 }
 

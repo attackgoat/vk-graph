@@ -1,8 +1,9 @@
 use {
     super::{DriverError, device::Device},
     ash::vk,
+    derive_builder::{Builder, UninitializedFieldError},
     log::{error, trace, warn},
-    std::{fmt::Debug, ops::Deref, sync::Arc, thread::panicking},
+    std::{fmt::Debug, slice, sync::Arc, thread::panicking},
 };
 
 // TODO: Expose command functions so the fence, device, waiting flags do not
@@ -10,13 +11,25 @@ use {
 
 /// Represents a Vulkan command buffer to which some work has been submitted.
 #[derive(Debug)]
+#[readonly::make]
 pub struct CommandBuffer {
-    cmd_buf: vk::CommandBuffer,
-    pub(crate) device: Arc<Device>,
+    /// The device which owns this command buffer resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Arc<Device>,
+
     droppables: Vec<Box<dyn Debug + Send + 'static>>,
     pub(crate) fence: vk::Fence, // Keeps state because everyone wants this
 
+    /// The native Vulkan resource handle of this command buffer.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub handle: vk::CommandBuffer,
+
     /// Information used to create this object.
+    #[readonly]
     pub info: CommandBufferInfo,
 
     pub(crate) pool: vk::CommandPool,
@@ -30,41 +43,45 @@ impl CommandBuffer {
         info: CommandBufferInfo,
     ) -> Result<Self, DriverError> {
         let device = Arc::clone(device);
-        let cmd_pool_info = vk::CommandPoolCreateInfo::default()
-            .flags(
-                vk::CommandPoolCreateFlags::TRANSIENT
-                    | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
-            )
-            .queue_family_index(info.queue_family_index);
+
         let pool = unsafe {
-            device
-                .create_command_pool(&cmd_pool_info, None)
-                .map_err(|err| {
-                    warn!("{err}");
+            device.create_command_pool(
+                &vk::CommandPoolCreateInfo::default()
+                    .flags(
+                        vk::CommandPoolCreateFlags::TRANSIENT
+                            | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+                    )
+                    .queue_family_index(info.queue_family_index),
+                None,
+            )
+        }
+        .map_err(|err| {
+            warn!("unable to create command pool: {err}");
 
-                    DriverError::Unsupported
-                })?
-        };
-        let cmd_buf_info = vk::CommandBufferAllocateInfo::default()
-            .command_buffer_count(1)
-            .command_pool(pool)
-            .level(vk::CommandBufferLevel::PRIMARY);
-        let cmd_buf = unsafe {
-            device
-                .allocate_command_buffers(&cmd_buf_info)
-                .map_err(|err| {
-                    warn!("{err}");
+            DriverError::Unsupported
+        })?;
 
-                    DriverError::Unsupported
-                })?
-        }[0];
+        let handle = unsafe {
+            device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_buffer_count(1)
+                    .command_pool(pool)
+                    .level(vk::CommandBufferLevel::PRIMARY),
+            )
+        }
+        .map_err(|err| {
+            warn!("unable to allocate command buffer: {err}");
+
+            DriverError::Unsupported
+        })?[0];
+
         let fence = Device::create_fence(&device, false)?;
 
         Ok(Self {
-            cmd_buf,
             device,
             droppables: vec![],
             fence,
+            handle,
             info,
             pool,
             waiting: false,
@@ -73,12 +90,12 @@ impl CommandBuffer {
 
     /// Signals that execution has completed and it is time to drop anything we collected.
     #[profiling::function]
-    pub(crate) fn drop_fenced(this: &mut Self) {
-        if !this.droppables.is_empty() {
-            trace!("dropping {} shared references", this.droppables.len());
+    pub(crate) fn drop_fenced(&mut self) {
+        if !self.droppables.is_empty() {
+            trace!("dropping {} shared references", self.droppables.len());
         }
 
-        this.droppables.clear();
+        self.droppables.clear();
     }
 
     /// Returns `true` after the GPU has executed the previous submission to this command buffer.
@@ -106,8 +123,8 @@ impl CommandBuffer {
     }
 
     /// Drops an item after execution has been completed
-    pub(crate) fn push_fenced_drop(this: &mut Self, thing_to_drop: impl Debug + Send + 'static) {
-        this.droppables.push(Box::new(thing_to_drop));
+    pub(crate) fn push_fenced_drop(&mut self, thing_to_drop: impl Debug + Send + 'static) {
+        self.droppables.push(Box::new(thing_to_drop));
     }
 
     /// Stalls by blocking the current thread until the GPU has executed the previous submission to
@@ -127,45 +144,70 @@ impl CommandBuffer {
     }
 }
 
-impl Deref for CommandBuffer {
-    type Target = vk::CommandBuffer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.cmd_buf
-    }
-}
-
 impl Drop for CommandBuffer {
     #[profiling::function]
     fn drop(&mut self) {
-        use std::slice::from_ref;
-
         if panicking() {
             return;
         }
 
+        if self.waiting && Device::wait_for_fence(&self.device, &self.fence).is_err() {
+            return;
+        }
+
+        self.drop_fenced();
+
         unsafe {
-            if self.waiting && Device::wait_for_fence(&self.device, &self.fence).is_err() {
-                return;
-            }
-
-            Self::drop_fenced(self);
-
             self.device
-                .free_command_buffers(self.pool, from_ref(&self.cmd_buf));
+                .free_command_buffers(self.pool, slice::from_ref(&self.handle));
             self.device.destroy_command_pool(self.pool, None);
             self.device.destroy_fence(self.fence, None);
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+/// Information used to create a [`CommandBuffer`] instance.
+#[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[builder(
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    derive(Clone, Copy, Debug),
+    pattern = "owned"
+)]
+#[non_exhaustive]
 pub struct CommandBufferInfo {
+    /// Designates a queue family as described in section
+    /// [Queue Family Properties](https://docs.vulkan.org/spec/latest/chapters/devsandqueues.html#devsandqueues-queueprops).
+    /// All command buffers allocated from this command pool must be submitted on queues from the
+    /// same queue family
     pub queue_family_index: u32,
 }
 
 impl CommandBufferInfo {
     pub fn new(queue_family_index: u32) -> Self {
         Self { queue_family_index }
+    }
+}
+
+impl CommandBufferInfo {
+    /// Converts a `CommandBufferInfo` into a `CommandBufferInfoBuilder`.
+    #[inline(always)]
+    pub fn to_builder(self) -> CommandBufferInfoBuilder {
+        CommandBufferInfoBuilder {
+            queue_family_index: Some(self.queue_family_index),
+        }
+    }
+}
+
+impl From<CommandBufferInfoBuilder> for CommandBufferInfo {
+    fn from(info: CommandBufferInfoBuilder) -> Self {
+        info.build()
+    }
+}
+
+impl CommandBufferInfoBuilder {
+    /// Builds a new `CommandBufferInfo`.
+    #[inline(always)]
+    pub fn build(self) -> CommandBufferInfo {
+        self.fallible_build().unwrap()
     }
 }

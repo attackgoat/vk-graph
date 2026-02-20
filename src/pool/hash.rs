@@ -150,7 +150,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
         })?;
 
         // Drop anything we were holding from the last submission
-        CommandBuffer::drop_fenced(&mut item);
+        item.drop_fenced();
 
         Ok(Lease::new(Arc::downgrade(cache_ref), item))
     }

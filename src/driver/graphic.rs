@@ -623,11 +623,7 @@ impl Drop for GraphicPipeline {
 /// Information used to create a [`GraphicPipeline`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(
-        private,
-        name = "fallible_build",
-        error = "GraphicPipelineInfoBuilderError"
-    ),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -773,15 +769,6 @@ impl GraphicPipelineInfoBuilder {
         let res = unsafe { res.unwrap_unchecked() };
 
         res
-    }
-}
-
-#[derive(Debug)]
-struct GraphicPipelineInfoBuilderError;
-
-impl From<UninitializedFieldError> for GraphicPipelineInfoBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
     }
 }
 

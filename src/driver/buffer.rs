@@ -811,6 +811,12 @@ impl BufferInfo {
     }
 }
 
+impl From<BufferInfoBuilder> for BufferInfo {
+    fn from(info: BufferInfoBuilder) -> Self {
+        info.build()
+    }
+}
+
 impl BufferInfoBuilder {
     /// Builds a new `BufferInfo`.
     ///    
@@ -834,12 +840,6 @@ impl BufferInfoBuilder {
         );
 
         res
-    }
-}
-
-impl From<BufferInfoBuilder> for BufferInfo {
-    fn from(info: BufferInfoBuilder) -> Self {
-        info.build()
     }
 }
 

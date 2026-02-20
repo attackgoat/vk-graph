@@ -106,14 +106,14 @@ impl Display {
         let exec = &mut self.execs[self.exec_idx];
 
         if exec.queue.is_some() {
-            CommandBuffer::wait_until_executed(&mut exec.cmd_buf).inspect_err(|err| {
+            exec.cmd_buf.wait_until_executed().inspect_err(|err| {
                 warn!("unable to wait for display fence: {err}");
             })?;
 
             exec.queue = None;
         }
 
-        CommandBuffer::drop_fenced(&mut exec.cmd_buf);
+        exec.cmd_buf.drop_fenced();
 
         unsafe {
             exec.cmd_buf
@@ -174,7 +174,7 @@ impl Display {
             exec.cmd_buf
                 .device
                 .begin_command_buffer(
-                    *exec.cmd_buf,
+                    exec.cmd_buf.handle,
                     &vk::CommandBufferBeginInfo::default()
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
@@ -207,7 +207,7 @@ impl Display {
                 // Force a presentation layout transition
                 pipeline_barrier(
                     &exec.cmd_buf.device,
-                    *exec.cmd_buf,
+                    exec.cmd_buf.handle,
                     None,
                     &[],
                     slice::from_ref(&ImageBarrier {
@@ -237,7 +237,7 @@ impl Display {
         unsafe {
             exec.cmd_buf
                 .device
-                .end_command_buffer(*exec.cmd_buf)
+                .end_command_buffer(exec.cmd_buf.handle)
                 .map_err(|err| {
                     warn!("unable to end display command buffer: {err}");
 
@@ -249,7 +249,7 @@ impl Display {
                     queue,
                     slice::from_ref(
                         &vk::SubmitInfo::default()
-                            .command_buffers(slice::from_ref(&exec.cmd_buf))
+                            .command_buffers(slice::from_ref(&exec.cmd_buf.handle))
                             .wait_semaphores(slice::from_ref(&exec.swapchain_acquired))
                             .wait_dst_stage_mask(slice::from_ref(&wait_dst_stage_mask))
                             .signal_semaphores(slice::from_ref(&exec.swapchain_rendered)),
@@ -280,7 +280,7 @@ impl Display {
 
         // Store the resolved graph because it contains bindings, leases, and other shared resources
         // that need to be kept alive until the fence is waited upon.
-        CommandBuffer::push_fenced_drop(&mut exec.cmd_buf, resolver);
+        exec.cmd_buf.push_fenced_drop(resolver);
 
         Ok(())
     }

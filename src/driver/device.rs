@@ -19,6 +19,7 @@ use {
         fmt::{Debug, Formatter},
         mem::{ManuallyDrop, forget},
         ops::Deref,
+        slice,
         thread::panicking,
         time::Instant,
     },
@@ -95,7 +96,7 @@ pub struct Device {
     pub(super) allocator: ManuallyDrop<Mutex<Allocator>>,
 
     device: ash::Device,
-    pipeline_cache: vk::PipelineCache,
+    pub(crate) pipeline_cache: vk::PipelineCache,
 
     /// The physical device, which contains useful data about features, properties, and limits.
     ///
@@ -107,7 +108,7 @@ pub struct Device {
     physical_device: PhysicalDevice,
 
     /// The physical execution queues which all work will be submitted to.
-    pub(crate) queues: Vec<Vec<vk::Queue>>,
+    pub(crate) queues: Box<[Box<[vk::Queue]>]>,
 
     ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
     surface_ext: Option<khr::surface::Instance>,
@@ -235,7 +236,7 @@ impl Device {
                     .push(unsafe { device.get_device_queue(queue_family_index as _, queue_index) });
             }
 
-            queues.push(queue_family);
+            queues.push(queue_family.into_boxed_slice());
         }
 
         let surface_ext = physical_device.display.then(|| {
@@ -267,7 +268,7 @@ impl Device {
             device,
             pipeline_cache,
             physical_device,
-            queues,
+            queues: queues.into_boxed_slice(),
             ray_trace_ext,
             surface_ext,
             swapchain_ext,
@@ -327,15 +328,9 @@ impl Device {
         Self::from_ash_device(device, physical_device)
     }
 
-    pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
-        this.pipeline_cache
-    }
-
     #[profiling::function]
     pub(crate) fn wait_for_fence(this: &Self, fence: &vk::Fence) -> Result<(), DriverError> {
-        use std::slice::from_ref;
-
-        Device::wait_for_fences(this, from_ref(fence))
+        Device::wait_for_fences(this, slice::from_ref(fence))
     }
 
     #[profiling::function]
@@ -427,7 +422,7 @@ impl Drop for Device {
 /// Information used to create a [`Device`] instance.
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "DeviceInfoBuilderError"),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -533,15 +528,6 @@ impl DeviceInfoBuilder {
     }
 }
 
-#[derive(Debug)]
-struct DeviceInfoBuilderError;
-
-impl From<UninitializedFieldError> for DeviceInfoBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
-    }
-}
-
 #[doc(hidden)]
 #[repr(C)]
 pub struct ReadOnlyDevice {
@@ -550,7 +536,7 @@ pub struct ReadOnlyDevice {
     device: ash::Device,
     pipeline_cache: vk::PipelineCache,
     pub physical_device: PhysicalDevice,
-    pub(crate) queues: Vec<Vec<vk::Queue>>,
+    pub(crate) queues: Box<[Box<[vk::Queue]>]>,
     ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
     surface_ext: Option<khr::surface::Instance>,
     swapchain_ext: Option<khr::swapchain::Device>,

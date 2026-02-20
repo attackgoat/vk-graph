@@ -31,6 +31,7 @@ use {
         collections::{BTreeMap, HashMap, VecDeque},
         iter::repeat_n,
         ops::Range,
+        slice,
     },
     vk_sync::{AccessType, BufferBarrier, GlobalBarrier, ImageBarrier, cmd::pipeline_barrier},
 };
@@ -555,9 +556,9 @@ impl Resolver {
 
             unsafe {
                 cmd_buf.device.cmd_begin_render_pass(
-                    **cmd_buf,
+                    cmd_buf.handle,
                     &vk::RenderPassBeginInfo::default()
-                        .render_pass(***render_pass)
+                        .render_pass(render_pass.handle)
                         .framebuffer(framebuffer)
                         .render_area(vk::Rect2D {
                             offset: vk::Offset2D {
@@ -610,7 +611,7 @@ impl Resolver {
 
                 unsafe {
                     cmd_buf.device.cmd_bind_descriptor_sets(
-                        **cmd_buf,
+                        cmd_buf.handle,
                         pipeline.bind_point(),
                         pipeline.layout(),
                         0,
@@ -665,7 +666,7 @@ impl Resolver {
         unsafe {
             cmd_buf
                 .device
-                .cmd_bind_pipeline(**cmd_buf, pipeline_bind_point, pipeline);
+                .cmd_bind_pipeline(cmd_buf.handle, pipeline_bind_point, pipeline);
         }
 
         Ok(())
@@ -675,7 +676,7 @@ impl Resolver {
         trace!("  end render pass");
 
         unsafe {
-            cmd_buf.device.cmd_end_render_pass(**cmd_buf);
+            cmd_buf.device.cmd_end_render_pass(cmd_buf.handle);
         }
     }
 
@@ -1838,7 +1839,7 @@ impl Resolver {
         unsafe {
             cmd_buf
                 .device
-                .cmd_next_subpass(**cmd_buf, vk::SubpassContents::INLINE);
+                .cmd_next_subpass(cmd_buf.handle, vk::SubpassContents::INLINE);
         }
     }
 
@@ -1883,8 +1884,6 @@ impl Resolver {
         bindings: &mut [Binding],
         accesses: impl Iterator<Item = (&'a NodeIndex, &'a Vec<SubresourceAccess>)>,
     ) {
-        use std::slice::from_ref;
-
         // We store a Barriers in TLS to save an alloc; contents are POD
         thread_local! {
             static TLS: RefCell<Tls> = Default::default();
@@ -2056,8 +2055,8 @@ impl Resolver {
                     );
 
                     BufferBarrier {
-                        next_accesses: from_ref(next_access),
-                        previous_accesses: from_ref(prev_access),
+                        next_accesses: slice::from_ref(next_access),
+                        previous_accesses: slice::from_ref(prev_access),
                         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                         buffer,
@@ -2103,9 +2102,9 @@ impl Resolver {
                     );
 
                     ImageBarrier {
-                        next_accesses: from_ref(next_access),
+                        next_accesses: slice::from_ref(next_access),
                         next_layout: image_access_layout(*next_access),
-                        previous_accesses: from_ref(prev_access),
+                        previous_accesses: slice::from_ref(prev_access),
                         previous_layout: image_access_layout(*prev_access),
                         discard_contents: *prev_access == AccessType::Nothing
                             || is_write_access(*next_access),
@@ -2119,7 +2118,7 @@ impl Resolver {
 
             pipeline_barrier(
                 &cmd_buf.device,
-                **cmd_buf,
+                cmd_buf.handle,
                 global_barrier,
                 &buffer_barriers.collect::<Box<[_]>>(),
                 &image_barriers.collect::<Box<[_]>>(),
@@ -2133,8 +2132,6 @@ impl Resolver {
         bindings: &mut [Binding],
         pass: &mut Command,
     ) {
-        use std::slice::from_ref;
-
         // We store a Barriers in TLS to save an alloc; contents are POD
         thread_local! {
             static TLS: RefCell<Tls> = Default::default();
@@ -2291,9 +2288,9 @@ impl Resolver {
                         *prev_access == AccessType::Nothing || !is_read_access(*next_access);
 
                     ImageBarrier {
-                        next_accesses: from_ref(next_access),
+                        next_accesses: slice::from_ref(next_access),
                         next_layout: image_access_layout(*next_access),
-                        previous_accesses: from_ref(prev_access),
+                        previous_accesses: slice::from_ref(prev_access),
                         previous_layout: image_access_layout(*prev_access),
                         discard_contents,
                         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
@@ -2306,7 +2303,7 @@ impl Resolver {
 
             pipeline_barrier(
                 &cmd_buf.device,
-                **cmd_buf,
+                cmd_buf.handle,
                 None,
                 &[],
                 &image_barriers.collect::<Box<_>>(),
@@ -2520,7 +2517,7 @@ impl Resolver {
                     let exec_func = exec.func.take().unwrap().0;
                     exec_func(
                         &cmd_buf.device,
-                        **cmd_buf,
+                        cmd_buf.handle,
                         Bindings::new(&self.graph.bindings, exec),
                     );
                 }
@@ -2548,10 +2545,8 @@ impl Resolver {
 
                     if pass_idx == schedule_idx {
                         // This was a scheduled pass - store it!
-                        CommandBuffer::push_fenced_drop(
-                            cmd_buf,
-                            (pass, self.physical_passes.pop().unwrap()),
-                        );
+
+                        cmd_buf.push_fenced_drop((pass, self.physical_passes.pop().unwrap()));
                         break;
                     } else {
                         debug_assert!(pass_idx > schedule_idx);
@@ -2846,13 +2841,11 @@ impl Resolver {
     }
 
     fn set_scissor(cmd_buf: &CommandBuffer, x: i32, y: i32, width: u32, height: u32) {
-        use std::slice::from_ref;
-
         unsafe {
             cmd_buf.device.cmd_set_scissor(
-                **cmd_buf,
+                cmd_buf.handle,
                 0,
-                from_ref(&vk::Rect2D {
+                slice::from_ref(&vk::Rect2D {
                     extent: vk::Extent2D { width, height },
                     offset: vk::Offset2D { x, y },
                 }),
@@ -2868,13 +2861,11 @@ impl Resolver {
         height: f32,
         depth: Range<f32>,
     ) {
-        use std::slice::from_ref;
-
         unsafe {
             cmd_buf.device.cmd_set_viewport(
-                **cmd_buf,
+                cmd_buf.handle,
                 0,
-                from_ref(&vk::Viewport {
+                slice::from_ref(&vk::Viewport {
                     x,
                     y,
                     width,
@@ -2899,8 +2890,6 @@ impl Resolver {
             + Pool<DescriptorPoolInfo, DescriptorPool>
             + Pool<RenderPassInfo, RenderPass>,
     {
-        use std::slice::from_ref;
-
         trace!("submit");
 
         let mut cmd_buf = pool.lease(CommandBufferInfo::new(queue_family_index as _))?;
@@ -2916,13 +2905,13 @@ impl Resolver {
             "Queue index must be within the range of the available queues created by the device."
         );
 
-        CommandBuffer::wait_until_executed(&mut cmd_buf)?;
+        cmd_buf.wait_until_executed()?;
 
         unsafe {
             cmd_buf
                 .device
                 .begin_command_buffer(
-                    **cmd_buf,
+                    cmd_buf.handle,
                     &vk::CommandBufferBeginInfo::default()
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
@@ -2934,17 +2923,20 @@ impl Resolver {
         unsafe {
             cmd_buf
                 .device
-                .end_command_buffer(**cmd_buf)
+                .end_command_buffer(cmd_buf.handle)
                 .map_err(|_| DriverError::OutOfMemory)?;
             cmd_buf
                 .device
-                .reset_fences(from_ref(&cmd_buf.fence))
+                .reset_fences(slice::from_ref(&cmd_buf.fence))
                 .map_err(|_| DriverError::OutOfMemory)?;
             cmd_buf
                 .device
                 .queue_submit(
                     cmd_buf.device.queues[queue_family_index][queue_index],
-                    from_ref(&vk::SubmitInfo::default().command_buffers(from_ref(&cmd_buf))),
+                    slice::from_ref(
+                        &vk::SubmitInfo::default()
+                            .command_buffers(slice::from_ref(&cmd_buf.handle)),
+                    ),
                     cmd_buf.fence,
                 )
                 .map_err(|_| DriverError::OutOfMemory)?;
@@ -2957,7 +2949,7 @@ impl Resolver {
         // they will return to the pool for other things to use. The drop will happen the next time
         // someone tries to lease a command buffer and we notice this one has returned and the fence
         // has been signalled.
-        CommandBuffer::push_fenced_drop(&mut cmd_buf, self);
+        cmd_buf.push_fenced_drop(self);
 
         Ok(cmd_buf)
     }

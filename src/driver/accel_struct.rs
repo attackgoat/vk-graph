@@ -712,6 +712,12 @@ impl AccelerationStructureInfo {
     }
 }
 
+impl From<AccelerationStructureInfoBuilder> for AccelerationStructureInfo {
+    fn from(info: AccelerationStructureInfoBuilder) -> Self {
+        info.build()
+    }
+}
+
 impl From<AccelerationStructureInfo> for () {
     fn from(_: AccelerationStructureInfo) -> Self {}
 }

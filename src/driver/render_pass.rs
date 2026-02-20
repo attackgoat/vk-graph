@@ -6,7 +6,7 @@ use {
     log::{trace, warn},
     std::{
         collections::{HashMap, hash_map::Entry},
-        ops::Deref,
+        slice,
         sync::Arc,
         thread::panicking,
     },
@@ -103,12 +103,28 @@ pub(crate) struct RenderPassInfo {
 }
 
 #[derive(Debug)]
+#[readonly::make]
 pub(crate) struct RenderPass {
-    device: Arc<Device>,
+    /// The device which owns this render pass resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Arc<Device>,
+
     framebuffers: HashMap<FramebufferInfo, vk::Framebuffer>,
     graphic_pipelines: HashMap<GraphicPipelineKey, vk::Pipeline>,
+
+    /// The native Vulkan resource handle of this render pass.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub handle: vk::RenderPass,
+
+    /// Information used to create this render pass resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub info: RenderPassInfo,
-    render_pass: vk::RenderPass,
 }
 
 impl RenderPass {
@@ -222,40 +238,36 @@ impl RenderPass {
             );
         }
 
-        let render_pass = unsafe {
-            device
-                .create_render_pass2(
-                    &vk::RenderPassCreateInfo2::default()
-                        .attachments(&attachments)
-                        .correlated_view_masks(&correlated_view_masks)
-                        .dependencies(&dependencies)
-                        .subpasses(&subpasses),
-                    None,
-                )
-                .map_err(|err| {
-                    warn!("{err}");
+        let handle = unsafe {
+            device.create_render_pass2(
+                &vk::RenderPassCreateInfo2::default()
+                    .attachments(&attachments)
+                    .correlated_view_masks(&correlated_view_masks)
+                    .dependencies(&dependencies)
+                    .subpasses(&subpasses),
+                None,
+            )
+        }
+        .map_err(|err| {
+            warn!("{err}");
 
-                    DriverError::Unsupported
-                })?
-        };
+            DriverError::Unsupported
+        })?;
 
         Ok(Self {
-            info,
             device,
             framebuffers: Default::default(),
             graphic_pipelines: Default::default(),
-            render_pass,
+            handle,
+            info,
         })
     }
 
     #[profiling::function]
-    pub fn framebuffer(
-        this: &mut Self,
-        info: FramebufferInfo,
-    ) -> Result<vk::Framebuffer, DriverError> {
+    pub fn framebuffer(&mut self, info: FramebufferInfo) -> Result<vk::Framebuffer, DriverError> {
         debug_assert!(!info.attachments.is_empty());
 
-        let entry = this.framebuffers.entry(info);
+        let entry = self.framebuffers.entry(info);
         if let Entry::Occupied(entry) = entry {
             return Ok(*entry.get());
         }
@@ -289,22 +301,19 @@ impl RenderPass {
             vk::FramebufferAttachmentsCreateInfoKHR::default().attachment_image_infos(&attachments);
         let mut create_info = vk::FramebufferCreateInfo::default()
             .flags(vk::FramebufferCreateFlags::IMAGELESS)
-            .render_pass(this.render_pass)
+            .render_pass(self.handle)
             .width(attachments[0].width)
             .height(attachments[0].height)
             .layers(layers)
             .push_next(&mut imageless_info);
-        create_info.attachment_count = this.info.attachments.len() as _;
+        create_info.attachment_count = self.info.attachments.len() as _;
 
-        let framebuffer = unsafe {
-            this.device
-                .create_framebuffer(&create_info, None)
-                .map_err(|err| {
-                    warn!("{err}");
+        let framebuffer =
+            unsafe { self.device.create_framebuffer(&create_info, None) }.map_err(|err| {
+                warn!("{err}");
 
-                    DriverError::Unsupported
-                })?
-        };
+                DriverError::Unsupported
+            })?;
 
         entry.insert(framebuffer);
 
@@ -313,14 +322,12 @@ impl RenderPass {
 
     #[profiling::function]
     pub fn graphic_pipeline(
-        this: &mut Self,
+        &mut self,
         pipeline: &Arc<GraphicPipeline>,
         depth_stencil: Option<DepthStencilMode>,
         subpass_idx: u32,
     ) -> Result<vk::Pipeline, DriverError> {
-        use std::slice::from_ref;
-
-        let entry = this.graphic_pipelines.entry(GraphicPipelineKey {
+        let entry = self.graphic_pipelines.entry(GraphicPipelineKey {
             depth_stencil,
             layout: pipeline.layout,
             shader_modules: pipeline.shader_modules.clone(),
@@ -335,7 +342,7 @@ impl RenderPass {
             _ => unreachable!(),
         };
 
-        let color_blend_attachment_states = this.info.subpasses[subpass_idx as usize]
+        let color_blend_attachment_states = self.info.subpasses[subpass_idx as usize]
             .color_attachments
             .iter()
             .map(|_| pipeline.info.blend.into())
@@ -406,7 +413,7 @@ impl RenderPass {
             cull_mode: pipeline.info.cull_mode,
             ..Default::default()
         };
-        let graphic_pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+        let create_info = vk::GraphicsPipelineCreateInfo::default()
             .color_blend_state(&color_blend_state)
             .depth_stencil_state(&depth_stencil)
             .dynamic_state(&dynamic_state)
@@ -414,24 +421,21 @@ impl RenderPass {
             .layout(pipeline.state.layout)
             .multisample_state(&multisample_state)
             .rasterization_state(&rasterization_state)
-            .render_pass(this.render_pass)
+            .render_pass(self.handle)
             .stages(&stages)
             .subpass(subpass_idx)
             .vertex_input_state(&vertex_input_state)
             .viewport_state(&viewport_state);
 
         let pipeline = unsafe {
-            this.device.create_graphics_pipelines(
-                Device::pipeline_cache(&this.device),
-                from_ref(&graphic_pipeline_info),
+            self.device.create_graphics_pipelines(
+                self.device.pipeline_cache,
+                slice::from_ref(&create_info),
                 None,
             )
         }
         .map_err(|(_, err)| {
-            warn!(
-                "create_graphics_pipelines: {err}\n{:#?}",
-                graphic_pipeline_info
-            );
+            warn!("create_graphics_pipelines: {err}\n{:#?}", create_info);
 
             DriverError::Unsupported
         })?[0];
@@ -442,14 +446,6 @@ impl RenderPass {
     }
 }
 
-impl Deref for RenderPass {
-    type Target = vk::RenderPass;
-
-    fn deref(&self) -> &Self::Target {
-        &self.render_pass
-    }
-}
-
 impl Drop for RenderPass {
     #[profiling::function]
     fn drop(&mut self) {
@@ -457,16 +453,20 @@ impl Drop for RenderPass {
             return;
         }
 
-        unsafe {
-            for (_, framebuffer) in self.framebuffers.drain() {
+        for (_, framebuffer) in self.framebuffers.drain() {
+            unsafe {
                 self.device.destroy_framebuffer(framebuffer, None);
             }
+        }
 
-            for (_, pipeline) in self.graphic_pipelines.drain() {
+        for (_, pipeline) in self.graphic_pipelines.drain() {
+            unsafe {
                 self.device.destroy_pipeline(pipeline, None);
             }
+        }
 
-            self.device.destroy_render_pass(self.render_pass, None);
+        unsafe {
+            self.device.destroy_render_pass(self.handle, None);
         }
     }
 }

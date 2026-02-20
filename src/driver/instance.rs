@@ -268,7 +268,7 @@ impl Instance {
             entry,
             info,
             inner: Arc::new(InstanceInner {
-                _debug_callback: debug_callback,
+                debug_callback,
                 _debug_loader: debug_loader,
                 debug_utils,
                 instance,
@@ -322,7 +322,7 @@ impl Instance {
                 ..Default::default()
             },
             inner: Arc::new(InstanceInner {
-                _debug_callback: None,
+                debug_callback: None,
                 _debug_loader: None,
                 debug_utils: None,
                 instance,
@@ -447,7 +447,7 @@ impl Deref for Instance {
 /// Information used to create an [`Instance`] instance.
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "InstanceInfoBuilderError"),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Debug),
     pattern = "owned"
 )]
@@ -493,23 +493,8 @@ impl InstanceInfo {
 impl InstanceInfoBuilder {
     /// Builds a new `InstanceInfo`.
     #[inline(always)]
-    pub fn build(mut self) -> InstanceInfo {
-        if self.api_version.is_none() {
-            self.api_version = Some(ApiVersion::MAX);
-        }
-
-        if self.debug.is_none() {
-            self.debug = Some(false);
-        }
-
-        if self.extension_names.is_none() {
-            self.extension_names = Some(&[]);
-        }
-
-        match self.fallible_build() {
-            Err(InstanceInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        }
+    pub fn build(self) -> InstanceInfo {
+        self.fallible_build().unwrap()
     }
 }
 
@@ -519,21 +504,15 @@ impl From<InstanceInfoBuilder> for InstanceInfo {
     }
 }
 
-#[derive(Debug)]
-struct InstanceInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for InstanceInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
-    }
-}
-
 struct InstanceInner {
-    _debug_callback: Option<vk::DebugReportCallbackEXT>,
+    debug_callback: Option<vk::DebugReportCallbackEXT>,
+
     #[allow(deprecated)] // TODO: Remove? Look into this....
     _debug_loader: Option<ext::debug_report::Instance>,
+
     #[allow(dead_code)]
     debug_utils: Option<ext::debug_utils::Instance>,
+
     instance: ash::Instance,
 }
 
@@ -547,7 +526,7 @@ impl Drop for InstanceInner {
         unsafe {
             #[allow(deprecated)]
             if let Some(debug_loader) = &self._debug_loader {
-                let debug_callback = self._debug_callback.unwrap();
+                let debug_callback = self.debug_callback.unwrap();
                 debug_loader.destroy_debug_report_callback(debug_callback, None);
             }
 

@@ -2,14 +2,29 @@ use {
     super::{DescriptorSetLayout, DriverError, device::Device},
     ash::vk,
     log::warn,
-    std::{ops::Deref, sync::Arc, thread::panicking},
+    std::{ops::Deref, slice, sync::Arc, thread::panicking},
 };
 
 #[derive(Debug)]
+#[readonly::make]
 pub struct DescriptorPool {
-    pub info: DescriptorPoolInfo,
-    descriptor_pool: vk::DescriptorPool,
+    /// The device which owns this descriptor pool resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub device: Arc<Device>,
+
+    /// The native Vulkan resource handle of this descriptor pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub handle: vk::DescriptorPool,
+
+    /// Information used to create this descriptor pool resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub info: DescriptorPoolInfo,
 }
 
 impl DescriptorPool {
@@ -123,7 +138,7 @@ impl DescriptorPool {
             pool_size_count += 1;
         }
 
-        let descriptor_pool = unsafe {
+        let handle = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
@@ -139,8 +154,8 @@ impl DescriptorPool {
         })?;
 
         Ok(Self {
-            descriptor_pool,
             device,
+            handle,
             info,
         })
     }
@@ -156,19 +171,17 @@ impl DescriptorPool {
 
     #[profiling::function]
     pub fn allocate_descriptor_sets<'a>(
-        this: &'a Self,
+        &'a self,
         layout: &DescriptorSetLayout,
         count: u32,
     ) -> Result<impl Iterator<Item = DescriptorSet> + 'a, DriverError> {
-        use std::slice::from_ref;
-
         let mut create_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(this.descriptor_pool)
-            .set_layouts(from_ref(&layout.handle));
+            .descriptor_pool(self.handle)
+            .set_layouts(slice::from_ref(&layout.handle));
         create_info.descriptor_set_count = count;
 
         Ok(unsafe {
-            this.device
+            self.device
                 .allocate_descriptor_sets(&create_info)
                 .map_err(|err| {
                     use {DriverError::*, vk::Result as vk};
@@ -185,19 +198,11 @@ impl DescriptorPool {
                 })?
                 .into_iter()
                 .map(move |descriptor_set| DescriptorSet {
-                    descriptor_pool: this.descriptor_pool,
+                    descriptor_pool: self.handle,
                     descriptor_set,
-                    device: Arc::clone(&this.device),
+                    device: Arc::clone(&self.device),
                 })
         })
-    }
-}
-
-impl Deref for DescriptorPool {
-    type Target = vk::DescriptorPool;
-
-    fn deref(&self) -> &Self::Target {
-        &self.descriptor_pool
     }
 }
 
@@ -209,8 +214,7 @@ impl Drop for DescriptorPool {
         }
 
         unsafe {
-            self.device
-                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device.destroy_descriptor_pool(self.handle, None);
         }
     }
 }
@@ -268,16 +272,15 @@ impl Deref for DescriptorSet {
 impl Drop for DescriptorSet {
     #[profiling::function]
     fn drop(&mut self) {
-        use std::slice::from_ref;
-
         if panicking() {
             return;
         }
 
-        unsafe {
+        if let Err(err) = unsafe {
             self.device
-                .free_descriptor_sets(self.descriptor_pool, from_ref(&self.descriptor_set))
-                .unwrap_or_else(|_| warn!("Unable to free descriptor set"))
+                .free_descriptor_sets(self.descriptor_pool, slice::from_ref(&self.descriptor_set))
+        } {
+            warn!("unable to free descriptor set: {err}");
         }
     }
 }
