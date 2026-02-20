@@ -114,7 +114,7 @@ fn draw_triangle(
         });
 }
 
-fn create_f16_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f16_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     if !supports_vertex_buffer(device, vk::Format::R16G16_SFLOAT) {
         return Err(DriverError::Unsupported);
     }
@@ -147,14 +147,14 @@ fn create_f16_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, Dri
     create_pipeline(device, vertex)
 }
 
-fn create_f32_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f32_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     // Uses automatic vertex input layout
     let vertex = create_vertex_shader(false);
 
     create_pipeline(device, vertex)
 }
 
-fn create_f64_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f64_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     if !supports_vertex_buffer(device, vk::Format::R64G64_SFLOAT) {
         return Err(DriverError::Unsupported);
     }
@@ -231,7 +231,7 @@ fn create_vertex_shader(is_double: bool) -> ShaderBuilder {
 }
 
 fn create_pipeline(
-    device: &Arc<Device>,
+    device: &Device,
     vertex: ShaderBuilder,
 ) -> Result<Arc<GraphicPipeline>, DriverError> {
     let fragment_spirv = glsl!(

@@ -8,7 +8,6 @@ use {
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     std::{
         fmt::{Debug, Formatter},
-        sync::Arc,
         thread::panicking,
     },
 };
@@ -19,7 +18,7 @@ pub struct Surface {
     /// The device which owns this buffer resource.
     ///
     /// _Note:_ This field is read-only.
-    pub device: Arc<Device>,
+    pub device: Device,
 
     /// The native Vulkan resource handle of this surface.
     ///
@@ -48,11 +47,11 @@ impl Surface {
     /// through [`Device::create_display_window`].
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         display: impl HasDisplayHandle,
         window: impl HasWindowHandle,
     ) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
+        let device = device.clone();
 
         let display_handle = display.display_handle().map_err(|err| {
             warn!("{err}");

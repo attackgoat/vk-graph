@@ -42,7 +42,7 @@ pub struct HashPool {
     buffer_cache: HashMap<BufferInfo, Cache<Buffer>>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: HashMap<DescriptorPoolInfo, Cache<DescriptorPool>>,
-    device: Arc<Device>,
+    device: Device,
     image_cache: HashMap<ImageInfo, Cache<Image>>,
     info: PoolInfo,
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
@@ -50,14 +50,14 @@ pub struct HashPool {
 
 impl HashPool {
     /// Constructs a new `HashPool`.
-    pub fn new(device: &Arc<Device>) -> Self {
+    pub fn new(device: &Device) -> Self {
         Self::with_capacity(device, PoolInfo::default())
     }
 
     /// Constructs a new `HashPool` with the given capacity information.
-    pub fn with_capacity(device: &Arc<Device>, info: impl Into<PoolInfo>) -> Self {
+    pub fn with_capacity(device: &Device, info: impl Into<PoolInfo>) -> Self {
         let info: PoolInfo = info.into();
-        let device = Arc::clone(device);
+        let device = device.clone();
 
         Self {
             acceleration_structure_cache: Default::default(),

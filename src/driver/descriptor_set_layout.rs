@@ -2,23 +2,23 @@ use {
     super::{DriverError, device::Device},
     ash::vk,
     log::warn,
-    std::{sync::Arc, thread::panicking},
+    std::thread::panicking,
 };
 
 #[derive(Debug)]
 #[readonly::make]
 pub struct DescriptorSetLayout {
-    pub device: Arc<Device>,
+    pub device: Device,
     pub handle: vk::DescriptorSetLayout,
 }
 
 impl DescriptorSetLayout {
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         info: &vk::DescriptorSetLayoutCreateInfo,
     ) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
+        let device = device.clone();
         let handle = unsafe {
             device
                 .create_descriptor_set_layout(info, None)

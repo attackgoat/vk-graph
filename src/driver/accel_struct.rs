@@ -8,7 +8,6 @@ use {
     std::{
         ffi::c_void,
         mem::{replace, size_of_val},
-        sync::Arc,
         thread::panicking,
     },
     vk_sync::AccessType,
@@ -65,7 +64,7 @@ pub struct AccelerationStructure {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     /// The native Vulkan resource handle of this acceleration structure.
     ///
@@ -108,7 +107,7 @@ impl AccelerationStructure {
     /// ```
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<AccelerationStructureInfo>,
     ) -> Result<Self, DriverError> {
         debug_assert!(device.physical_device.accel_struct_properties.is_some());
@@ -147,7 +146,7 @@ impl AccelerationStructure {
             )?
         };
 
-        let device = Arc::clone(device);
+        let device = device.clone();
 
         Ok(Self {
             access: Mutex::new(AccessType::Nothing),

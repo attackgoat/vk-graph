@@ -61,7 +61,7 @@ fn main() -> Result<(), DriverError> {
 }
 
 fn exclusive_sum(
-    device: &Arc<Device>,
+    device: &Device,
     reduce_pipeline: &Arc<ComputePipeline>,
     scan_pipeline: &Arc<ComputePipeline>,
     input_data: &[u32],
@@ -152,7 +152,7 @@ fn assert_output_data(input_data: &[u32], output_data: &[u32]) {
     }
 }
 
-fn create_reduce_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, DriverError> {
+fn create_reduce_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, DriverError> {
     Ok(Arc::new(ComputePipeline::create(
         device,
         ComputePipelineInfo::default(),
@@ -202,9 +202,7 @@ fn create_reduce_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
     )?))
 }
 
-fn create_exclusive_sum_pipeline(
-    device: &Arc<Device>,
-) -> Result<Arc<ComputePipeline>, DriverError> {
+fn create_exclusive_sum_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, DriverError> {
     Ok( Arc::new(
         ComputePipeline::create(
             device,

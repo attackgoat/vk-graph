@@ -84,7 +84,7 @@ fn main() -> Result<(), WindowError> {
     })
 }
 
-fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), DriverError> {
+fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverError> {
     #[derive(Clone, Copy, Pod, Zeroable)]
     #[repr(C)]
     struct PushConstants {
@@ -201,7 +201,7 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
         .map(|_| ())
 }
 
-fn splat(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn splat(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     Ok(Arc::new(GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),

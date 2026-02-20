@@ -14,7 +14,6 @@ use {
         fmt::{Debug, Formatter},
         mem::{replace, take},
         ops::DerefMut,
-        sync::Arc,
         thread::panicking,
     },
     vk_sync::AccessType,
@@ -101,7 +100,7 @@ pub struct Image {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     /// The native Vulkan resource handle of this image.
     ///
@@ -146,7 +145,7 @@ impl Image {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn create(device: &Arc<Device>, info: impl Into<ImageInfo>) -> Result<Self, DriverError> {
+    pub fn create(device: &Device, info: impl Into<ImageInfo>) -> Result<Self, DriverError> {
         let info: ImageInfo = info.into();
 
         //trace!("create: {:?}", &info);
@@ -160,7 +159,7 @@ impl Image {
 
         let accesses = Mutex::new(ImageAccess::new(info, AccessType::Nothing));
 
-        let device = Arc::clone(device);
+        let device = device.clone();
         let create_info: ImageCreateInfo = info.into();
         let create_info =
             create_info.queue_family_indices(&device.physical_device.queue_family_indices);
@@ -176,7 +175,7 @@ impl Image {
             profiling::scope!("allocate");
 
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = device.allocator.lock();
+            let mut allocator = Device::allocator(&device).lock();
 
             #[cfg(not(feature = "parking_lot"))]
             let mut allocator = allocator.unwrap();
@@ -336,7 +335,7 @@ impl Image {
         Self {
             accesses: Mutex::new(ImageAccess::new(info, AccessType::General)),
             allocation: None,
-            device: Arc::clone(&self.device),
+            device: self.device.clone(),
             handle,
             image_view_cache: Mutex::new(image_view_cache),
             info,
@@ -366,7 +365,7 @@ impl Image {
             profiling::scope!("deallocate");
 
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = self.device.allocator.lock();
+            let mut allocator = Device::allocator(&self.device).lock();
 
             #[cfg(not(feature = "parking_lot"))]
             let mut allocator = allocator.unwrap();
@@ -381,8 +380,8 @@ impl Image {
     /// The image is not destroyed automatically on drop, unlike images created through the
     /// [`Image::create`] function.
     #[profiling::function]
-    pub fn from_raw(device: &Arc<Device>, handle: vk::Image, info: impl Into<ImageInfo>) -> Self {
-        let device = Arc::clone(device);
+    pub fn from_raw(device: &Device, handle: vk::Image, info: impl Into<ImageInfo>) -> Self {
+        let device = device.clone();
         let info = info.into();
 
         // For now default all image access to general, but maybe make this configurable later.
@@ -959,19 +958,19 @@ impl From<ImageViewInfo> for vk::ImageSubresourceRange {
 }
 
 struct ImageView {
-    device: Arc<Device>,
+    device: Device,
     image_view: vk::ImageView,
 }
 
 impl ImageView {
     #[profiling::function]
     fn create(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<ImageViewInfo>,
         image: vk::Image,
     ) -> Result<Self, DriverError> {
         let info = info.into();
-        let device = Arc::clone(device);
+        let device = device.clone();
         let create_info = vk::ImageViewCreateInfo::default()
             .view_type(info.ty)
             .format(info.fmt)

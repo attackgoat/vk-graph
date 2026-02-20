@@ -1516,7 +1516,7 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
 
 fn compute_pipeline(
     key: &'static str,
-    device: &Arc<Device>,
+    device: &Device,
     info: impl Into<ComputePipelineInfo>,
     shader: impl Into<Shader>,
 ) -> Arc<ComputePipeline> {
@@ -1536,7 +1536,7 @@ fn compute_pipeline(
 }
 
 fn graphic_vert_frag_pipeline(
-    device: &Arc<Device>,
+    device: &Device,
     info: impl Into<GraphicPipelineInfo>,
     vert_source: &'static [u32],
     frag_source: &'static [u32],

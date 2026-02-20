@@ -46,7 +46,7 @@ fn main() -> Result<(), WindowError> {
     })
 }
 
-fn create_images(device: &Arc<Device>) -> Result<Vec<Arc<Image>>, DriverError> {
+fn create_images(device: &Device) -> Result<Vec<Arc<Image>>, DriverError> {
     let mut textures = Vec::with_capacity(64);
 
     let (b, a) = (0.0, 1.0);
@@ -77,7 +77,7 @@ fn create_images(device: &Arc<Device>) -> Result<Vec<Arc<Image>>, DriverError> {
     Ok(textures)
 }
 
-fn create_indirect_buffer(device: &Arc<Device>) -> Result<Arc<Buffer>, DriverError> {
+fn create_indirect_buffer(device: &Device) -> Result<Arc<Buffer>, DriverError> {
     let mut draw_cmds = Vec::with_capacity(64);
     for first_instance in 0..64 {
         draw_cmds.push(DrawIndirectCommand {
@@ -95,7 +95,7 @@ fn create_indirect_buffer(device: &Arc<Device>) -> Result<Arc<Buffer>, DriverErr
     Ok(draw_buf)
 }
 
-fn create_graphic_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_graphic_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     Ok(Arc::new(GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),

@@ -329,7 +329,7 @@ static SHADER_SHADOW_MISS: &[u32] = glsl!(
 )
 .as_slice();
 
-fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipeline>, DriverError> {
+fn create_ray_trace_pipeline(device: &Device) -> Result<Arc<RayTracePipeline>, DriverError> {
     Ok(Arc::new(RayTracePipeline::create(
         device,
         RayTracePipelineInfoBuilder::default().max_ray_recursion_depth(1),
@@ -350,7 +350,7 @@ fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipelin
 
 #[allow(clippy::type_complexity)]
 fn load_scene_buffers(
-    device: &Arc<Device>,
+    device: &Device,
 ) -> Result<(Arc<Buffer>, Arc<Buffer>, u32, u32, Arc<Buffer>, Arc<Buffer>), DriverError> {
     use std::slice::from_raw_parts;
 

@@ -9,7 +9,7 @@ use {
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{debug, info, trace, warn},
-    std::{mem::replace, ops::Deref, slice, sync::Arc, thread::panicking},
+    std::{mem::replace, ops::Deref, slice, thread::panicking},
 };
 
 // TODO: This needs to track completed command buffers and not constantly create semaphores
@@ -21,7 +21,7 @@ pub struct Swapchain {
     /// The device which owns this buffer resource.
     ///
     /// _Note:_ This field is read-only.
-    pub device: Arc<Device>,
+    pub device: Device,
 
     /// The native Vulkan resource handle of this swapchain.
     ///
@@ -49,11 +49,11 @@ impl Swapchain {
     /// [`acquire_next_image`][Self::acquire_next_image].
     #[profiling::function]
     pub fn new(
-        device: &Arc<Device>,
+        device: &Device,
         surface: Surface,
         info: impl Into<SwapchainInfo>,
     ) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
+        let device = device.clone();
         let info = info.into();
 
         Ok(Swapchain {

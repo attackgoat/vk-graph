@@ -18,7 +18,7 @@ use {
 /// TODO
 #[derive(Debug)]
 pub struct HotRayTracePipeline {
-    device: Arc<Device>,
+    device: Device,
     has_changes: Arc<AtomicBool>,
     instance: Arc<RayTracePipeline>,
     shader_groups: Box<[RayTraceShaderGroup]>,
@@ -29,7 +29,7 @@ pub struct HotRayTracePipeline {
 impl HotRayTracePipeline {
     /// TODO
     pub fn create<S>(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<RayTracePipelineInfo>,
         shaders: impl IntoIterator<Item = S>,
         shader_groups: impl IntoIterator<Item = RayTraceShaderGroup>,
@@ -56,7 +56,7 @@ impl HotRayTracePipeline {
             shader_groups.iter().copied(),
         )?);
 
-        let device = Arc::clone(device);
+        let device = device.clone();
 
         Ok(Self {
             device,

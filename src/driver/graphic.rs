@@ -12,7 +12,7 @@ use {
     derive_builder::{Builder, UninitializedFieldError},
     log::{Level::Trace, log_enabled, trace, warn},
     ordered_float::OrderedFloat,
-    std::{collections::HashSet, ffi::CString, sync::Arc, thread::panicking},
+    std::{collections::HashSet, ffi::CString, thread::panicking},
 };
 
 const RGBA_COLOR_COMPONENTS: vk::ColorComponentFlags = vk::ColorComponentFlags::from_raw(
@@ -355,7 +355,7 @@ pub struct GraphicPipeline {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     /// Information used to create this object.
     #[readonly]
@@ -408,7 +408,7 @@ impl GraphicPipeline {
     /// ```
     #[profiling::function]
     pub fn create<S>(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<GraphicPipelineInfo>,
         shaders: impl IntoIterator<Item = S>,
     ) -> Result<Self, DriverError>
@@ -417,7 +417,7 @@ impl GraphicPipeline {
     {
         trace!("create");
 
-        let device = Arc::clone(device);
+        let device = device.clone();
         let info = info.into();
         let shaders = shaders
             .into_iter()

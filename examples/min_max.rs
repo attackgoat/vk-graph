@@ -86,7 +86,7 @@ fn main() -> Result<(), DriverError> {
 }
 
 fn fill_depth_image(
-    device: &Arc<Device>,
+    device: &Device,
     render_graph: &mut Graph,
     size: u32,
 ) -> Result<ImageNode, DriverError> {
@@ -156,7 +156,7 @@ fn fill_depth_image(
 }
 
 fn reduce_depth_image(
-    device: &Arc<Device>,
+    device: &Device,
     render_graph: &mut Graph,
     depth_image: ImageNode,
     reduction_mode: vk::SamplerReductionMode,
@@ -214,7 +214,7 @@ fn reduce_depth_image(
 }
 
 fn copy_image_to_buffer(
-    device: &Arc<Device>,
+    device: &Device,
     render_graph: &mut Graph,
     reduced_image: ImageNode,
 ) -> Result<Arc<Buffer>, DriverError> {

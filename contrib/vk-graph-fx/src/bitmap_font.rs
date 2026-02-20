@@ -31,7 +31,7 @@ pub struct BitmapFont {
 impl BitmapFont {
     /// TODO
     pub fn new(
-        device: &Arc<Device>,
+        device: &Device,
         font: BMFont,
         pages: impl Into<Vec<Arc<Image>>>,
     ) -> anyhow::Result<Self> {

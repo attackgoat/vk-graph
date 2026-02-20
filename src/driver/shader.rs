@@ -18,7 +18,6 @@ use {
         fmt::{Debug, Formatter},
         iter::repeat_n,
         ops::Deref,
-        sync::Arc,
         thread::panicking,
     },
 };
@@ -186,7 +185,7 @@ pub(crate) struct PipelineDescriptorInfo {
 impl PipelineDescriptorInfo {
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         descriptor_bindings: &DescriptorBindingMap,
     ) -> Result<Self, DriverError> {
         let descriptor_set_count = descriptor_bindings
@@ -325,14 +324,14 @@ impl PipelineDescriptorInfo {
 }
 
 pub(crate) struct Sampler {
-    device: Arc<Device>,
+    device: Device,
     sampler: vk::Sampler,
 }
 
 impl Sampler {
     #[profiling::function]
-    pub fn create(device: &Arc<Device>, info: impl Into<SamplerInfo>) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
+    pub fn create(device: &Device, info: impl Into<SamplerInfo>) -> Result<Self, DriverError> {
+        let device = device.clone();
         let info = info.into();
 
         let sampler = unsafe {

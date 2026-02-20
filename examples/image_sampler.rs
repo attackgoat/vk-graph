@@ -82,7 +82,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn create_pipeline(
-    device: &Arc<Device>,
+    device: &Device,
     sampler_info: impl Into<SamplerInfo>,
 ) -> anyhow::Result<Arc<GraphicPipeline>> {
     let args = Args::parse();
@@ -228,7 +228,7 @@ fn create_pipeline(
     )?))
 }
 
-fn read_image(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Arc<Image>> {
+fn read_image(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Arc<Image>> {
     // For another way to loading images, see vk_graph_fx::ImageLoader
     let gulf_jpg = image::open(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path))?;
     let image = Arc::new(Image::create(

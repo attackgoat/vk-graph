@@ -11,7 +11,7 @@ use {
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::warn,
-    std::{ffi::CString, sync::Arc, thread::panicking},
+    std::{ffi::CString, thread::panicking},
 };
 
 /// Smart pointer handle to a [pipeline] object.
@@ -38,7 +38,7 @@ pub struct RayTracePipeline {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     /// The native Vulkan resource handle of this pipeline.
     ///
@@ -115,7 +115,7 @@ impl RayTracePipeline {
     /// ```
     #[profiling::function]
     pub fn create<S>(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<RayTracePipelineInfo>,
         shaders: impl IntoIterator<Item = S>,
         shader_groups: impl IntoIterator<Item = RayTraceShaderGroup>,
@@ -238,7 +238,7 @@ impl RayTracePipeline {
             let handle = ray_trace_ext
                 .create_ray_tracing_pipelines(
                     vk::DeferredOperationKHR::null(),
-                    device.pipeline_cache,
+                    Device::pipeline_cache(device),
                     &[vk::RayTracingPipelineCreateInfoKHR::default()
                         .stages(&shader_stages)
                         .groups(&shader_groups)
@@ -274,7 +274,7 @@ impl RayTracePipeline {
 
                     DriverError::Unsupported
                 })?[0];
-            let device = Arc::clone(device);
+            let device = device.clone();
             let &RayTraceProperties {
                 shader_group_handle_size,
                 ..

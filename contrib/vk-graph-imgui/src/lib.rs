@@ -32,7 +32,7 @@ pub struct ImGui {
 
 impl ImGui {
     /// TODO
-    pub fn new(device: &Arc<Device>) -> Self {
+    pub fn new(device: &Device) -> Self {
         let mut context = Context::create();
         let platform = WinitPlatform::new(&mut context);
         let pipeline = Arc::new(

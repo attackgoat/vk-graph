@@ -245,7 +245,7 @@ fn camera(width: u32, height: u32) -> Camera {
 
 /// Returns ready-to-use index and vertex buffers. Index count is also returned. The shape data uses
 /// temporary staging buffers which are not required but are fun.
-fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape, DriverError> {
+fn create_funky_shape(device: &Device, pool: &mut LazyPool) -> Result<Shape, DriverError> {
     // Static index/vertex data courtesy of the polyhedron-ops library
     let (indices, vertices) = funky_shape_data();
     let index_count = indices.len() as u32;
@@ -304,7 +304,7 @@ fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape
     })
 }
 
-fn create_fill_background_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
+fn create_fill_background_pipeline(device: &Device) -> Arc<GraphicPipeline> {
     let vertex_shader = Shader::new_vertex(
         glsl!(
             r#"
@@ -355,7 +355,7 @@ fn create_fill_background_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline>
     )
 }
 
-fn create_prepass_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
+fn create_prepass_pipeline(device: &Device) -> Arc<GraphicPipeline> {
     let vertex_shader = Shader::new_vertex(
         glsl!(
             r#"
@@ -428,7 +428,7 @@ fn create_prepass_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
     )
 }
 
-fn create_pbr_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
+fn create_pbr_pipeline(device: &Device) -> Arc<GraphicPipeline> {
     // See: https://github.com/SaschaWillems/Vulkan/blob/master/data/shaders/glsl/pbrbasic/pbr.vert
     let vertex_shader = Shader::new_vertex(
         glsl!(

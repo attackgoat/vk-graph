@@ -33,7 +33,7 @@ pub struct Egui {
 
 impl Egui {
     /// TODO
-    pub fn new(device: &Arc<Device>, display_target: &dyn HasDisplayHandle) -> Self {
+    pub fn new(device: &Device, display_target: &dyn HasDisplayHandle) -> Self {
         let ppl = Arc::new(
             GraphicPipeline::create(
                 device,

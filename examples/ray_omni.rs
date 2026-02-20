@@ -147,7 +147,7 @@ fn best_2d_optimal_format(
 }
 
 fn create_blas(
-    device: &Arc<Device>,
+    device: &Device,
     models: &[&Model],
 ) -> Result<Arc<AccelerationStructure>, DriverError> {
     let info = AccelerationStructureGeometryInfo::blas(
@@ -226,7 +226,7 @@ fn create_blas(
     Ok(blas)
 }
 
-fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     let vert = glsl!(
         r#"
         #version 460 core
@@ -314,7 +314,7 @@ fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverE
 }
 
 fn create_tlas(
-    device: &Arc<Device>,
+    device: &Device,
     pool: &mut LazyPool,
     render_graph: &mut Graph,
     blas: &Arc<AccelerationStructure>,
@@ -418,7 +418,7 @@ fn download_model_from_github(model_name: &str) -> anyhow::Result<PathBuf> {
     Ok(model_path)
 }
 
-fn load_ground_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
+fn load_ground_mesh(device: &Device) -> Result<Model, DriverError> {
     let extent = 100f32;
     let v0 = [-extent, 0.0, -extent];
     let v1 = [extent, 0.0, -extent];
@@ -450,7 +450,7 @@ fn load_ground_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
 }
 
 fn load_model<T>(
-    device: &Arc<Device>,
+    device: &Device,
     path: impl AsRef<Path>,
     face_fn: fn(a: Vec3, b: Vec3, c: Vec3) -> [T; 3],
 ) -> anyhow::Result<Model>
@@ -525,7 +525,7 @@ where
 }
 
 /// Loads an .obj model as indexed position and normal vertices
-fn load_model_mesh(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Model> {
+fn load_model_mesh(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> {
     #[repr(C)]
     #[derive(Clone, Copy, Default, Pod, Zeroable)]
     struct Vertex {

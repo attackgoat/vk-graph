@@ -8,7 +8,7 @@ pub use self::frame::FrameContext;
 
 use {
     log::{error, info, trace, warn},
-    std::{error, fmt, sync::Arc},
+    std::{error, fmt},
     vk_graph::{
         display::{Display, DisplayError, DisplayInfoBuilder},
         driver::{
@@ -47,7 +47,7 @@ pub struct Window {
     data: WindowData,
 
     /// TODO
-    pub device: Arc<Device>,
+    pub device: Device,
 
     event_loop: EventLoop<()>,
 }
@@ -71,7 +71,7 @@ impl Window {
         struct Application<F> {
             active_window: Option<ActiveWindow>,
             data: WindowData,
-            device: Arc<Device>,
+            device: Device,
             draw_fn: F,
             error: Option<WindowError>,
             primary_monitor: Option<MonitorHandle>,
@@ -322,7 +322,7 @@ impl Window {
         impl ActiveWindow {
             fn draw(
                 &mut self,
-                device: &Arc<Device>,
+                device: &Device,
                 mut f: impl FnMut(FrameContext),
             ) -> Result<bool, DisplayError> {
                 if let Some((width, height)) = self.display_resize.take() {
@@ -426,7 +426,7 @@ impl WindowBuilder {
     /// TODO
     pub fn build(self) -> Result<Window, WindowError> {
         let event_loop = EventLoop::new()?;
-        let device = Arc::new(Device::from_display(&event_loop, self.device_info)?);
+        let device = Device::from_display(&event_loop, self.device_info)?;
 
         Ok(Window {
             data: WindowData {

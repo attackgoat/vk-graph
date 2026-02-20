@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
 
     for thread_index in 0..thread_count {
         let running = Arc::clone(&running);
-        let device = Arc::clone(&window.device);
+        let device = window.device.clone();
         let tx = tx.clone();
         threads.push(spawn(move || {
             let queue_index = thread_index;
@@ -215,7 +215,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_font(device: &Arc<Device>) -> anyhow::Result<BitmapFont> {
+fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
     // Load the font definition file using the bmfont crate
     let font = BMFont::new(
         Cursor::new(include_bytes!("res/font/small/small_10px.fnt")),

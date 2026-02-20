@@ -3,7 +3,7 @@ use {
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{error, trace, warn},
-    std::{fmt::Debug, slice, sync::Arc, thread::panicking},
+    std::{fmt::Debug, slice, thread::panicking},
 };
 
 // TODO: Expose command functions so the fence, device, waiting flags do not
@@ -17,7 +17,7 @@ pub struct CommandBuffer {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     droppables: Vec<Box<dyn Debug + Send + 'static>>,
     pub(crate) fence: vk::Fence, // Keeps state because everyone wants this
@@ -38,11 +38,8 @@ pub struct CommandBuffer {
 
 impl CommandBuffer {
     #[profiling::function]
-    pub(crate) fn create(
-        device: &Arc<Device>,
-        info: CommandBufferInfo,
-    ) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
+    pub(crate) fn create(device: &Device, info: CommandBufferInfo) -> Result<Self, DriverError> {
+        let device = device.clone();
 
         let pool = unsafe {
             device.create_command_pool(

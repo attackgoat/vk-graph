@@ -18,7 +18,7 @@ use {
 /// TODO
 #[derive(Debug)]
 pub struct HotComputePipeline {
-    device: Arc<Device>,
+    device: Device,
     has_changes: Arc<AtomicBool>,
     instance: Arc<ComputePipeline>,
     shader: HotShader,
@@ -28,7 +28,7 @@ pub struct HotComputePipeline {
 impl HotComputePipeline {
     /// TODO
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<ComputePipelineInfo>,
         shader: impl Into<HotShader>,
     ) -> Result<Self, DriverError> {
@@ -39,7 +39,7 @@ impl HotComputePipeline {
 
         let instance = Arc::new(ComputePipeline::create(device, info, compiled_shader)?);
 
-        let device = Arc::clone(device);
+        let device = device.clone();
 
         Ok(Self {
             device,

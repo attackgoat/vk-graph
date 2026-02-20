@@ -298,7 +298,7 @@ fn load_cube_data() -> [CubeVertex; 36] {
 }
 
 /// Loads a cube as unindexed position, normal and color vertices
-fn load_cube_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
+fn load_cube_mesh(device: &Device) -> Result<Model, DriverError> {
     let vertices = load_cube_data();
 
     let vertex_buf = Arc::new(Buffer::create_from_slice(
@@ -314,7 +314,7 @@ fn load_cube_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
 }
 
 fn create_mesh_pipeline(
-    device: &Arc<Device>,
+    device: &Device,
     sample_count: SampleCount,
 ) -> Result<Arc<GraphicPipeline>, DriverError> {
     let vert = glsl!(

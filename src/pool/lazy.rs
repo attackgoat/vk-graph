@@ -76,7 +76,7 @@ pub struct LazyPool {
     buffer_cache: HashMap<(bool, vk::DeviceSize), Cache<Buffer>>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: Cache<DescriptorPool>,
-    device: Arc<Device>,
+    device: Device,
     image_cache: HashMap<ImageKey, Cache<Image>>,
     info: PoolInfo,
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
@@ -84,14 +84,14 @@ pub struct LazyPool {
 
 impl LazyPool {
     /// Constructs a new `LazyPool`.
-    pub fn new(device: &Arc<Device>) -> Self {
+    pub fn new(device: &Device) -> Self {
         Self::with_capacity(device, PoolInfo::default())
     }
 
     /// Constructs a new `LazyPool` with the given capacity information.
-    pub fn with_capacity(device: &Arc<Device>, info: impl Into<PoolInfo>) -> Self {
+    pub fn with_capacity(device: &Device, info: impl Into<PoolInfo>) -> Self {
         let info: PoolInfo = info.into();
-        let device = Arc::clone(device);
+        let device = device.clone();
 
         Self {
             accel_struct_cache: Default::default(),

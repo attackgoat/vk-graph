@@ -25,7 +25,7 @@ fn vk_cstr_to_string_lossy(cstr: &[c_char]) -> String {
 /// See
 /// [`VkPhysicalDeviceAccelerationStructurePropertiesKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceAccelerationStructurePropertiesKHR.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct AccelerationStructureProperties {
     /// The maximum number of geometries in a bottom level acceleration structure.
     pub max_geometry_count: u64,
@@ -79,7 +79,7 @@ impl From<vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'_>>
 /// See
 /// [`VkPhysicalDeviceDepthStencilResolveProperties`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceDepthStencilResolveProperties.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct DepthStencilResolveProperties {
     /// A bitmask indicating the set of supported depth resolve modes.
     ///
@@ -123,7 +123,7 @@ impl From<vk::PhysicalDeviceDepthStencilResolveProperties<'_>> for DepthStencilR
 /// See
 /// [`VkPhysicalDeviceIndexTypeUint8FeaturesEXT`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceIndexTypeUint8FeaturesEXT.html)
 /// manual page.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct IndexTypeUint8Features {
     /// Indicates that VK_INDEX_TYPE_UINT8_EXT can be used with vkCmdBindIndexBuffer2KHR and
     /// vkCmdBindIndexBuffer.
@@ -139,6 +139,7 @@ impl From<vk::PhysicalDeviceIndexTypeUint8FeaturesEXT<'_>> for IndexTypeUint8Fea
 }
 
 /// Structure which holds data about the physical hardware selected by the current device.
+#[derive(Clone)]
 #[readonly::make]
 pub struct PhysicalDevice {
     /// Describes the properties of the device which relate to acceleration structures, if
@@ -559,7 +560,7 @@ impl Debug for PhysicalDevice {
 /// See
 /// [`VkPhysicalDeviceRayQueryFeaturesKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceRayQueryFeaturesKHR.html)
 /// manual page.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RayQueryFeatures {
     /// Indicates whether the implementation supports ray query (`OpRayQueryProceedKHR`)
     /// functionality.
@@ -579,7 +580,7 @@ impl From<vk::PhysicalDeviceRayQueryFeaturesKHR<'_>> for RayQueryFeatures {
 /// See
 /// [`VkPhysicalDeviceRayTracingPipelineFeaturesKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceRayTracingPipelineFeaturesKHR.html)
 /// manual page.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RayTraceFeatures {
     /// Indicates whether the implementation supports the ray tracing pipeline functionality.
     ///
@@ -629,7 +630,7 @@ impl From<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>> for RayTraceFeatu
 /// See
 /// [`VkPhysicalDeviceRayTracingPipelinePropertiesKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceRayTracingPipelinePropertiesKHR.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RayTraceProperties {
     /// The size in bytes of the shader header.
     pub shader_group_handle_size: u32,
@@ -679,7 +680,7 @@ impl From<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>> for RayTracePro
 ///
 /// See
 /// [`VkPhysicalDeviceSamplerFilterMinmaxProperties`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT.html)
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct SamplerFilterMinmaxProperties {
     /// When `false` the component mapping of the image view used with min/max filtering must have
     /// been created with the r component set to the identity swizzle. Only the r component of the
@@ -725,7 +726,7 @@ impl From<vk::PhysicalDeviceSamplerFilterMinmaxProperties<'_>> for SamplerFilter
 /// See
 /// [`VkPhysicalDeviceFeatures`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceFeatures.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan10Features {
     /// Specifies that accesses to buffers are bounds-checked against the range of the buffer
     /// descriptor.
@@ -1289,7 +1290,7 @@ impl From<vk::PhysicalDeviceFeatures> for Vulkan10Features {
 /// [`VkPhysicalDeviceLimits`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceLimits.html)
 /// manual page.
 #[allow(missing_docs)] // TODO: Finish docs!
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan10Limits {
     /// The largest dimension (width) that is guaranteed to be supported for all images created with
     /// an image type of [`ImageType::Texture1D`](super::image::ImageType).
@@ -1568,7 +1569,7 @@ impl From<vk::PhysicalDeviceLimits> for Vulkan10Limits {
 /// See
 /// [`VkPhysicalDeviceProperties`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceProperties.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Vulkan10Properties {
     /// The version of Vulkan supported by the device, encoded as described
     /// [here](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#extendingvulkan-coreversions-versionnumbers).
@@ -1626,7 +1627,7 @@ impl From<vk::PhysicalDeviceProperties> for Vulkan10Properties {
 /// See
 /// [`VkPhysicalDeviceVulkan11Features`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan11Features.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan11Features {
     /// Specifies whether objects in the StorageBuffer, ShaderRecordBufferKHR, or
     /// PhysicalStorageBuffer storage class with the Block decoration can have 16-bit integer and
@@ -1735,7 +1736,7 @@ impl From<vk::PhysicalDeviceVulkan11Features<'_>> for Vulkan11Features {
 /// See
 /// [`VkPhysicalDeviceVulkan11Properties`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan11Properties.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan11Properties {
     /// An array of `VK_UUID_SIZE` `u8` values representing a universally unique identifier for
     /// the device
@@ -1844,7 +1845,7 @@ impl From<vk::PhysicalDeviceVulkan11Properties<'_>> for Vulkan11Properties {
 /// See
 /// [`VkPhysicalDeviceVulkan12Features`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan12Features.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan12Features {
     /// Indicates whether the implementation supports the
     /// `VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE` sampler address mode.
@@ -2280,7 +2281,7 @@ impl From<vk::PhysicalDeviceVulkan12Features<'_>> for Vulkan12Features {
 /// See
 /// [`VkPhysicalDeviceVulkan12Properties`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan12Properties.html)
 /// manual page.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Vulkan12Properties {
     /// A unique identifier for the driver of the physical device.
     pub driver_id: vk::DriverId,

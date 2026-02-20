@@ -41,12 +41,12 @@ pub struct ImageLoader {
     decode_rgb_rgba: Arc<ComputePipeline>,
 
     /// TODO
-    pub device: Arc<Device>,
+    pub device: Device,
 }
 
 impl ImageLoader {
     /// TODO
-    pub fn new(device: &Arc<Device>) -> Result<Self, DriverError> {
+    pub fn new(device: &Device) -> Result<Self, DriverError> {
         Ok(Self {
             pool: HashPool::new(device),
             _decode_r_rg: Arc::new(ComputePipeline::create(
@@ -63,7 +63,7 @@ impl ImageLoader {
                     include_glsl!("res/shader/compute/decode_bitmap_rgb_rgba.comp").as_slice(),
                 ),
             )?),
-            device: Arc::clone(device),
+            device: device.clone(),
         })
     }
 

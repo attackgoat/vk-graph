@@ -385,15 +385,15 @@ impl Transition {
 /// TODO
 pub struct TransitionPipeline {
     cache: HashPool,
-    device: Arc<Device>,
+    device: Device,
     pipelines: HashMap<TransitionType, Arc<ComputePipeline>>,
 }
 
 impl TransitionPipeline {
     /// TODO
-    pub fn new(device: &Arc<Device>) -> Self {
+    pub fn new(device: &Device) -> Self {
         let cache = HashPool::new(device);
-        let device = Arc::clone(device);
+        let device = device.clone();
         let pipelines = Default::default();
 
         Self {

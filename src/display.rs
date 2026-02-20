@@ -22,7 +22,6 @@ use {
         fmt::{Debug, Formatter},
         ops::Deref,
         slice,
-        sync::Arc,
         thread::panicking,
         time::Instant,
     },
@@ -66,7 +65,7 @@ pub struct DisplayRef {
 impl Display {
     /// Constructs a new `Display` object.
     pub fn new(
-        device: &Arc<Device>,
+        device: &Device,
         swapchain: Swapchain,
         info: impl Into<DisplayInfo>,
     ) -> Result<Self, DriverError> {

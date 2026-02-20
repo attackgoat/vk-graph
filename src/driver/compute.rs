@@ -9,7 +9,7 @@ use {
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{trace, warn},
-    std::{ffi::CString, slice, sync::Arc, thread::panicking},
+    std::{ffi::CString, slice, thread::panicking},
 };
 
 /// Smart pointer handle to a [pipeline] object.
@@ -33,7 +33,7 @@ pub struct ComputePipeline {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     pub(crate) layout: vk::PipelineLayout,
 
@@ -83,13 +83,13 @@ impl ComputePipeline {
     /// ```
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<ComputePipelineInfo>,
         shader: impl Into<Shader>,
     ) -> Result<Self, DriverError> {
         trace!("create");
 
-        let device = Arc::clone(device);
+        let device = device.clone();
         let info: ComputePipelineInfo = info.into();
         let shader = shader.into();
 
@@ -156,7 +156,7 @@ impl ComputePipeline {
                 .layout(layout);
             let handle = device
                 .create_compute_pipelines(
-                    device.pipeline_cache,
+                    Device::pipeline_cache(&device),
                     slice::from_ref(&create_info),
                     None,
                 )

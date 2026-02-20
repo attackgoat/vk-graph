@@ -147,10 +147,7 @@ fn main() -> Result<(), WindowError> {
     })
 }
 
-fn create_pipeline(
-    device: &Arc<Device>,
-    pak: &mut PakBuf,
-) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_pipeline(device: &Device, pak: &mut PakBuf) -> Result<Arc<GraphicPipeline>, DriverError> {
     let vert_spirv = pak.read_blob("shader/animated_mesh_vert.spirv").unwrap();
     let frag_spirv = pak.read_blob("shader/mesh_frag.spirv").unwrap();
 
@@ -164,11 +161,7 @@ fn create_pipeline(
     )?))
 }
 
-fn load_texture(
-    device: &Arc<Device>,
-    pak: &mut PakBuf,
-    key: &str,
-) -> Result<Arc<Image>, DriverError> {
+fn load_texture(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Arc<Image>, DriverError> {
     let bitmap = pak.read_bitmap(key).unwrap();
 
     assert_eq!(bitmap.format(), BitmapFormat::Rgba);
@@ -386,7 +379,7 @@ struct Model {
 }
 
 impl Model {
-    fn load(device: &Arc<Device>, pak: &mut PakBuf, key: &str) -> Result<Self, DriverError> {
+    fn load(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Self, DriverError> {
         let model = pak.read_model(key).unwrap();
 
         // This obviously makes some assumptions about the input model!

@@ -109,7 +109,7 @@ pub(crate) struct RenderPass {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     framebuffers: HashMap<FramebufferInfo, vk::Framebuffer>,
     graphic_pipelines: HashMap<GraphicPipelineKey, vk::Pipeline>,
@@ -129,11 +129,11 @@ pub(crate) struct RenderPass {
 
 impl RenderPass {
     #[profiling::function]
-    pub fn create(device: &Arc<Device>, info: RenderPassInfo) -> Result<Self, DriverError> {
+    pub fn create(device: &Device, info: RenderPassInfo) -> Result<Self, DriverError> {
         //trace!("create: \n{:#?}", &info);
         trace!("create");
 
-        let device = Arc::clone(device);
+        let device = device.clone();
         let attachments = info
             .attachments
             .iter()
@@ -429,7 +429,7 @@ impl RenderPass {
 
         let pipeline = unsafe {
             self.device.create_graphics_pipelines(
-                self.device.pipeline_cache,
+                Device::pipeline_cache(&self.device),
                 slice::from_ref(&create_info),
                 None,
             )

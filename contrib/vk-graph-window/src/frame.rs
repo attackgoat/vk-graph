@@ -1,5 +1,4 @@
 use {
-    std::sync::Arc,
     vk_graph::{driver::device::Device, node::SwapchainImageNode, Graph},
     winit::{dpi::PhysicalPosition, event::Event, window::Window},
 };
@@ -21,7 +20,7 @@ pub fn set_cursor_position(window: &Window, x: u32, y: u32) {
 /// A request to render a single frame to the provided render graph.
 pub struct FrameContext<'a> {
     /// The device this frame belongs to.
-    pub device: &'a Arc<Device>,
+    pub device: &'a Device,
 
     /// A slice of events that have occurred since the previous frame.
     pub events: &'a [Event<()>],

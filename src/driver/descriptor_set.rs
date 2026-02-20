@@ -2,7 +2,7 @@ use {
     super::{DescriptorSetLayout, DriverError, device::Device},
     ash::vk,
     log::warn,
-    std::{ops::Deref, slice, sync::Arc, thread::panicking},
+    std::{ops::Deref, slice, thread::panicking},
 };
 
 #[derive(Debug)]
@@ -12,7 +12,7 @@ pub struct DescriptorPool {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     /// The native Vulkan resource handle of this descriptor pool.
     ///
@@ -30,10 +30,10 @@ pub struct DescriptorPool {
 impl DescriptorPool {
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<DescriptorPoolInfo>,
     ) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
+        let device = device.clone();
         let info = info.into();
 
         let mut pool_sizes = [vk::DescriptorPoolSize {
@@ -200,7 +200,7 @@ impl DescriptorPool {
                 .map(move |descriptor_set| DescriptorSet {
                     descriptor_pool: self.handle,
                     descriptor_set,
-                    device: Arc::clone(&self.device),
+                    device: self.device.clone(),
                 })
         })
     }
@@ -258,7 +258,7 @@ impl DescriptorPoolInfo {
 pub struct DescriptorSet {
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
-    device: Arc<Device>,
+    device: Device,
 }
 
 impl Deref for DescriptorSet {

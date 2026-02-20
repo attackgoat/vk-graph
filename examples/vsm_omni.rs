@@ -448,7 +448,7 @@ fn best_2d_optimal_format(
     panic!("Unsupported format");
 }
 
-fn create_blur_x_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, DriverError> {
+fn create_blur_x_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, DriverError> {
     let comp = glsl!(
         r#"
         #version 450 core
@@ -571,7 +571,7 @@ fn create_blur_x_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
     )?))
 }
 
-fn create_blur_y_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, DriverError> {
+fn create_blur_y_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, DriverError> {
     let comp = glsl!(
         r#"
         #version 450 core
@@ -694,7 +694,7 @@ fn create_blur_y_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
     )?))
 }
 
-fn create_debug_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_debug_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -770,7 +770,7 @@ fn create_debug_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, D
     )?))
 }
 
-fn create_mesh_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_mesh_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -889,7 +889,7 @@ fn create_mesh_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, Dr
     )?))
 }
 
-fn create_shadow_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_shadow_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -959,7 +959,7 @@ fn create_shadow_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, 
 }
 
 fn create_shadow_pipeline_with_geometry_shader(
-    device: &Arc<Device>,
+    device: &Device,
 ) -> Result<Arc<GraphicPipeline>, DriverError> {
     let vert = glsl!(
         r#"
@@ -1275,7 +1275,7 @@ fn load_cube_data() -> [[f32; 6]; 36] {
 }
 
 /// Loads a cube as indexed position and normal vertices
-fn load_cube_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
+fn load_cube_mesh(device: &Device) -> Result<Model, DriverError> {
     let vertices = load_cube_data();
     let indices = (0u32..vertices.len() as u32).collect::<Vec<_>>();
 
@@ -1298,7 +1298,7 @@ fn load_cube_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
 }
 
 /// Loads a cube as indexed position vertices
-fn load_cube_shadow(device: &Arc<Device>) -> Result<Model, DriverError> {
+fn load_cube_shadow(device: &Device) -> Result<Model, DriverError> {
     let vertices = load_cube_data()
         .iter()
         .map(|vertex| [vertex[0], vertex[1], vertex[2]])
@@ -1324,7 +1324,7 @@ fn load_cube_shadow(device: &Arc<Device>) -> Result<Model, DriverError> {
 }
 
 fn load_model<T>(
-    device: &Arc<Device>,
+    device: &Device,
     path: impl AsRef<Path>,
     face_fn: fn(a: Vec3, b: Vec3, c: Vec3) -> [T; 3],
 ) -> anyhow::Result<Model>
@@ -1394,7 +1394,7 @@ where
 }
 
 /// Loads an .obj model as indexed position and normal vertices
-fn load_model_mesh(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Model> {
+fn load_model_mesh(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> {
     #[repr(C)]
     #[derive(Clone, Copy, Default, NoUninit)]
     struct Vertex {
@@ -1431,7 +1431,7 @@ fn load_model_mesh(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Resu
 }
 
 /// Loads an .obj model as indexed position vertices
-fn load_model_shadow(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Model> {
+fn load_model_shadow(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> {
     #[repr(C)]
     #[derive(Clone, Copy, Default, NoUninit)]
     struct Vertex {

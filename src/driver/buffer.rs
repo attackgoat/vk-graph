@@ -14,7 +14,6 @@ use {
         fmt::{Debug, Formatter},
         mem::ManuallyDrop,
         ops::{DerefMut, Range},
-        sync::Arc,
         thread::panicking,
     },
     vk_sync::AccessType,
@@ -63,7 +62,7 @@ pub struct Buffer {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub device: Arc<Device>,
+    pub device: Device,
 
     /// The native Vulkan resource handle of this buffer.
     ///
@@ -105,14 +104,14 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn create(device: &Arc<Device>, info: impl Into<BufferInfo>) -> Result<Self, DriverError> {
+    pub fn create(device: &Device, info: impl Into<BufferInfo>) -> Result<Self, DriverError> {
         let info = info.into();
 
         trace!("create: {:?}", info);
 
         debug_assert_ne!(info.size, 0, "Size must be non-zero");
 
-        let device = Arc::clone(device);
+        let device = device.clone();
         let buffer_info = vk::BufferCreateInfo::default()
             .size(info.size)
             .usage(info.usage)
@@ -144,7 +143,7 @@ impl Buffer {
             profiling::scope!("allocate");
 
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = device.allocator.lock();
+            let mut allocator = Device::allocator(&device).lock();
 
             #[cfg(not(feature = "parking_lot"))]
             let mut allocator = allocator.unwrap();
@@ -223,7 +222,7 @@ impl Buffer {
     /// ```
     #[profiling::function]
     pub fn create_from_slice(
-        device: &Arc<Device>,
+        device: &Device,
         usage: vk::BufferUsageFlags,
         slice: impl AsRef<[u8]>,
     ) -> Result<Self, DriverError> {
@@ -474,7 +473,7 @@ impl Drop for Buffer {
             profiling::scope!("deallocate");
 
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = self.device.allocator.lock();
+            let mut allocator = Device::allocator(&self.device).lock();
 
             #[cfg(not(feature = "parking_lot"))]
             let mut allocator = allocator.unwrap();

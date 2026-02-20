@@ -561,7 +561,7 @@ fn device_queue_family_index(device: &Device, flags: vk::QueueFlags) -> Option<u
 /// Loads a .obj model from disk, reading position, normal and UV data.
 ///
 /// Tangent (and bitangent) data is calculated and the whole thing is re-indexed using meshopt.
-fn load_model(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Model> {
+fn load_model(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> {
     trace!("Loading model {}", path.as_ref().display());
 
     let (mut models, _) = load_obj(path.as_ref(), &GPU_LOAD_OPTIONS)?;
@@ -722,7 +722,7 @@ fn load_model(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Mo
 
 /// Loads a texture from disk and returns the image after waiting for GPU operations to complete.
 fn load_texture(
-    device: &Arc<Device>,
+    device: &Device,
     path: impl AsRef<Path>,
     fmt: vk::Format,
 ) -> anyhow::Result<Arc<Image>> {

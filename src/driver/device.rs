@@ -20,6 +20,7 @@ use {
         mem::{ManuallyDrop, forget},
         ops::Deref,
         slice,
+        sync::Arc,
         thread::panicking,
         time::Instant,
     },
@@ -89,14 +90,11 @@ fn select_physical_device(
 }
 
 /// Opaque handle to a device object.
+#[derive(Clone)]
 #[repr(C)]
 pub struct Device {
     accel_struct_ext: Option<khr::acceleration_structure::Device>,
-
-    pub(super) allocator: ManuallyDrop<Mutex<Allocator>>,
-
-    device: ash::Device,
-    pub(crate) pipeline_cache: vk::PipelineCache,
+    inner: Arc<DeviceInner>,
 
     /// The physical device, which contains useful data about features, properties, and limits.
     ///
@@ -128,6 +126,10 @@ impl Device {
         let physical_device = select_physical_device(&instance, physical_device_index)?;
 
         Self::from_physical_device(physical_device)
+    }
+
+    pub(crate) fn allocator(this: &Self) -> &Mutex<Allocator> {
+        &this.inner.allocator
     }
 
     pub(crate) fn create_fence(this: &Self, signaled: bool) -> Result<vk::Fence, DriverError> {
@@ -264,9 +266,11 @@ impl Device {
 
         Ok(Self {
             accel_struct_ext,
-            allocator: ManuallyDrop::new(Mutex::new(allocator)),
-            device,
-            pipeline_cache,
+            inner: Arc::new(DeviceInner {
+                allocator: ManuallyDrop::new(Mutex::new(allocator)),
+                device,
+                pipeline_cache,
+            }),
             physical_device,
             queues: queues.into_boxed_slice(),
             ray_trace_ext,
@@ -328,6 +332,10 @@ impl Device {
         Self::from_ash_device(device, physical_device)
     }
 
+    pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
+        this.inner.pipeline_cache
+    }
+
     #[profiling::function]
     pub(crate) fn wait_for_fence(this: &Self, fence: &vk::Fence) -> Result<(), DriverError> {
         Device::wait_for_fences(this, slice::from_ref(fence))
@@ -336,7 +344,7 @@ impl Device {
     #[profiling::function]
     pub(crate) fn wait_for_fences(this: &Self, fences: &[vk::Fence]) -> Result<(), DriverError> {
         unsafe {
-            match this.device.wait_for_fences(fences, true, 100) {
+            match this.wait_for_fences(fences, true, 100) {
                 Ok(_) => return Ok(()),
                 Err(err) if err == vk::Result::ERROR_DEVICE_LOST => {
                     error!("Device lost");
@@ -351,7 +359,7 @@ impl Device {
 
             let started = Instant::now();
 
-            match this.device.wait_for_fences(fences, true, u64::MAX) {
+            match this.wait_for_fences(fences, true, u64::MAX) {
                 Ok(_) => (),
                 Err(err) if err == vk::Result::ERROR_DEVICE_LOST => {
                     error!("Device lost");
@@ -385,37 +393,6 @@ impl Deref for Device {
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*(self as *const Self as *const Self::Target) }
-    }
-}
-
-impl Drop for Device {
-    #[profiling::function]
-    fn drop(&mut self) {
-        if panicking() {
-            // When panicking we don't want the GPU allocator to complain about leaks
-            unsafe {
-                forget(ManuallyDrop::take(&mut self.allocator));
-            }
-
-            return;
-        }
-
-        // trace!("drop");
-
-        if let Err(err) = unsafe { self.device.device_wait_idle() } {
-            warn!("device_wait_idle() failed: {err}");
-        }
-
-        unsafe {
-            self.device
-                .destroy_pipeline_cache(self.pipeline_cache, None);
-
-            ManuallyDrop::drop(&mut self.allocator);
-        }
-
-        unsafe {
-            self.device.destroy_device(None);
-        }
     }
 }
 
@@ -528,13 +505,48 @@ impl DeviceInfoBuilder {
     }
 }
 
+struct DeviceInner {
+    allocator: ManuallyDrop<Mutex<Allocator>>,
+    device: ash::Device,
+    pipeline_cache: vk::PipelineCache,
+}
+
+impl Drop for DeviceInner {
+    #[profiling::function]
+    fn drop(&mut self) {
+        if panicking() {
+            // When panicking we don't want the GPU allocator to complain about leaks
+            unsafe {
+                forget(ManuallyDrop::take(&mut self.allocator));
+            }
+
+            return;
+        }
+
+        // trace!("drop");
+
+        if let Err(err) = unsafe { self.device.device_wait_idle() } {
+            warn!("device_wait_idle() failed: {err}");
+        }
+
+        unsafe {
+            self.device
+                .destroy_pipeline_cache(self.pipeline_cache, None);
+
+            ManuallyDrop::drop(&mut self.allocator);
+        }
+
+        unsafe {
+            self.device.destroy_device(None);
+        }
+    }
+}
+
 #[doc(hidden)]
 #[repr(C)]
 pub struct ReadOnlyDevice {
     accel_struct_ext: Option<khr::acceleration_structure::Device>,
-    pub(super) allocator: ManuallyDrop<Mutex<Allocator>>,
-    device: ash::Device,
-    pipeline_cache: vk::PipelineCache,
+    inner: Arc<DeviceInner>,
     pub physical_device: PhysicalDevice,
     pub(crate) queues: Box<[Box<[vk::Queue]>]>,
     ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
@@ -546,7 +558,7 @@ impl Deref for ReadOnlyDevice {
     type Target = ash::Device;
 
     fn deref(&self) -> &Self::Target {
-        &self.device
+        &self.inner.device
     }
 }
 
@@ -565,18 +577,7 @@ mod tests {
             offset_of!(Device, accel_struct_ext),
             offset_of!(ReadOnlyDevice, accel_struct_ext),
         );
-        assert_eq!(
-            offset_of!(Device, allocator),
-            offset_of!(ReadOnlyDevice, allocator),
-        );
-        assert_eq!(
-            offset_of!(Device, device),
-            offset_of!(ReadOnlyDevice, device),
-        );
-        assert_eq!(
-            offset_of!(Device, pipeline_cache),
-            offset_of!(ReadOnlyDevice, pipeline_cache),
-        );
+        assert_eq!(offset_of!(Device, inner), offset_of!(ReadOnlyDevice, inner),);
         assert_eq!(
             offset_of!(Device, physical_device),
             offset_of!(ReadOnlyDevice, physical_device),

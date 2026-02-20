@@ -46,7 +46,7 @@ pub struct FifoPool {
     buffer_cache: Cache<Buffer>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: Cache<DescriptorPool>,
-    device: Arc<Device>,
+    device: Device,
     image_cache: Cache<Image>,
     info: PoolInfo,
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
@@ -54,14 +54,14 @@ pub struct FifoPool {
 
 impl FifoPool {
     /// Constructs a new `FifoPool`.
-    pub fn new(device: &Arc<Device>) -> Self {
+    pub fn new(device: &Device) -> Self {
         Self::with_capacity(device, PoolInfo::default())
     }
 
     /// Constructs a new `FifoPool` with the given capacity information.
-    pub fn with_capacity(device: &Arc<Device>, info: impl Into<PoolInfo>) -> Self {
+    pub fn with_capacity(device: &Device, info: impl Into<PoolInfo>) -> Self {
         let info: PoolInfo = info.into();
-        let device = Arc::clone(device);
+        let device = device.clone();
 
         Self {
             accel_struct_cache: PoolInfo::explicit_cache(info.accel_struct_capacity),

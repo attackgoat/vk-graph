@@ -6,7 +6,6 @@ use {
         fmt::{Debug, Formatter},
         mem::transmute,
         ops::Deref,
-        sync::Arc,
     },
     vk_graph::driver::{
         ash::{
@@ -19,7 +18,7 @@ use {
 };
 
 pub struct XrInstance {
-    device: Arc<Device>,
+    device: Device,
     event_buf: xr::EventDataBuffer,
     instance: xr::Instance,
     system: xr::SystemId,
@@ -202,13 +201,11 @@ impl XrInstance {
 
                     InstanceCreateError::VulkanUnsupported
                 })?;
-            let device = Arc::new(
-                Device::from_ash_device(ash_device, physical_device).map_err(|err| {
-                    error!("Vulkan device: {err}");
+            let device = Device::from_ash_device(ash_device, physical_device).map_err(|err| {
+                error!("Vulkan device: {err}");
 
-                    InstanceCreateError::VulkanUnsupported
-                })?,
-            );
+                InstanceCreateError::VulkanUnsupported
+            })?;
             let event_buf = xr::EventDataBuffer::new();
 
             Ok(Self {
@@ -244,7 +241,7 @@ impl XrInstance {
         }
     }
 
-    pub fn device(this: &Self) -> &Arc<Device> {
+    pub fn device(this: &Self) -> &Device {
         &this.device
     }
 

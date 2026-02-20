@@ -11,7 +11,7 @@ pub struct ComputePresenter([Arc<ComputePipeline>; 2]);
 
 impl ComputePresenter {
     /// TODO
-    pub fn new(device: &Arc<Device>) -> Result<Self, DriverError> {
+    pub fn new(device: &Device) -> Result<Self, DriverError> {
         let pipeline1 = Arc::new(ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
@@ -86,7 +86,7 @@ pub struct GraphicPresenter {
 
 impl GraphicPresenter {
     /// TODO
-    pub fn new(device: &Arc<Device>) -> Result<Self, DriverError> {
+    pub fn new(device: &Device) -> Result<Self, DriverError> {
         Ok(Self {
             pipeline: Arc::new(GraphicPipeline::create(
                 device,

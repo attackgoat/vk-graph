@@ -76,7 +76,7 @@ static SHADER_MISS: &[u32] = glsl!(
 )
 .as_slice();
 
-fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipeline>, DriverError> {
+fn create_ray_trace_pipeline(device: &Device) -> Result<Arc<RayTracePipeline>, DriverError> {
     Ok(Arc::new(RayTracePipeline::create(
         device,
         RayTracePipelineInfoBuilder::default().max_ray_recursion_depth(1),
