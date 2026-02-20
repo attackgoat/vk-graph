@@ -323,6 +323,36 @@ impl PipelineDescriptorInfo {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum PipelineHandle {
+    Handle(vk::Pipeline),
+}
+
+#[derive(Debug)]
+pub(crate) struct PipelineInner {
+    pub descriptor_info: PipelineDescriptorInfo,
+    pub device: Device,
+    pub handle: PipelineHandle,
+    pub layout: vk::PipelineLayout,
+}
+
+impl Drop for PipelineInner {
+    #[profiling::function]
+    fn drop(&mut self) {
+        if panicking() {
+            return;
+        }
+
+        unsafe {
+            match self.handle {
+                PipelineHandle::Handle(handle) => self.device.destroy_pipeline(handle, None),
+            }
+
+            self.device.destroy_pipeline_layout(self.layout, None);
+        }
+    }
+}
+
 pub(crate) struct Sampler {
     device: Device,
     sampler: vk::Sampler,

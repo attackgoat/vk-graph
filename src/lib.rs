@@ -117,6 +117,7 @@ let my_image = Image::create(&device, info)?;
 // Note: info is a field provided through the Deref trait and is immutable!
 assert_eq!(8, my_image.info.width);
 # Ok(()) }
+```
 
 ## Pooling
 
@@ -567,9 +568,9 @@ struct ExecutionFunction(ExecFn);
 
 #[derive(Clone, Debug)]
 enum ExecutionPipeline {
-    Compute(Arc<ComputePipeline>),
-    Graphic(Arc<GraphicPipeline>),
-    RayTrace(Arc<RayTracePipeline>),
+    Compute(ComputePipeline),
+    Graphic(GraphicPipeline),
+    RayTrace(RayTracePipeline),
 }
 
 impl ExecutionPipeline {
@@ -599,17 +600,17 @@ impl ExecutionPipeline {
 
     fn descriptor_info(&self) -> &PipelineDescriptorInfo {
         match self {
-            ExecutionPipeline::Compute(pipeline) => &pipeline.descriptor_info,
+            ExecutionPipeline::Compute(pipeline) => pipeline.descriptor_info(),
             ExecutionPipeline::Graphic(pipeline) => &pipeline.descriptor_info,
-            ExecutionPipeline::RayTrace(pipeline) => &pipeline.descriptor_info,
+            ExecutionPipeline::RayTrace(pipeline) => pipeline.descriptor_info(),
         }
     }
 
     fn layout(&self) -> vk::PipelineLayout {
         match self {
-            ExecutionPipeline::Compute(pipeline) => pipeline.layout,
+            ExecutionPipeline::Compute(pipeline) => pipeline.layout(),
             ExecutionPipeline::Graphic(pipeline) => pipeline.layout,
-            ExecutionPipeline::RayTrace(pipeline) => pipeline.layout,
+            ExecutionPipeline::RayTrace(pipeline) => pipeline.layout(),
         }
     }
 

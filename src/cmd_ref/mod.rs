@@ -74,7 +74,7 @@ impl Access for RayTracePipeline {
 macro_rules! bind {
     ($name:ident) => {
         paste::paste! {
-            impl<'a> Bind<CommandRef<'a>, PipelineCommandRef<'a, [<$name Pipeline>]>> for &'a Arc<[<$name Pipeline>]> {
+            impl<'a> Bind<CommandRef<'a>, PipelineCommandRef<'a, [<$name Pipeline>]>> for &'a [<$name Pipeline>] {
                 // TODO: Allow binding as explicit secondary command buffers? like with compute/raytrace stuff
                 fn bind(self, mut cmd: CommandRef<'a>) -> PipelineCommandRef<'a, [<$name Pipeline>]> {
                     let cmd_ref = cmd.as_mut();
@@ -83,25 +83,7 @@ macro_rules! bind {
                         cmd_ref.execs.push(Default::default());
                     }
 
-                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(Arc::clone(self)));
-
-                    PipelineCommandRef {
-                        __: PhantomData,
-                        cmd,
-                    }
-                }
-            }
-
-            impl<'a> Bind<CommandRef<'a>, PipelineCommandRef<'a, [<$name Pipeline>]>> for Arc<[<$name Pipeline>]> {
-                // TODO: Allow binding as explicit secondary command buffers? like with compute/raytrace stuff
-                fn bind(self, mut cmd: CommandRef<'a>) -> PipelineCommandRef<'a, [<$name Pipeline>]> {
-                    let cmd_ref = cmd.as_mut();
-                    if cmd_ref.execs.last().unwrap().pipeline.is_some() {
-                        // Binding from PipelinePass -> PipelinePass (changing shaders)
-                        cmd_ref.execs.push(Default::default());
-                    }
-
-                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self));
+                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self.clone()));
 
                     PipelineCommandRef {
                         __: PhantomData,
@@ -119,7 +101,7 @@ macro_rules! bind {
                         cmd_ref.execs.push(Default::default());
                     }
 
-                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(Arc::new(self)));
+                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self));
 
                     PipelineCommandRef {
                         __: PhantomData,
@@ -135,7 +117,7 @@ macro_rules! bind {
                 }
 
                 #[allow(unused)]
-                pub(super) fn [<unwrap_ $name:snake>](&self) -> &Arc<[<$name Pipeline>]> {
+                pub(super) fn [<unwrap_ $name:snake>](&self) -> &[<$name Pipeline>] {
                     if let Self::$name(binding) = self {
                         &binding
                     } else {

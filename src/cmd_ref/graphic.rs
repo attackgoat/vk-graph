@@ -61,7 +61,7 @@ pub struct Graphic<'a> {
     pub(super) bindings: Bindings<'a>,
     pub(super) cmd_buf: vk::CommandBuffer,
     pub(super) device: &'a Device,
-    pub(super) pipeline: Arc<GraphicPipeline>,
+    pub(super) pipeline: GraphicPipeline,
 }
 
 impl Graphic<'_> {
@@ -1529,7 +1529,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         mut self,
         func: impl FnOnce(Graphic<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
-        let pipeline = Arc::clone(
+        let pipeline = 
             self.cmd
                 .as_ref()
                 .execs
@@ -1538,8 +1538,8 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
                 .pipeline
                 .as_ref()
                 .unwrap()
-                .unwrap_graphic(),
-        );
+                .unwrap_graphic().clone()
+        ;
 
         self.cmd.push_execute(move |device, cmd_buf, bindings| {
             func(

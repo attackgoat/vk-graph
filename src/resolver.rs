@@ -634,13 +634,13 @@ impl Resolver {
         if log_enabled!(Trace) {
             let (ty, name, vk_pipeline) = match pipeline {
                 ExecutionPipeline::Compute(pipeline) => {
-                    ("compute", pipeline.name.as_ref(), pipeline.handle)
+                    ("compute", pipeline.name.as_ref(), pipeline.handle())
                 }
                 ExecutionPipeline::Graphic(pipeline) => {
                     ("graphic", pipeline.name.as_ref(), vk::Pipeline::null())
                 }
                 ExecutionPipeline::RayTrace(pipeline) => {
-                    ("ray trace", pipeline.name.as_ref(), pipeline.handle)
+                    ("ray trace", pipeline.name.as_ref(), pipeline.handle())
                 }
             };
             if let Some(name) = name {
@@ -653,14 +653,14 @@ impl Resolver {
         // We store a shared reference to this pipeline inside the command buffer!
         let pipeline_bind_point = pipeline.bind_point();
         let pipeline = match pipeline {
-            ExecutionPipeline::Compute(pipeline) => pipeline.handle,
+            ExecutionPipeline::Compute(pipeline) => pipeline.handle(),
             ExecutionPipeline::Graphic(pipeline) => RenderPass::graphic_pipeline(
                 physical_pass.render_pass.as_mut().unwrap(),
                 pipeline,
                 depth_stencil,
                 exec_idx as _,
             )?,
-            ExecutionPipeline::RayTrace(pipeline) => pipeline.handle,
+            ExecutionPipeline::RayTrace(pipeline) => pipeline.handle(),
         };
 
         unsafe {

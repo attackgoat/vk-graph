@@ -4,12 +4,12 @@ use {
     super::{
         DriverError,
         device::Device,
-        shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
+        shader::{DescriptorBindingMap, PipelineDescriptorInfo, PipelineHandle, PipelineInner, Shader},
     },
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{trace, warn},
-    std::{ffi::CString, slice, thread::panicking},
+    std::{ffi::CString, slice, sync::Arc},
 };
 
 /// Smart pointer handle to a [pipeline] object.
@@ -23,29 +23,16 @@ use {
 ///
 /// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
 /// [deref]: core::ops::Deref
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[readonly::make]
 pub struct ComputePipeline {
     pub(crate) descriptor_bindings: DescriptorBindingMap,
-    pub(crate) descriptor_info: PipelineDescriptorInfo,
-
-    /// The device which owns this buffer resource.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub device: Device,
-
-    pub(crate) layout: vk::PipelineLayout,
-
-    /// The native Vulkan resource handle of this pipeline.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub handle: vk::Pipeline,
 
     /// Information used to create this object.
     #[readonly]
     pub info: ComputePipelineInfo,
+
+    inner: Arc<PipelineInner>,
 
     /// A descriptive name used in debugging messages.
     pub name: Option<String>,
@@ -78,7 +65,7 @@ impl ComputePipeline {
     /// let shader = Shader::new_compute(my_shader_code.as_slice());
     /// let pipeline = ComputePipeline::create(&device, ComputePipelineInfo::default(), shader)?;
     ///
-    /// assert_ne!(pipeline.handle, vk::Pipeline::null());
+    /// assert_ne!(pipeline.handle(), vk::Pipeline::null());
     /// # Ok(()) }
     /// ```
     #[profiling::function]
@@ -89,8 +76,7 @@ impl ComputePipeline {
     ) -> Result<Self, DriverError> {
         trace!("create");
 
-        let device = device.clone();
-        let info: ComputePipelineInfo = info.into();
+        let info = info.into();
         let shader = shader.into();
 
         // Use SPIR-V reflection to get the types and counts of all descriptors
@@ -101,7 +87,7 @@ impl ComputePipeline {
             }
         }
 
-        let descriptor_info = PipelineDescriptorInfo::create(&device, &descriptor_bindings)?;
+        let descriptor_info = PipelineDescriptorInfo::create(device, &descriptor_bindings)?;
         let descriptor_set_layouts = descriptor_info
             .layouts
             .values()
@@ -156,7 +142,7 @@ impl ComputePipeline {
                 .layout(layout);
             let handle = device
                 .create_compute_pipelines(
-                    Device::pipeline_cache(&device),
+                    Device::pipeline_cache(device),
                     slice::from_ref(&create_info),
                     None,
                 )
@@ -172,35 +158,45 @@ impl ComputePipeline {
 
             Ok(ComputePipeline {
                 descriptor_bindings,
-                descriptor_info,
-                device,
-                handle,
                 info,
-                layout,
+                inner: Arc::new(PipelineInner {
+                    descriptor_info,
+                    device: device.clone(),
+                    handle: PipelineHandle::Handle(handle),
+                    layout,
+                }),
                 name: None,
                 push_constants,
             })
         }
     }
 
+    pub(crate) fn descriptor_info(&self) -> &PipelineDescriptorInfo {
+        &self.inner.descriptor_info
+    }
+
+    /// The device which owns this compute pipeline.
+    pub fn device(&self) -> &Device {
+        &self.inner.device
+    }
+
+    /// The native Vulkan pipeline handle of this compute pipeline.
+    pub fn handle(&self) -> vk::Pipeline {
+        let PipelineHandle::Handle(handle) = self.inner.handle else {
+            unreachable!();
+        };
+
+        handle
+    }
+
+    pub(crate) fn layout(&self) -> vk::PipelineLayout {
+        self.inner.layout
+    }
+
     /// Sets the debugging name assigned to this pipeline.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
-    }
-}
-
-impl Drop for ComputePipeline {
-    #[profiling::function]
-    fn drop(&mut self) {
-        if panicking() {
-            return;
-        }
-
-        unsafe {
-            self.device.destroy_pipeline(self.handle, None);
-            self.device.destroy_pipeline_layout(self.layout, None);
-        }
     }
 }
 

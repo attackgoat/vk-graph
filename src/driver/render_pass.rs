@@ -91,7 +91,6 @@ pub(crate) struct FramebufferInfo {
 struct GraphicPipelineKey {
     depth_stencil: Option<DepthStencilMode>,
     layout: vk::PipelineLayout,
-    shader_modules: Vec<vk::ShaderModule>,
     subpass_idx: u32,
 }
 
@@ -330,7 +329,6 @@ impl RenderPass {
         let entry = self.graphic_pipelines.entry(GraphicPipelineKey {
             depth_stencil,
             layout: pipeline.layout,
-            shader_modules: pipeline.shader_modules.clone(),
             subpass_idx,
         });
         if let Entry::Occupied(entry) = entry {
@@ -349,9 +347,8 @@ impl RenderPass {
             .collect::<Box<[_]>>();
         let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
             .attachments(&color_blend_attachment_states);
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
         let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
             .alpha_to_coverage_enable(pipeline.state.multisample.alpha_to_coverage_enable)
             .alpha_to_one_enable(pipeline.state.multisample.alpha_to_one_enable)

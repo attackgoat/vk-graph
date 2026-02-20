@@ -13,7 +13,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
         mut self,
         func: impl FnOnce(RayTrace<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
-        let pipeline = Arc::clone(
+        let pipeline = 
             self.cmd
                 .as_ref()
                 .execs
@@ -22,8 +22,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
                 .pipeline
                 .as_ref()
                 .unwrap()
-                .unwrap_ray_trace(),
-        );
+                .unwrap_ray_trace().clone();
 
         #[cfg(debug_assertions)]
         let dynamic_stack_size = pipeline.info.dynamic_stack_size;
@@ -89,7 +88,7 @@ pub struct RayTrace<'a> {
     #[cfg(debug_assertions)]
     dynamic_stack_size: bool,
 
-    pipeline: Arc<RayTracePipeline>,
+    pipeline: RayTracePipeline,
 }
 
 impl RayTrace<'_> {
@@ -178,7 +177,7 @@ impl RayTrace<'_> {
                 unsafe {
                     self.device.cmd_push_constants(
                         self.cmd_buf,
-                        self.pipeline.layout,
+                        self.pipeline.layout(),
                         push_const.stage_flags,
                         start,
                         &data[(start - offset) as usize..(end - offset) as usize],

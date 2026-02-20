@@ -76,11 +76,7 @@ node_ref!(Arc<Lease<Image>> => ImageLeaseNode);
 macro_rules! pipeline {
     ($name:ident) => {
         paste::paste! {
-            impl<'a> Edge<CommandRef<'a>> for &'a Arc<[<$name Pipeline>]> {
-                type Result = PipelineCommandRef<'a, [<$name Pipeline>]>;
-            }
-
-            impl<'a> Edge<CommandRef<'a>> for Arc<[<$name Pipeline>]> {
+            impl<'a> Edge<CommandRef<'a>> for &'a [<$name Pipeline>] {
                 type Result = PipelineCommandRef<'a, [<$name Pipeline>]>;
             }
 

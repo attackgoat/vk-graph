@@ -45,7 +45,7 @@ pub struct Compute<'a> {
     pub(super) bindings: Bindings<'a>,
     pub(super) cmd_buf: vk::CommandBuffer,
     pub(super) device: &'a Device,
-    pub(super) pipeline: Arc<ComputePipeline>,
+    pub(super) pipeline: ComputePipeline,
 }
 
 impl Compute<'_> {
@@ -302,7 +302,7 @@ impl Compute<'_> {
                 unsafe {
                     self.device.cmd_push_constants(
                         self.cmd_buf,
-                        self.pipeline.layout,
+                        self.pipeline.layout(),
                         vk::ShaderStageFlags::COMPUTE,
                         push_const.offset,
                         &data[(start - offset) as usize..(end - offset) as usize],
@@ -322,7 +322,7 @@ impl PipelineCommandRef<'_, ComputePipeline> {
         mut self,
         func: impl FnOnce(Compute<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
-        let pipeline = Arc::clone(
+        let pipeline = 
             self.cmd
                 .as_ref()
                 .execs
@@ -331,8 +331,7 @@ impl PipelineCommandRef<'_, ComputePipeline> {
                 .pipeline
                 .as_ref()
                 .unwrap()
-                .unwrap_compute(),
-        );
+                .unwrap_compute().clone();
 
         self.cmd.push_execute(move |device, cmd_buf, bindings| {
             func(
