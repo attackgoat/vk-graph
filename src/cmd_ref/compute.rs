@@ -1,5 +1,5 @@
 use {
-    super::{Bindings, pipeline::PipelineCommandRef},
+    super::{Bindings, pipeline::PipelineRef},
     crate::{
         AnyBufferNode,
         driver::{compute::ComputePipeline, device::Device},
@@ -39,14 +39,14 @@ use {
 ///         });
 /// # Ok(()) }
 /// ```
-pub struct Compute<'a> {
+pub struct ComputePipelineRef<'a> {
     pub(super) bindings: Bindings<'a>,
     pub(super) cmd_buf: vk::CommandBuffer,
     pub(super) device: &'a Device,
     pub(super) pipeline: ComputePipeline,
 }
 
-impl Compute<'_> {
+impl ComputePipelineRef<'_> {
     /// [Dispatch] compute work items.
     ///
     /// When the command is executed, a global workgroup consisting of
@@ -311,11 +311,11 @@ impl Compute<'_> {
 }
 
 // NOTE: local implementation of type from super module
-impl PipelineCommandRef<'_, ComputePipeline> {
-    /// Begin recording a computing command buffer.
+impl PipelineRef<'_, ComputePipeline> {
+    /// Begin recording a compute pipeline command buffer.
     pub fn record_pipeline(
         mut self,
-        func: impl FnOnce(Compute<'_>, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(ComputePipelineRef<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -331,7 +331,7 @@ impl PipelineCommandRef<'_, ComputePipeline> {
 
         self.cmd.push_execute(move |device, cmd_buf, bindings| {
             func(
-                Compute {
+                ComputePipelineRef {
                     bindings,
                     cmd_buf,
                     device,

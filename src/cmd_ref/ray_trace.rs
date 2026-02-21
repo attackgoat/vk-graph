@@ -1,16 +1,16 @@
 use {
-    super::{Bindings, PipelineCommandRef},
+    super::{Bindings, PipelineRef},
     crate::driver::{device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
 };
 
 // NOTE: local implementation of type from super module
-impl PipelineCommandRef<'_, RayTracePipeline> {
-    /// Begin recording a ray tracing command buffer.
+impl PipelineRef<'_, RayTracePipeline> {
+    /// Begin recording a ray trace pipeline command buffer.
     pub fn record_pipeline(
         mut self,
-        func: impl FnOnce(RayTrace<'_>, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(RayTracePipelineRef<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -29,7 +29,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
 
         self.cmd.push_execute(move |device, cmd_buf, bindings| {
             func(
-                RayTrace {
+                RayTracePipelineRef {
                     cmd_buf,
                     device,
 
@@ -50,7 +50,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
 ///
 /// This structure provides a strongly-typed set of methods which allow ray trace shader code to be
 /// executed. An instance of `RayTrace` is provided to the closure parameter of
-/// [`PipelineCommandRef::record_pipeline`] which may be accessed by binding a [`RayTracePipeline`] to
+/// [`PipelineRef::record_pipeline`] which may be accessed by binding a [`RayTracePipeline`] to
 /// a render pass.
 ///
 /// # Examples
@@ -80,7 +80,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
 ///         });
 /// # Ok(()) }
 /// ```
-pub struct RayTrace<'a> {
+pub struct RayTracePipelineRef<'a> {
     cmd_buf: vk::CommandBuffer,
     device: &'a Device,
 
@@ -90,7 +90,7 @@ pub struct RayTrace<'a> {
     pipeline: RayTracePipeline,
 }
 
-impl RayTrace<'_> {
+impl RayTracePipelineRef<'_> {
     /// Updates push constants.
     ///
     /// Push constants represent a high speed path to modify constant data in pipelines that is

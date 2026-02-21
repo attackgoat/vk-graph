@@ -3,7 +3,11 @@
 #![warn(missing_docs)]
 
 pub use vk_graph::{
-    Bind, ClearColorValue, CommandRef, Graph, Unbind,
+    Bind, ClearColorValue, Graph, Unbind,
+    cmd_ref::{
+        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
+        PipelineRef, UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
+    },
     display::{Display, DisplayError, DisplayInfo, DisplayInfoBuilder, ResolverPool},
     driver::{
         AccessType, CommandBuffer, DriverError,

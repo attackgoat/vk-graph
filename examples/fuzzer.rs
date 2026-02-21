@@ -26,6 +26,7 @@ use {
     log::debug,
     rand::{Rng, rng, seq::IndexedRandom},
     std::mem::size_of,
+    vk_graph::cmd_ref::BuildAccelerationStructureInfo,
     vk_graph_prelude::*,
     vk_graph_window::{FrameContext, WindowBuilder, WindowError},
     vk_shader_macros::glsl,
@@ -230,7 +231,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             .unwrap(),
         );
 
-        blas_nodes.push((scratch_buf, blas_node));
+        blas_nodes.push((blas_node, scratch_buf, blas_geometry_info.clone()));
     }
 
     // Lease and bind a single top-level acceleration structure
@@ -275,21 +276,25 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     let mut pass = pass.read_node(index_node).read_node(vertex_node);
 
     // TODO: Like this:
-    for (scratch_buf, blas_node) in &blas_nodes {
-        pass.access_node_mut(*scratch_buf, AccessType::AccelerationStructureBufferWrite);
+    for (blas_node, scratch_buf, _) in &blas_nodes {
         pass.access_node_mut(*blas_node, AccessType::AccelerationStructureBuildWrite);
+        pass.access_node_mut(*scratch_buf, AccessType::AccelerationStructureBufferWrite);
     }
 
     // Ugly copy of the nodes that I want to figure out a way around while not being confusing
     let blas_nodes_copy = blas_nodes
         .iter()
-        .map(|(_, blas_node)| *blas_node)
+        .map(|(blas_node, _, _)| *blas_node)
         .collect::<Vec<_>>();
 
-    let mut pass = pass.record_acceleration(move |accel, bindings| {
-        for (scratch_buf, blas_node) in blas_nodes {
-            let scratch_data = Buffer::device_address(&bindings[scratch_buf]);
-            accel.build_structure(&blas_geometry_info, blas_node, scratch_data);
+    let mut pass = pass.record_accel_struct(move |accel_struct, bindings| {
+        for (blas_node, scratch_buf, build_data) in blas_nodes {
+            let scratch_addr = bindings[scratch_buf].device_address();
+            accel_struct.build(&[BuildAccelerationStructureInfo::new(
+                blas_node,
+                scratch_addr,
+                build_data,
+            )]);
         }
     });
 
@@ -304,9 +309,13 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     );
     pass.access_node_mut(tlas_node, AccessType::AccelerationStructureBuildWrite);
 
-    pass.record_acceleration(move |accel, bindings| {
+    pass.record_accel_struct(move |accel_struct, bindings| {
         let scratch_data = Buffer::device_address(&bindings[tlas_scratch_buf]);
-        accel.build_structure(&tlas_geometry_info, tlas_node, scratch_data);
+        accel_struct.build(&[BuildAccelerationStructureInfo::new(
+            tlas_node,
+            scratch_data,
+            tlas_geometry_info,
+        )]);
     });
 }
 

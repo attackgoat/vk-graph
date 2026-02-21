@@ -213,8 +213,12 @@ fn create_blas(
 
     pass.access_node(blas, AccessType::AccelerationStructureBuildWrite)
         .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-        .record_acceleration(move |accel, _| {
-            accel.build_structure(&info, blas, scratch_data);
+        .record_accel_struct(move |accel_struct, _| {
+            accel_struct.build(&[BuildAccelerationStructureInfo::new(
+                blas,
+                scratch_data,
+                info,
+            )]);
         });
 
     let blas = render_graph.unbind_node(blas);
@@ -392,8 +396,12 @@ fn create_tlas(
         .access_node(instance_buf, AccessType::AccelerationStructureBuildRead)
         .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
         .access_node(tlas, AccessType::AccelerationStructureBuildWrite)
-        .record_acceleration(move |accel, _| {
-            accel.build_structure(&info, tlas, scratch_data);
+        .record_accel_struct(move |accel_struct, _| {
+            accel_struct.build(&[BuildAccelerationStructureInfo::new(
+                tlas,
+                scratch_data,
+                info,
+            )]);
         });
 
     Ok(tlas)

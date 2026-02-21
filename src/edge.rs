@@ -2,7 +2,7 @@ use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, BufferLeaseNode, BufferNode,
         Graph, ImageLeaseNode, ImageNode, Resolver, SwapchainImageNode,
-        cmd_ref::{CommandRef, PipelineCommandRef},
+        cmd_ref::{CommandRef, PipelineRef},
     },
     crate::{
         driver::{
@@ -72,16 +72,16 @@ node_ref!(Arc<Image> => ImageNode);
 node_ref!(Arc<Lease<Image>> => ImageLeaseNode);
 
 // Specialized edges for pipelines added to a pass:
-// Ex: PassRef::bind_pipeline(&mut self, pipeline: X) -> PipelineCommandRef
+// Ex: PassRef::bind_pipeline(&mut self, pipeline: X) -> PipelineRef
 macro_rules! pipeline {
     ($name:ident) => {
         paste::paste! {
             impl<'a> Edge<CommandRef<'a>> for &'a [<$name Pipeline>] {
-                type Result = PipelineCommandRef<'a, [<$name Pipeline>]>;
+                type Result = PipelineRef<'a, [<$name Pipeline>]>;
             }
 
             impl<'a> Edge<CommandRef<'a>> for [<$name Pipeline>] {
-                type Result = PipelineCommandRef<'a, [<$name Pipeline>]>;
+                type Result = PipelineRef<'a, [<$name Pipeline>]>;
             }
         }
     };

@@ -294,10 +294,13 @@ impl Egui {
                                 .bind_index_buffer(idx_buf, 0, vk::IndexType::UINT32)
                                 .bind_vertex_buffer(0, vert_buf, 0)
                                 .push_constants(0, cast_slice(&[push_constants]))
-                                .set_scissor(&vk::Rect2D {
-                                    offset: vk::Offset2D { x, y },
-                                    extent: vk::Extent2D { width, height },
-                                })
+                                .set_scissor(
+                                    0,
+                                    &[vk::Rect2D {
+                                        offset: vk::Offset2D { x, y },
+                                        extent: vk::Extent2D { width, height },
+                                    }],
+                                )
                                 .draw_indexed(num_indices, 1, 0, 0, 0);
                         });
                 }

@@ -210,10 +210,13 @@ impl ImGui {
                         let width = (clip_rect[2] - clip_rect[0]).ceil() as u32;
                         let height = (clip_rect[3] - clip_rect[1]).ceil() as u32;
                         pipeline
-                            .set_scissor(&vk::Rect2D {
-                                offset: vk::Offset2D { x, y },
-                                extent: vk::Extent2D { width, height },
-                            })
+                            .set_scissor(
+                                0,
+                                &[vk::Rect2D {
+                                    offset: vk::Offset2D { x, y },
+                                    extent: vk::Extent2D { width, height },
+                                }],
+                            )
                             .draw_indexed(
                                 index_count as _,
                                 1,

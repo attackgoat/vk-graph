@@ -18,7 +18,7 @@ use {
 ///
 /// This structure provides a strongly-typed set of methods which allow acceleration structures to
 /// be built and updated. An instance of `Acceleration` is provided to the closure parameter of
-/// [`PassRef::record_acceleration`].
+/// [`PassRef::record_accel_struct`].
 ///
 /// # Examples
 ///
@@ -36,20 +36,23 @@ use {
 /// # let device = Device::new(DeviceInfo::default())?;
 /// # let mut my_graph = Graph::default();
 /// # let info = AccelerationStructureInfo::blas(1);
-/// my_graph.begin_cmd().with_name("my acceleration command")
-///         .record_acceleration(move |acceleration, bindings| {
-///             // During this closure we have access to the acceleration methods!
+/// my_graph.begin_cmd()
+///         .record_accel_struct(move |accel_struct, bindings| {
+///             // During this closure we have access to the build and update methods
 ///         });
 /// # Ok(()) }
 /// ```
-pub struct Acceleration<'a> {
+pub struct AccelerationStructureRef<'a> {
     pub(super) bindings: Bindings<'a>,
     pub(super) cmd_buf: vk::CommandBuffer,
     pub(super) device: &'a Device,
 }
 
-impl Acceleration<'_> {
-    /// Build an acceleration structure.
+impl AccelerationStructureRef<'_> {
+    /// Build acceleration structures.
+    ///
+    /// There is no ordering or synchronization implied between any of the individual acceleration
+    /// structure builds.
     ///
     /// Requires a scratch buffer which was created with the following requirements:
     ///
@@ -59,13 +62,15 @@ impl Acceleration<'_> {
     ///   of
     ///   [`PhysicalDevice::accel_struct_properties`](crate::driver::physical_device::PhysicalDevice::accel_struct_properties).
     ///
+    ///     TODO: Link to somewhere else for a full example of the scratch buffer steps
+    ///
     /// # Examples
     ///
     /// Basic usage:
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use ash::vk;
+    /// # use vk_graph::cmd_ref::BuildAccelerationStructureInfo;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, AccelerationStructureInfo, DeviceOrHostAddress};
@@ -87,12 +92,13 @@ impl Acceleration<'_> {
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
     /// # let index_node = my_graph.bind_node(my_idx_buf);
     /// # let vertex_node = my_graph.bind_node(my_vtx_buf);
-    /// my_graph.begin_cmd().with_name("my acceleration pass")
+    /// my_graph.begin_cmd()
     ///         .read_node(index_node)
     ///         .read_node(vertex_node)
     ///         .write_node(blas_node)
     ///         .write_node(scratch_buf)
-    ///         .record_acceleration(move |acceleration, bindings| {
+    ///         .record_accel_struct(move |accel_struct, bindings| {
+    ///             let scratch_addr = bindings[scratch_buf].device_address();
     ///             let geom = AccelerationStructureGeometry {
     ///                 max_primitive_count: 64,
     ///                 flags: vk::GeometryFlagsKHR::OPAQUE,
@@ -118,120 +124,13 @@ impl Acceleration<'_> {
     ///             };
     ///             let info = AccelerationStructureGeometryInfo::blas([(geom, build_range)]);
     ///
-    ///             acceleration.build_structure(&info, blas_node, bindings[scratch_buf].device_address());
+    ///             accel_struct.build(&[
+    ///                 BuildAccelerationStructureInfo::new(blas_node, scratch_addr, info)
+    ///             ]);
     ///         });
     /// # Ok(()) }
     /// ```
-    pub fn build_structure(
-        &self,
-        info: &AccelerationStructureGeometryInfo<(
-            AccelerationStructureGeometry,
-            vk::AccelerationStructureBuildRangeInfoKHR,
-        )>,
-        accel_struct: impl Into<AnyAccelerationStructureNode>,
-        scratch_addr: impl Into<DeviceOrHostAddress>,
-    ) -> &Self {
-        #[derive(Default)]
-        struct Tls {
-            geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
-            ranges: Vec<vk::AccelerationStructureBuildRangeInfoKHR>,
-        }
-
-        thread_local! {
-            static TLS: RefCell<Tls> = Default::default();
-        }
-
-        let accel_struct = accel_struct.into();
-        let scratch_addr = scratch_addr.into().into();
-
-        TLS.with_borrow_mut(|tls| {
-            tls.geometries.clear();
-            tls.ranges.clear();
-
-            for (geometry, range) in info.geometries.iter() {
-                tls.geometries.push(geometry.into());
-                tls.ranges.push(*range);
-            }
-
-            unsafe {
-                Device::expect_accel_struct_ext(self.device).cmd_build_acceleration_structures(
-                    self.cmd_buf,
-                    &[vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                        .ty(info.ty)
-                        .flags(info.flags)
-                        .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                        .dst_acceleration_structure(self.bindings[accel_struct].handle)
-                        .geometries(&tls.geometries)
-                        .scratch_data(scratch_addr)],
-                    &[&tls.ranges],
-                );
-            }
-        });
-
-        self
-    }
-
-    /// Build an acceleration structure with some parameters provided on the device.
-    ///
-    /// `range` is a buffer device address which points to `info.geometry.len()`
-    /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
-    /// addresses where geometry data is stored, as defined by `info`.
-    pub fn build_structure_indirect(
-        &self,
-        info: &AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
-        accel_struct: impl Into<AnyAccelerationStructureNode>,
-        scratch_addr: impl Into<DeviceOrHostAddress>,
-        range_base: vk::DeviceAddress,
-        range_stride: u32,
-    ) -> &Self {
-        #[derive(Default)]
-        struct Tls {
-            geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
-            max_primitive_counts: Vec<u32>,
-        }
-
-        thread_local! {
-            static TLS: RefCell<Tls> = Default::default();
-        }
-
-        let accel_struct = accel_struct.into();
-        let scratch_addr = scratch_addr.into().into();
-
-        TLS.with_borrow_mut(|tls| {
-            tls.geometries.clear();
-            tls.max_primitive_counts.clear();
-
-            for geometry in info.geometries.iter() {
-                tls.geometries.push(geometry.into());
-                tls.max_primitive_counts.push(geometry.max_primitive_count);
-            }
-
-            unsafe {
-                Device::expect_accel_struct_ext(self.device)
-                    .cmd_build_acceleration_structures_indirect(
-                        self.cmd_buf,
-                        &[vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                            .ty(info.ty)
-                            .flags(info.flags)
-                            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(self.bindings[accel_struct].handle)
-                            .geometries(&tls.geometries)
-                            .scratch_data(scratch_addr)],
-                        &[range_base],
-                        &[range_stride],
-                        &[&tls.max_primitive_counts],
-                    );
-            }
-        });
-
-        self
-    }
-
-    /// Build acceleration structures.
-    ///
-    /// There is no ordering or synchronization implied between any of the individual acceleration
-    /// structure builds.
-    pub fn build_structures(&self, infos: &[AccelerationStructureBuildInfo]) -> &Self {
+    pub fn build(&self, infos: &[BuildAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
             geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
@@ -308,11 +207,10 @@ impl Acceleration<'_> {
     /// There is no ordering or synchronization implied between any of the individual acceleration
     /// structure builds.
     ///
-    /// See [Self::build_structure_indirect]
-    pub fn build_structures_indirect(
-        &self,
-        infos: &[AccelerationStructureIndirectBuildInfo],
-    ) -> &Self {
+    /// `range` is a buffer device address which points to `info.geometry.len()`
+    /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
+    /// addresses where geometry data is stored, as defined by `info`.
+    pub fn build_indirect(&self, infos: &[BuildAccelerationStructureIndirectInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
             geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
@@ -386,7 +284,10 @@ impl Acceleration<'_> {
         self
     }
 
-    /// Update an acceleration structure.
+    /// Update acceleration structures.
+    ///
+    /// There is no ordering or synchronization implied between any of the individual acceleration
+    /// structure updates.
     ///
     /// Requires a scratch buffer which was created with the following requirements:
     ///
@@ -395,122 +296,7 @@ impl Acceleration<'_> {
     ///   [`AccelerationStructure::size_of`] aligned to `min_accel_struct_scratch_offset_alignment`
     ///   of
     ///   [`PhysicalDevice::accel_struct_properties`](crate::driver::physical_device::PhysicalDevice::accel_struct_properties).
-    pub fn update_structure(
-        &self,
-        info: &AccelerationStructureGeometryInfo<(
-            AccelerationStructureGeometry,
-            vk::AccelerationStructureBuildRangeInfoKHR,
-        )>,
-        src_accel_struct: impl Into<AnyAccelerationStructureNode>,
-        dst_accel_struct: impl Into<AnyAccelerationStructureNode>,
-        scratch_addr: impl Into<DeviceOrHostAddress>,
-    ) -> &Self {
-        #[derive(Default)]
-        struct Tls {
-            geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
-            ranges: Vec<vk::AccelerationStructureBuildRangeInfoKHR>,
-        }
-
-        thread_local! {
-            static TLS: RefCell<Tls> = Default::default();
-        }
-
-        let src_accel_struct = src_accel_struct.into();
-        let dst_accel_struct = dst_accel_struct.into();
-        let scratch_addr = scratch_addr.into().into();
-
-        TLS.with_borrow_mut(|tls| {
-            tls.geometries.clear();
-            tls.ranges.clear();
-
-            for (geometry, range) in info.geometries.iter() {
-                tls.geometries.push(geometry.into());
-                tls.ranges.push(*range);
-            }
-
-            unsafe {
-                Device::expect_accel_struct_ext(self.device).cmd_build_acceleration_structures(
-                    self.cmd_buf,
-                    &[vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                        .ty(info.ty)
-                        .flags(info.flags)
-                        .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                        .dst_acceleration_structure(self.bindings[dst_accel_struct].handle)
-                        .src_acceleration_structure(self.bindings[src_accel_struct].handle)
-                        .geometries(&tls.geometries)
-                        .scratch_data(scratch_addr)],
-                    &[&tls.ranges],
-                );
-            }
-        });
-
-        self
-    }
-
-    /// Update an acceleration structure with some parameters provided on the device.
-    ///
-    /// `range` is a buffer device address which points to `info.geometry.len()`
-    /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
-    /// addresses where geometry data is stored, as defined by `info`.
-    pub fn update_structure_indirect(
-        &self,
-        info: &AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
-        src_accel_struct: impl Into<AnyAccelerationStructureNode>,
-        dst_accel_struct: impl Into<AnyAccelerationStructureNode>,
-        scratch_addr: impl Into<DeviceOrHostAddress>,
-        range_base: vk::DeviceAddress,
-        range_stride: u32,
-    ) -> &Self {
-        #[derive(Default)]
-        struct Tls {
-            geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
-            max_primitive_counts: Vec<u32>,
-        }
-
-        thread_local! {
-            static TLS: RefCell<Tls> = Default::default();
-        }
-
-        let src_accel_struct = src_accel_struct.into();
-        let dst_accel_struct = dst_accel_struct.into();
-        let scratch_addr = scratch_addr.into().into();
-
-        TLS.with_borrow_mut(|tls| {
-            tls.geometries.clear();
-            tls.max_primitive_counts.clear();
-
-            for geometry in info.geometries.iter() {
-                tls.geometries.push(geometry.into());
-                tls.max_primitive_counts.push(geometry.max_primitive_count);
-            }
-
-            unsafe {
-                Device::expect_accel_struct_ext(self.device)
-                    .cmd_build_acceleration_structures_indirect(
-                        self.cmd_buf,
-                        &[vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                            .ty(info.ty)
-                            .flags(info.flags)
-                            .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .src_acceleration_structure(self.bindings[src_accel_struct].handle)
-                            .dst_acceleration_structure(self.bindings[dst_accel_struct].handle)
-                            .geometries(&tls.geometries)
-                            .scratch_data(scratch_addr)],
-                        &[range_base],
-                        &[range_stride],
-                        &[&tls.max_primitive_counts],
-                    );
-            }
-        });
-
-        self
-    }
-
-    /// Update acceleration structures.
-    ///
-    /// There is no ordering or synchronization implied between any of the individual acceleration
-    /// structure updates.
-    pub fn update_structures(&self, infos: &[AccelerationStructureUpdateInfo]) -> &Self {
+    pub fn update(&self, infos: &[UpdateAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
             geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
@@ -588,11 +374,10 @@ impl Acceleration<'_> {
     /// There is no ordering or synchronization implied between any of the individual acceleration
     /// structure updates.
     ///
-    /// See [Self::update_structure_indirect]
-    pub fn update_structures_indirect(
-        &self,
-        infos: &[AccelerationStructureIndirectUpdateInfo],
-    ) -> &Self {
+    /// `range` is a buffer device address which points to `info.geometry.len()`
+    /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
+    /// addresses where geometry data is stored, as defined by `info`.
+    pub fn update_indirect(&self, infos: &[UpdateAccelerationStructureIndirectInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
             geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
@@ -674,7 +459,7 @@ impl Acceleration<'_> {
 /// [VkAccelerationStructureBuildGeometryInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureBuildGeometryInfoKHR.html)
 /// for more information.
 #[derive(Clone, Debug)]
-pub struct AccelerationStructureBuildInfo {
+pub struct BuildAccelerationStructureInfo {
     /// The acceleration structure to be written.
     pub accel_struct: AnyAccelerationStructureNode,
 
@@ -689,15 +474,15 @@ pub struct AccelerationStructureBuildInfo {
     pub scratch_addr: DeviceOrHostAddress,
 }
 
-impl AccelerationStructureBuildInfo {
+impl BuildAccelerationStructureInfo {
     /// Constructs new acceleration structure build information.
     pub fn new(
         accel_struct: impl Into<AnyAccelerationStructureNode>,
+        scratch_addr: impl Into<DeviceOrHostAddress>,
         build_data: AccelerationStructureGeometryInfo<(
             AccelerationStructureGeometry,
             vk::AccelerationStructureBuildRangeInfoKHR,
         )>,
-        scratch_addr: impl Into<DeviceOrHostAddress>,
     ) -> Self {
         let accel_struct = accel_struct.into();
         let scratch_addr = scratch_addr.into();
@@ -717,7 +502,7 @@ impl AccelerationStructureBuildInfo {
 /// [VkAccelerationStructureBuildGeometryInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureBuildGeometryInfoKHR.html)
 /// for more information.
 #[derive(Clone, Debug)]
-pub struct AccelerationStructureIndirectBuildInfo {
+pub struct BuildAccelerationStructureIndirectInfo {
     /// The acceleration structure to be written.
     pub accel_struct: AnyAccelerationStructureNode,
 
@@ -737,15 +522,14 @@ pub struct AccelerationStructureIndirectBuildInfo {
     pub scratch_data: DeviceOrHostAddress,
 }
 
-impl AccelerationStructureIndirectBuildInfo {
+impl BuildAccelerationStructureIndirectInfo {
     /// Constructs new acceleration structure indirect build information.
     pub fn new(
         accel_struct: impl Into<AnyAccelerationStructureNode>,
+        scratch_data: impl Into<DeviceOrHostAddress>,
         build_data: AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
         range_base: vk::DeviceAddress,
-
         range_stride: u32,
-        scratch_data: impl Into<DeviceOrHostAddress>,
     ) -> Self {
         let accel_struct = accel_struct.into();
         let scratch_data = scratch_data.into();
@@ -767,7 +551,7 @@ impl AccelerationStructureIndirectBuildInfo {
 /// [VkAccelerationStructureBuildGeometryInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureBuildGeometryInfoKHR.html)
 /// for more information.
 #[derive(Clone, Debug)]
-pub struct AccelerationStructureIndirectUpdateInfo {
+pub struct UpdateAccelerationStructureIndirectInfo {
     /// The acceleration structure to be written.
     pub dst_accel_struct: AnyAccelerationStructureNode,
 
@@ -790,16 +574,15 @@ pub struct AccelerationStructureIndirectUpdateInfo {
     pub update_data: AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
 }
 
-impl AccelerationStructureIndirectUpdateInfo {
+impl UpdateAccelerationStructureIndirectInfo {
     /// Constructs new acceleration structure indirect update information.
     pub fn new(
         src_accel_struct: impl Into<AnyAccelerationStructureNode>,
         dst_accel_struct: impl Into<AnyAccelerationStructureNode>,
+        scratch_addr: impl Into<DeviceOrHostAddress>,
         update_data: AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
         range_base: vk::DeviceAddress,
-
         range_stride: u32,
-        scratch_addr: impl Into<DeviceOrHostAddress>,
     ) -> Self {
         let src_accel_struct = src_accel_struct.into();
         let dst_accel_struct = dst_accel_struct.into();
@@ -822,7 +605,7 @@ impl AccelerationStructureIndirectUpdateInfo {
 /// [VkAccelerationStructureBuildGeometryInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureBuildGeometryInfoKHR.html)
 /// for more information.
 #[derive(Clone, Debug)]
-pub struct AccelerationStructureUpdateInfo {
+pub struct UpdateAccelerationStructureInfo {
     /// The acceleration structure to be written.
     pub dst_accel_struct: AnyAccelerationStructureNode,
 
@@ -840,16 +623,16 @@ pub struct AccelerationStructureUpdateInfo {
     )>,
 }
 
-impl AccelerationStructureUpdateInfo {
+impl UpdateAccelerationStructureInfo {
     /// Constructs new acceleration structure update information.
     pub fn new(
         src_accel_struct: impl Into<AnyAccelerationStructureNode>,
         dst_accel_struct: impl Into<AnyAccelerationStructureNode>,
+        scratch_addr: impl Into<DeviceOrHostAddress>,
         update_data: AccelerationStructureGeometryInfo<(
             AccelerationStructureGeometry,
             vk::AccelerationStructureBuildRangeInfoKHR,
         )>,
-        scratch_addr: impl Into<DeviceOrHostAddress>,
     ) -> Self {
         let src_accel_struct = src_accel_struct.into();
         let dst_accel_struct = dst_accel_struct.into();

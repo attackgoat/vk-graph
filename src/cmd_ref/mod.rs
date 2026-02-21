@@ -1,6 +1,6 @@
 //! Strongly-typed rendering commands.
 
-mod accel;
+mod accel_struct;
 mod compute;
 mod graphic;
 mod pipeline;
@@ -8,12 +8,16 @@ mod ray_trace;
 mod view;
 
 pub use self::{
-    pipeline::PipelineCommandRef,
+    accel_struct::{
+        AccelerationStructureRef, BuildAccelerationStructureIndirectInfo,
+        BuildAccelerationStructureInfo, UpdateAccelerationStructureIndirectInfo,
+        UpdateAccelerationStructureInfo,
+    },
+    pipeline::PipelineRef,
     view::{View, ViewType},
 };
 
 use {
-    self::accel::Acceleration,
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
         AnyBufferNode, AnyImageNode, Bind, Binding, BufferLeaseNode, BufferNode, Command, Edge,
@@ -74,9 +78,9 @@ impl Access for RayTracePipeline {
 macro_rules! bind {
     ($name:ident) => {
         paste::paste! {
-            impl<'a> Bind<CommandRef<'a>, PipelineCommandRef<'a, [<$name Pipeline>]>> for &'a [<$name Pipeline>] {
+            impl<'a> Bind<CommandRef<'a>, PipelineRef<'a, [<$name Pipeline>]>> for &'a [<$name Pipeline>] {
                 // TODO: Allow binding as explicit secondary command buffers? like with compute/raytrace stuff
-                fn bind(self, mut cmd: CommandRef<'a>) -> PipelineCommandRef<'a, [<$name Pipeline>]> {
+                fn bind(self, mut cmd: CommandRef<'a>) -> PipelineRef<'a, [<$name Pipeline>]> {
                     let cmd_ref = cmd.as_mut();
                     if cmd_ref.execs.last().unwrap().pipeline.is_some() {
                         // Binding from PipelinePass -> PipelinePass (changing shaders)
@@ -85,16 +89,16 @@ macro_rules! bind {
 
                     cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self.clone()));
 
-                    PipelineCommandRef {
+                    PipelineRef {
                         __: PhantomData,
                         cmd,
                     }
                 }
             }
 
-            impl<'a> Bind<CommandRef<'a>, PipelineCommandRef<'a, [<$name Pipeline>]>> for [<$name Pipeline>] {
+            impl<'a> Bind<CommandRef<'a>, PipelineRef<'a, [<$name Pipeline>]>> for [<$name Pipeline>] {
                 // TODO: Allow binding as explicit secondary command buffers? like with compute/raytrace stuff
-                fn bind(self, mut cmd: CommandRef<'a>) -> PipelineCommandRef<'a, [<$name Pipeline>]> {
+                fn bind(self, mut cmd: CommandRef<'a>) -> PipelineRef<'a, [<$name Pipeline>]> {
                     let cmd_ref = cmd.as_mut();
                     if cmd_ref.execs.last().unwrap().pipeline.is_some() {
                         // Binding from PipelinePass -> PipelinePass (changing shaders)
@@ -103,7 +107,7 @@ macro_rules! bind {
 
                     cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self));
 
-                    PipelineCommandRef {
+                    PipelineRef {
                         __: PhantomData,
                         cmd,
                     }
@@ -139,7 +143,7 @@ bind!(RayTrace);
 ///
 /// This type is available while recording commands in the following closures:
 ///
-/// - [`PassRef::record_acceleration`] for building and updating acceleration structures
+/// - [`PassRef::record_accel_struct`] for building and updating acceleration structures
 /// - [`PassRef::record_cmd_buf`] for general command streams
 /// - [`PipelineCommandRef::record_pipeline`] for dispatched compute operations
 /// - [`PipelineCommandRef::record_pipeline`] for raster drawing operations, such as triangles streams
@@ -487,13 +491,13 @@ impl<'a> CommandRef<'a> {
     /// Begin recording an acceleration structure command buffer.
     ///
     /// This is the entry point for building and updating an [`AccelerationStructure`] instance.
-    pub fn record_acceleration(
+    pub fn record_accel_struct(
         mut self,
-        func: impl FnOnce(Acceleration<'_>, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(AccelerationStructureRef<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
         self.push_execute(move |device, cmd_buf, bindings| {
             func(
-                Acceleration {
+                AccelerationStructureRef {
                     bindings,
                     cmd_buf,
                     device,

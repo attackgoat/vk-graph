@@ -347,8 +347,12 @@ fn main() -> anyhow::Result<()> {
                 .access_node(vertex_node, AccessType::AccelerationStructureBuildRead)
                 .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
                 .access_node(blas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_acceleration(move |accel, _| {
-                    accel.build_structure(&blas_geometry_info, blas_node, scratch_data);
+                .record_accel_struct(move |accel_struct, _| {
+                    accel_struct.build(&[BuildAccelerationStructureInfo::new(
+                        blas_node,
+                        scratch_data,
+                        blas_geometry_info,
+                    )]);
                 });
         }
 
@@ -374,8 +378,12 @@ fn main() -> anyhow::Result<()> {
                 .access_node(instance_node, AccessType::AccelerationStructureBuildRead)
                 .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
                 .access_node(tlas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_acceleration(move |accel, _| {
-                    accel.build_structure(&tlas_geometry_info, tlas_node, scratch_data);
+                .record_accel_struct(move |accel_struct, _| {
+                    accel_struct.build(&[BuildAccelerationStructureInfo::new(
+                        tlas_node,
+                        scratch_data,
+                        tlas_geometry_info,
+                    )]);
                 });
         }
 

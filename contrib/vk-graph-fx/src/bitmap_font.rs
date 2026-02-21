@@ -217,10 +217,13 @@ impl BitmapFont {
 
         pass.record_pipeline(move |pipeline, _| {
             if let Some((x, y, width, height)) = scissor {
-                pipeline.set_scissor(&vk::Rect2D {
-                    offset: vk::Offset2D { x, y },
-                    extent: vk::Extent2D { width, height },
-                });
+                pipeline.set_scissor(
+                    0,
+                    &[vk::Rect2D {
+                        offset: vk::Offset2D { x, y },
+                        extent: vk::Extent2D { width, height },
+                    }],
+                );
             }
 
             pipeline

@@ -1,5 +1,5 @@
 use {
-    super::{AttachmentIndex, Bindings, Info, PipelineCommandRef, Subresource, SubresourceAccess},
+    super::{AttachmentIndex, Bindings, Info, PipelineRef, Subresource, SubresourceAccess},
     crate::{
         AnyBufferNode, AnyImageNode, Area, Attachment, ClearColorValue, Node, NodeIndex,
         SampleCount,
@@ -22,7 +22,7 @@ use {
 ///
 /// This structure provides a strongly-typed set of methods which allow rasterization shader code to
 /// be executed. An instance of `Draw` is provided to the closure parameter of
-/// [`PipelineCommandRef::record_pipeline`] which may be accessed by binding a [`GraphicPipeline`] to a
+/// [`PipelineRef::record_pipeline`] which may be accessed by binding a [`GraphicPipeline`] to a
 /// render pass.
 ///
 /// # Examples
@@ -56,14 +56,14 @@ use {
 ///         });
 /// # Ok(()) }
 /// ```
-pub struct Graphic<'a> {
+pub struct GraphicPipelineRef<'a> {
     pub(super) bindings: Bindings<'a>,
     pub(super) cmd_buf: vk::CommandBuffer,
     pub(super) device: &'a Device,
     pub(super) pipeline: GraphicPipeline,
 }
 
-impl Graphic<'_> {
+impl GraphicPipelineRef<'_> {
     /// Bind an index buffer to the current pass.
     ///
     /// `offset` is the starting offset in bytes within `buffer` used in index buffer address
@@ -581,85 +581,31 @@ impl Graphic<'_> {
         self
     }
 
-    /// Set scissor rectangle dynamically for a pass.
+    /// Set scissor rectangle dynamically for the current command.
     #[profiling::function]
-    pub fn set_scissor(&self, scissor: &vk::Rect2D) -> &Self {
+    pub fn set_scissor(&self, first_scissor: u32, scissors: &[vk::Rect2D]) -> &Self {
         unsafe {
             self.device
-                .cmd_set_scissor(self.cmd_buf, 0, slice::from_ref(scissor));
+                .cmd_set_scissor(self.cmd_buf, first_scissor, scissors);
         }
 
         self
     }
 
-    /// Set scissor rectangles dynamically for a pass.
+    /// Set the viewport dynamically for the current command.
     #[profiling::function]
-    pub fn set_scissors<S>(
-        &self,
-        first_scissor: u32,
-        scissors: impl IntoIterator<Item = S>,
-    ) -> &Self
-    where
-        S: Into<vk::Rect2D>,
-    {
-        thread_local! {
-            static TLS: RefCell<Vec<vk::Rect2D>> = Default::default();
-        }
-
-        TLS.with_borrow_mut(|tls| {
-            tls.clear();
-            tls.extend(scissors.into_iter().map(Into::into));
-
-            unsafe {
-                self.device
-                    .cmd_set_scissor(self.cmd_buf, first_scissor, tls);
-            }
-        });
-
-        self
-    }
-
-    /// Set the viewport dynamically for a pass.
-    #[profiling::function]
-    pub fn set_viewport(&self, viewport: &vk::Viewport) -> &Self {
+    pub fn set_viewport(&self, first_viewport: u32, viewports: &[vk::Viewport]) -> &Self {
         unsafe {
             self.device
-                .cmd_set_viewport(self.cmd_buf, 0, slice::from_ref(viewport));
+                .cmd_set_viewport(self.cmd_buf, first_viewport, viewports);
         }
-
-        self
-    }
-
-    /// Set the viewports dynamically for a pass.
-    #[profiling::function]
-    pub fn set_viewports<V>(
-        &self,
-        first_viewport: u32,
-        viewports: impl IntoIterator<Item = V>,
-    ) -> &Self
-    where
-        V: Into<vk::Viewport>,
-    {
-        thread_local! {
-            static TLS: RefCell<Vec<vk::Viewport>> = Default::default();
-        }
-
-        TLS.with_borrow_mut(|tls| {
-            tls.clear();
-            tls.extend(viewports.into_iter().map(Into::into));
-
-            unsafe {
-                self.device
-                    .cmd_set_viewport(self.cmd_buf, first_viewport, tls);
-            }
-        });
 
         self
     }
 }
 
 // NOTE: local implementation of type from super module
-impl PipelineCommandRef<'_, GraphicPipeline> {
+impl PipelineRef<'_, GraphicPipeline> {
     /// Specifies `VK_ATTACHMENT_LOAD_OP_DONT_CARE` for the render pass attachment, and loads an
     /// image into the framebuffer.
     pub fn attach_color(
@@ -1519,10 +1465,10 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         self
     }
 
-    /// Begin recording a graphics command buffer.
+    /// Begin recording a graphics pipeline command buffer.
     pub fn record_pipeline(
         mut self,
-        func: impl FnOnce(Graphic<'_>, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(GraphicPipelineRef<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -1538,7 +1484,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
 
         self.cmd.push_execute(move |device, cmd_buf, bindings| {
             func(
-                Graphic {
+                GraphicPipelineRef {
                     bindings,
                     cmd_buf,
                     device,

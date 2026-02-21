@@ -349,27 +349,26 @@ layout.
 
 #![warn(missing_docs)]
 
+pub mod cmd_ref;
 pub mod display;
 pub mod driver;
 pub mod node;
 pub mod pool;
 
 mod bind;
-mod cmd_ref;
 mod edge;
 mod info;
 mod resolver;
 
 pub use self::{
     bind::{Bind, Unbind},
-    cmd_ref::CommandRef,
     resolver::Resolver,
 };
 
 use {
     self::{
         bind::Binding,
-        cmd_ref::{AttachmentIndex, Bindings, Descriptor, SubresourceAccess, ViewType},
+        cmd_ref::{AttachmentIndex, Bindings, CommandRef, Descriptor, SubresourceAccess, ViewType},
         edge::Edge,
         info::Info,
         node::Node,

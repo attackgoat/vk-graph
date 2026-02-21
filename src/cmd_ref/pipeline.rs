@@ -7,13 +7,13 @@ use {
 };
 
 /// A render pass which has been bound to a particular compute, graphic, or ray-trace pipeline.
-pub struct PipelineCommandRef<'a, T> {
+pub struct PipelineRef<'a, T> {
     pub(super) __: PhantomData<T>,
     pub(super) cmd: CommandRef<'a>,
 }
 
 // NOTE: There are specific implementations of T in the compute, graphic, and ray trace modules
-impl<'a, T> PipelineCommandRef<'a, T>
+impl<'a, T> PipelineRef<'a, T>
 where
     T: Access,
 {
