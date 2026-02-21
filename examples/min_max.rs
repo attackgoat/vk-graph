@@ -178,7 +178,7 @@ fn reduce_depth_image(
     render_graph
         .begin_cmd()
         .with_name("Reduce depth image")
-        .bind_pipeline(&Arc::new(ComputePipeline::create(
+        .bind_pipeline(ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
             Shader::new_compute(
@@ -203,7 +203,7 @@ fn reduce_depth_image(
                 .as_slice(),
             )
             .image_sampler(0, SamplerInfo::LINEAR.reduction_mode(reduction_mode)),
-        )?))
+        )?)
         .read_descriptor(0, depth_image)
         .write_descriptor(1, reduced_image)
         .record_pipeline(move |compute, _| {

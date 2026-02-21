@@ -18,9 +18,8 @@ use {
 /// TODO
 #[derive(Debug)]
 pub struct HotRayTracePipeline {
-    device: Device,
     has_changes: Arc<AtomicBool>,
-    instance: Arc<RayTracePipeline>,
+    pipeline: RayTracePipeline,
     shader_groups: Box<[RayTraceShaderGroup]>,
     shaders: Box<[HotShader]>,
     watcher: RecommendedWatcher,
@@ -49,19 +48,16 @@ impl HotRayTracePipeline {
             .map(|shader| compile_shader_and_watch(shader, &mut watcher))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let instance = Arc::new(RayTracePipeline::create(
+        let pipeline = RayTracePipeline::create(
             device,
             info,
             compiled_shaders,
             shader_groups.iter().copied(),
-        )?);
-
-        let device = device.clone();
+        )?;
 
         Ok(Self {
-            device,
             has_changes,
-            instance,
+            pipeline,
             shader_groups,
             shaders,
             watcher,
@@ -70,13 +66,13 @@ impl HotRayTracePipeline {
 
     /// Returns the most recent compilation without checking for changes or re-compiling the shader
     /// source code.
-    pub fn cold(&self) -> &Arc<RayTracePipeline> {
-        &self.instance
+    pub fn cold(&self) -> &RayTracePipeline {
+        &self.pipeline
     }
 
     /// Returns the most recent compilation after checking for changes, and if needed re-compiling
     /// the shader source code.
-    pub fn hot(&mut self) -> &Arc<RayTracePipeline> {
+    pub fn hot(&mut self) -> &RayTracePipeline {
         let has_changes = self.has_changes.swap(false, Ordering::Relaxed);
 
         if has_changes {
@@ -89,15 +85,15 @@ impl HotRayTracePipeline {
                 .map(|shader| compile_shader_and_watch(shader, &mut watcher))
                 .collect::<Result<Vec<_>, DriverError>>()
             {
-                if let Ok(instance) = RayTracePipeline::create(
-                    &self.device,
-                    self.instance.info,
+                if let Ok(pipeline) = RayTracePipeline::create(
+                    self.pipeline.device(),
+                    self.pipeline.info(),
                     compiled_shaders,
                     self.shader_groups.iter().copied(),
                 ) {
+                    self.pipeline = pipeline;
                     self.has_changes = has_changes;
                     self.watcher = watcher;
-                    self.instance = Arc::new(instance);
                 }
             }
         }
@@ -108,6 +104,6 @@ impl HotRayTracePipeline {
 
 impl AsRef<RayTracePipeline> for HotRayTracePipeline {
     fn as_ref(&self) -> &RayTracePipeline {
-        self.instance.as_ref()
+        &self.pipeline
     }
 }

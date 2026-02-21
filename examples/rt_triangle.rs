@@ -76,8 +76,8 @@ static SHADER_MISS: &[u32] = glsl!(
 )
 .as_slice();
 
-fn create_ray_trace_pipeline(device: &Device) -> Result<Arc<RayTracePipeline>, DriverError> {
-    Ok(Arc::new(RayTracePipeline::create(
+fn create_ray_trace_pipeline(device: &Device) -> Result<RayTracePipeline, DriverError> {
+    RayTracePipeline::create(
         device,
         RayTracePipelineInfoBuilder::default().max_ray_recursion_depth(1),
         [
@@ -90,7 +90,7 @@ fn create_ray_trace_pipeline(device: &Device) -> Result<Arc<RayTracePipeline>, D
             RayTraceShaderGroup::new_triangles(1, None),
             RayTraceShaderGroup::new_general(2),
         ],
-    )?))
+    )
 }
 
 /// Adapted from https://iorange.github.io/p01/HappyTriangle.html

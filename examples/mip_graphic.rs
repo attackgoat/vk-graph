@@ -92,7 +92,7 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
         b: Vec4,
     }
 
-    let vertical_gradient = Arc::new(GraphicPipeline::create(
+    let vertical_gradient = GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
@@ -144,7 +144,7 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
                 .as_slice(),
             ),
         ],
-    )?);
+    )?;
 
     let mut render_graph = Graph::default();
     let image_info = image.info;
@@ -190,7 +190,7 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
             family
                 .queue_flags
                 .contains(vk::QueueFlags::GRAPHICS)
-                .then_some(idx)
+                .then_some(idx as u32)
         })
         .ok_or(DriverError::Unsupported)?;
 
@@ -201,8 +201,8 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
         .map(|_| ())
 }
 
-fn splat(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
-    Ok(Arc::new(GraphicPipeline::create(
+fn splat(device: &Device) -> Result<GraphicPipeline, DriverError> {
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
@@ -262,7 +262,7 @@ fn splat(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
                 SamplerInfoBuilder::default().mipmap_mode(vk::SamplerMipmapMode::LINEAR),
             ),
         ],
-    )?))
+    )
 }
 
 #[derive(Parser)]

@@ -37,8 +37,8 @@ impl ImageFormat {
 #[derive(Debug)]
 pub struct ImageLoader {
     pool: HashPool,
-    _decode_r_rg: Arc<ComputePipeline>,
-    decode_rgb_rgba: Arc<ComputePipeline>,
+    _decode_r_rg: ComputePipeline,
+    decode_rgb_rgba: ComputePipeline,
 
     /// TODO
     pub device: Device,
@@ -49,20 +49,20 @@ impl ImageLoader {
     pub fn new(device: &Device) -> Result<Self, DriverError> {
         Ok(Self {
             pool: HashPool::new(device),
-            _decode_r_rg: Arc::new(ComputePipeline::create(
+            _decode_r_rg: ComputePipeline::create(
                 device,
                 ComputePipelineInfo::default(),
                 Shader::new_compute(
                     include_glsl!("res/shader/compute/decode_bitmap_r_rg.comp").as_slice(),
                 ),
-            )?),
-            decode_rgb_rgba: Arc::new(ComputePipeline::create(
+            )?,
+            decode_rgb_rgba: ComputePipeline::create(
                 device,
                 ComputePipelineInfo::default(),
                 Shader::new_compute(
                     include_glsl!("res/shader/compute/decode_bitmap_rgb_rgba.comp").as_slice(),
                 ),
-            )?),
+            )?,
             device: device.clone(),
         })
     }
@@ -118,8 +118,8 @@ impl ImageLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn decode_bitmap(
         &mut self,
-        queue_family_index: usize,
-        queue_index: usize,
+        queue_family_index: u32,
+        queue_index: u32,
         pixels: &[u8],
         format: ImageFormat,
         width: u32,
@@ -247,8 +247,8 @@ impl ImageLoader {
     /// TODO
     pub fn decode_linear(
         &mut self,
-        queue_family_index: usize,
-        queue_index: usize,
+        queue_family_index: u32,
+        queue_index: u32,
         pixels: &[u8],
         format: ImageFormat,
         width: u32,
@@ -268,8 +268,8 @@ impl ImageLoader {
     /// TODO
     pub fn decode_srgb(
         &mut self,
-        queue_family_index: usize,
-        queue_index: usize,
+        queue_family_index: u32,
+        queue_index: u32,
         pixels: &[u8],
         format: ImageFormat,
         width: u32,
@@ -289,8 +289,8 @@ impl ImageLoader {
     /// TODO
     pub fn load_bitmap_font<'a>(
         &mut self,
-        queue_family_index: usize,
-        queue_index: usize,
+        queue_family_index: u32,
+        queue_index: u32,
         font: BMFont,
         pages: impl IntoIterator<Item = (&'a [u8], u32, u32)>,
     ) -> anyhow::Result<BitmapFont> {

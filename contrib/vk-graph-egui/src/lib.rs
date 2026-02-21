@@ -26,7 +26,7 @@ pub struct Egui {
     egui_winit: egui_winit::State,
     textures: HashMap<egui::TextureId, Arc<Lease<Image>>>,
     cache: HashPool,
-    ppl: Arc<GraphicPipeline>,
+    ppl: GraphicPipeline,
     next_tex_id: u64,
     user_textures: HashMap<egui::TextureId, AnyImageNode>,
 }
@@ -34,31 +34,29 @@ pub struct Egui {
 impl Egui {
     /// TODO
     pub fn new(device: &Device, display_target: &dyn HasDisplayHandle) -> Self {
-        let ppl = Arc::new(
-            GraphicPipeline::create(
-                device,
-                GraphicPipelineInfoBuilder::default()
-                    .blend(BlendMode {
-                        blend_enable: true,
-                        src_color_blend_factor: vk::BlendFactor::ONE,
-                        dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-                        color_blend_op: vk::BlendOp::ADD,
-                        src_alpha_blend_factor: vk::BlendFactor::ONE,
-                        dst_alpha_blend_factor: vk::BlendFactor::ONE,
-                        alpha_blend_op: vk::BlendOp::ADD,
-                        color_write_mask: vk::ColorComponentFlags::R
-                            | vk::ColorComponentFlags::G
-                            | vk::ColorComponentFlags::B
-                            | vk::ColorComponentFlags::A,
-                    })
-                    .cull_mode(vk::CullModeFlags::NONE),
-                [
-                    Shader::new_vertex(include_glsl!("shaders/egui.vert").as_slice()),
-                    Shader::new_fragment(include_glsl!("shaders/egui.frag").as_slice()),
-                ],
-            )
-            .unwrap(),
-        );
+        let ppl = GraphicPipeline::create(
+            device,
+            GraphicPipelineInfoBuilder::default()
+                .blend(BlendMode {
+                    blend_enable: true,
+                    src_color_blend_factor: vk::BlendFactor::ONE,
+                    dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                    color_blend_op: vk::BlendOp::ADD,
+                    src_alpha_blend_factor: vk::BlendFactor::ONE,
+                    dst_alpha_blend_factor: vk::BlendFactor::ONE,
+                    alpha_blend_op: vk::BlendOp::ADD,
+                    color_write_mask: vk::ColorComponentFlags::R
+                        | vk::ColorComponentFlags::G
+                        | vk::ColorComponentFlags::B
+                        | vk::ColorComponentFlags::A,
+                })
+                .cull_mode(vk::CullModeFlags::NONE),
+            [
+                Shader::new_vertex(include_glsl!("shaders/egui.vert").as_slice()),
+                Shader::new_fragment(include_glsl!("shaders/egui.frag").as_slice()),
+            ],
+        )
+        .unwrap();
 
         let ctx = egui::Context::default();
         let max_texture_side = Some(

@@ -4,12 +4,17 @@ use {
     super::{
         DriverError,
         device::Device,
-        shader::{DescriptorBindingMap, PipelineDescriptorInfo, PipelineHandle, PipelineInner, Shader},
+        shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{trace, warn},
-    std::{ffi::CString, slice, sync::Arc},
+    std::{
+        ffi::CString,
+        slice,
+        sync::{Arc, OnceLock},
+        thread::panicking,
+    },
 };
 
 /// Smart pointer handle to a [pipeline] object.
@@ -24,20 +29,8 @@ use {
 /// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
 /// [deref]: core::ops::Deref
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct ComputePipeline {
-    pub(crate) descriptor_bindings: DescriptorBindingMap,
-
-    /// Information used to create this object.
-    #[readonly]
-    pub info: ComputePipelineInfo,
-
-    inner: Arc<PipelineInner>,
-
-    /// A descriptive name used in debugging messages.
-    pub name: Option<String>,
-
-    pub(crate) push_constants: Option<vk::PushConstantRange>,
+    pub(crate) inner: Arc<ComputePipelineInner>,
 }
 
 impl ComputePipeline {
@@ -59,7 +52,7 @@ impl ComputePipeline {
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_shader_code = [0u8; 1];
     /// // my_shader_code is raw SPIR-V code as bytes
     /// let shader = Shader::new_compute(my_shader_code.as_slice());
@@ -157,22 +150,18 @@ impl ComputePipeline {
             device.destroy_shader_module(shader_module, None);
 
             Ok(ComputePipeline {
-                descriptor_bindings,
-                info,
-                inner: Arc::new(PipelineInner {
+                inner: Arc::new(ComputePipelineInner {
+                    descriptor_bindings,
                     descriptor_info,
                     device: device.clone(),
-                    handle: PipelineHandle::Handle(handle),
+                    handle,
+                    info,
                     layout,
+                    name: Default::default(),
+                    push_constants,
                 }),
-                name: None,
-                push_constants,
             })
         }
-    }
-
-    pub(crate) fn descriptor_info(&self) -> &PipelineDescriptorInfo {
-        &self.inner.descriptor_info
     }
 
     /// The device which owns this compute pipeline.
@@ -182,20 +171,39 @@ impl ComputePipeline {
 
     /// The native Vulkan pipeline handle of this compute pipeline.
     pub fn handle(&self) -> vk::Pipeline {
-        let PipelineHandle::Handle(handle) = self.inner.handle else {
-            unreachable!();
-        };
-
-        handle
+        self.inner.handle
     }
 
-    pub(crate) fn layout(&self) -> vk::PipelineLayout {
-        self.inner.layout
+    /// Gets the information used to create this object.
+    pub fn info(&self) -> ComputePipelineInfo {
+        self.inner.info
+    }
+
+    /// Gets the debugging name assigned to this pipeline, if one has been set.
+    pub fn name(&self) -> Option<&str> {
+        self.inner.name.get().map(String::as_str)
     }
 
     /// Sets the debugging name assigned to this pipeline.
+    ///
+    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
+    /// previously set name value.
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        if !self.inner.device.physical_device.instance.info.debug {
+            return;
+        }
+
+        // Both Ok and Err are valid conditions
+        let _ = self.inner.name.set(name.into());
+    }
+
+    /// Sets the debugging name assigned to this pipeline.
+    ///
+    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
+    /// previously set name value.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+        self.set_name(name);
+
         self
     }
 }
@@ -273,6 +281,32 @@ impl ComputePipelineInfoBuilder {
         let res = unsafe { res.unwrap_unchecked() };
 
         res
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ComputePipelineInner {
+    pub descriptor_bindings: DescriptorBindingMap,
+    pub descriptor_info: PipelineDescriptorInfo,
+    pub device: Device,
+    pub handle: vk::Pipeline,
+    pub info: ComputePipelineInfo,
+    pub layout: vk::PipelineLayout,
+    pub name: OnceLock<String>,
+    pub push_constants: Option<vk::PushConstantRange>,
+}
+
+impl Drop for ComputePipelineInner {
+    #[profiling::function]
+    fn drop(&mut self) {
+        if panicking() {
+            return;
+        }
+
+        unsafe {
+            self.device.destroy_pipeline(self.handle, None);
+            self.device.destroy_pipeline_layout(self.layout, None);
+        }
     }
 }
 

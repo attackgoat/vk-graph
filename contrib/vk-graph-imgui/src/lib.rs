@@ -26,7 +26,7 @@ use {
 pub struct ImGui {
     context: Context,
     font_atlas_image: Option<Arc<Lease<Image>>>,
-    pipeline: Arc<GraphicPipeline>,
+    pipeline: GraphicPipeline,
     platform: WinitPlatform,
 }
 
@@ -35,19 +35,17 @@ impl ImGui {
     pub fn new(device: &Device) -> Self {
         let mut context = Context::create();
         let platform = WinitPlatform::new(&mut context);
-        let pipeline = Arc::new(
-            GraphicPipeline::create(
-                device,
-                GraphicPipelineInfoBuilder::default()
-                    .blend(BlendMode::PRE_MULTIPLIED_ALPHA)
-                    .cull_mode(vk::CullModeFlags::NONE),
-                [
-                    Shader::new_vertex(include_glsl!("res/shader/imgui.vert").as_slice()),
-                    Shader::new_fragment(include_glsl!("res/shader/imgui.frag").as_slice()),
-                ],
-            )
-            .unwrap(),
-        );
+        let pipeline = GraphicPipeline::create(
+            device,
+            GraphicPipelineInfoBuilder::default()
+                .blend(BlendMode::PRE_MULTIPLIED_ALPHA)
+                .cull_mode(vk::CullModeFlags::NONE),
+            [
+                Shader::new_vertex(include_glsl!("res/shader/imgui.vert").as_slice()),
+                Shader::new_fragment(include_glsl!("res/shader/imgui.frag").as_slice()),
+            ],
+        )
+        .unwrap();
 
         Self {
             context,

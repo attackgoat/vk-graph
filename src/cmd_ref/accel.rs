@@ -33,7 +33,7 @@ use {
 /// # use vk_graph::Graph;
 /// # use vk_graph::driver::shader::Shader;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let device = Device::new(DeviceInfo::default())?;
 /// # let mut my_graph = Graph::default();
 /// # let info = AccelerationStructureInfo::blas(1);
 /// my_graph.begin_cmd().with_name("my acceleration command")
@@ -73,7 +73,7 @@ impl Acceleration<'_> {
     /// # use vk_graph::Graph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let mut my_graph = Graph::default();
     /// # let info = AccelerationStructureInfo::blas(1);
     /// # let blas_accel_struct = AccelerationStructure::create(&device, info)?;

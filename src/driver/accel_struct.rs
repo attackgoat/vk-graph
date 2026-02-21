@@ -38,7 +38,7 @@ use std::sync::Mutex;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let device = Device::new(DeviceInfo::default())?;
 /// # const SIZE: vk::DeviceSize = 1024;
 /// # let info = AccelerationStructureInfo::blas(SIZE);
 /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
@@ -59,12 +59,6 @@ pub struct AccelerationStructure {
     /// _Note:_ This field is read-only.
     #[readonly]
     pub buffer: Buffer,
-
-    /// The device which owns this buffer resource.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub device: Device,
 
     /// The native Vulkan resource handle of this acceleration structure.
     ///
@@ -96,7 +90,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// const SIZE: vk::DeviceSize = 1024;
     /// let info = AccelerationStructureInfo::blas(SIZE);
     /// let accel_struct = AccelerationStructure::create(&device, info)?;
@@ -146,12 +140,9 @@ impl AccelerationStructure {
             )?
         };
 
-        let device = device.clone();
-
         Ok(Self {
             access: Mutex::new(AccessType::Nothing),
             buffer,
-            device,
             handle,
             info,
             name: None,
@@ -180,7 +171,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # const SIZE: vk::DeviceSize = 1024;
     /// # let info = AccelerationStructureInfo::blas(SIZE);
     /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
@@ -226,7 +217,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # const SIZE: vk::DeviceSize = 1024;
     /// # let info = AccelerationStructureInfo::blas(SIZE);
     /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
@@ -237,7 +228,7 @@ impl AccelerationStructure {
     /// ```
     #[profiling::function]
     pub fn device_address(&self) -> vk::DeviceAddress {
-        let accel_struct_ext = Device::expect_accel_struct_ext(&self.device);
+        let accel_struct_ext = Device::expect_accel_struct_ext(&self.buffer.device);
 
         unsafe {
             accel_struct_ext.get_acceleration_structure_device_address(
@@ -268,7 +259,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, DeviceOrHostAddress};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_geom_triangles = AccelerationStructureGeometryData::Triangles {
     /// #     index_addr: DeviceOrHostAddress::DeviceAddress(0),
     /// #     index_type: vk::IndexType::UINT32,
@@ -355,7 +346,7 @@ impl Drop for AccelerationStructure {
             return;
         }
 
-        let accel_struct_ext = Device::expect_accel_struct_ext(&self.device);
+        let accel_struct_ext = Device::expect_accel_struct_ext(&self.buffer.device);
 
         unsafe {
             accel_struct_ext.destroy_acceleration_structure(self.handle, None);

@@ -93,24 +93,16 @@ fn select_physical_device(
 #[derive(Clone)]
 #[repr(C)]
 pub struct Device {
-    accel_struct_ext: Option<khr::acceleration_structure::Device>,
     inner: Arc<DeviceInner>,
 
     /// The physical device, which contains useful data about features, properties, and limits.
     ///
     /// _Note:_ This field is read-only.
     #[cfg(doc)]
-    pub physical_device: PhysicalDevice,
+    pub physical_device: Box<PhysicalDevice>,
 
     #[cfg(not(doc))]
-    physical_device: PhysicalDevice,
-
-    /// The physical execution queues which all work will be submitted to.
-    pub(crate) queues: Box<[Box<[vk::Queue]>]>,
-
-    ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
-    surface_ext: Option<khr::surface::Instance>,
-    swapchain_ext: Option<khr::swapchain::Device>,
+    physical_device: Box<PhysicalDevice>,
 }
 
 impl Device {
@@ -167,7 +159,8 @@ impl Device {
     ///
     /// Panics if [Self.physical_device.accel_struct_properties] is `None`.
     pub(crate) fn expect_accel_struct_ext(this: &Self) -> &khr::acceleration_structure::Device {
-        this.accel_struct_ext
+        this.inner
+            .accel_struct_ext
             .as_ref()
             .expect("VK_KHR_acceleration_structure")
     }
@@ -179,7 +172,8 @@ impl Device {
     ///
     /// Panics if [Self.physical_device.ray_trace_properties] is `None`.
     pub(crate) fn expect_ray_trace_ext(this: &Self) -> &khr::ray_tracing_pipeline::Device {
-        this.ray_trace_ext
+        this.inner
+            .ray_trace_ext
             .as_ref()
             .expect("VK_KHR_ray_tracing_pipeline")
     }
@@ -190,7 +184,7 @@ impl Device {
     ///
     /// Panics if the device was not created for display window access.
     pub(crate) fn expect_surface_ext(this: &Self) -> &khr::surface::Instance {
-        this.surface_ext.as_ref().expect("VK_KHR_surface")
+        this.inner.surface_ext.as_ref().expect("VK_KHR_surface")
     }
 
     /// Helper for times when you already know that the device supports the swapchain extension.
@@ -199,7 +193,7 @@ impl Device {
     ///
     /// Panics if the device was not created for display window access.
     pub(crate) fn expect_swapchain_ext(this: &Self) -> &khr::swapchain::Device {
-        this.swapchain_ext.as_ref().expect("VK_KHR_swapchain")
+        this.inner.swapchain_ext.as_ref().expect("VK_KHR_swapchain")
     }
 
     /// Loads and existing `ash` Vulkan device that may have been created by other means.
@@ -265,17 +259,17 @@ impl Device {
                 })?;
 
         Ok(Self {
-            accel_struct_ext,
             inner: Arc::new(DeviceInner {
+                accel_struct_ext,
                 allocator: ManuallyDrop::new(Mutex::new(allocator)),
                 device,
                 pipeline_cache,
+                queues: queues.into_boxed_slice(),
+                ray_trace_ext,
+                surface_ext,
+                swapchain_ext,
             }),
-            physical_device,
-            queues: queues.into_boxed_slice(),
-            ray_trace_ext,
-            surface_ext,
-            swapchain_ext,
+            physical_device: Box::new(physical_device),
         })
     }
 
@@ -334,6 +328,23 @@ impl Device {
 
     pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
         this.inner.pipeline_cache
+    }
+
+    /// TODO
+    ///
+    /// Panics if the indicies are invalid.
+    pub fn queue(this: &Self, queue_family_index: u32, queue_index: u32) -> vk::Queue {
+        debug_assert!(
+            (queue_family_index as usize) < this.physical_device.queue_families.len(),
+            "Queue family index must be within the range of the available queues created by the device."
+        );
+        debug_assert!(
+            queue_index
+                < this.physical_device.queue_families[queue_family_index as usize].queue_count,
+            "Queue index must be within the range of the available queues created by the device."
+        );
+
+        this.inner.queues[queue_family_index as usize][queue_index as usize]
     }
 
     #[profiling::function]
@@ -506,9 +517,14 @@ impl DeviceInfoBuilder {
 }
 
 struct DeviceInner {
+    accel_struct_ext: Option<khr::acceleration_structure::Device>,
     allocator: ManuallyDrop<Mutex<Allocator>>,
     device: ash::Device,
     pipeline_cache: vk::PipelineCache,
+    pub queues: Box<[Box<[vk::Queue]>]>,
+    ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
+    surface_ext: Option<khr::surface::Instance>,
+    swapchain_ext: Option<khr::swapchain::Device>,
 }
 
 impl Drop for DeviceInner {
@@ -545,13 +561,8 @@ impl Drop for DeviceInner {
 #[doc(hidden)]
 #[repr(C)]
 pub struct ReadOnlyDevice {
-    accel_struct_ext: Option<khr::acceleration_structure::Device>,
     inner: Arc<DeviceInner>,
-    pub physical_device: PhysicalDevice,
-    pub(crate) queues: Box<[Box<[vk::Queue]>]>,
-    ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
-    surface_ext: Option<khr::surface::Instance>,
-    swapchain_ext: Option<khr::swapchain::Device>,
+    pub physical_device: Box<PhysicalDevice>,
 }
 
 impl Deref for ReadOnlyDevice {
@@ -573,30 +584,10 @@ mod tests {
     pub fn device_repr_c() {
         // HACK: The readonly crate uses a private implementation and so we can't further deref it
         // into the native object type. Because of this the ReadOnly part is manually implemented.
-        assert_eq!(
-            offset_of!(Device, accel_struct_ext),
-            offset_of!(ReadOnlyDevice, accel_struct_ext),
-        );
         assert_eq!(offset_of!(Device, inner), offset_of!(ReadOnlyDevice, inner),);
         assert_eq!(
             offset_of!(Device, physical_device),
             offset_of!(ReadOnlyDevice, physical_device),
-        );
-        assert_eq!(
-            offset_of!(Device, queues),
-            offset_of!(ReadOnlyDevice, queues),
-        );
-        assert_eq!(
-            offset_of!(Device, ray_trace_ext),
-            offset_of!(ReadOnlyDevice, ray_trace_ext),
-        );
-        assert_eq!(
-            offset_of!(Device, surface_ext),
-            offset_of!(ReadOnlyDevice, surface_ext),
-        );
-        assert_eq!(
-            offset_of!(Device, swapchain_ext),
-            offset_of!(ReadOnlyDevice, swapchain_ext),
         );
     }
 

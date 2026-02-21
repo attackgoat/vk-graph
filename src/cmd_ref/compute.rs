@@ -6,7 +6,6 @@ use {
     },
     ash::vk,
     log::trace,
-    std::sync::Arc,
 };
 
 /// Recording interface for computing commands.
@@ -21,7 +20,6 @@ use {
 /// Basic usage:
 ///
 /// ```no_run
-/// # use std::sync::Arc;
 /// # use ash::vk;
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -29,10 +27,10 @@ use {
 /// # use vk_graph::driver::shader::{Shader};
 /// # use vk_graph::Graph;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let device = Device::new(DeviceInfo::default())?;
 /// # let info = ComputePipelineInfo::default();
 /// # let shader = Shader::new_compute([0u8; 1].as_slice());
-/// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
+/// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd().with_name("my compute pass")
 ///         .bind_pipeline(&my_compute_pipeline)
@@ -74,7 +72,6 @@ impl Compute<'_> {
     /// ```
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -83,12 +80,12 @@ impl Compute<'_> {
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::STORAGE_BUFFER);
     /// # let my_buf = Buffer::create(&device, buf_info)?;
     /// # let info = ComputePipelineInfo::default();
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
-    /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
+    /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
     /// # let my_buf_node = my_graph.bind_node(my_buf);
     /// my_graph.begin_cmd().with_name("fill my_buf_node with data")
@@ -159,7 +156,6 @@ impl Compute<'_> {
     /// Basic usage:
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use std::mem::size_of;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
@@ -169,12 +165,12 @@ impl Compute<'_> {
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::STORAGE_BUFFER);
     /// # let my_buf = Buffer::create(&device, buf_info)?;
     /// # let info = ComputePipelineInfo::default();
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
-    /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
+    /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
     /// # let my_buf_node = my_graph.bind_node(my_buf);
     /// const CMD_SIZE: usize = size_of::<vk::DispatchIndirectCommand>();
@@ -260,7 +256,6 @@ impl Compute<'_> {
     /// ```
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -269,10 +264,10 @@ impl Compute<'_> {
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let info = ComputePipelineInfo::default();
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
-    /// # let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
+    /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
     /// my_graph.begin_cmd().with_name("compute the ultimate question")
     ///         .bind_pipeline(&my_compute_pipeline)
@@ -286,7 +281,7 @@ impl Compute<'_> {
     /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
     #[profiling::function]
     pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
-        if let Some(push_const) = self.pipeline.push_constants {
+        if let Some(push_const) = self.pipeline.inner.push_constants {
             // Determine the range of the overall pipline push constants which overlap with `data`
             let push_const_end = push_const.offset + push_const.size;
             let data_end = offset + data.len() as u32;
@@ -302,7 +297,7 @@ impl Compute<'_> {
                 unsafe {
                     self.device.cmd_push_constants(
                         self.cmd_buf,
-                        self.pipeline.layout(),
+                        self.pipeline.inner.layout,
                         vk::ShaderStageFlags::COMPUTE,
                         push_const.offset,
                         &data[(start - offset) as usize..(end - offset) as usize],
@@ -322,16 +317,17 @@ impl PipelineCommandRef<'_, ComputePipeline> {
         mut self,
         func: impl FnOnce(Compute<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
-        let pipeline = 
-            self.cmd
-                .as_ref()
-                .execs
-                .last()
-                .unwrap()
-                .pipeline
-                .as_ref()
-                .unwrap()
-                .unwrap_compute().clone();
+        let pipeline = self
+            .cmd
+            .as_ref()
+            .execs
+            .last()
+            .unwrap()
+            .pipeline
+            .as_ref()
+            .unwrap()
+            .unwrap_compute()
+            .clone();
 
         self.cmd.push_execute(move |device, cmd_buf, bindings| {
             func(

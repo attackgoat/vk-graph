@@ -37,7 +37,7 @@ use {
     bytemuck::{bytes_of, Pod, Zeroable},
     clap::Parser,
     pak::{Pak, PakBuf},
-    std::{sync::Arc, time::Instant},
+    std::time::Instant,
     vk_graph::{
         driver::{
             ash::vk,
@@ -103,28 +103,24 @@ fn main() -> anyhow::Result<()> {
     // no depth/stencil
     // 1x sample count
     // one-sided
-    let buffer_pipeline = Arc::new(
-        GraphicPipeline::create(
-            &window.device,
-            GraphicPipelineInfo::default(),
-            [
-                Shader::new_vertex(res::shader::QUAD_VERT),
-                Shader::new_fragment(res::shader::FLOCKAROO_BUF_FRAG),
-            ],
-        )
-        .context("FLOCKAROO_BUF_FRAG")?,
-    );
-    let image_pipeline = Arc::new(
-        GraphicPipeline::create(
-            &window.device,
-            GraphicPipelineInfo::default(),
-            [
-                Shader::new_vertex(res::shader::QUAD_VERT),
-                Shader::new_fragment(res::shader::FLOCKAROO_IMG_FRAG),
-            ],
-        )
-        .context("FLOCKAROO_IMG_FRAG")?,
-    );
+    let buffer_pipeline = GraphicPipeline::create(
+        &window.device,
+        GraphicPipelineInfo::default(),
+        [
+            Shader::new_vertex(res::shader::QUAD_VERT),
+            Shader::new_fragment(res::shader::FLOCKAROO_BUF_FRAG),
+        ],
+    )
+    .context("FLOCKAROO_BUF_FRAG")?;
+    let image_pipeline = GraphicPipeline::create(
+        &window.device,
+        GraphicPipelineInfo::default(),
+        [
+            Shader::new_vertex(res::shader::QUAD_VERT),
+            Shader::new_fragment(res::shader::FLOCKAROO_IMG_FRAG),
+        ],
+    )
+    .context("FLOCKAROO_IMG_FRAG")?;
 
     let mut render_graph = Graph::default();
     let blank_image = render_graph.bind_node(

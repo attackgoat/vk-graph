@@ -66,7 +66,7 @@ For example, a typical host-mappable buffer:
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # fn main() -> Result<(), DriverError> {
-# let device = Arc::new(Device::new(DeviceInfo::default())?);
+# let device = Device::new(DeviceInfo::default())?;
 let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 let my_buf = Buffer::create(&device, info)?;
 # Ok(()) }
@@ -88,7 +88,7 @@ For example, a graphics pipeline:
 # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Arc::new(Device::new(DeviceInfo::default())?);
+# let device = Device::new(DeviceInfo::default())?;
 # let my_frag_code = [0u8; 1];
 # let my_vert_code = [0u8; 1];
 // shader code is SPIR-V in u32 format
@@ -110,7 +110,7 @@ make the information of each resource easily available and immutable.
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
 # fn main() -> Result<(), DriverError> {
-# let device = Arc::new(Device::new(DeviceInfo::default())?);
+# let device = Device::new(DeviceInfo::default())?;
 let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::empty());
 let my_image = Image::create(&device, info)?;
 
@@ -138,7 +138,7 @@ For example, leasing an image:
 # use vk_graph::pool::{Pool};
 # use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
-# let device = Arc::new(Device::new(DeviceInfo::default())?);
+# let device = Device::new(DeviceInfo::default())?;
 let mut pool = LazyPool::new(&device);
 
 let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
@@ -178,7 +178,7 @@ it as a node. Bound nodes may only be used with the graphs they were bound to. N
 # use vk_graph::pool::{Pool};
 # use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
-# let device = Arc::new(Device::new(DeviceInfo::default())?);
+# let device = Device::new(DeviceInfo::default())?;
 # let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 # let buffer = Buffer::create(&device, info)?;
 # let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
@@ -230,7 +230,7 @@ Example:
 # use vk_graph::pool::{Pool};
 # use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
-# let device = Arc::new(Device::new(DeviceInfo::default())?);
+# let device = Device::new(DeviceInfo::default())?;
 # let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 # let buffer = Buffer::create(&device, info)?;
 # let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
@@ -262,7 +262,6 @@ graph
 Pipeline instances may be bound to a [`PassRef`] in order to execute the associated shader code:
 
 ```no_run
-# use std::sync::Arc;
 # use ash::vk;
 # use vk_graph::driver::DriverError;
 # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -270,11 +269,11 @@ Pipeline instances may be bound to a [`PassRef`] in order to execute the associa
 # use vk_graph::driver::shader::{Shader};
 # use vk_graph::Graph;
 # fn main() -> Result<(), DriverError> {
-# let device = Arc::new(Device::new(DeviceInfo::default())?);
+# let device = Device::new(DeviceInfo::default())?;
 # let my_shader_code = [0u8; 1];
 # let info = ComputePipelineInfo::default();
 # let shader = Shader::new_compute(my_shader_code.as_slice());
-# let my_compute_pipeline = Arc::new(ComputePipeline::create(&device, info, shader)?);
+# let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
 # let mut graph = Graph::default();
 graph
     .begin_cmd().with_name("My compute pass")
@@ -398,7 +397,6 @@ use {
         collections::{BTreeMap, HashMap},
         fmt::{Debug, Formatter},
         ops::Range,
-        sync::Arc,
     },
     vk_sync::AccessType,
 };
@@ -592,25 +590,25 @@ impl ExecutionPipeline {
 
     fn descriptor_bindings(&self) -> &DescriptorBindingMap {
         match self {
-            ExecutionPipeline::Compute(pipeline) => &pipeline.descriptor_bindings,
-            ExecutionPipeline::Graphic(pipeline) => &pipeline.descriptor_bindings,
-            ExecutionPipeline::RayTrace(pipeline) => &pipeline.descriptor_bindings,
+            ExecutionPipeline::Compute(pipeline) => &pipeline.inner.descriptor_bindings,
+            ExecutionPipeline::Graphic(pipeline) => &pipeline.inner.descriptor_bindings,
+            ExecutionPipeline::RayTrace(pipeline) => &pipeline.inner.descriptor_bindings,
         }
     }
 
     fn descriptor_info(&self) -> &PipelineDescriptorInfo {
         match self {
-            ExecutionPipeline::Compute(pipeline) => pipeline.descriptor_info(),
-            ExecutionPipeline::Graphic(pipeline) => &pipeline.descriptor_info,
-            ExecutionPipeline::RayTrace(pipeline) => pipeline.descriptor_info(),
+            ExecutionPipeline::Compute(pipeline) => &pipeline.inner.descriptor_info,
+            ExecutionPipeline::Graphic(pipeline) => &pipeline.inner.descriptor_info,
+            ExecutionPipeline::RayTrace(pipeline) => &pipeline.inner.descriptor_info,
         }
     }
 
     fn layout(&self) -> vk::PipelineLayout {
         match self {
-            ExecutionPipeline::Compute(pipeline) => pipeline.layout(),
-            ExecutionPipeline::Graphic(pipeline) => pipeline.layout,
-            ExecutionPipeline::RayTrace(pipeline) => pipeline.layout(),
+            ExecutionPipeline::Compute(pipeline) => pipeline.inner.layout,
+            ExecutionPipeline::Graphic(pipeline) => pipeline.inner.layout,
+            ExecutionPipeline::RayTrace(pipeline) => pipeline.inner.layout,
         }
     }
 

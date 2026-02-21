@@ -30,7 +30,7 @@ use {
         ray_trace::RayTracePipeline,
     },
     ash::vk,
-    std::{marker::PhantomData, ops::Index, sync::Arc},
+    std::{marker::PhantomData, ops::Index},
     vk_sync::AccessType,
 };
 
@@ -158,7 +158,7 @@ bind!(RayTrace);
 /// # use vk_graph::Graph;
 /// # use vk_graph::node::ImageNode;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let device = Device::new(DeviceInfo::default())?;
 /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
 /// # let image = Image::create(&device, info)?;
 /// # let mut my_graph = Graph::default();

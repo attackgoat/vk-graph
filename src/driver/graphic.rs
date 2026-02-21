@@ -12,7 +12,12 @@ use {
     derive_builder::{Builder, UninitializedFieldError},
     log::{Level::Trace, log_enabled, trace, warn},
     ordered_float::OrderedFloat,
-    std::{collections::HashSet, ffi::CString, thread::panicking},
+    std::{
+        collections::HashSet,
+        ffi::CString,
+        sync::{Arc, OnceLock},
+        thread::panicking,
+    },
 };
 
 const RGBA_COLOR_COMPONENTS: vk::ColorComponentFlags = vk::ColorComponentFlags::from_raw(
@@ -345,31 +350,10 @@ impl From<UninitializedFieldError> for DepthStencilModeBuilderError {
 /// Also contains information about the object.
 ///
 /// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[readonly::make]
 pub struct GraphicPipeline {
-    pub(crate) descriptor_bindings: DescriptorBindingMap,
-    pub(crate) descriptor_info: PipelineDescriptorInfo,
-
-    /// The device which owns this buffer resource.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub device: Device,
-
-    /// Information used to create this object.
-    #[readonly]
-    pub info: GraphicPipelineInfo,
-
-    pub(crate) input_attachments: Box<[u32]>,
-    pub(crate) layout: vk::PipelineLayout,
-
-    /// A descriptive name used in debugging messages.
-    pub name: Option<String>,
-
-    pub(crate) push_constants: Vec<vk::PushConstantRange>,
-    pub(crate) shader_modules: Vec<vk::ShaderModule>,
-    pub(super) state: GraphicPipelineState,
+    pub(crate) inner: Arc<GraphicPipelineInner>,
 }
 
 impl GraphicPipeline {
@@ -394,7 +378,7 @@ impl GraphicPipeline {
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// // shader code is raw SPIR-V code as bytes
@@ -403,7 +387,7 @@ impl GraphicPipeline {
     /// let info = GraphicPipelineInfo::default();
     /// let pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     ///
-    /// assert_eq!(pipeline.info.front_face, vk::FrontFace::COUNTER_CLOCKWISE);
+    /// assert_eq!(pipeline.info().front_face, vk::FrontFace::COUNTER_CLOCKWISE);
     /// # Ok(()) }
     /// ```
     #[profiling::function]
@@ -514,7 +498,7 @@ impl GraphicPipeline {
 
                     DriverError::Unsupported
                 })?;
-            let shader_info = shaders
+            let shader_stages = shaders
                 .into_iter()
                 .map(|shader| {
                     let shader_module = device
@@ -527,24 +511,16 @@ impl GraphicPipeline {
 
                             DriverError::Unsupported
                         })?;
-                    let shader_stage = Stage {
+                    let shader_stage = ShaderStage {
                         flags: shader.stage,
                         module: shader_module,
                         name: CString::new(shader.entry_name.as_str()).unwrap(),
                         specialization_info: shader.specialization_info,
                     };
 
-                    Result::<_, DriverError>::Ok((shader_module, shader_stage))
+                    Result::<_, DriverError>::Ok(shader_stage)
                 })
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut shader_modules = vec![];
-            let mut stages = vec![];
-            shader_info
-                .into_iter()
-                .for_each(|(shader_module, shader_stage)| {
-                    shader_modules.push(shader_module);
-                    stages.push(shader_stage);
-                });
+                .collect::<Result<Box<_>, _>>()?;
 
             let mut multisample = MultisampleState {
                 alpha_to_coverage_enable: info.alpha_to_coverage,
@@ -572,51 +548,62 @@ impl GraphicPipeline {
                 multisample.min_sample_shading = min_sample_shading;
             }
 
-            let push_constants = merge_push_constant_ranges(&push_constants);
+            let push_constants = merge_push_constant_ranges(&push_constants).into_boxed_slice();
 
             Ok(Self {
-                descriptor_bindings,
-                descriptor_info,
-                device,
-                info,
-                input_attachments,
-                layout,
-                name: None,
-                push_constants,
-                shader_modules,
-                state: GraphicPipelineState {
+                inner: Arc::new(GraphicPipelineInner {
+                    descriptor_bindings,
+                    descriptor_info,
+                    device,
+                    info,
+                    input_attachments,
                     layout,
                     multisample,
-                    stages,
+                    name: Default::default(),
+                    push_constants,
+                    shader_stages,
                     vertex_input,
-                },
+                }),
             })
         }
     }
 
-    /// Sets the debugging name assigned to this pipeline.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
+    /// The device which owns this compute pipeline.
+    pub fn device(&self) -> &Device {
+        &self.inner.device
     }
-}
 
-impl Drop for GraphicPipeline {
-    #[profiling::function]
-    fn drop(&mut self) {
-        if panicking() {
+    /// Gets the information used to create this object.
+    pub fn info(&self) -> GraphicPipelineInfo {
+        self.inner.info
+    }
+
+    /// Gets the debugging name assigned to this pipeline, if one has been set.
+    pub fn name(&self) -> Option<&str> {
+        self.inner.name.get().map(String::as_str)
+    }
+
+    /// Sets the debugging name assigned to this pipeline.
+    ///
+    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
+    /// previously set name value.
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        if !self.inner.device.physical_device.instance.info.debug {
             return;
         }
 
-        unsafe {
-            self.device.destroy_pipeline_layout(self.layout, None);
-        }
+        // Both Ok and Err are valid conditions
+        let _ = self.inner.name.set(name.into());
+    }
 
-        for shader_module in self.shader_modules.drain(..) {
-            unsafe {
-                self.device.destroy_shader_module(shader_module, None);
-            }
-        }
+    /// Sets the debugging name assigned to this pipeline.
+    ///
+    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
+    /// previously set name value.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.set_name(name);
+
+        self
     }
 }
 
@@ -773,15 +760,41 @@ impl GraphicPipelineInfoBuilder {
 }
 
 #[derive(Debug)]
-pub(super) struct GraphicPipelineState {
+pub(crate) struct GraphicPipelineInner {
+    pub descriptor_bindings: DescriptorBindingMap,
+    pub descriptor_info: PipelineDescriptorInfo,
+    pub device: Device,
+    pub info: GraphicPipelineInfo,
+    pub input_attachments: Box<[u32]>,
     pub layout: vk::PipelineLayout,
     pub multisample: MultisampleState,
-    pub stages: Vec<Stage>,
+    pub name: OnceLock<String>,
+    pub push_constants: Box<[vk::PushConstantRange]>,
+    pub shader_stages: Box<[ShaderStage]>,
     pub vertex_input: VertexInputState,
 }
 
+impl Drop for GraphicPipelineInner {
+    #[profiling::function]
+    fn drop(&mut self) {
+        if panicking() {
+            return;
+        }
+
+        unsafe {
+            self.device.destroy_pipeline_layout(self.layout, None);
+        }
+
+        for shader_stage in &mut self.shader_stages {
+            unsafe {
+                self.device.destroy_shader_module(shader_stage.module, None);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default)]
-pub(super) struct MultisampleState {
+pub(crate) struct MultisampleState {
     pub alpha_to_coverage_enable: bool,
     pub alpha_to_one_enable: bool,
     pub flags: vk::PipelineMultisampleStateCreateFlags,
@@ -792,7 +805,7 @@ pub(super) struct MultisampleState {
 }
 
 #[derive(Debug)]
-pub(super) struct Stage {
+pub(crate) struct ShaderStage {
     pub flags: vk::ShaderStageFlags,
     pub module: vk::ShaderModule,
     pub name: CString, // TODO
@@ -862,7 +875,7 @@ impl From<StencilMode> for vk::StencilOpState {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct VertexInputState {
+pub(crate) struct VertexInputState {
     pub vertex_binding_descriptions: Vec<vk::VertexInputBindingDescription>,
     pub vertex_attribute_descriptions: Vec<vk::VertexInputAttributeDescription>,
 }

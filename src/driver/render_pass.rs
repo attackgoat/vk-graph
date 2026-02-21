@@ -7,7 +7,6 @@ use {
     std::{
         collections::{HashMap, hash_map::Entry},
         slice,
-        sync::Arc,
         thread::panicking,
     },
 };
@@ -320,15 +319,15 @@ impl RenderPass {
     }
 
     #[profiling::function]
-    pub fn graphic_pipeline(
+    pub fn pipeline_handle(
         &mut self,
-        pipeline: &Arc<GraphicPipeline>,
+        pipeline: &GraphicPipeline,
         depth_stencil: Option<DepthStencilMode>,
         subpass_idx: u32,
     ) -> Result<vk::Pipeline, DriverError> {
         let entry = self.graphic_pipelines.entry(GraphicPipelineKey {
             depth_stencil,
-            layout: pipeline.layout,
+            layout: pipeline.inner.layout,
             subpass_idx,
         });
         if let Entry::Occupied(entry) = entry {
@@ -343,38 +342,29 @@ impl RenderPass {
         let color_blend_attachment_states = self.info.subpasses[subpass_idx as usize]
             .color_attachments
             .iter()
-            .map(|_| pipeline.info.blend.into())
+            .map(|_| pipeline.inner.info.blend.into())
             .collect::<Box<[_]>>();
         let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
             .attachments(&color_blend_attachment_states);
-        let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
+            .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
         let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
-            .alpha_to_coverage_enable(pipeline.state.multisample.alpha_to_coverage_enable)
-            .alpha_to_one_enable(pipeline.state.multisample.alpha_to_one_enable)
-            .flags(pipeline.state.multisample.flags)
-            .min_sample_shading(pipeline.state.multisample.min_sample_shading)
-            .rasterization_samples(pipeline.state.multisample.rasterization_samples.into())
-            .sample_shading_enable(pipeline.state.multisample.sample_shading_enable)
-            .sample_mask(&pipeline.state.multisample.sample_mask);
+            .alpha_to_coverage_enable(pipeline.inner.multisample.alpha_to_coverage_enable)
+            .alpha_to_one_enable(pipeline.inner.multisample.alpha_to_one_enable)
+            .flags(pipeline.inner.multisample.flags)
+            .min_sample_shading(pipeline.inner.multisample.min_sample_shading)
+            .rasterization_samples(pipeline.inner.multisample.rasterization_samples.into())
+            .sample_shading_enable(pipeline.inner.multisample.sample_shading_enable)
+            .sample_mask(&pipeline.inner.multisample.sample_mask);
         let specializations = pipeline
-            .state
-            .stages
+            .inner
+            .shader_stages
             .iter()
-            .map(|stage| {
-                stage
-                    .specialization_info
-                    .as_ref()
-                    .map(|specialization_info| {
-                        vk::SpecializationInfo::default()
-                            .map_entries(&specialization_info.map_entries)
-                            .data(&specialization_info.data)
-                    })
-            })
+            .map(|stage| stage.specialization_info.as_ref().map(Into::into))
             .collect::<Box<_>>();
         let stages = pipeline
-            .state
-            .stages
+            .inner
+            .shader_stages
             .iter()
             .zip(specializations.iter())
             .map(|(stage, specialization)| {
@@ -392,22 +382,22 @@ impl RenderPass {
             .collect::<Box<[_]>>();
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_attribute_descriptions(
-                &pipeline.state.vertex_input.vertex_attribute_descriptions,
+                &pipeline.inner.vertex_input.vertex_attribute_descriptions,
             )
-            .vertex_binding_descriptions(&pipeline.state.vertex_input.vertex_binding_descriptions);
+            .vertex_binding_descriptions(&pipeline.inner.vertex_input.vertex_binding_descriptions);
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
         let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
-            topology: pipeline.info.topology,
+            topology: pipeline.inner.info.topology,
             ..Default::default()
         };
         let depth_stencil = depth_stencil.map(Into::into).unwrap_or_default();
         let rasterization_state = vk::PipelineRasterizationStateCreateInfo {
-            front_face: pipeline.info.front_face,
+            front_face: pipeline.inner.info.front_face,
             line_width: 1.0,
-            polygon_mode: pipeline.info.polygon_mode,
-            cull_mode: pipeline.info.cull_mode,
+            polygon_mode: pipeline.inner.info.polygon_mode,
+            cull_mode: pipeline.inner.info.cull_mode,
             ..Default::default()
         };
         let create_info = vk::GraphicsPipelineCreateInfo::default()
@@ -415,7 +405,7 @@ impl RenderPass {
             .depth_stencil_state(&depth_stencil)
             .dynamic_state(&dynamic_state)
             .input_assembly_state(&input_assembly_state)
-            .layout(pipeline.state.layout)
+            .layout(pipeline.inner.layout)
             .multisample_state(&multisample_state)
             .rasterization_state(&rasterization_state)
             .render_pass(self.handle)

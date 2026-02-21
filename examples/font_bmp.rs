@@ -4,7 +4,7 @@ use {
     bmfont::{BMFont, OrdinateOrientation},
     clap::Parser,
     image::ImageReader,
-    std::{io::Cursor, sync::Arc, time::Instant},
+    std::{io::Cursor, time::Instant},
     vk_graph_fx::*,
     vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
@@ -48,7 +48,7 @@ fn main() -> anyhow::Result<()> {
     // A neato smoke effect just for fun
     let Vulkan11Properties { subgroup_size, .. } = window.device.physical_device.properties_v1_1;
     let start_time = Instant::now();
-    let smoke_pipeline = Arc::new(ComputePipeline::create(&window.device,
+    let smoke_pipeline = ComputePipeline::create(&window.device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
         glsl!(
@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
                 size: 4,
             }],
         }),
-    )?);
+    )?;
 
     window.run(|frame| {
         let image_node = frame.render_graph.bind_node(

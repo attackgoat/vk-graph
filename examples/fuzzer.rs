@@ -25,7 +25,7 @@ use {
     clap::Parser,
     log::debug,
     rand::{Rng, rng, seq::IndexedRandom},
-    std::{mem::size_of, sync::Arc},
+    std::mem::size_of,
     vk_graph_prelude::*,
     vk_graph_window::{FrameContext, WindowBuilder, WindowError},
     vk_shader_macros::glsl,
@@ -1519,19 +1519,18 @@ fn compute_pipeline(
     device: &Device,
     info: impl Into<ComputePipelineInfo>,
     shader: impl Into<Shader>,
-) -> Arc<ComputePipeline> {
+) -> ComputePipeline {
     use std::{cell::RefCell, collections::HashMap};
 
     thread_local! {
-        static TLS: RefCell<HashMap<&'static str, Arc<ComputePipeline>>> = Default::default();
+        static TLS: RefCell<HashMap<&'static str, ComputePipeline>> = Default::default();
     }
 
     TLS.with(|tls| {
-        Arc::clone(
-            tls.borrow_mut().entry(key).or_insert_with(|| {
-                Arc::new(ComputePipeline::create(device, info, shader).unwrap())
-            }),
-        )
+        tls.borrow_mut()
+            .entry(key)
+            .or_insert_with(|| ComputePipeline::create(device, info, shader).unwrap())
+            .clone()
     })
 }
 
@@ -1540,7 +1539,7 @@ fn graphic_vert_frag_pipeline(
     info: impl Into<GraphicPipelineInfo>,
     vert_source: &'static [u32],
     frag_source: &'static [u32],
-) -> Arc<GraphicPipeline> {
+) -> GraphicPipeline {
     use std::{cell::RefCell, collections::HashMap};
 
     #[derive(Eq, Hash, PartialEq)]
@@ -1551,33 +1550,30 @@ fn graphic_vert_frag_pipeline(
     }
 
     thread_local! {
-        static TLS: RefCell<HashMap<Key, Arc<GraphicPipeline>>> = Default::default();
+        static TLS: RefCell<HashMap<Key, GraphicPipeline>> = Default::default();
     }
 
     let info = info.into();
 
     TLS.with(|tls| {
-        Arc::clone(
-            tls.borrow_mut()
-                .entry(Key {
+        tls.borrow_mut()
+            .entry(Key {
+                info,
+                vert_source,
+                frag_source,
+            })
+            .or_insert_with(move || {
+                GraphicPipeline::create(
+                    device,
                     info,
-                    vert_source,
-                    frag_source,
-                })
-                .or_insert_with(move || {
-                    Arc::new(
-                        GraphicPipeline::create(
-                            device,
-                            info,
-                            [
-                                Shader::new_vertex(vert_source),
-                                Shader::new_fragment(frag_source),
-                            ],
-                        )
-                        .unwrap(),
-                    )
-                }),
-        )
+                    [
+                        Shader::new_vertex(vert_source),
+                        Shader::new_fragment(frag_source),
+                    ],
+                )
+                .unwrap()
+            })
+            .clone()
     })
 }
 

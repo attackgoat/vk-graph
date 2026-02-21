@@ -12,6 +12,7 @@ use {
             SubpassDependency, SubpassInfo,
             accel_struct::AccelerationStructure,
             buffer::Buffer,
+            device::Device,
             format_aspect_mask,
             graphic::{DepthStencilMode, GraphicPipeline},
             image::{Image, ImageAccess},
@@ -221,11 +222,13 @@ impl Resolver {
         let rhs_pipeline = unsafe { rhs_pipeline.unwrap_unchecked() };
 
         // Must be same general rasterization modes
-        if lhs_pipeline.info.blend != rhs_pipeline.info.blend
-            || lhs_pipeline.info.cull_mode != rhs_pipeline.info.cull_mode
-            || lhs_pipeline.info.front_face != rhs_pipeline.info.front_face
-            || lhs_pipeline.info.polygon_mode != rhs_pipeline.info.polygon_mode
-            || lhs_pipeline.info.samples != rhs_pipeline.info.samples
+        let lhs_info = lhs_pipeline.inner.info;
+        let rhs_info = rhs_pipeline.inner.info;
+        if lhs_info.blend != rhs_info.blend
+            || lhs_info.cull_mode != rhs_info.cull_mode
+            || lhs_info.front_face != rhs_info.front_face
+            || lhs_info.polygon_mode != rhs_info.polygon_mode
+            || lhs_info.samples != rhs_info.samples
         {
             trace!("  different rasterization modes",);
 
@@ -325,7 +328,7 @@ impl Resolver {
         }
 
         // Keep input on tile
-        if !rhs_pipeline.input_attachments.is_empty() {
+        if !rhs_pipeline.inner.input_attachments.is_empty() {
             trace!("  merging due to subpass input");
 
             return true;
@@ -634,13 +637,13 @@ impl Resolver {
         if log_enabled!(Trace) {
             let (ty, name, vk_pipeline) = match pipeline {
                 ExecutionPipeline::Compute(pipeline) => {
-                    ("compute", pipeline.name.as_ref(), pipeline.handle())
+                    ("compute", pipeline.name(), pipeline.handle())
                 }
                 ExecutionPipeline::Graphic(pipeline) => {
-                    ("graphic", pipeline.name.as_ref(), vk::Pipeline::null())
+                    ("graphic", pipeline.name(), vk::Pipeline::null())
                 }
                 ExecutionPipeline::RayTrace(pipeline) => {
-                    ("ray trace", pipeline.name.as_ref(), pipeline.handle())
+                    ("ray trace", pipeline.name(), pipeline.handle())
                 }
             };
             if let Some(name) = name {
@@ -654,7 +657,7 @@ impl Resolver {
         let pipeline_bind_point = pipeline.bind_point();
         let pipeline = match pipeline {
             ExecutionPipeline::Compute(pipeline) => pipeline.handle(),
-            ExecutionPipeline::Graphic(pipeline) => RenderPass::graphic_pipeline(
+            ExecutionPipeline::Graphic(pipeline) => RenderPass::pipeline_handle(
                 physical_pass.render_pass.as_mut().unwrap(),
                 pipeline,
                 depth_stencil,
@@ -1062,7 +1065,7 @@ impl Resolver {
             let mut subpass_info = SubpassInfo::with_capacity(attachment_count);
 
             // Add input attachments
-            for attachment_idx in pipeline.input_attachments.iter() {
+            for attachment_idx in pipeline.inner.input_attachments.iter() {
                 debug_assert!(
                     !exec.color_clears.contains_key(attachment_idx),
                     "cannot clear color attachment index {attachment_idx} because it uses subpass input",
@@ -1713,6 +1716,7 @@ impl Resolver {
                         .as_ref()
                         .unwrap()
                         .unwrap_graphic()
+                        .inner
                         .descriptor_info
                         .pool_sizes
                         .values()
@@ -2882,8 +2886,8 @@ impl Resolver {
     pub fn submit<P>(
         mut self,
         pool: &mut P,
-        queue_family_index: usize,
-        queue_index: usize,
+        queue_family_index: u32,
+        queue_index: u32,
     ) -> Result<Lease<CommandBuffer>, DriverError>
     where
         P: Pool<CommandBufferInfo, CommandBuffer>
@@ -2893,17 +2897,6 @@ impl Resolver {
         trace!("submit");
 
         let mut cmd_buf = pool.lease(CommandBufferInfo::new(queue_family_index as _))?;
-
-        debug_assert!(
-            queue_family_index < cmd_buf.device.physical_device.queue_families.len(),
-            "Queue family index must be within the range of the available queues created by the device."
-        );
-        debug_assert!(
-            queue_index
-                < cmd_buf.device.physical_device.queue_families[queue_family_index].queue_count
-                    as usize,
-            "Queue index must be within the range of the available queues created by the device."
-        );
 
         cmd_buf.wait_until_executed()?;
 
@@ -2920,6 +2913,8 @@ impl Resolver {
 
         self.record_unscheduled_passes(pool, &mut cmd_buf)?;
 
+        let queue = Device::queue(&cmd_buf.device, queue_family_index, queue_index);
+
         unsafe {
             cmd_buf
                 .device
@@ -2932,7 +2927,7 @@ impl Resolver {
             cmd_buf
                 .device
                 .queue_submit(
-                    cmd_buf.device.queues[queue_family_index][queue_index],
+                    queue,
                     slice::from_ref(
                         &vk::SubmitInfo::default()
                             .command_buffers(slice::from_ref(&cmd_buf.handle)),
@@ -3125,7 +3120,7 @@ impl Resolver {
                             binding: dst_binding,
                         },
                         (descriptor_info, _),
-                    ) in &pipeline.descriptor_bindings
+                    ) in &pipeline.inner.descriptor_bindings
                     {
                         if let DescriptorInfo::InputAttachment(_, attachment_idx) = *descriptor_info
                         {

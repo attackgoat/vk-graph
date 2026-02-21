@@ -16,7 +16,7 @@ fn main() -> Result<(), WindowError> {
 
     let args = Args::parse();
     let window = WindowBuilder::default().debug(args.debug).build()?;
-    let triangle_pipeline = Arc::new(GraphicPipeline::create(
+    let triangle_pipeline = GraphicPipeline::create(
         &window.device,
         GraphicPipelineInfo::default(),
         [
@@ -57,7 +57,7 @@ fn main() -> Result<(), WindowError> {
                 .as_slice(),
             ),
         ],
-    )?);
+    )?;
 
     let index_buf = Arc::new(Buffer::create_from_slice(
         &window.device,

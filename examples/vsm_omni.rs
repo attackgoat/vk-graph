@@ -448,7 +448,7 @@ fn best_2d_optimal_format(
     panic!("Unsupported format");
 }
 
-fn create_blur_x_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, DriverError> {
+fn create_blur_x_pipeline(device: &Device) -> Result<ComputePipeline, DriverError> {
     let comp = glsl!(
         r#"
         #version 450 core
@@ -564,14 +564,10 @@ fn create_blur_x_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, Drive
         }),
     ));
 
-    Ok(Arc::new(ComputePipeline::create(
-        device,
-        ComputePipelineInfo::default(),
-        shader,
-    )?))
+    ComputePipeline::create(device, ComputePipelineInfo::default(), shader)
 }
 
-fn create_blur_y_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, DriverError> {
+fn create_blur_y_pipeline(device: &Device) -> Result<ComputePipeline, DriverError> {
     let comp = glsl!(
         r#"
         #version 450 core
@@ -687,14 +683,10 @@ fn create_blur_y_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, Drive
         }),
     ));
 
-    Ok(Arc::new(ComputePipeline::create(
-        device,
-        ComputePipelineInfo::default(),
-        shader,
-    )?))
+    ComputePipeline::create(device, ComputePipelineInfo::default(), shader)
 }
 
-fn create_debug_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_debug_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -758,19 +750,17 @@ fn create_debug_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, Driver
         "#
     );
 
-    let info = GraphicPipelineInfo::default();
-
-    Ok(Arc::new(GraphicPipeline::create(
+    GraphicPipeline::create(
         device,
-        info,
+        GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()),
         ],
-    )?))
+    )
 }
 
-fn create_mesh_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_mesh_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -870,11 +860,9 @@ fn create_mesh_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverE
         "#
     );
 
-    let info = GraphicPipelineInfo::default();
-
-    Ok(Arc::new(GraphicPipeline::create(
+    GraphicPipeline::create(
         device,
-        info,
+        GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()).specialization_info(SpecializationInfo::new(
@@ -886,10 +874,10 @@ fn create_mesh_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverE
                 bytes_of(&SHADOW_BIAS),
             )),
         ],
-    )?))
+    )
 }
 
-fn create_shadow_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_shadow_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -946,21 +934,19 @@ fn create_shadow_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, Drive
         "#
     );
 
-    let info = GraphicPipelineInfo::default();
-
-    Ok(Arc::new(GraphicPipeline::create(
+    GraphicPipeline::create(
         device,
-        info,
+        GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()),
         ],
-    )?))
+    )
 }
 
 fn create_shadow_pipeline_with_geometry_shader(
     device: &Device,
-) -> Result<Arc<GraphicPipeline>, DriverError> {
+) -> Result<GraphicPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -1145,7 +1131,7 @@ fn create_shadow_pipeline_with_geometry_shader(
 
     let info = GraphicPipelineInfo::default();
 
-    Ok(Arc::new(GraphicPipeline::create(
+    GraphicPipeline::create(
         device,
         info,
         [
@@ -1153,7 +1139,7 @@ fn create_shadow_pipeline_with_geometry_shader(
             Shader::new_geometry(geom.as_slice()),
             Shader::new_fragment(frag.as_slice()),
         ],
-    )?))
+    )
 }
 
 fn download_model_from_github(model_name: &str) -> anyhow::Result<PathBuf> {

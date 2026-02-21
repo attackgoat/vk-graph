@@ -80,7 +80,7 @@ pub(crate) fn image_subresource_range_intersects(
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::image::{Image, ImageInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let device = Device::new(DeviceInfo::default())?;
 /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
 /// # let my_image = Image::create(&device, info)?;
 /// # let my_subresource_range = vk::ImageSubresourceRange::default();
@@ -135,7 +135,7 @@ impl Image {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// let image = Image::create(&device, info)?;
     ///
@@ -252,7 +252,7 @@ impl Image {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
     /// # let my_image = Image::create(&device, info)?;
     /// # let my_subresource_range = vk::ImageSubresourceRange::default();

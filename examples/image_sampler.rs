@@ -84,7 +84,7 @@ fn main() -> anyhow::Result<()> {
 fn create_pipeline(
     device: &Device,
     sampler_info: impl Into<SamplerInfo>,
-) -> anyhow::Result<Arc<GraphicPipeline>> {
+) -> anyhow::Result<GraphicPipeline> {
     let args = Args::parse();
 
     let mut frag_shader = match (args.hlsl, args.separate) {
@@ -197,7 +197,7 @@ fn create_pipeline(
     let sampler_binding = args.separate as u32;
     frag_shader = frag_shader.image_sampler(sampler_binding, sampler_info);
 
-    Ok(Arc::new(GraphicPipeline::create(
+    Ok(GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
@@ -225,7 +225,7 @@ fn create_pipeline(
             ),
             frag_shader,
         ],
-    )?))
+    )?)
 }
 
 fn read_image(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Arc<Image>> {

@@ -95,8 +95,8 @@ fn create_indirect_buffer(device: &Device) -> Result<Arc<Buffer>, DriverError> {
     Ok(draw_buf)
 }
 
-fn create_graphic_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
-    Ok(Arc::new(GraphicPipeline::create(
+fn create_graphic_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
@@ -152,7 +152,7 @@ fn create_graphic_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, Driv
                 .as_slice(),
             ),
         ],
-    )?))
+    )
 }
 
 #[derive(Parser)]

@@ -3,7 +3,6 @@ use {
     crate::driver::{device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
-    std::sync::Arc,
 };
 
 // NOTE: local implementation of type from super module
@@ -13,19 +12,20 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
         mut self,
         func: impl FnOnce(RayTrace<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
-        let pipeline = 
-            self.cmd
-                .as_ref()
-                .execs
-                .last()
-                .unwrap()
-                .pipeline
-                .as_ref()
-                .unwrap()
-                .unwrap_ray_trace().clone();
+        let pipeline = self
+            .cmd
+            .as_ref()
+            .execs
+            .last()
+            .unwrap()
+            .pipeline
+            .as_ref()
+            .unwrap()
+            .unwrap_ray_trace()
+            .clone();
 
         #[cfg(debug_assertions)]
-        let dynamic_stack_size = pipeline.info.dynamic_stack_size;
+        let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
         self.cmd.push_execute(move |device, cmd_buf, bindings| {
             func(
@@ -58,7 +58,6 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
 /// Basic usage:
 ///
 /// ```no_run
-/// # use std::sync::Arc;
 /// # use ash::vk;
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -66,13 +65,13 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
 /// # use vk_graph::driver::shader::Shader;
 /// # use vk_graph::Graph;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let device = Device::new(DeviceInfo::default())?;
 /// # let info = RayTracePipelineInfo::default();
 /// # let my_miss_code = [0u8; 1];
-/// # let my_ray_trace_pipeline = Arc::new(RayTracePipeline::create(&device, info,
+/// # let my_ray_trace_pipeline = RayTracePipeline::create(&device, info,
 ///     [Shader::new_miss(my_miss_code.as_slice())],
 ///     [RayTraceShaderGroup::new_general(0)],
-/// )?);
+/// )?;
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd().with_name("my ray trace pass")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
@@ -128,7 +127,6 @@ impl RayTrace<'_> {
     /// ```
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -137,14 +135,14 @@ impl RayTrace<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let shader = [0u8; 1];
     /// # let info = RayTracePipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
-    /// # let my_ray_trace_pipeline = Arc::new(RayTracePipeline::create(&device, info,
+    /// # let my_ray_trace_pipeline = RayTracePipeline::create(&device, info,
     /// #     [Shader::new_miss(my_miss_code.as_slice())],
     /// #     [RayTraceShaderGroup::new_general(0)],
-    /// # )?);
+    /// # )?;
     /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
@@ -162,7 +160,7 @@ impl RayTrace<'_> {
     /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
     #[profiling::function]
     pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
-        for push_const in self.pipeline.push_constants.iter() {
+        for push_const in self.pipeline.inner.push_constants.iter() {
             let push_const_end = push_const.offset + push_const.size;
             let data_end = offset + data.len() as u32;
             let end = data_end.min(push_const_end);
@@ -177,7 +175,7 @@ impl RayTrace<'_> {
                 unsafe {
                     self.device.cmd_push_constants(
                         self.cmd_buf,
-                        self.pipeline.layout(),
+                        self.pipeline.inner.layout,
                         push_const.stage_flags,
                         start,
                         &data[(start - offset) as usize..(end - offset) as usize],
@@ -221,7 +219,6 @@ impl RayTrace<'_> {
     /// Basic usage:
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -230,14 +227,14 @@ impl RayTrace<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let shader = [0u8; 1];
     /// # let info = RayTracePipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
-    /// # let my_ray_trace_pipeline = Arc::new(RayTracePipeline::create(&device, info,
+    /// # let my_ray_trace_pipeline = RayTracePipeline::create(&device, info,
     /// #     [Shader::new_miss(my_miss_code.as_slice())],
     /// #     [RayTraceShaderGroup::new_general(0)],
-    /// # )?);
+    /// # )?;
     /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };

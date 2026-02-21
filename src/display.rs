@@ -230,8 +230,11 @@ impl Display {
         // things so we do them last
         resolver.record_unscheduled_passes(pool, &mut exec.cmd_buf)?;
 
-        let queue =
-            exec.cmd_buf.device.queues[self.info.queue_family_index as usize][queue_index as usize];
+        let queue = Device::queue(
+            &exec.cmd_buf.device,
+            self.info.queue_family_index,
+            queue_index,
+        );
 
         unsafe {
             exec.cmd_buf

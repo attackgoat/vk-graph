@@ -323,36 +323,6 @@ impl PipelineDescriptorInfo {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum PipelineHandle {
-    Handle(vk::Pipeline),
-}
-
-#[derive(Debug)]
-pub(crate) struct PipelineInner {
-    pub descriptor_info: PipelineDescriptorInfo,
-    pub device: Device,
-    pub handle: PipelineHandle,
-    pub layout: vk::PipelineLayout,
-}
-
-impl Drop for PipelineInner {
-    #[profiling::function]
-    fn drop(&mut self) {
-        if panicking() {
-            return;
-        }
-
-        unsafe {
-            match self.handle {
-                PipelineHandle::Handle(handle) => self.device.destroy_pipeline(handle, None),
-            }
-
-            self.device.destroy_pipeline_layout(self.layout, None);
-        }
-    }
-}
-
 pub(crate) struct Sampler {
     device: Device,
     sampler: vk::Sampler,
@@ -732,7 +702,7 @@ pub struct Shader {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::shader::{Shader, SpecializationInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_shader_code = [0u8; 1];
     /// // We instead specify 42 for MY_COUNT:
     /// let shader = Shader::new_fragment(my_shader_code.as_slice())
@@ -1546,6 +1516,14 @@ impl SpecializationInfo {
             data: data.into(),
             map_entries: map_entries.into(),
         }
+    }
+}
+
+impl<'a> From<&'a SpecializationInfo> for vk::SpecializationInfo<'a> {
+    fn from(value: &'a SpecializationInfo) -> Self {
+        vk::SpecializationInfo::default()
+            .map_entries(&value.map_entries)
+            .data(&value.data)
     }
 }
 

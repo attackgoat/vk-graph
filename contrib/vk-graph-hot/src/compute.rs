@@ -18,9 +18,8 @@ use {
 /// TODO
 #[derive(Debug)]
 pub struct HotComputePipeline {
-    device: Device,
     has_changes: Arc<AtomicBool>,
-    instance: Arc<ComputePipeline>,
+    pipeline: ComputePipeline,
     shader: HotShader,
     watcher: RecommendedWatcher,
 }
@@ -37,14 +36,11 @@ impl HotComputePipeline {
         let (mut watcher, has_changes) = create_watcher();
         let compiled_shader = compile_shader_and_watch(&shader, &mut watcher)?;
 
-        let instance = Arc::new(ComputePipeline::create(device, info, compiled_shader)?);
-
-        let device = device.clone();
+        let pipeline = ComputePipeline::create(device, info, compiled_shader)?;
 
         Ok(Self {
-            device,
             has_changes,
-            instance,
+            pipeline,
             shader,
             watcher,
         })
@@ -52,13 +48,13 @@ impl HotComputePipeline {
 
     /// Returns the most recent compilation without checking for changes or re-compiling the shader
     /// source code.
-    pub fn cold(&self) -> &Arc<ComputePipeline> {
-        &self.instance
+    pub fn cold(&self) -> &ComputePipeline {
+        &self.pipeline
     }
 
     /// Returns the most recent compilation after checking for changes, and if needed re-compiling
     /// the shader source code.
-    pub fn hot(&mut self) -> &Arc<ComputePipeline> {
+    pub fn hot(&mut self) -> &ComputePipeline {
         let has_changes = self.has_changes.swap(false, Ordering::Relaxed);
 
         if has_changes {
@@ -66,12 +62,14 @@ impl HotComputePipeline {
 
             let (mut watcher, has_changes) = create_watcher();
             if let Ok(compiled_shader) = compile_shader_and_watch(&self.shader, &mut watcher) {
-                if let Ok(instance) =
-                    ComputePipeline::create(&self.device, self.instance.info, compiled_shader)
-                {
+                if let Ok(pipeline) = ComputePipeline::create(
+                    self.pipeline.device(),
+                    self.pipeline.info(),
+                    compiled_shader,
+                ) {
+                    self.pipeline = pipeline;
                     self.has_changes = has_changes;
                     self.watcher = watcher;
-                    self.instance = Arc::new(instance);
                 }
             }
         }
@@ -82,6 +80,6 @@ impl HotComputePipeline {
 
 impl AsRef<ComputePipeline> for HotComputePipeline {
     fn as_ref(&self) -> &ComputePipeline {
-        self.instance.as_ref()
+        &self.pipeline
     }
 }

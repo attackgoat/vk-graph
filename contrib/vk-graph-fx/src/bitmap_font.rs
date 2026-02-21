@@ -25,7 +25,7 @@ pub struct BitmapFont {
     cache: HashPool,
     font: BMFont,
     pages: Vec<Arc<Image>>,
-    pipeline: Arc<GraphicPipeline>,
+    pipeline: GraphicPipeline,
 }
 
 impl BitmapFont {
@@ -38,25 +38,23 @@ impl BitmapFont {
         let cache = HashPool::new(device);
         let pages = pages.into();
         let num_pages = pages.len() as u32;
-        let pipeline = Arc::new(
-            GraphicPipeline::create(
-                device,
-                GraphicPipelineInfoBuilder::default().blend(BlendMode::ALPHA),
-                [
-                    Shader::new_vertex(include_glsl!("res/shader/graphic/font.vert").as_slice()),
-                    Shader::new_fragment(include_glsl!("res/shader/graphic/font.frag").as_slice())
-                        .specialization_info(SpecializationInfo::new(
-                            [vk::SpecializationMapEntry {
-                                constant_id: 0,
-                                offset: 0,
-                                size: 4,
-                            }],
-                            num_pages.to_ne_bytes(),
-                        )),
-                ],
-            )
-            .context("Unable to create bitmap font pipeline")?,
-        );
+        let pipeline = GraphicPipeline::create(
+            device,
+            GraphicPipelineInfoBuilder::default().blend(BlendMode::ALPHA),
+            [
+                Shader::new_vertex(include_glsl!("res/shader/graphic/font.vert").as_slice()),
+                Shader::new_fragment(include_glsl!("res/shader/graphic/font.frag").as_slice())
+                    .specialization_info(SpecializationInfo::new(
+                        [vk::SpecializationMapEntry {
+                            constant_id: 0,
+                            offset: 0,
+                            size: 4,
+                        }],
+                        num_pages.to_ne_bytes(),
+                    )),
+            ],
+        )
+        .context("Unable to create bitmap font pipeline")?;
 
         Ok(Self {
             cache,

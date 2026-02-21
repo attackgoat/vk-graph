@@ -92,11 +92,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn draw_triangle(
-    frame: &mut FrameContext,
-    pipeline: &Arc<GraphicPipeline>,
-    vertex_buf: &Arc<Buffer>,
-) {
+fn draw_triangle(frame: &mut FrameContext, pipeline: &GraphicPipeline, vertex_buf: &Arc<Buffer>) {
     let vertex_buf = frame.render_graph.bind_node(vertex_buf);
 
     frame
@@ -114,7 +110,7 @@ fn draw_triangle(
         });
 }
 
-fn create_f16_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f16_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     if !supports_vertex_buffer(device, vk::Format::R16G16_SFLOAT) {
         return Err(DriverError::Unsupported);
     }
@@ -147,14 +143,14 @@ fn create_f16_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverEr
     create_pipeline(device, vertex)
 }
 
-fn create_f32_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f32_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     // Uses automatic vertex input layout
     let vertex = create_vertex_shader(false);
 
     create_pipeline(device, vertex)
 }
 
-fn create_f64_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f64_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     if !supports_vertex_buffer(device, vk::Format::R64G64_SFLOAT) {
         return Err(DriverError::Unsupported);
     }
@@ -230,30 +226,31 @@ fn create_vertex_shader(is_double: bool) -> ShaderBuilder {
     Shader::new_vertex(spirv)
 }
 
-fn create_pipeline(
-    device: &Device,
-    vertex: ShaderBuilder,
-) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let fragment_spirv = glsl!(
-        r#"
-        #version 460 core
-        #pragma shader_stage(fragment)
-
-        layout(location = 0) in vec3 color_in;
-
-        layout(location = 0) out vec4 color_out;
-
-        void main() {
-            color_out = vec4(color_in, 1.0);
-        }
-        "#
-    );
-
-    Ok(Arc::new(GraphicPipeline::create(
+fn create_pipeline(device: &Device, vertex: ShaderBuilder) -> Result<GraphicPipeline, DriverError> {
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
-        [vertex, Shader::new_fragment(fragment_spirv.as_slice())],
-    )?))
+        [
+            vertex,
+            Shader::new_fragment(
+                glsl!(
+                    r#"
+                    #version 460 core
+                    #pragma shader_stage(fragment)
+
+                    layout(location = 0) in vec3 color_in;
+
+                    layout(location = 0) out vec4 color_out;
+
+                    void main() {
+                        color_out = vec4(color_in, 1.0);
+                    }
+                    "#
+                )
+                .as_slice(),
+            ),
+        ],
+    )
 }
 
 fn supports_vertex_buffer(device: &Device, format: vk::Format) -> bool {

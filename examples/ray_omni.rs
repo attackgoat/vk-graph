@@ -226,7 +226,7 @@ fn create_blas(
     Ok(blas)
 }
 
-fn create_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 460 core
@@ -303,14 +303,14 @@ fn create_pipeline(device: &Device) -> Result<Arc<GraphicPipeline>, DriverError>
         "#
     );
 
-    Ok(Arc::new(GraphicPipeline::create(
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()),
         ],
-    )?))
+    )
 }
 
 fn create_tlas(

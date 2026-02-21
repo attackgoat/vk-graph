@@ -14,7 +14,7 @@ use {
     },
     ash::vk,
     log::trace,
-    std::{cell::RefCell, slice, sync::Arc},
+    std::{cell::RefCell, slice},
     vk_sync::AccessType,
 };
 
@@ -30,7 +30,6 @@ use {
 /// Basic usage:
 ///
 /// ```no_run
-/// # use std::sync::Arc;
 /// # use ash::vk;
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -39,13 +38,13 @@ use {
 /// # use vk_graph::Graph;
 /// # use vk_graph::driver::shader::Shader;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let device = Device::new(DeviceInfo::default())?;
 /// # let my_frag_code = [0u8; 1];
 /// # let my_vert_code = [0u8; 1];
 /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
 /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
 /// # let info = GraphicPipelineInfo::default();
-/// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
+/// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
 /// # let mut my_graph = Graph::default();
 /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
 /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
@@ -75,7 +74,6 @@ impl Graphic<'_> {
     /// Basic usage:
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -85,13 +83,13 @@ impl Graphic<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
     /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
+    /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
@@ -143,7 +141,6 @@ impl Graphic<'_> {
     /// Basic usage:
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -153,7 +150,7 @@ impl Graphic<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
     /// # let my_frag_code = [0u8; 1];
@@ -161,7 +158,7 @@ impl Graphic<'_> {
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
     /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
+    /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
@@ -312,7 +309,6 @@ impl Graphic<'_> {
     /// Basic usage:
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use std::mem::size_of;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
@@ -323,13 +319,13 @@ impl Graphic<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
     /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
+    /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::INDEX_BUFFER);
     /// # let my_idx_buf = Buffer::create(&device, buf_info)?;
@@ -525,7 +521,6 @@ impl Graphic<'_> {
     /// ```
     ///
     /// ```no_run
-    /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
@@ -534,13 +529,13 @@ impl Graphic<'_> {
     /// # use vk_graph::Graph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
     /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = Arc::new(GraphicPipeline::create(&device, info, [vert, frag])?);
+    /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = Image::create(&device, info)?;
     /// # let mut my_graph = Graph::default();
@@ -558,7 +553,7 @@ impl Graphic<'_> {
     /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
     #[profiling::function]
     pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
-        for push_const in self.pipeline.push_constants.iter() {
+        for push_const in self.pipeline.inner.push_constants.iter() {
             // Determine the range of the overall pipline push constants which overlap with `data`
             let push_const_end = push_const.offset + push_const.size;
             let data_end = offset + data.len() as u32;
@@ -574,7 +569,7 @@ impl Graphic<'_> {
                 unsafe {
                     self.device.cmd_push_constants(
                         self.cmd_buf,
-                        self.pipeline.layout,
+                        self.pipeline.inner.layout,
                         push_const.stage_flags,
                         start,
                         &data[(start - offset) as usize..(end - offset) as usize],
@@ -1529,17 +1524,17 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         mut self,
         func: impl FnOnce(Graphic<'_>, Bindings<'_>) + Send + 'static,
     ) -> Self {
-        let pipeline = 
-            self.cmd
-                .as_ref()
-                .execs
-                .last()
-                .unwrap()
-                .pipeline
-                .as_ref()
-                .unwrap()
-                .unwrap_graphic().clone()
-        ;
+        let pipeline = self
+            .cmd
+            .as_ref()
+            .execs
+            .last()
+            .unwrap()
+            .pipeline
+            .as_ref()
+            .unwrap()
+            .unwrap_graphic()
+            .clone();
 
         self.cmd.push_execute(move |device, cmd_buf, bindings| {
             func(

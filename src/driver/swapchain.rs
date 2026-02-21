@@ -198,20 +198,6 @@ impl Swapchain {
         queue_family_index: u32,
         queue_index: u32,
     ) {
-        let queue_family_index = queue_family_index as usize;
-        let queue_index = queue_index as usize;
-
-        debug_assert!(
-            queue_family_index < self.device.physical_device.queue_families.len(),
-            "Queue family index must be within the range of the available queues created by the device."
-        );
-        debug_assert!(
-            queue_index
-                < self.device.physical_device.queue_families[queue_family_index].queue_count
-                    as usize,
-            "Queue index must be within the range of the available queues created by the device."
-        );
-
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(wait_semaphores)
             .swapchains(slice::from_ref(&self.handle))
@@ -221,7 +207,7 @@ impl Swapchain {
 
         unsafe {
             match swapchain_ext.queue_present(
-                self.device.queues[queue_family_index][queue_index],
+                Device::queue(&self.device, queue_family_index, queue_index),
                 &present_info,
             ) {
                 Ok(_) => {

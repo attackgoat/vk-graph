@@ -18,9 +18,8 @@ use {
 /// TODO
 #[derive(Debug)]
 pub struct HotGraphicPipeline {
-    device: Device,
     has_changes: Arc<AtomicBool>,
-    instance: Arc<GraphicPipeline>,
+    pipeline: GraphicPipeline,
     shaders: Box<[HotShader]>,
     watcher: RecommendedWatcher,
 }
@@ -46,14 +45,11 @@ impl HotGraphicPipeline {
             .map(|shader| compile_shader_and_watch(shader, &mut watcher))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let instance = Arc::new(GraphicPipeline::create(device, info, compiled_shaders)?);
-
-        let device = device.clone();
+        let pipeline = GraphicPipeline::create(device, info, compiled_shaders)?;
 
         Ok(Self {
-            device,
             has_changes,
-            instance,
+            pipeline,
             shaders,
             watcher,
         })
@@ -61,13 +57,13 @@ impl HotGraphicPipeline {
 
     /// Returns the most recent compilation without checking for changes or re-compiling the shader
     /// source code.
-    pub fn cold(&self) -> &Arc<GraphicPipeline> {
-        &self.instance
+    pub fn cold(&self) -> &GraphicPipeline {
+        &self.pipeline
     }
 
     /// Returns the most recent compilation after checking for changes, and if needed re-compiling
     /// the shader source code.
-    pub fn hot(&mut self) -> &Arc<GraphicPipeline> {
+    pub fn hot(&mut self) -> &GraphicPipeline {
         let has_changes = self.has_changes.swap(false, Ordering::Relaxed);
 
         if has_changes {
@@ -80,12 +76,14 @@ impl HotGraphicPipeline {
                 .map(|shader| compile_shader_and_watch(shader, &mut watcher))
                 .collect::<Result<Vec<_>, DriverError>>()
             {
-                if let Ok(instance) =
-                    GraphicPipeline::create(&self.device, self.instance.info, compiled_shaders)
-                {
+                if let Ok(pipeline) = GraphicPipeline::create(
+                    self.pipeline.device(),
+                    self.pipeline.info(),
+                    compiled_shaders,
+                ) {
+                    self.pipeline = pipeline;
                     self.has_changes = has_changes;
                     self.watcher = watcher;
-                    self.instance = Arc::new(instance);
                 }
             }
         }
@@ -96,6 +94,6 @@ impl HotGraphicPipeline {
 
 impl AsRef<GraphicPipeline> for HotGraphicPipeline {
     fn as_ref(&self) -> &GraphicPipeline {
-        self.instance.as_ref()
+        &self.pipeline
     }
 }

@@ -63,7 +63,8 @@ fn main() -> anyhow::Result<()> {
                 || queue_family_properties
                     .queue_flags
                     .contains(vk::QueueFlags::GRAPHICS)
-        });
+        })
+        .map(|(idx, queue_family_properties)| (idx as u32, queue_family_properties));
 
     assert!(
         secondary_queue_family.is_some(),
@@ -72,8 +73,7 @@ fn main() -> anyhow::Result<()> {
 
     let (secondary_queue_family_index, secondary_queue_family_properties) =
         secondary_queue_family.unwrap();
-    let queue_count =
-        desired_queue_count.min(secondary_queue_family_properties.queue_count) as usize;
+    let queue_count = desired_queue_count.min(secondary_queue_family_properties.queue_count);
 
     assert!(queue_count > 0, "GPU does not support secondary queues");
 
@@ -81,7 +81,7 @@ fn main() -> anyhow::Result<()> {
 
     let running = Arc::new(AtomicBool::new(true));
     let thread_count = queue_count;
-    let mut threads = Vec::with_capacity(thread_count);
+    let mut threads = Vec::with_capacity(thread_count as _);
     let (tx, rx) = channel();
 
     info!("Launching {thread_count} threads");

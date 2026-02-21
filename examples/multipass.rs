@@ -304,7 +304,7 @@ fn create_funky_shape(device: &Device, pool: &mut LazyPool) -> Result<Shape, Dri
     })
 }
 
-fn create_fill_background_pipeline(device: &Device) -> Arc<GraphicPipeline> {
+fn create_fill_background_pipeline(device: &Device) -> GraphicPipeline {
     let vertex_shader = Shader::new_vertex(
         glsl!(
             r#"
@@ -345,17 +345,15 @@ fn create_fill_background_pipeline(device: &Device) -> Arc<GraphicPipeline> {
         .as_slice(),
     );
 
-    Arc::new(
-        GraphicPipeline::create(
-            device,
-            GraphicPipelineInfo::default(),
-            [vertex_shader, fragment_shader],
-        )
-        .unwrap(),
+    GraphicPipeline::create(
+        device,
+        GraphicPipelineInfo::default(),
+        [vertex_shader, fragment_shader],
     )
+    .unwrap()
 }
 
-fn create_prepass_pipeline(device: &Device) -> Arc<GraphicPipeline> {
+fn create_prepass_pipeline(device: &Device) -> GraphicPipeline {
     let vertex_shader = Shader::new_vertex(
         glsl!(
             r#"
@@ -418,17 +416,15 @@ fn create_prepass_pipeline(device: &Device) -> Arc<GraphicPipeline> {
         .as_slice(),
     );
 
-    Arc::new(
-        GraphicPipeline::create(
-            device,
-            GraphicPipelineInfo::default(),
-            [vertex_shader, fragment_shader],
-        )
-        .unwrap(),
+    GraphicPipeline::create(
+        device,
+        GraphicPipelineInfo::default(),
+        [vertex_shader, fragment_shader],
     )
+    .unwrap()
 }
 
-fn create_pbr_pipeline(device: &Device) -> Arc<GraphicPipeline> {
+fn create_pbr_pipeline(device: &Device) -> GraphicPipeline {
     // See: https://github.com/SaschaWillems/Vulkan/blob/master/data/shaders/glsl/pbrbasic/pbr.vert
     let vertex_shader = Shader::new_vertex(
         glsl!(
@@ -605,14 +601,12 @@ fn create_pbr_pipeline(device: &Device) -> Arc<GraphicPipeline> {
         .as_slice(),
     );
 
-    Arc::new(
-        GraphicPipeline::create(
-            device,
-            GraphicPipelineInfo::default(),
-            [vertex_shader, fragment_shader],
-        )
-        .unwrap(),
+    GraphicPipeline::create(
+        device,
+        GraphicPipelineInfo::default(),
+        [vertex_shader, fragment_shader],
     )
+    .unwrap()
 }
 
 /// Returns index and position/normal data (polyhedron_ops you are 🥇🏆🥂💯)

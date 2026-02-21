@@ -43,7 +43,7 @@ use std::sync::Mutex;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+/// # let device = Device::new(DeviceInfo::default())?;
 /// # let info = BufferInfo::device_mem(8, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
 /// # let my_buf = Buffer::create(&device, info)?;
 /// let addr = Buffer::device_address(&my_buf);
@@ -94,7 +94,7 @@ impl Buffer {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// const SIZE: vk::DeviceSize = 1024;
     /// let info = BufferInfo::host_mem(SIZE, vk::BufferUsageFlags::UNIFORM_BUFFER);
     /// let buf = Buffer::create(&device, info)?;
@@ -211,7 +211,7 @@ impl Buffer {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// const DATA: [u8; 4] = [0xfe, 0xed, 0xbe, 0xef];
     /// let buf = Buffer::create_from_slice(&device, vk::BufferUsageFlags::UNIFORM_BUFFER, &DATA)?;
     ///
@@ -256,7 +256,7 @@ impl Buffer {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo, BufferSubresourceRange};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # const SIZE: vk::DeviceSize = 1024;
     /// # let info = BufferInfo::device_mem(SIZE, vk::BufferUsageFlags::STORAGE_BUFFER);
     /// # let my_buf = Buffer::create(&device, info)?;
@@ -321,7 +321,7 @@ impl Buffer {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let info = BufferInfo::host_mem(4, vk::BufferUsageFlags::empty());
     /// # let mut my_buf = Buffer::create(&device, info)?;
     /// const DATA: [u8; 4] = [0xde, 0xad, 0xc0, 0xde];
@@ -353,7 +353,7 @@ impl Buffer {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let info = BufferInfo::host_mem(4, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
     /// # let my_buf = Buffer::create(&device, info)?;
     /// let addr = Buffer::device_address(&my_buf);
@@ -393,7 +393,7 @@ impl Buffer {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # const DATA: [u8; 4] = [0; 4];
     /// # let my_buf = Buffer::create_from_slice(&device, vk::BufferUsageFlags::empty(), &DATA)?;
     /// // my_buf is mappable and filled with four zeroes
@@ -431,7 +431,7 @@ impl Buffer {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # const DATA: [u8; 4] = [0; 4];
     /// # let mut my_buf = Buffer::create_from_slice(&device, vk::BufferUsageFlags::empty(), &DATA)?;
     /// let mut data = Buffer::mapped_slice_mut(&mut my_buf);

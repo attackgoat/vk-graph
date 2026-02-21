@@ -316,7 +316,7 @@ fn load_cube_mesh(device: &Device) -> Result<Model, DriverError> {
 fn create_mesh_pipeline(
     device: &Device,
     sample_count: SampleCount,
-) -> Result<Arc<GraphicPipeline>, DriverError> {
+) -> Result<GraphicPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 460 core
@@ -374,14 +374,14 @@ fn create_mesh_pipeline(
 
     let info = GraphicPipelineInfoBuilder::default().samples(sample_count);
 
-    Ok(Arc::new(GraphicPipeline::create(
+    GraphicPipeline::create(
         device,
         info,
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()),
         ],
-    )?))
+    )
 }
 
 #[derive(Parser)]

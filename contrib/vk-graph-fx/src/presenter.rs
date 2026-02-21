@@ -1,27 +1,26 @@
 use {
     bytemuck::cast_slice,
     glam::{vec3, Mat4},
-    std::sync::Arc,
     vk_graph_prelude::*,
     vk_shader_macros::include_glsl,
 };
 
 /// TODO
-pub struct ComputePresenter([Arc<ComputePipeline>; 2]);
+pub struct ComputePresenter([ComputePipeline; 2]);
 
 impl ComputePresenter {
     /// TODO
     pub fn new(device: &Device) -> Result<Self, DriverError> {
-        let pipeline1 = Arc::new(ComputePipeline::create(
+        let pipeline1 = ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
             Shader::new_compute(include_glsl!("res/shader/compute/present1.comp").as_slice()),
-        )?);
-        let pipeline2 = Arc::new(ComputePipeline::create(
+        )?;
+        let pipeline2 = ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
             Shader::new_compute(include_glsl!("res/shader/compute/present2.comp").as_slice()),
-        )?);
+        )?;
 
         Ok(Self([pipeline1, pipeline2]))
     }
@@ -81,24 +80,22 @@ impl ComputePresenter {
 
 /// TODO
 pub struct GraphicPresenter {
-    pipeline: Arc<GraphicPipeline>,
+    pipeline: GraphicPipeline,
 }
 
 impl GraphicPresenter {
     /// TODO
     pub fn new(device: &Device) -> Result<Self, DriverError> {
-        Ok(Self {
-            pipeline: Arc::new(GraphicPipeline::create(
-                device,
-                GraphicPipelineInfo::default(),
-                [
-                    Shader::new_vertex(include_glsl!("res/shader/graphic/present.vert").as_slice()),
-                    Shader::new_fragment(
-                        include_glsl!("res/shader/graphic/present.frag").as_slice(),
-                    ),
-                ],
-            )?),
-        })
+        let pipeline = GraphicPipeline::create(
+            device,
+            GraphicPipelineInfo::default(),
+            [
+                Shader::new_vertex(include_glsl!("res/shader/graphic/present.vert").as_slice()),
+                Shader::new_fragment(include_glsl!("res/shader/graphic/present.frag").as_slice()),
+            ],
+        )?;
+
+        Ok(Self { pipeline })
     }
 
     /// TODO

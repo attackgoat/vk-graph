@@ -24,7 +24,7 @@
     To continue, uncomment line 30.
 */
 fn main() -> Result<(), vk_graph_window::WindowError> {
-    use {log::debug, std::sync::Arc, vk_graph_prelude::*, vk_graph_window::Window};
+    use {log::debug, vk_graph_prelude::*, vk_graph_window::Window};
 
     // 👋, 🌎!
     //pretty_env_logger::init();
@@ -126,8 +126,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
         );
 
         // Note: This is just for example
-        let compute_pipeline = Arc::new(
-            ComputePipeline::create(
+        let compute_pipeline = ComputePipeline::create(
                 frame.device,
                 ComputePipelineInfo::default(),
                 Shader::new_compute(
@@ -146,8 +145,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
                     .as_slice(),
                 ),
             )
-            .unwrap(),
-        );
+            .unwrap();
 
         /*
             Case #2:

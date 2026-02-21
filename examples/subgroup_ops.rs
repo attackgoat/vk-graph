@@ -62,8 +62,8 @@ fn main() -> Result<(), DriverError> {
 
 fn exclusive_sum(
     device: &Device,
-    reduce_pipeline: &Arc<ComputePipeline>,
-    scan_pipeline: &Arc<ComputePipeline>,
+    reduce_pipeline: &ComputePipeline,
+    scan_pipeline: &ComputePipeline,
     input_data: &[u32],
 ) -> Result<Vec<u32>, DriverError> {
     let mut render_graph = Graph::default();
@@ -152,8 +152,8 @@ fn assert_output_data(input_data: &[u32], output_data: &[u32]) {
     }
 }
 
-fn create_reduce_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, DriverError> {
-    Ok(Arc::new(ComputePipeline::create(
+fn create_reduce_pipeline(device: &Device) -> Result<ComputePipeline, DriverError> {
+    ComputePipeline::create(
         device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
@@ -199,12 +199,11 @@ fn create_reduce_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, Drive
                 size: size_of::<u32>(),
             }],
         }),
-    )?))
+    )
 }
 
-fn create_exclusive_sum_pipeline(device: &Device) -> Result<Arc<ComputePipeline>, DriverError> {
-    Ok( Arc::new(
-        ComputePipeline::create(
+fn create_exclusive_sum_pipeline(device: &Device) -> Result<ComputePipeline, DriverError> {
+    ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
             Shader::new_compute(glsl!(
@@ -254,8 +253,7 @@ fn create_exclusive_sum_pipeline(device: &Device) -> Result<Arc<ComputePipeline>
                     size: size_of::<u32>(),
                 }],
             }),
-        )?
-    ))
+        )
 }
 
 #[derive(Parser)]

@@ -147,18 +147,18 @@ fn main() -> Result<(), WindowError> {
     })
 }
 
-fn create_pipeline(device: &Device, pak: &mut PakBuf) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_pipeline(device: &Device, pak: &mut PakBuf) -> Result<GraphicPipeline, DriverError> {
     let vert_spirv = pak.read_blob("shader/animated_mesh_vert.spirv").unwrap();
     let frag_spirv = pak.read_blob("shader/mesh_frag.spirv").unwrap();
 
-    Ok(Arc::new(GraphicPipeline::create(
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfoBuilder::default().front_face(vk::FrontFace::CLOCKWISE),
         [
             Shader::new_vertex(vert_spirv.as_slice()),
             Shader::new_fragment(frag_spirv.as_slice()),
         ],
-    )?))
+    )
 }
 
 fn load_texture(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Arc<Image>, DriverError> {

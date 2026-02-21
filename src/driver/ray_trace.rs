@@ -6,12 +6,16 @@ use {
         device::Device,
         merge_push_constant_ranges,
         physical_device::RayTraceProperties,
-        shader::{DescriptorBindingMap, PipelineDescriptorInfo,PipelineHandle, PipelineInner, Shader},
+        shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::warn,
-    std::{ffi::CString, sync::Arc},
+    std::{
+        ffi::CString,
+        sync::{Arc, OnceLock},
+        thread::panicking,
+    },
 };
 
 /// Smart pointer handle to a [pipeline] object.
@@ -31,19 +35,7 @@ use {
 #[derive(Clone, Debug)]
 #[readonly::make]
 pub struct RayTracePipeline {
-    pub(crate) descriptor_bindings: DescriptorBindingMap,
-
-    /// Information used to create this object.
-    #[readonly]
-    pub info: RayTracePipelineInfo,
-
-    inner: Arc<PipelineInner>,
-
-    /// A descriptive name used in debugging messages.
-    pub name: Option<String>,
-
-    pub(crate) push_constants: Vec<vk::PushConstantRange>,
-    shader_group_handles: Vec<u8>,
+    pub(crate) inner: Arc<RayTracePipelineInner>,
 }
 
 impl RayTracePipeline {
@@ -71,7 +63,7 @@ impl RayTracePipeline {
     /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::new(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_rgen_code = [0u8; 1];
     /// # let my_chit_code = [0u8; 1];
     /// # let my_miss_code = [0u8; 1];
@@ -96,7 +88,7 @@ impl RayTracePipeline {
     /// )?;
     ///
     /// assert_ne!(pipeline.handle(), vk::Pipeline::null());
-    /// assert_eq!(pipeline.info.max_ray_recursion_depth, 1);
+    /// assert_eq!(pipeline.info().max_ray_recursion_depth, 1);
     /// # Ok(()) }
     /// ```
     #[profiling::function]
@@ -269,7 +261,7 @@ impl RayTracePipeline {
                 .as_ref()
                 .unwrap();
 
-            let push_constants = merge_push_constant_ranges(&push_constants);
+            let push_constants = merge_push_constant_ranges(&push_constants).into_boxed_slice();
 
             // SAFETY:
             // According to [vulkan spec](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkGetRayTracingShaderGroupHandlesKHR.html)
@@ -289,26 +281,23 @@ impl RayTracePipeline {
                     group_count * shader_group_handle_size as usize,
                 )
             }
-            .map_err(|_| DriverError::InvalidData)?;
+            .map_err(|_| DriverError::InvalidData)?
+            .into_boxed_slice();
 
             Ok(Self {
-                descriptor_bindings,
-                inner: Arc::new(PipelineInner {
+                inner: Arc::new(RayTracePipelineInner {
+                    descriptor_bindings,
                     descriptor_info,
                     device: device.clone(),
-                    handle: PipelineHandle::Handle(handle),
+                    handle,
+                    info,
                     layout,
+                    name: Default::default(),
+                    push_constants,
+                    shader_group_handles,
                 }),
-                info,
-                name: None,
-                push_constants,
-                shader_group_handles,
             })
         }
-    }
-
-    pub(crate) fn descriptor_info(&self) -> &PipelineDescriptorInfo {
-        &self.inner.descriptor_info
     }
 
     /// The device which owns this compute pipeline.
@@ -338,7 +327,7 @@ impl RayTracePipeline {
         let start = idx * shader_group_handle_size as usize;
         let end = start + shader_group_handle_size as usize;
 
-        &self.shader_group_handles[start..end]
+        &self.inner.shader_group_handles[start..end]
     }
 
     /// Query ray trace pipeline shader group shader stack size.
@@ -358,22 +347,41 @@ impl RayTracePipeline {
         }
     }
 
-    /// The native Vulkan pipeline handle of this compute pipeline.
+    /// The native Vulkan pipeline handle of this ray trace pipeline.
     pub fn handle(&self) -> vk::Pipeline {
-        let PipelineHandle::Handle(handle) = self.inner.handle else {
-            unreachable!();
-        };
-
-        handle
+        self.inner.handle
     }
 
-    pub(crate) fn layout(&self) -> vk::PipelineLayout {
-        self.inner.layout
+    /// Gets the information used to create this object.
+    pub fn info(&self) -> RayTracePipelineInfo {
+        self.inner.info
+    }
+
+    /// Gets the debugging name assigned to this pipeline, if one has been set.
+    pub fn name(&self) -> Option<&str> {
+        self.inner.name.get().map(String::as_str)
     }
 
     /// Sets the debugging name assigned to this pipeline.
+    ///
+    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
+    /// previously set name value.
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        if !self.inner.device.physical_device.instance.info.debug {
+            return;
+        }
+
+        // Both Ok and Err are valid conditions
+        let _ = self.inner.name.set(name.into());
+    }
+
+    /// Sets the debugging name assigned to this pipeline.
+    ///
+    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
+    /// previously set name value.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+        self.set_name(name);
+
         self
     }
 }
@@ -468,6 +476,33 @@ impl RayTracePipelineInfoBuilder {
     #[inline(always)]
     pub fn build(self) -> RayTracePipelineInfo {
         self.fallible_build().unwrap()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RayTracePipelineInner {
+    pub descriptor_bindings: DescriptorBindingMap,
+    pub descriptor_info: PipelineDescriptorInfo,
+    pub device: Device,
+    pub handle: vk::Pipeline,
+    pub info: RayTracePipelineInfo,
+    pub layout: vk::PipelineLayout,
+    pub name: OnceLock<String>,
+    pub push_constants: Box<[vk::PushConstantRange]>,
+    pub shader_group_handles: Box<[u8]>,
+}
+
+impl Drop for RayTracePipelineInner {
+    #[profiling::function]
+    fn drop(&mut self) {
+        if panicking() {
+            return;
+        }
+
+        unsafe {
+            self.device.destroy_pipeline(self.handle, None);
+            self.device.destroy_pipeline_layout(self.layout, None);
+        }
     }
 }
 
