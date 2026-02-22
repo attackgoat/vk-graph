@@ -270,8 +270,8 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        let mut render_graph = Graph::default();
-        let depth_image = render_graph.bind_node(
+        let mut graph = Graph::default();
+        let depth_image = graph.bind_node(
             pool.lease(ImageInfo::image_2d_array(
                 resolution.width,
                 resolution.height,
@@ -284,7 +284,7 @@ fn main() -> anyhow::Result<()> {
 
         let swapchain_image_index = swapchain.acquire_image().unwrap();
         let swapchain_image = Swapchain::image(&swapchain, swapchain_image_index as _);
-        let swapchain_image = render_graph.bind_node(swapchain_image);
+        let swapchain_image = graph.bind_node(swapchain_image);
 
         // Get the XR views and copy them into a leased uniform buffer
         let (_, views) = session.locate_views(
@@ -300,7 +300,7 @@ fn main() -> anyhow::Result<()> {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
             Buffer::copy_from_slice(&mut buf, 0, data);
-            render_graph.bind_node(buf)
+            graph.bind_node(buf)
         };
 
         session.sync_actions(&[(&action_set).into()]).unwrap();
@@ -339,21 +339,21 @@ fn main() -> anyhow::Result<()> {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
             Buffer::copy_from_slice(&mut buf, 0, data);
-            render_graph.bind_node(buf)
+            graph.bind_node(buf)
         };
 
-        render_graph.clear_color_image(swapchain_image, [0x00, 0x00, 0x00, 0xff]);
+        graph.clear_color_image(swapchain_image, [0x00, 0x00, 0x00, 0xff]);
 
         if let Some(location) = left_hand_location {
-            let index_buf = render_graph.bind_node(&lincoln_hand_left.index_buf);
-            let vertex_buf = render_graph.bind_node(&lincoln_hand_left.vertex_buf);
-            let diffuse_texture = render_graph.bind_node(&lincoln_hand_left_diffuse);
-            let normal_texture = render_graph.bind_node(&lincoln_hand_left_normal);
-            let occlusion_texture = render_graph.bind_node(&lincoln_hand_left_occlusion);
+            let index_buf = graph.bind_node(&lincoln_hand_left.index_buf);
+            let vertex_buf = graph.bind_node(&lincoln_hand_left.vertex_buf);
+            let diffuse_texture = graph.bind_node(&lincoln_hand_left_diffuse);
+            let normal_texture = graph.bind_node(&lincoln_hand_left_normal);
+            let occlusion_texture = graph.bind_node(&lincoln_hand_left_occlusion);
             let model_transform = pose_transform(location.pose);
             let push_consts = PushConstants::new(model_transform);
 
-            render_graph
+            graph
                 .begin_cmd()
                 .with_name("Left hand")
                 .bind_pipeline(hands_pipeline.hot())
@@ -390,15 +390,15 @@ fn main() -> anyhow::Result<()> {
         }
 
         if let Some(location) = right_hand_location {
-            let index_buf = render_graph.bind_node(&lincoln_hand_right.index_buf);
-            let vertex_buf = render_graph.bind_node(&lincoln_hand_right.vertex_buf);
-            let diffuse_texture = render_graph.bind_node(&lincoln_hand_right_diffuse);
-            let normal_texture = render_graph.bind_node(&lincoln_hand_right_normal);
-            let occlusion_texture = render_graph.bind_node(&lincoln_hand_right_occlusion);
+            let index_buf = graph.bind_node(&lincoln_hand_right.index_buf);
+            let vertex_buf = graph.bind_node(&lincoln_hand_right.vertex_buf);
+            let diffuse_texture = graph.bind_node(&lincoln_hand_right_diffuse);
+            let normal_texture = graph.bind_node(&lincoln_hand_right_normal);
+            let occlusion_texture = graph.bind_node(&lincoln_hand_right_occlusion);
             let model_transform = pose_transform(location.pose);
             let push_consts = PushConstants::new(model_transform);
 
-            render_graph
+            graph
                 .begin_cmd()
                 .with_name("Right hand")
                 .bind_pipeline(hands_pipeline.hot())
@@ -435,13 +435,13 @@ fn main() -> anyhow::Result<()> {
         }
 
         {
-            let index_buf = render_graph.bind_node(&woolly_mammoth.index_buf);
-            let vertex_buf = render_graph.bind_node(&woolly_mammoth.vertex_buf);
-            let normal_texture = render_graph.bind_node(&woolly_mammoth_normal);
-            let occlusion_texture = render_graph.bind_node(&woolly_mammoth_occlusion);
+            let index_buf = graph.bind_node(&woolly_mammoth.index_buf);
+            let vertex_buf = graph.bind_node(&woolly_mammoth.vertex_buf);
+            let normal_texture = graph.bind_node(&woolly_mammoth_normal);
+            let occlusion_texture = graph.bind_node(&woolly_mammoth_occlusion);
             let push_consts = PushConstants::new(Mat4::IDENTITY);
 
-            render_graph
+            graph
                 .begin_cmd()
                 .with_name("Woolly Mammoth")
                 .bind_pipeline(mammoth_pipeline.hot())
@@ -476,7 +476,7 @@ fn main() -> anyhow::Result<()> {
         // the image - afterwards we keep the submitted command buffer around (including all
         // in-flight resources) so that nothing is dropped until that image is actually done.
         swapchain.wait_image(xr::Duration::INFINITE).unwrap();
-        let cmd_buf = render_graph
+        let cmd_buf = graph
             .resolve()
             .submit(&mut pool, queue_family_index as _, 0)
             .unwrap();
@@ -764,13 +764,13 @@ fn load_texture(
         ),
     )?);
 
-    let mut render_graph = Graph::default();
-    let staging_buf = render_graph.bind_node(staging_buf);
-    let texture_image = render_graph.bind_node(&texture);
-    render_graph.copy_buffer_to_image(staging_buf, texture_image);
+    let mut graph = Graph::default();
+    let staging_buf = graph.bind_node(staging_buf);
+    let texture_image = graph.bind_node(&texture);
+    graph.copy_buffer_to_image(staging_buf, texture_image);
 
     let queue_family_index = device_queue_family_index(device, vk::QueueFlags::TRANSFER).unwrap();
-    render_graph
+    graph
         .resolve()
         .submit(&mut LazyPool::new(device), queue_family_index as _, 0)?
         .wait_until_executed()?;

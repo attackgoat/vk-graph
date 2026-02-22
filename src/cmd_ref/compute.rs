@@ -1,5 +1,5 @@
 use {
-    super::{Bindings, pipeline::PipelineRef},
+    super::{Nodes, pipeline::PipelineRef},
     crate::{
         AnyBufferNode,
         driver::{compute::ComputePipeline, device::Device},
@@ -34,15 +34,15 @@ use {
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd().with_name("my compute pass")
 ///         .bind_pipeline(&my_compute_pipeline)
-///         .record_pipeline(move |compute, bindings| {
+///         .record_pipeline(move |compute, nodes| {
 ///             // During this closure we have access to the compute methods!
 ///         });
 /// # Ok(()) }
 /// ```
 pub struct ComputePipelineRef<'a> {
-    pub(super) bindings: Bindings<'a>,
     pub(super) cmd_buf: vk::CommandBuffer,
     pub(super) device: &'a Device,
+    pub(super) nodes: Nodes<'a>,
     pub(super) pipeline: ComputePipeline,
 }
 
@@ -91,7 +91,7 @@ impl ComputePipelineRef<'_> {
     /// my_graph.begin_cmd().with_name("fill my_buf_node with data")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .write_descriptor(0, my_buf_node)
-    ///         .record_pipeline(move |compute, bindings| {
+    ///         .record_pipeline(move |compute, nodes| {
     ///             compute.dispatch(128, 64, 32);
     ///         });
     /// # Ok(()) }
@@ -192,7 +192,7 @@ impl ComputePipelineRef<'_> {
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .read_node(args_buf_node)
     ///         .write_descriptor(0, my_buf_node)
-    ///         .record_pipeline(move |compute, bindings| {
+    ///         .record_pipeline(move |compute, nodes| {
     ///             compute.dispatch_indirect(args_buf_node, 0);
     ///         });
     /// # Ok(()) }
@@ -211,7 +211,7 @@ impl ComputePipelineRef<'_> {
         unsafe {
             self.device.cmd_dispatch_indirect(
                 self.cmd_buf,
-                self.bindings[args_buf].handle,
+                self.nodes[args_buf].handle,
                 args_offset,
             );
         }
@@ -271,7 +271,7 @@ impl ComputePipelineRef<'_> {
     /// # let mut my_graph = Graph::default();
     /// my_graph.begin_cmd().with_name("compute the ultimate question")
     ///         .bind_pipeline(&my_compute_pipeline)
-    ///         .record_pipeline(move |compute, bindings| {
+    ///         .record_pipeline(move |compute, nodes| {
     ///             compute.push_constants(0, &[42])
     ///                    .dispatch(1, 1, 1);
     ///         });
@@ -315,7 +315,7 @@ impl PipelineRef<'_, ComputePipeline> {
     /// Begin recording a compute pipeline command buffer.
     pub fn record_pipeline(
         mut self,
-        func: impl FnOnce(ComputePipelineRef<'_>, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(ComputePipelineRef<'_>, Nodes<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -329,15 +329,15 @@ impl PipelineRef<'_, ComputePipeline> {
             .unwrap_compute()
             .clone();
 
-        self.cmd.push_execute(move |device, cmd_buf, bindings| {
+        self.cmd.push_execute(move |device, cmd_buf, nodes| {
             func(
                 ComputePipelineRef {
-                    bindings,
+                    nodes,
                     cmd_buf,
                     device,
                     pipeline,
                 },
-                bindings,
+                nodes,
             );
         });
 

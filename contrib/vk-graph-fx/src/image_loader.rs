@@ -144,9 +144,8 @@ impl ImageLoader {
             warn!("unused data");
         }
 
-        let mut render_graph = Graph::default();
-        let image =
-            render_graph.bind_node(self.create_image(format, width, height, is_srgb, false)?);
+        let mut graph = Graph::default();
+        let image = graph.bind_node(self.create_image(format, width, height, is_srgb, false)?);
 
         // Fill the image from the temporary buffer
         match format {
@@ -191,19 +190,19 @@ impl ImageLoader {
                     }
                 }
 
-                let pixel_buf = render_graph.bind_node(pixel_buf);
+                let pixel_buf = graph.bind_node(pixel_buf);
 
                 // We create a temporary storage image because SRGB support isn't wide enough to
                 // have SRGB storage images directly
                 let temp_image =
-                    render_graph.bind_node(self.create_image(format, width, height, false, true)?);
+                    graph.bind_node(self.create_image(format, width, height, false, true)?);
 
                 // Copy host-local data in the buffer to the temporary buffer on the GPU and then
                 // use a compute shader to decode it before copying it over the output image
 
                 let dispatch_x = (width + 3) >> 2;
                 let dispatch_y = height;
-                render_graph
+                graph
                     .begin_cmd()
                     .with_name("Decode RGB image")
                     .bind_pipeline(&self.decode_rgb_rgba)
@@ -230,14 +229,14 @@ impl ImageLoader {
                     pixel_buf.copy_from_slice(pixels);
                 }
 
-                let pixel_buf = render_graph.bind_node(pixel_buf);
-                render_graph.copy_buffer_to_image(pixel_buf, image);
+                let pixel_buf = graph.bind_node(pixel_buf);
+                graph.copy_buffer_to_image(pixel_buf, image);
             }
         }
 
-        let image = render_graph.unbind_node(image);
+        let image = graph.unbind_node(image);
 
-        render_graph
+        graph
             .resolve()
             .submit(&mut self.pool, queue_family_index, queue_index)?;
 

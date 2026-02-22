@@ -93,10 +93,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn draw_triangle(frame: &mut FrameContext, pipeline: &GraphicPipeline, vertex_buf: &Arc<Buffer>) {
-    let vertex_buf = frame.render_graph.bind_node(vertex_buf);
+    let vertex_buf = frame.graph.bind_node(vertex_buf);
 
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("Triangle")
         .bind_pipeline(pipeline)

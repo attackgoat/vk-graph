@@ -668,13 +668,13 @@ fn main() -> anyhow::Result<()> {
             .unwrap()
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
-        let mut render_graph = Graph::default();
-        let index_node = render_graph.bind_node(&index_buf);
-        let vertex_node = render_graph.bind_node(&vertex_buf);
-        let blas_node = render_graph.bind_node(&blas);
+        let mut graph = Graph::default();
+        let index_node = graph.bind_node(&index_buf);
+        let vertex_node = graph.bind_node(&vertex_buf);
+        let blas_node = graph.bind_node(&blas);
 
         {
-            let scratch_buf = render_graph.bind_node(Buffer::create(
+            let scratch_buf = graph.bind_node(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     blas_size.build_size,
@@ -684,9 +684,9 @@ fn main() -> anyhow::Result<()> {
                 .to_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = render_graph.node_device_address(scratch_buf);
+            let scratch_data = graph.node_device_address(scratch_buf);
 
-            render_graph
+            graph
                 .begin_cmd()
                 .with_name("Build BLAS")
                 .access_node(index_node, AccessType::AccelerationStructureBuildRead)
@@ -703,7 +703,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         {
-            let scratch_buf = render_graph.bind_node(Buffer::create(
+            let scratch_buf = graph.bind_node(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     tlas_size.build_size,
@@ -713,11 +713,11 @@ fn main() -> anyhow::Result<()> {
                 .to_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = render_graph.node_device_address(scratch_buf);
-            let instance_node = render_graph.bind_node(&instance_buf);
-            let tlas_node = render_graph.bind_node(&tlas);
+            let scratch_data = graph.node_device_address(scratch_buf);
+            let instance_node = graph.bind_node(&instance_buf);
+            let tlas_node = graph.bind_node(&tlas);
 
-            render_graph
+            graph
                 .begin_cmd()
                 .with_name("Build TLAS")
                 .access_node(blas_node, AccessType::AccelerationStructureBuildRead)
@@ -733,7 +733,7 @@ fn main() -> anyhow::Result<()> {
                 });
         }
 
-        render_graph.resolve().submit(&mut cache, 0, 0)?;
+        graph.resolve().submit(&mut cache, 0, 0)?;
     }
 
     // ------------------------------------------------------------------------------------------ //
@@ -761,7 +761,7 @@ fn main() -> anyhow::Result<()> {
                     .lease(ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        frame.render_graph.node_info(frame.swapchain_image).fmt,
+                        frame.graph.node_info(frame.swapchain_image).fmt,
                         vk::ImageUsageFlags::STORAGE
                             | vk::ImageUsageFlags::TRANSFER_DST
                             | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -770,7 +770,7 @@ fn main() -> anyhow::Result<()> {
             ));
         }
 
-        let image_node = frame.render_graph.bind_node(image.as_ref().unwrap());
+        let image_node = frame.graph.bind_node(image.as_ref().unwrap());
 
         {
             input.step_with_window_events(
@@ -811,13 +811,13 @@ fn main() -> anyhow::Result<()> {
 
             if input.key_pressed(KeyCode::Escape) {
                 frame_count = 0;
-                frame.render_graph.clear_color_image(image_node, [0f32; 4]);
+                frame.graph.clear_color_image(image_node, [0f32; 4]);
             } else {
                 frame_count += 1;
             }
         }
 
-        let camera_buf = frame.render_graph.bind_node({
+        let camera_buf = frame.graph.bind_node({
             #[repr(C)]
             struct Camera {
                 position: [f32; 4],
@@ -848,16 +848,16 @@ fn main() -> anyhow::Result<()> {
 
             buf
         });
-        let blas_node = frame.render_graph.bind_node(&blas);
-        let tlas_node = frame.render_graph.bind_node(&tlas);
-        let index_buf_node = frame.render_graph.bind_node(&index_buf);
-        let vertex_buf_node = frame.render_graph.bind_node(&vertex_buf);
-        let material_id_buf_node = frame.render_graph.bind_node(&material_id_buf);
-        let material_buf_node = frame.render_graph.bind_node(&material_buf);
-        let sbt_node = frame.render_graph.bind_node(&sbt_buf);
+        let blas_node = frame.graph.bind_node(&blas);
+        let tlas_node = frame.graph.bind_node(&tlas);
+        let index_buf_node = frame.graph.bind_node(&index_buf);
+        let vertex_buf_node = frame.graph.bind_node(&vertex_buf);
+        let material_id_buf_node = frame.graph.bind_node(&material_id_buf);
+        let material_buf_node = frame.graph.bind_node(&material_buf);
+        let sbt_node = frame.graph.bind_node(&sbt_buf);
 
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("basic ray tracer")
             .bind_pipeline(&ray_trace_pipeline)

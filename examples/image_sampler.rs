@@ -65,9 +65,9 @@ fn main() -> anyhow::Result<()> {
         }
 
         // Draw gulf.jpg using the active pipeline
-        let gulf_image = frame.render_graph.bind_node(&gulf_image);
+        let gulf_image = frame.graph.bind_node(&gulf_image);
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("Draw gulf image to swapchain")
             .bind_pipeline(&pipelines[pipeline_index])
@@ -242,17 +242,15 @@ fn read_image(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Arc<Ima
     )?);
 
     {
-        let mut render_graph = Graph::default();
-        let image = render_graph.bind_node(&image);
-        let image_buf = render_graph.bind_node(Buffer::create_from_slice(
+        let mut graph = Graph::default();
+        let image = graph.bind_node(&image);
+        let image_buf = graph.bind_node(Buffer::create_from_slice(
             device,
             vk::BufferUsageFlags::TRANSFER_SRC,
             gulf_jpg.into_rgba8().into_vec(),
         )?);
-        render_graph.copy_buffer_to_image(image_buf, image);
-        render_graph
-            .resolve()
-            .submit(&mut HashPool::new(device), 0, 0)?;
+        graph.copy_buffer_to_image(image_buf, image);
+        graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
         // Note: There is no need to call wait_until_executed() here
     }

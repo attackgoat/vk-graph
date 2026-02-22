@@ -333,8 +333,8 @@ impl Window {
                 }
 
                 if let Some(swapchain_image) = self.display.acquire_next_image()? {
-                    let mut render_graph = Graph::default();
-                    let swapchain_image = render_graph.bind_node(swapchain_image);
+                    let mut graph = Graph::default();
+                    let swapchain_image = graph.bind_node(swapchain_image);
                     let swapchain_info = self.display.swapchain.info;
 
                     let mut will_exit = false;
@@ -345,7 +345,7 @@ impl Window {
                         device,
                         events: &self.events,
                         height: swapchain_info.height,
-                        render_graph: &mut render_graph,
+                        graph: &mut graph,
                         swapchain_image,
                         width: swapchain_info.width,
                         will_exit: &mut will_exit,
@@ -362,7 +362,7 @@ impl Window {
 
                     self.window.pre_present_notify();
                     self.display
-                        .present_image(&mut self.display_pool, render_graph, swapchain_image, 0)
+                        .present_image(&mut self.display_pool, graph, swapchain_image, 0)
                         .inspect_err(|err| {
                             warn!("unable to present swapchain image: {err}");
                         })?;

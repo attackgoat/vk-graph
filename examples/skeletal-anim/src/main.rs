@@ -59,9 +59,9 @@ fn main() -> Result<(), WindowError> {
     window.run(|frame| {
         let elapsed = (Instant::now() - started).as_secs_f32();
 
-        let index_buf = frame.render_graph.bind_node(&character.index_buf);
-        let vertex_buf = frame.render_graph.bind_node(&character.vertex_buf);
-        let depth_image = frame.render_graph.bind_node(
+        let index_buf = frame.graph.bind_node(&character.index_buf);
+        let vertex_buf = frame.graph.bind_node(&character.vertex_buf);
+        let depth_image = frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -72,7 +72,7 @@ fn main() -> Result<(), WindowError> {
         );
 
         let texture = frame
-            .render_graph
+            .graph
             .bind_node(match (elapsed / 2.0).rem_euclid(4.0) {
                 t if t < 1.0 => &human_female,
                 t if t < 2.0 => &human_male,
@@ -80,7 +80,7 @@ fn main() -> Result<(), WindowError> {
                 _ => &zombie_male,
             });
 
-        let camera_buf = frame.render_graph.bind_node({
+        let camera_buf = frame.graph.bind_node({
             let position = Vec3::ONE * 3.0;
             let aspect_ratio = frame.render_aspect_ratio();
             let projection = Mat4::perspective_rh(45.0, aspect_ratio, 0.1, 100.0);
@@ -105,7 +105,7 @@ fn main() -> Result<(), WindowError> {
             buf
         });
 
-        let animation_buf = frame.render_graph.bind_node({
+        let animation_buf = frame.graph.bind_node({
             let animation = match (elapsed / 4.0).rem_euclid(2.0) {
                 t if t < 1.0 => &mut run,
                 _ => &mut idle,
@@ -124,7 +124,7 @@ fn main() -> Result<(), WindowError> {
         });
 
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("🦴")
             .bind_pipeline(&pipeline)
@@ -188,13 +188,11 @@ fn load_texture(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Arc<Imag
     )?);
 
     // Copy the host-accessible pixels into the device-only image
-    let mut render_graph = Graph::default();
-    let image_node = render_graph.bind_node(&image);
-    let buffer_node = render_graph.bind_node(&buffer);
-    render_graph.copy_buffer_to_image(buffer_node, image_node);
-    render_graph
-        .resolve()
-        .submit(&mut HashPool::new(device), 0, 0)?;
+    let mut graph = Graph::default();
+    let image_node = graph.bind_node(&image);
+    let buffer_node = graph.bind_node(&buffer);
+    graph.copy_buffer_to_image(buffer_node, image_node);
+    graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
     Ok(image)
 }
@@ -441,16 +439,14 @@ impl Model {
         )?);
 
         // Copy the host-accessible staging buffers to device-only buffers
-        let mut render_graph = Graph::default();
-        let index_staging_buf_node = render_graph.bind_node(index_staging_buf);
-        let vertex_staging_buf_node = render_graph.bind_node(vertex_staging_buf);
-        let index_buf_node = render_graph.bind_node(&index_buf);
-        let vertex_buf_node = render_graph.bind_node(&vertex_buf);
-        render_graph.copy_buffer(index_staging_buf_node, index_buf_node);
-        render_graph.copy_buffer(vertex_staging_buf_node, vertex_buf_node);
-        render_graph
-            .resolve()
-            .submit(&mut HashPool::new(device), 0, 0)?;
+        let mut graph = Graph::default();
+        let index_staging_buf_node = graph.bind_node(index_staging_buf);
+        let vertex_staging_buf_node = graph.bind_node(vertex_staging_buf);
+        let index_buf_node = graph.bind_node(&index_buf);
+        let vertex_buf_node = graph.bind_node(&vertex_buf);
+        graph.copy_buffer(index_staging_buf_node, index_buf_node);
+        graph.copy_buffer(vertex_staging_buf_node, vertex_buf_node);
+        graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
         Ok(Model {
             index_buf,

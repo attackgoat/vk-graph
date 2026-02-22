@@ -240,17 +240,17 @@ let buffer_node = graph.bind_node(buffer);
 let image_node = graph.bind_node(image);
 graph
     .begin_cmd().with_name("Do some raw Vulkan or interop with another Vulkan library")
-    .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
+    .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
         // I always run first!
     })
     .read_node(buffer_node) // <-- These two functions, read_node/write_node, completely
     .write_node(image_node) //     handle vulkan synchronization.
-    .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
+    .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
         // device is &ash::Device
         // cmd_buf is vk::CommandBuffer
         // bindings is a magical object you can retrieve the Vulkan resource from
-        let vk_buffer: vk::Buffer = bindings[buffer_node].handle;
-        let vk_image: vk::Image = bindings[image_node].handle;
+        let vk_buffer: vk::Buffer = nodes[buffer_node].handle;
+        let vk_image: vk::Image = nodes[image_node].handle;
 
         // You are free to READ vk_buffer and WRITE vk_image!
     });
@@ -368,7 +368,7 @@ pub use self::{
 use {
     self::{
         bind::Binding,
-        cmd_ref::{AttachmentIndex, Bindings, CommandRef, Descriptor, SubresourceAccess, ViewType},
+        cmd_ref::{AttachmentIndex, CommandRef, Descriptor, Nodes, SubresourceAccess, ViewType},
         edge::Edge,
         info::Info,
         node::Node,
@@ -400,7 +400,7 @@ use {
     vk_sync::AccessType,
 };
 
-type ExecFn = Box<dyn FnOnce(&Device, vk::CommandBuffer, Bindings<'_>) + Send>;
+type ExecFn = Box<dyn FnOnce(&Device, vk::CommandBuffer, Nodes<'_>) + Send>;
 type NodeIndex = usize;
 
 #[derive(Clone, Copy, Debug)]
@@ -648,7 +648,7 @@ impl Command {
 /// The design of this code originated with a combination of
 /// [`PassBuilder`](https://github.com/EmbarkStudios/kajiya/blob/main/crates/lib/kajiya-rg/src/pass_builder.rs)
 /// and
-/// [`render_graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/render_graph.cpp).
+/// [`graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/graph.cpp).
 #[derive(Debug, Default)]
 pub struct Graph {
     bindings: Vec<Binding>,
@@ -767,9 +767,9 @@ impl Graph {
                 );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_image = bindings[src_node].handle;
-            let dst_image = bindings[dst_node].handle;
+        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
+            let src_image = nodes[src_node].handle;
+            let dst_image = nodes[dst_node].handle;
 
             unsafe {
                 device.cmd_blit_image(
@@ -801,10 +801,10 @@ impl Graph {
         self.begin_cmd()
             .with_name("clear color")
             .access_node_subrange(image_node, AccessType::TransferWrite, image_view_info)
-            .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
+            .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
                 device.cmd_clear_color_image(
                     cmd_buf,
-                    bindings[image_node].handle,
+                    nodes[image_node].handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &vk::ClearColorValue {
                         float32: color_value.0,
@@ -830,10 +830,10 @@ impl Graph {
         self.begin_cmd()
             .with_name("clear depth/stencil")
             .access_node_subrange(image_node, AccessType::TransferWrite, image_view_info)
-            .record_cmd_buf(move |device, cmd_buf, bindings| unsafe {
+            .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
                 device.cmd_clear_depth_stencil_image(
                     cmd_buf,
-                    bindings[image_node].handle,
+                    nodes[image_node].handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &vk::ClearDepthStencilValue { depth, stencil },
                     &[image_view_info.into()],
@@ -918,9 +918,9 @@ impl Graph {
                 );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_buf = bindings[src_node].handle;
-            let dst_buf = bindings[dst_node].handle;
+        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
+            let src_buf = nodes[src_node].handle;
+            let dst_buf = nodes[dst_node].handle;
 
             unsafe {
                 device.cmd_copy_buffer(cmd_buf, src_buf, dst_buf, regions.as_ref());
@@ -1005,9 +1005,9 @@ impl Graph {
                 );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_buf = bindings[src_node].handle;
-            let dst_image = bindings[dst_node].handle;
+        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
+            let src_buf = nodes[src_node].handle;
+            let dst_image = nodes[dst_node].handle;
 
             unsafe {
                 device.cmd_copy_buffer_to_image(
@@ -1098,9 +1098,9 @@ impl Graph {
                 );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_image = bindings[src_node].handle;
-            let dst_image = bindings[dst_node].handle;
+        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
+            let src_image = nodes[src_node].handle;
+            let dst_image = nodes[dst_node].handle;
 
             unsafe {
                 device.cmd_copy_image(
@@ -1194,9 +1194,9 @@ impl Graph {
                 );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, bindings| {
-            let src_image = bindings[src_node].handle;
-            let dst_buf = bindings[dst_node].handle;
+        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
+            let src_image = nodes[src_node].handle;
+            let dst_buf = nodes[dst_node].handle;
 
             unsafe {
                 device.cmd_copy_image_to_buffer(
@@ -1233,8 +1233,8 @@ impl Graph {
         self.begin_cmd()
             .with_name("fill buffer")
             .access_node_subrange(buffer_node, AccessType::TransferWrite, region.clone())
-            .record_cmd_buf(move |device, cmd_buf, bindings| {
-                let buffer = bindings[buffer_node].handle;
+            .record_cmd_buf(move |device, cmd_buf, nodes| {
+                let buffer = nodes[buffer_node].handle;
 
                 unsafe {
                     device.cmd_fill_buffer(
@@ -1336,8 +1336,8 @@ impl Graph {
         self.begin_cmd()
             .with_name("update buffer")
             .access_node_subrange(buffer_node, AccessType::TransferWrite, offset..data_end)
-            .record_cmd_buf(move |device, cmd_buf, bindings| {
-                let buffer = bindings[buffer_node].handle;
+            .record_cmd_buf(move |device, cmd_buf, nodes| {
+                let buffer = nodes[buffer_node].handle;
 
                 unsafe {
                     device.cmd_update_buffer(cmd_buf, buffer, offset, data.as_ref());

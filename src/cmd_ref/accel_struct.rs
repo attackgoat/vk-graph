@@ -1,5 +1,5 @@
 use {
-    super::Bindings,
+    super::Nodes,
     crate::{
         AnyAccelerationStructureNode,
         driver::{
@@ -37,15 +37,15 @@ use {
 /// # let mut my_graph = Graph::default();
 /// # let info = AccelerationStructureInfo::blas(1);
 /// my_graph.begin_cmd()
-///         .record_accel_struct(move |accel_struct, bindings| {
+///         .record_accel_struct(move |accel_struct, nodes| {
 ///             // During this closure we have access to the build and update methods
 ///         });
 /// # Ok(()) }
 /// ```
 pub struct AccelerationStructureRef<'a> {
-    pub(super) bindings: Bindings<'a>,
     pub(super) cmd_buf: vk::CommandBuffer,
     pub(super) device: &'a Device,
+    pub(super) nodes: Nodes<'a>,
 }
 
 impl AccelerationStructureRef<'_> {
@@ -97,20 +97,20 @@ impl AccelerationStructureRef<'_> {
     ///         .read_node(vertex_node)
     ///         .write_node(blas_node)
     ///         .write_node(scratch_buf)
-    ///         .record_accel_struct(move |accel_struct, bindings| {
-    ///             let scratch_addr = bindings[scratch_buf].device_address();
+    ///         .record_accel_struct(move |accel_struct, nodes| {
+    ///             let scratch_addr = nodes[scratch_buf].device_address();
     ///             let geom = AccelerationStructureGeometry {
     ///                 max_primitive_count: 64,
     ///                 flags: vk::GeometryFlagsKHR::OPAQUE,
     ///                 geometry: AccelerationStructureGeometryData::Triangles {
     ///                     index_addr: DeviceOrHostAddress::DeviceAddress(
-    ///                         bindings[index_node].device_address()
+    ///                         nodes[index_node].device_address()
     ///                     ),
     ///                     index_type: vk::IndexType::UINT32,
     ///                     max_vertex: 42,
     ///                     transform_addr: None,
     ///                     vertex_addr: DeviceOrHostAddress::DeviceAddress(
-    ///                         bindings[vertex_node].device_address(),
+    ///                         nodes[vertex_node].device_address(),
     ///                     ),
     ///                     vertex_format: vk::Format::R32G32B32_SFLOAT,
     ///                     vertex_stride: 12,
@@ -180,7 +180,7 @@ impl AccelerationStructureRef<'_> {
                             .ty(info.build_data.ty)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(self.bindings[info.accel_struct].handle)
+                            .dst_acceleration_structure(self.nodes[info.accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -255,7 +255,7 @@ impl AccelerationStructureRef<'_> {
                             .ty(info.build_data.ty)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(self.bindings[info.accel_struct].handle)
+                            .dst_acceleration_structure(self.nodes[info.accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_data.into()),
                     );
@@ -346,8 +346,8 @@ impl AccelerationStructureRef<'_> {
                             .ty(info.update_data.ty)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .dst_acceleration_structure(self.bindings[info.dst_accel_struct].handle)
-                            .src_acceleration_structure(self.bindings[info.src_accel_struct].handle)
+                            .dst_acceleration_structure(self.nodes[info.dst_accel_struct].handle)
+                            .src_acceleration_structure(self.nodes[info.src_accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -422,8 +422,8 @@ impl AccelerationStructureRef<'_> {
                             .ty(info.update_data.ty)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .src_acceleration_structure(self.bindings[info.src_accel_struct].handle)
-                            .dst_acceleration_structure(self.bindings[info.dst_accel_struct].handle)
+                            .src_acceleration_structure(self.nodes[info.src_accel_struct].handle)
+                            .dst_acceleration_structure(self.nodes[info.dst_accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );

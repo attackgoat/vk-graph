@@ -79,11 +79,11 @@ fn main() -> Result<(), WindowError> {
     )?);
 
     window.run(|frame| {
-        let index_node = frame.render_graph.bind_node(&index_buf);
-        let vertex_node = frame.render_graph.bind_node(&vertex_buf);
+        let index_node = frame.graph.bind_node(&index_buf);
+        let vertex_node = frame.graph.bind_node(&vertex_buf);
 
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("Triangle Example")
             .bind_pipeline(&triangle_pipeline)

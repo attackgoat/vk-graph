@@ -78,7 +78,7 @@ fn main() -> Result<(), WindowError> {
 
         if clear_before {
             frame
-                .render_graph
+                .graph
                 .clear_color_image(frame.swapchain_image, [0f32; 4]);
         }
 
@@ -89,7 +89,7 @@ fn main() -> Result<(), WindowError> {
 
         if !clear_before {
             frame
-                .render_graph
+                .graph
                 .clear_color_image(frame.swapchain_image, [0f32; 4]);
         }
     })?;
@@ -217,8 +217,8 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             }]),
         );
 
-        let blas_node = frame.render_graph.bind_node(blas);
-        let scratch_buf = frame.render_graph.bind_node(
+        let blas_node = frame.graph.bind_node(blas);
+        let scratch_buf = frame.graph.bind_node(
             pool.lease(
                 BufferInfo::device_mem(
                     blas_size.build_size,
@@ -246,13 +246,13 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         },
         vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
     )]);
-    let instance_buf = frame.render_graph.bind_node(instance_buf);
+    let instance_buf = frame.graph.bind_node(instance_buf);
     let tlas_size = AccelerationStructure::size_of(frame.device, &tlas_geometry_info);
     let tlas = pool
         .lease(AccelerationStructureInfo::tlas(tlas_size.create_size))
         .unwrap();
-    let tlas_node = frame.render_graph.bind_node(tlas);
-    let tlas_scratch_buf = frame.render_graph.bind_node(
+    let tlas_node = frame.graph.bind_node(tlas);
+    let tlas_scratch_buf = frame.graph.bind_node(
         pool.lease(
             BufferInfo::device_mem(
                 tlas_size.build_size,
@@ -264,11 +264,11 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         .unwrap(),
     );
 
-    let index_node = frame.render_graph.bind_node(index_buf);
-    let vertex_node = frame.render_graph.bind_node(vertex_buf);
+    let index_node = frame.graph.bind_node(index_buf);
+    let vertex_node = frame.graph.bind_node(vertex_buf);
 
     let pass = frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("build acceleration structures");
 
@@ -287,9 +287,9 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         .map(|(blas_node, _, _)| *blas_node)
         .collect::<Vec<_>>();
 
-    let mut pass = pass.record_accel_struct(move |accel_struct, bindings| {
+    let mut pass = pass.record_accel_struct(move |accel_struct, nodes| {
         for (blas_node, scratch_buf, build_data) in blas_nodes {
-            let scratch_addr = bindings[scratch_buf].device_address();
+            let scratch_addr = nodes[scratch_buf].device_address();
             accel_struct.build(&[BuildAccelerationStructureInfo::new(
                 blas_node,
                 scratch_addr,
@@ -309,8 +309,8 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     );
     pass.access_node_mut(tlas_node, AccessType::AccelerationStructureBuildWrite);
 
-    pass.record_accel_struct(move |accel_struct, bindings| {
-        let scratch_data = Buffer::device_address(&bindings[tlas_scratch_buf]);
+    pass.record_accel_struct(move |accel_struct, nodes| {
+        let scratch_data = Buffer::device_address(&nodes[tlas_scratch_buf]);
         accel_struct.build(&[BuildAccelerationStructureInfo::new(
             tlas_node,
             scratch_data,
@@ -363,25 +363,15 @@ fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
     );
     let images = [
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
     ];
 
     frame
-        .render_graph
+        .graph
         .clear_color_image(images[0], [0f32; 4])
         .clear_color_image(images[1], [0f32; 4])
         .clear_color_image(images[2], [0f32; 4])
@@ -444,25 +434,15 @@ fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
     );
     let images = [
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
     ];
 
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("compute-bindless")
         .bind_pipeline(&pipeline)
@@ -497,7 +477,7 @@ fn record_pipeline_no_op(frame: &mut FrameContext, _: &mut HashPool) {
         ),
     );
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("no-op")
         .bind_pipeline(&pipeline)
@@ -547,7 +527,7 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .as_slice(),
     );
 
-    let image = frame.render_graph.bind_node(
+    let image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -565,25 +545,15 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
             | vk::ImageUsageFlags::TRANSFER_DST,
     );
     let images = [
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
-        frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
+        frame.graph.bind_node(pool.lease(image_info).unwrap()),
     ];
 
     frame
-        .render_graph
+        .graph
         .clear_color_image(images[0], [0f32; 4])
         .clear_color_image(images[1], [0f32; 4])
         .clear_color_image(images[2], [0f32; 4])
@@ -636,7 +606,7 @@ fn record_graphic_load_store(frame: &mut FrameContext, _: &mut HashPool) {
     );
 
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("load-store")
         .bind_pipeline(&pipeline)
@@ -749,8 +719,8 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .as_slice(),
     );
 
-    let swapchain_format = frame.render_graph.node_info(frame.swapchain_image).fmt;
-    let msaa_color_image = frame.render_graph.bind_node(
+    let swapchain_format = frame.graph.node_info(frame.swapchain_image).fmt;
+    let msaa_color_image = frame.graph.bind_node(
         pool.lease(
             ImageInfo::image_2d(
                 frame.width,
@@ -763,7 +733,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         )
         .unwrap(),
     );
-    let msaa_depth_stencil_image = frame.render_graph.bind_node(
+    let msaa_depth_stencil_image = frame.graph.bind_node(
         pool.lease(
             ImageInfo::image_2d(
                 frame.width,
@@ -777,7 +747,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         )
         .unwrap(),
     );
-    let depth_stencil_image = frame.render_graph.bind_node(
+    let depth_stencil_image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             frame.width,
             frame.height,
@@ -808,7 +778,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
     };
 
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("msaa-depth-stencil")
         .bind_pipeline(&pipeline)
@@ -828,7 +798,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
 }
 
 fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut HashPool) {
-    let image = frame.render_graph.bind_node(
+    let image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -840,7 +810,7 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
 
     // Pass "a" stores color0 which "b" compatibly loads; so these two will get merged
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
@@ -874,7 +844,7 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("b")
         .bind_pipeline(&graphic_vert_frag_pipeline(
@@ -911,7 +881,7 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
 }
 
 fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut HashPool) {
-    let image_0 = frame.render_graph.bind_node(
+    let image_0 = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -920,7 +890,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         ))
         .unwrap(),
     );
-    let image_1 = frame.render_graph.bind_node(
+    let image_1 = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -931,7 +901,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
     );
 
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
@@ -965,7 +935,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("b")
         .bind_pipeline(&graphic_vert_frag_pipeline(
@@ -1003,7 +973,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("c")
         .bind_pipeline(&graphic_vert_frag_pipeline(
@@ -1040,7 +1010,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
 }
 
 fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut HashPool) {
-    let color_image = frame.render_graph.bind_node(
+    let color_image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -1049,7 +1019,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         ))
         .unwrap(),
     );
-    let depth_image = frame.render_graph.bind_node(
+    let depth_image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -1061,7 +1031,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
 
     // Pass "a" stores color0+depth which "b" compatibly loads; so these two will get merged
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
@@ -1096,7 +1066,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
@@ -1131,7 +1101,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
 }
 
 fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut HashPool) {
-    let color_image = frame.render_graph.bind_node(
+    let color_image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -1140,7 +1110,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         ))
         .unwrap(),
     );
-    let depth_image = frame.render_graph.bind_node(
+    let depth_image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -1152,7 +1122,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
 
     // Pass "a" stores color0+depth which "b" compatibly loads; so these two will get merged
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
@@ -1184,7 +1154,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
@@ -1222,7 +1192,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
 }
 
 fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut HashPool) {
-    let depth_image = frame.render_graph.bind_node(
+    let depth_image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -1233,7 +1203,7 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
     );
 
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
@@ -1265,7 +1235,7 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
@@ -1348,7 +1318,7 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
         )
         .as_slice(),
     );
-    let image = frame.render_graph.bind_node(
+    let image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -1362,7 +1332,7 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
 
     // Pass "a" stores color 0 which "b" compatibly inputs; so these two will get merged
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("a")
         .bind_pipeline(&pipeline_a)
@@ -1372,7 +1342,7 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("b")
         .bind_pipeline(&pipeline_b)
@@ -1410,7 +1380,7 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
         .as_slice(),
     );
 
-    let image = frame.render_graph.bind_node(
+    let image = frame.graph.bind_node(
         pool.lease(ImageInfo::image_2d(
             256,
             256,
@@ -1422,7 +1392,7 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
 
     // These two passes have common writes but are otherwise regular - they won't get merged
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("c")
         .bind_pipeline(&pipeline)
@@ -1431,7 +1401,7 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("d")
         .bind_pipeline(&pipeline)
@@ -1472,7 +1442,7 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
         .as_slice(),
     );
     let images = [
-        frame.render_graph.bind_node(
+        frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d(
                 256,
                 256,
@@ -1481,7 +1451,7 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
             ))
             .unwrap(),
         ),
-        frame.render_graph.bind_node(
+        frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d(
                 256,
                 256,
@@ -1492,13 +1462,13 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
         ),
     ];
 
-    frame.render_graph.clear_color_image(images[0], [0f32; 4]);
-    frame.render_graph.clear_color_image(images[1], [0f32; 4]);
+    frame.graph.clear_color_image(images[0], [0f32; 4]);
+    frame.graph.clear_color_image(images[1], [0f32; 4]);
 
     // a and b should merge into one renderpass with two subpasses; however the use of images[1] in
     // b should have a pipeline barrier (on the clear we just did) before the pass starts.
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("a")
         .bind_pipeline(&pipeline)
@@ -1509,7 +1479,7 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
             pipeline.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
+        .graph
         .begin_cmd()
         .with_name("b")
         .bind_pipeline(&pipeline)

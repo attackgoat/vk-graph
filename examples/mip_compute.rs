@@ -18,9 +18,9 @@ fn main() -> Result<(), DriverError> {
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
     let device = Arc::new(Device::new(device_info)?);
 
-    let mut render_graph = Graph::default();
+    let mut graph = Graph::default();
 
-    let depth_pyramid = render_graph.bind_node(Image::create(
+    let depth_pyramid = graph.bind_node(Image::create(
         &device,
         ImageInfo::image_2d(
             4,
@@ -34,11 +34,11 @@ fn main() -> Result<(), DriverError> {
         .to_builder()
         .mip_level_count(3),
     )?);
-    let depth_info = render_graph.node_info(depth_pyramid);
+    let depth_info = graph.node_info(depth_pyramid);
 
     // You would normally create this buffer by copying the depth attachment image
     #[allow(clippy::inconsistent_digit_grouping)]
-    let depth_buf = render_graph.bind_node(Buffer::create_from_slice(
+    let depth_buf = graph.bind_node(Buffer::create_from_slice(
         &device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         cast_slice(&[
@@ -48,9 +48,9 @@ fn main() -> Result<(), DriverError> {
             [13.0__, 14.0, 15.0, 16.0],
         ]),
     )?);
-    render_graph.copy_buffer_to_image(depth_buf, depth_pyramid);
+    graph.copy_buffer_to_image(depth_buf, depth_pyramid);
 
-    let mut pass = render_graph
+    let mut pass = graph
         .begin_cmd()
         .with_name("update depth pyramid")
         .bind_pipeline(ComputePipeline::create(
@@ -114,11 +114,11 @@ fn main() -> Result<(), DriverError> {
             });
     }
 
-    let depth_pixel = render_graph.bind_node(Buffer::create(
+    let depth_pixel = graph.bind_node(Buffer::create(
         &device,
         BufferInfo::host_mem(size_of::<f32>() as _, vk::BufferUsageFlags::TRANSFER_DST),
     )?);
-    render_graph.copy_image_to_buffer_region(
+    graph.copy_image_to_buffer_region(
         depth_pyramid,
         depth_pixel,
         vk::BufferImageCopy {
@@ -140,9 +140,9 @@ fn main() -> Result<(), DriverError> {
         },
     );
 
-    let depth_pixel = render_graph.unbind_node(depth_pixel);
+    let depth_pixel = graph.unbind_node(depth_pixel);
 
-    render_graph
+    graph
         .resolve()
         .submit(&mut HashPool::new(&device), 0, 0)?
         .wait_until_executed()?;

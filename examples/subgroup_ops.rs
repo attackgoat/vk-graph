@@ -66,15 +66,15 @@ fn exclusive_sum(
     scan_pipeline: &ComputePipeline,
     input_data: &[u32],
 ) -> Result<Vec<u32>, DriverError> {
-    let mut render_graph = Graph::default();
+    let mut graph = Graph::default();
 
-    let input_buf = render_graph.bind_node(Buffer::create_from_slice(
+    let input_buf = graph.bind_node(Buffer::create_from_slice(
         device,
         vk::BufferUsageFlags::STORAGE_BUFFER,
         cast_slice(input_data),
     )?);
 
-    let output_buf = render_graph.bind_node(Arc::new(Buffer::create(
+    let output_buf = graph.bind_node(Arc::new(Buffer::create(
         device,
         BufferInfo::host_mem(
             input_data.len() as vk::DeviceSize * size_of::<u32>() as vk::DeviceSize,
@@ -85,7 +85,7 @@ fn exclusive_sum(
     let workgroup_count =
         input_data.len() as u32 / device.physical_device.properties_v1_1.subgroup_size;
     let reduce_count = workgroup_count - 1;
-    let workgroup_buf = render_graph.bind_node(Buffer::create(
+    let workgroup_buf = graph.bind_node(Buffer::create(
         device,
         BufferInfo::device_mem(
             reduce_count.max(1) as vk::DeviceSize * size_of::<u32>() as vk::DeviceSize,
@@ -94,7 +94,7 @@ fn exclusive_sum(
     )?);
 
     if reduce_count > 0 {
-        render_graph
+        graph
             .begin_cmd()
             .with_name("exclusive sum reduce")
             .bind_pipeline(reduce_pipeline)
@@ -105,7 +105,7 @@ fn exclusive_sum(
             });
     }
 
-    render_graph
+    graph
         .begin_cmd()
         .with_name("exclusive sum scan")
         .bind_pipeline(scan_pipeline)
@@ -116,10 +116,8 @@ fn exclusive_sum(
             compute.dispatch(workgroup_count, 1, 1);
         });
 
-    let output_buf = render_graph.unbind_node(output_buf);
-    let mut cmd_buf = render_graph
-        .resolve()
-        .submit(&mut HashPool::new(device), 0, 0)?;
+    let output_buf = graph.unbind_node(output_buf);
+    let mut cmd_buf = graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();
     cmd_buf.wait_until_executed()?;

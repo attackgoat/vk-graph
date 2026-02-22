@@ -89,7 +89,7 @@ impl Egui {
     fn bind_and_update_textures(
         &mut self,
         deltas: &egui::TexturesDelta,
-        render_graph: &mut Graph,
+        graph: &mut Graph,
     ) -> HashMap<egui::TextureId, AnyImageNode> {
         let mut bound_tex = deltas
             .set
@@ -114,7 +114,7 @@ impl Egui {
                         ))
                         .unwrap();
                     Buffer::copy_from_slice(&mut buf, 0, cast_slice(&pixels));
-                    render_graph.bind_node(buf)
+                    graph.bind_node(buf)
                 };
 
                 if let Some(pos) = delta.pos {
@@ -122,10 +122,10 @@ impl Egui {
                         self.textures
                             .remove(id)
                             .expect("Tried updating undefined texture.")
-                            .bind(render_graph),
+                            .bind(graph),
                     );
 
-                    render_graph.copy_buffer_to_image_region(
+                    graph.copy_buffer_to_image_region(
                         tmp_buf,
                         image,
                         vk::BufferImageCopy {
@@ -161,11 +161,11 @@ impl Egui {
                                 vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
                             ))
                             .unwrap()
-                            .bind(render_graph),
+                            .bind(graph),
                     );
 
-                    render_graph.copy_buffer_to_image(tmp_buf, image);
-                    render_graph.unbind_node(tmp_buf);
+                    graph.copy_buffer_to_image(tmp_buf, image);
+                    graph.unbind_node(tmp_buf);
                     (*id, image)
                 }
             })
@@ -173,7 +173,7 @@ impl Egui {
 
         // Bind the rest of the textures.
         for (id, image) in self.textures.drain() {
-            bound_tex.insert(id, AnyImageNode::ImageLease(render_graph.bind_node(image)));
+            bound_tex.insert(id, AnyImageNode::ImageLease(graph.bind_node(image)));
         }
 
         // Add user textures.
@@ -187,14 +187,14 @@ impl Egui {
     fn unbind_and_free(
         &mut self,
         bound_tex: HashMap<egui::TextureId, AnyImageNode>,
-        render_graph: &mut Graph,
+        graph: &mut Graph,
         deltas: &egui::TexturesDelta,
     ) {
         // Unbind textures
         for (id, tex) in bound_tex.iter() {
             if let AnyImageNode::ImageLease(tex) = tex {
                 if let egui::TextureId::Managed(_) = *id {
-                    self.textures.insert(*id, render_graph.unbind_node(*tex));
+                    self.textures.insert(*id, graph.unbind_node(*tex));
                 }
             }
         }
@@ -211,11 +211,11 @@ impl Egui {
         &mut self,
         shapes: Vec<egui::epaint::ClippedShape>,
         bound_tex: &HashMap<egui::TextureId, AnyImageNode>,
-        render_graph: &mut Graph,
+        graph: &mut Graph,
         target: impl Into<AnyImageNode>,
     ) {
         let target = target.into();
-        let target_info = render_graph.node_info(target);
+        let target_info = graph.node_info(target);
         for egui::ClippedPrimitive {
             clip_rect,
             primitive,
@@ -241,7 +241,7 @@ impl Egui {
                         Buffer::copy_from_slice(&mut buf, 0, cast_slice(&mesh.indices));
                         buf
                     };
-                    let idx_buf = render_graph.bind_node(idx_buf);
+                    let idx_buf = graph.bind_node(idx_buf);
 
                     let vert_buf = {
                         let mut buf = self
@@ -255,7 +255,7 @@ impl Egui {
                         Buffer::copy_from_slice(&mut buf, 0, cast_slice(&mesh.vertices));
                         buf
                     };
-                    let vert_buf = render_graph.bind_node(vert_buf);
+                    let vert_buf = graph.bind_node(vert_buf);
 
                     #[repr(C)]
                     #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -280,7 +280,7 @@ impl Egui {
                     let width = ((clip_rect.max.x - clip_rect.min.x) * pixels_per_point) as u32;
                     let height = ((clip_rect.max.y - clip_rect.min.y) * pixels_per_point) as u32;
 
-                    render_graph
+                    graph
                         .begin_cmd()
                         .with_name("Egui pass")
                         .bind_pipeline(&self.ppl)
@@ -315,7 +315,7 @@ impl Egui {
         window: &Window,
         events: &[Event<()>],
         target: impl Into<AnyImageNode>,
-        render_graph: &mut Graph,
+        graph: &mut Graph,
         ui_fn: impl FnMut(&egui::Context),
     ) {
         // Update events and generate shapes and texture deltas.
@@ -335,11 +335,11 @@ impl Egui {
 
         let deltas = full_output.textures_delta;
 
-        let bound_tex = self.bind_and_update_textures(&deltas, render_graph);
+        let bound_tex = self.bind_and_update_textures(&deltas, graph);
 
-        self.draw_primitive(full_output.shapes, &bound_tex, render_graph, target);
+        self.draw_primitive(full_output.shapes, &bound_tex, graph, target);
 
-        self.unbind_and_free(bound_tex, render_graph, &deltas);
+        self.unbind_and_free(bound_tex, graph, &deltas);
     }
 
     /// TODO

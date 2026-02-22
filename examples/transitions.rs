@@ -78,18 +78,13 @@ fn main() -> anyhow::Result<()> {
         };
 
         // Bind images so we can graph them
-        let bart_image = frame.render_graph.bind_node(&bart_image);
-        let gulf_image = frame.render_graph.bind_node(&gulf_image);
+        let bart_image = frame.graph.bind_node(&bart_image);
+        let gulf_image = frame.graph.bind_node(&gulf_image);
 
         // Apply the current transition to the images and get a resultant image out; "blend_image"
         let transition = TRANSITIONS[curr_transition_idx];
-        let blend_image = transition_pipeline.apply(
-            frame.render_graph,
-            bart_image,
-            gulf_image,
-            transition,
-            progress,
-        );
+        let blend_image =
+            transition_pipeline.apply(frame.graph, bart_image, gulf_image, transition, progress);
 
         // Draw UI: TODO: Sliders and value setters? That would be fun.
         let gui_image = imgui.draw(
@@ -97,7 +92,7 @@ fn main() -> anyhow::Result<()> {
             frame.events,
             frame.window,
             &mut pool,
-            frame.render_graph,
+            frame.graph,
             |ui, _, _| {
                 ui.window("Transitions example")
                     .position([10.0, 10.0], Condition::FirstUseEver)
@@ -121,12 +116,7 @@ fn main() -> anyhow::Result<()> {
         );
 
         // Display the GUI + Blend images on screen
-        display.present_images(
-            frame.render_graph,
-            gui_image,
-            blend_image,
-            frame.swapchain_image,
-        );
+        display.present_images(frame.graph, gui_image, blend_image, frame.swapchain_image);
     })?;
 
     Ok(())

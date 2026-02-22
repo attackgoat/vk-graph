@@ -29,7 +29,7 @@ fn main() -> Result<(), WindowError> {
 
     window.run(|frame| {
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("make some noise")
             .bind_pipeline(pipeline.hot())

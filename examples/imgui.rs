@@ -30,7 +30,7 @@ fn main() -> Result<(), WindowError> {
 
     window.run(|frame| {
         // Lease and clear an image as a stand-in for some real game or program output
-        let app_image = frame.render_graph.bind_node(
+        let app_image = frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -42,7 +42,7 @@ fn main() -> Result<(), WindowError> {
             .unwrap(),
         );
         frame
-            .render_graph
+            .graph
             .clear_color_image(app_image, [0.2, 0.22, 0.2, 1.0]);
 
         // Use the draw function callback to do some fun meant-for-debug-mode GUI stuff
@@ -51,7 +51,7 @@ fn main() -> Result<(), WindowError> {
             frame.events,
             frame.window,
             &mut pool,
-            frame.render_graph,
+            frame.graph,
             |ui, _, _| {
                 ui.window("Hello world")
                     .position([10.0, 10.0], Condition::FirstUseEver)
@@ -76,12 +76,7 @@ fn main() -> Result<(), WindowError> {
         );
 
         // Present "gui_image" on top of "app_image" onto "frame.swapchain"
-        display.present_images(
-            frame.render_graph,
-            gui_image,
-            app_image,
-            frame.swapchain_image,
-        );
+        display.present_images(frame.graph, gui_image, app_image, frame.swapchain_image);
     })
 }
 

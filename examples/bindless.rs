@@ -24,10 +24,10 @@ fn main() -> Result<(), WindowError> {
     let draw_buf = create_indirect_buffer(&window.device)?;
 
     window.run(|frame| {
-        let draw_buf_node = frame.render_graph.bind_node(&draw_buf);
+        let draw_buf_node = frame.graph.bind_node(&draw_buf);
 
         let mut pass = frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("Test")
             .bind_pipeline(&pipeline)

@@ -1,5 +1,5 @@
 use {
-    super::{Bindings, PipelineRef},
+    super::{Nodes, PipelineRef},
     crate::driver::{device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
@@ -10,7 +10,7 @@ impl PipelineRef<'_, RayTracePipeline> {
     /// Begin recording a ray trace pipeline command buffer.
     pub fn record_pipeline(
         mut self,
-        func: impl FnOnce(RayTracePipelineRef<'_>, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(RayTracePipelineRef<'_>, Nodes<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -27,7 +27,7 @@ impl PipelineRef<'_, RayTracePipeline> {
         #[cfg(debug_assertions)]
         let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
-        self.cmd.push_execute(move |device, cmd_buf, bindings| {
+        self.cmd.push_execute(move |device, cmd_buf, nodes| {
             func(
                 RayTracePipelineRef {
                     cmd_buf,
@@ -38,7 +38,7 @@ impl PipelineRef<'_, RayTracePipeline> {
 
                     pipeline,
                 },
-                bindings,
+                nodes,
             );
         });
 
@@ -75,7 +75,7 @@ impl PipelineRef<'_, RayTracePipeline> {
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd().with_name("my ray trace pass")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
-///         .record_pipeline(move |pipeline, bindings| {
+///         .record_pipeline(move |pipeline, nodes| {
 ///             // During this closure we have access to the ray trace methods!
 ///         });
 /// # Ok(()) }
@@ -150,7 +150,7 @@ impl RayTracePipelineRef<'_> {
     /// # let mut my_graph = Graph::default();
     /// my_graph.begin_cmd().with_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_pipeline(move |pipeline, bindings| {
+    ///         .record_pipeline(move |pipeline, nodes| {
     ///             pipeline.push_constants(0, &[0xcb])
     ///                     .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
@@ -242,7 +242,7 @@ impl RayTracePipelineRef<'_> {
     /// # let mut my_graph = Graph::default();
     /// my_graph.begin_cmd().with_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_pipeline(move |pipeline, bindings| {
+    ///         .record_pipeline(move |pipeline, nodes| {
     ///             pipeline.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }

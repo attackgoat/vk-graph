@@ -44,7 +44,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             Note:
                 This callback runs each time the operating system requests a new window image and it
                 expects you to render something to `frame.swapchain_image` using
-                `frame.render_graph`. Note that this scope is infalliable. You may create additional
+                `frame.graph`. Note that this scope is infalliable. You may create additional
                 images and graphs if you choose. You can resolve multiple render graphs per frame -
                 but you only need to do that if you have a hot-section that is part of a VERY large
                 graph.
@@ -100,7 +100,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             It is left as an excerise to the reader to determine *what* might have gone wrong here.
         */
         #[allow(unused_variables)]
-        let image = frame.render_graph.bind_node(
+        let image = frame.graph.bind_node(
             Image::create(
                 frame.device,
                 ImageInfo::image_2d(
@@ -112,7 +112,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             )
             .unwrap(),
         );
-        let image = frame.render_graph.bind_node(
+        let image = frame.graph.bind_node(
             Image::create(
                 frame.device,
                 ImageInfo::image_2d(
@@ -175,7 +175,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
                 .write_descriptor(42, frame.swapchain_image)
         */
         frame
-            .render_graph
+            .graph
             .begin_cmd().with_name("This doesn't look good...")
             .bind_pipeline(&compute_pipeline)
             .write_descriptor(42, image)

@@ -101,8 +101,8 @@ fn main() -> anyhow::Result<()> {
                 let t = 12.0 * ((Instant::now() - started_at).as_millis() % 32) as f32;
 
                 // Clear a new image to a cycling color
-                let mut render_graph = Graph::default();
-                let image = render_graph.bind_node(
+                let mut graph = Graph::default();
+                let image = graph.bind_node(
                     pool.lease(ImageInfo::image_2d(
                         10,
                         10,
@@ -111,7 +111,7 @@ fn main() -> anyhow::Result<()> {
                     ))
                     .unwrap(),
                 );
-                render_graph.clear_color_image(
+                graph.clear_color_image(
                     image,
                     [
                         (t.sin() * 127.0 + 128.0) as u8,
@@ -121,10 +121,10 @@ fn main() -> anyhow::Result<()> {
                     ],
                 );
 
-                let image = render_graph.unbind_node(image);
+                let image = graph.unbind_node(image);
 
                 // Submit on a queue we are reserving for only this thread to use
-                render_graph
+                graph
                     .resolve()
                     .submit(&mut pool, secondary_queue_family_index, queue_index)
                     .unwrap();
@@ -153,11 +153,11 @@ fn main() -> anyhow::Result<()> {
         }
 
         frame
-            .render_graph
+            .graph
             .clear_color_image(frame.swapchain_image, [0f32; 4]);
 
         for (image_idx, image) in images.iter().enumerate() {
-            let image = frame.render_graph.bind_node(image);
+            let image = frame.graph.bind_node(image);
 
             let x = (image_idx % 8) as f32;
             let y = (image_idx / 8) as f32;
@@ -165,7 +165,7 @@ fn main() -> anyhow::Result<()> {
             let j = frame.width as f32 / 10.0;
             let k = frame.height as f32 / 10.0;
 
-            frame.render_graph.blit_image_region(
+            frame.graph.blit_image_region(
                 image,
                 frame.swapchain_image,
                 vk::Filter::NEAREST,
@@ -195,7 +195,7 @@ fn main() -> anyhow::Result<()> {
         let fps = (1.0 / elapsed.as_secs_f32()).round();
         let message = format!("FPS: {fps}");
         font.print_scale(
-            frame.render_graph,
+            frame.graph,
             frame.swapchain_image,
             0.0,
             0.0,
@@ -248,19 +248,17 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
     )
     .unwrap();
 
-    let mut render_graph = Graph::default();
-    let page_0 = render_graph.bind_node(page_0);
-    let temp_buf = render_graph.bind_node(temp_buf);
-    render_graph.copy_buffer_to_image(temp_buf, page_0);
+    let mut graph = Graph::default();
+    let page_0 = graph.bind_node(page_0);
+    let temp_buf = graph.bind_node(temp_buf);
+    graph.copy_buffer_to_image(temp_buf, page_0);
 
     // Unbind page_0 to get the Arc<Image> but we could have just bound a reference (with no unbind)
-    let page_0 = render_graph.unbind_node(page_0);
+    let page_0 = graph.unbind_node(page_0);
 
     // This copy happens in queue index 0! Notice the unbind above is OK because we already asked
     // for the copy to happen first!
-    render_graph
-        .resolve()
-        .submit(&mut HashPool::new(device), 0, 0)?;
+    graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
     BitmapFont::new(device, font, [page_0])
 }

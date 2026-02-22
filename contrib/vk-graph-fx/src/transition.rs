@@ -401,7 +401,7 @@ impl TransitionPipeline {
     /// TODO
     pub fn apply(
         &mut self,
-        render_graph: &mut Graph,
+        graph: &mut Graph,
         a_image: impl Into<AnyImageNode>,
         b_image: impl Into<AnyImageNode>,
         transition: Transition,
@@ -410,8 +410,8 @@ impl TransitionPipeline {
         let a_image = a_image.into();
         let b_image = b_image.into();
 
-        let a_info = render_graph.node_info(a_image);
-        let b_info = render_graph.node_info(b_image);
+        let a_info = graph.node_info(a_image);
+        let b_info = graph.node_info(b_image);
 
         let dest_info = ImageInfo::image_2d(
             a_info.width.max(b_info.width),
@@ -422,16 +422,9 @@ impl TransitionPipeline {
                 | vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::TRANSFER_SRC,
         );
-        let dest_image = render_graph.bind_node(self.cache.lease(dest_info).unwrap());
+        let dest_image = graph.bind_node(self.cache.lease(dest_info).unwrap());
 
-        self.apply_to(
-            render_graph,
-            a_image,
-            b_image,
-            dest_image,
-            transition,
-            progress,
-        );
+        self.apply_to(graph, a_image, b_image, dest_image, transition, progress);
 
         dest_image
     }
@@ -439,7 +432,7 @@ impl TransitionPipeline {
     /// TODO
     pub fn apply_to(
         &mut self,
-        render_graph: &mut Graph,
+        graph: &mut Graph,
         a_image: impl Into<AnyImageNode>,
         b_image: impl Into<AnyImageNode>,
         dest_image: impl Into<AnyImageNode>,
@@ -451,7 +444,7 @@ impl TransitionPipeline {
         let dest_image = dest_image.into();
         let progress = progress.clamp(0.0, 1.0);
 
-        let dest_info = render_graph.node_info(dest_image);
+        let dest_info = graph.node_info(dest_image);
 
         // Lazy-initialize the compute pipeline for this transition
         let transition_ty = transition.ty();
@@ -463,7 +456,7 @@ impl TransitionPipeline {
         extend_push_constants(transition, &mut push_consts);
 
         // TODO: Handle displacement and luma in an if case, below
-        render_graph
+        graph
             .begin_cmd()
             .with_name(format!("transition {transition_ty:?}"))
             .bind_pipeline(pipeline)

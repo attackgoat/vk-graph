@@ -63,7 +63,7 @@ impl ImGui {
         events: &[Event<()>],
         window: &Window,
         pool: &mut P,
-        render_graph: &mut Graph,
+        graph: &mut Graph,
         ui_func: impl FnOnce(&mut Ui, &mut P, &mut Graph),
     ) -> ImageLeaseNode
     where
@@ -75,7 +75,7 @@ impl ImGui {
             .attach_window(self.context.io_mut(), window, HiDpiMode::Default);
 
         if self.font_atlas_image.is_none() || self.platform.hidpi_factor() != hidpi {
-            self.lease_font_atlas_image(pool, render_graph);
+            self.lease_font_atlas_image(pool, graph);
         }
 
         let io = self.context.io_mut();
@@ -92,12 +92,12 @@ impl ImGui {
         // Let the caller draw the GUI
         let ui = self.context.frame();
 
-        ui_func(ui, pool, render_graph);
+        ui_func(ui, pool, graph);
 
         self.platform.prepare_render(ui, window);
         let draw_data = self.context.render();
 
-        let image = render_graph.bind_node({
+        let image = graph.bind_node({
             let mut image = pool
                 .lease(ImageInfo::image_2d(
                     window.inner_size().width,
@@ -114,12 +114,12 @@ impl ImGui {
 
             image
         });
-        let font_atlas_image = render_graph.bind_node(self.font_atlas_image.as_ref().unwrap());
+        let font_atlas_image = graph.bind_node(self.font_atlas_image.as_ref().unwrap());
         let display_pos = draw_data.display_pos;
         let framebuffer_scale = draw_data.framebuffer_scale;
 
         if draw_data.draw_lists_count() == 0 {
-            render_graph.clear_color_image(image, [0f32; 4]);
+            graph.clear_color_image(image, [0f32; 4]);
 
             return image;
         }
@@ -137,7 +137,7 @@ impl ImGui {
                 Buffer::mapped_slice_mut(&mut index_buf)[0..indices.len()].copy_from_slice(indices);
             }
 
-            let index_buf = render_graph.bind_node(index_buf);
+            let index_buf = graph.bind_node(index_buf);
 
             let vertices = draw_list.vtx_buffer();
             let vertex_buf_len = vertices.len() * 20;
@@ -158,7 +158,7 @@ impl ImGui {
                 }
             }
 
-            let vertex_buf = render_graph.bind_node(vertex_buf);
+            let vertex_buf = graph.bind_node(vertex_buf);
 
             let draw_cmds = draw_list
                 .commands()
@@ -182,7 +182,7 @@ impl ImGui {
             let window_height =
                 self.platform.hidpi_factor() as f32 / window.inner_size().height as f32;
 
-            render_graph
+            graph
                 .begin_cmd()
                 .with_name("imgui")
                 .bind_pipeline(&self.pipeline)
@@ -231,7 +231,7 @@ impl ImGui {
         image
     }
 
-    fn lease_font_atlas_image<P>(&mut self, pool: &mut P, render_graph: &mut Graph)
+    fn lease_font_atlas_image<P>(&mut self, pool: &mut P, graph: &mut Graph)
     where
         P: Pool<BufferInfo, Buffer> + Pool<ImageInfo, Image>,
     {
@@ -280,8 +280,8 @@ impl ImGui {
             temp_buf[0..temp_buf_len].copy_from_slice(texture.data);
         }
 
-        let temp_buf = render_graph.bind_node(temp_buf);
-        let image = render_graph.bind_node({
+        let temp_buf = graph.bind_node(temp_buf);
+        let image = graph.bind_node({
             let mut image = pool
                 .lease(ImageInfo::image_2d(
                     texture.width,
@@ -297,8 +297,8 @@ impl ImGui {
             image
         });
 
-        render_graph.copy_buffer_to_image(temp_buf, image);
+        graph.copy_buffer_to_image(temp_buf, image);
 
-        self.font_atlas_image = Some(render_graph.unbind_node(image));
+        self.font_atlas_image = Some(graph.unbind_node(image));
     }
 }

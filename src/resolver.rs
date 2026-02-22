@@ -1,7 +1,7 @@
 use {
     super::{
-        Area, Attachment, Binding, Bindings, Command, ExecutionPipeline, Graph, Node, NodeIndex,
-        cmd_ref::{Subresource, SubresourceAccess},
+        Area, Attachment, Binding, Command, ExecutionPipeline, Graph, Node, NodeIndex,
+        cmd_ref::{Nodes, Subresource, SubresourceAccess},
         node::SwapchainImageNode,
     },
     crate::{
@@ -2522,7 +2522,11 @@ impl Resolver {
                     exec_func(
                         &cmd_buf.device,
                         cmd_buf.handle,
-                        Bindings::new(&self.graph.bindings, exec),
+                        Nodes::new(
+                            &self.graph.bindings,
+                            #[cfg(debug_assertions)]
+                            exec,
+                        ),
                     );
                 }
             }

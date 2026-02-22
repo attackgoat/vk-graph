@@ -19,7 +19,7 @@ use {
 fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
-    let mut render_graph = Graph::default();
+    let mut graph = Graph::default();
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
     let device = Arc::new(Device::new(device_info)?);
@@ -30,27 +30,27 @@ fn main() -> Result<(), DriverError> {
     //   4.0   5.0   6.0   7.0
     //   8.0   9.0  10.0  11.0
     //  12.0  13.0  14.0  15.0
-    let depth_image = fill_depth_image(&device, &mut render_graph, size)?;
+    let depth_image = fill_depth_image(&device, &mut graph, size)?;
 
     // These 2x2 reduced images have undefined data until we wait on the results later
     let min_reduced_image = reduce_depth_image(
         &device,
-        &mut render_graph,
+        &mut graph,
         depth_image,
         vk::SamplerReductionMode::MIN,
     )?;
     let max_reduced_image = reduce_depth_image(
         &device,
-        &mut render_graph,
+        &mut graph,
         depth_image,
         vk::SamplerReductionMode::MAX,
     )?;
 
     // Create result buffers so we can read back the results
-    let min_result_buf = copy_image_to_buffer(&device, &mut render_graph, min_reduced_image)?;
-    let max_result_buf = copy_image_to_buffer(&device, &mut render_graph, max_reduced_image)?;
+    let min_result_buf = copy_image_to_buffer(&device, &mut graph, min_reduced_image)?;
+    let max_result_buf = copy_image_to_buffer(&device, &mut graph, max_reduced_image)?;
 
-    render_graph
+    graph
         .resolve()
         .submit(&mut HashPool::new(&device), 0, 0)?
         .wait_until_executed()?;
@@ -87,7 +87,7 @@ fn main() -> Result<(), DriverError> {
 
 fn fill_depth_image(
     device: &Device,
-    render_graph: &mut Graph,
+    graph: &mut Graph,
     size: u32,
 ) -> Result<ImageNode, DriverError> {
     let info = ImageInfo::image_2d(
@@ -144,24 +144,24 @@ fn fill_depth_image(
     // device.physical_device.sampler_filter_minmax_properties.image_component_mapping
 
     let depth_data = (0..size.pow(2)).map(|x| x as f32).collect::<Box<_>>();
-    let depth_data = render_graph.bind_node(Buffer::create_from_slice(
+    let depth_data = graph.bind_node(Buffer::create_from_slice(
         device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         cast_slice(&depth_data),
     )?);
-    let depth_image = render_graph.bind_node(Image::create(device, info)?);
-    render_graph.copy_buffer_to_image(depth_data, depth_image);
+    let depth_image = graph.bind_node(Image::create(device, info)?);
+    graph.copy_buffer_to_image(depth_data, depth_image);
 
     Ok(depth_image)
 }
 
 fn reduce_depth_image(
     device: &Device,
-    render_graph: &mut Graph,
+    graph: &mut Graph,
     depth_image: ImageNode,
     reduction_mode: vk::SamplerReductionMode,
 ) -> Result<ImageNode, DriverError> {
-    let depth_info = render_graph.node_info(depth_image);
+    let depth_info = graph.node_info(depth_image);
 
     assert_eq!(depth_info.width, depth_info.height);
 
@@ -173,9 +173,9 @@ fn reduce_depth_image(
         vk::Format::R32_SFLOAT,
         vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
     );
-    let reduced_image = render_graph.bind_node(Image::create(device, reduced_info)?);
+    let reduced_image = graph.bind_node(Image::create(device, reduced_info)?);
 
-    render_graph
+    graph
         .begin_cmd()
         .with_name("Reduce depth image")
         .bind_pipeline(ComputePipeline::create(
@@ -215,20 +215,20 @@ fn reduce_depth_image(
 
 fn copy_image_to_buffer(
     device: &Device,
-    render_graph: &mut Graph,
+    graph: &mut Graph,
     reduced_image: ImageNode,
 ) -> Result<Arc<Buffer>, DriverError> {
-    let reduced_info = render_graph.node_info(reduced_image);
+    let reduced_info = graph.node_info(reduced_image);
     let result_len = (reduced_info.width * reduced_info.height) as vk::DeviceSize
         * size_of::<f32>() as vk::DeviceSize;
-    let result_buf = render_graph.bind_node(Buffer::create(
+    let result_buf = graph.bind_node(Buffer::create(
         device,
         BufferInfo::host_mem(result_len, vk::BufferUsageFlags::TRANSFER_DST),
     )?);
 
-    render_graph.copy_image_to_buffer(reduced_image, result_buf);
+    graph.copy_image_to_buffer(reduced_image, result_buf);
 
-    Ok(render_graph.unbind_node(result_buf))
+    Ok(graph.unbind_node(result_buf))
 }
 
 #[derive(Parser)]

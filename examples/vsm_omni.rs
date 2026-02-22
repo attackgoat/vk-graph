@@ -177,19 +177,19 @@ fn main() -> anyhow::Result<()> {
         };
 
         // Bind resources to the render graph of the current frame
-        let cube_mesh_index_buf = frame.render_graph.bind_node(&cube_mesh.index_buf);
-        let cube_mesh_vertex_buf = frame.render_graph.bind_node(&cube_mesh.vertex_buf);
-        let cube_shadow_index_buf = frame.render_graph.bind_node(&cube_shadow.index_buf);
-        let cube_shadow_vertex_buf = frame.render_graph.bind_node(&cube_shadow.vertex_buf);
-        let model_mesh_index_buf = frame.render_graph.bind_node(&model_mesh.index_buf);
-        let model_mesh_vertex_buf = frame.render_graph.bind_node(&model_mesh.vertex_buf);
-        let model_shadow_index_buf = frame.render_graph.bind_node(&model_shadow.index_buf);
-        let model_shadow_vertex_buf = frame.render_graph.bind_node(&model_shadow.vertex_buf);
+        let cube_mesh_index_buf = frame.graph.bind_node(&cube_mesh.index_buf);
+        let cube_mesh_vertex_buf = frame.graph.bind_node(&cube_mesh.vertex_buf);
+        let cube_shadow_index_buf = frame.graph.bind_node(&cube_shadow.index_buf);
+        let cube_shadow_vertex_buf = frame.graph.bind_node(&cube_shadow.vertex_buf);
+        let model_mesh_index_buf = frame.graph.bind_node(&model_mesh.index_buf);
+        let model_mesh_vertex_buf = frame.graph.bind_node(&model_mesh.vertex_buf);
+        let model_shadow_index_buf = frame.graph.bind_node(&model_shadow.index_buf);
+        let model_shadow_vertex_buf = frame.graph.bind_node(&model_shadow.vertex_buf);
         let camera_uniform_buf = frame
-            .render_graph
+            .graph
             .bind_node(lease_uniform_buffer(&mut pool, &camera).unwrap());
         let light_uniform_buf = frame
-            .render_graph
+            .graph
             .bind_node(lease_uniform_buffer(&mut pool, &light).unwrap());
 
         // Lease and bind a cube-compatible shadow 2D image array to the graph of the current frame
@@ -209,15 +209,15 @@ fn main() -> anyhow::Result<()> {
             )
             .unwrap();
         let shadow_faces_info = shadow_faces_image.info;
-        let shadow_faces_node = frame.render_graph.bind_node(shadow_faces_image);
+        let shadow_faces_node = frame.graph.bind_node(shadow_faces_image);
 
         // Lease and bind a temporary image we'll use during blur passes
         let temp_image = frame
-            .render_graph
+            .graph
             .bind_node(pool.lease(shadow_faces_info).unwrap());
 
         // Lastly we lease and bind depth images needed for rendering
-        let shadow_depth_image = frame.render_graph.bind_node(
+        let shadow_depth_image = frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d_array(
                 frame.width,
                 frame.height,
@@ -227,7 +227,7 @@ fn main() -> anyhow::Result<()> {
             ))
             .unwrap(),
         );
-        let depth_image = frame.render_graph.bind_node(
+        let depth_image = frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
         // Hold tab to view a debug mode
         if input.key_held(KeyCode::Tab) {
             frame
-                .render_graph
+                .graph
                 .begin_cmd()
                 .with_name("DEBUG")
                 .bind_pipeline(&debug_pipeline)
@@ -274,7 +274,7 @@ fn main() -> anyhow::Result<()> {
             // Render the omni light point of view into the six-layer image we leased above
             if use_geometry_shader {
                 frame
-                    .render_graph
+                    .graph
                     .begin_cmd()
                     .with_name("Shadow (Using geometry shader)")
                     .bind_pipeline(&shadow_pipeline)
@@ -315,11 +315,11 @@ fn main() -> anyhow::Result<()> {
                     };
 
                     let light_uniform_buf = frame
-                        .render_graph
+                        .graph
                         .bind_node(lease_uniform_buffer(&mut pool, &light).unwrap());
 
                     frame
-                        .render_graph
+                        .graph
                         .begin_cmd()
                         .with_name("Shadow")
                         .bind_pipeline(&shadow_pipeline)
@@ -360,7 +360,7 @@ fn main() -> anyhow::Result<()> {
                     // Flip-flop between the shadow image and a temporary image using a
                     // separable box blur filter which approximates a gaussian blur
                     frame
-                        .render_graph
+                        .graph
                         .begin_cmd()
                         .with_name("Blur X")
                         .bind_pipeline(&blur_x_pipeline)
@@ -383,7 +383,7 @@ fn main() -> anyhow::Result<()> {
 
             // Render the scene directly to the swapchain using the shadow map from the above pass
             frame
-                .render_graph
+                .graph
                 .begin_cmd()
                 .with_name("Mesh objects")
                 .bind_pipeline(&mesh_pipeline)

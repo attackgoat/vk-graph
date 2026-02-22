@@ -138,149 +138,6 @@ bind!(Compute);
 bind!(Graphic);
 bind!(RayTrace);
 
-/// An indexable structure will provides access to Vulkan smart-pointer resources inside a record
-/// closure.
-///
-/// This type is available while recording commands in the following closures:
-///
-/// - [`PassRef::record_accel_struct`] for building and updating acceleration structures
-/// - [`PassRef::record_cmd_buf`] for general command streams
-/// - [`PipelineCommandRef::record_pipeline`] for dispatched compute operations
-/// - [`PipelineCommandRef::record_pipeline`] for raster drawing operations, such as triangles streams
-/// - [`PipelineCommandRef::record_ray_trace`] for ray-traced operations
-///
-/// # Examples
-///
-/// Basic usage:
-///
-/// ```no_run
-/// # use std::sync::Arc;
-/// # use ash::vk;
-/// # use vk_graph::driver::DriverError;
-/// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::driver::image::{Image, ImageInfo};
-/// # use vk_graph::Graph;
-/// # use vk_graph::node::ImageNode;
-/// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
-/// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
-/// # let image = Image::create(&device, info)?;
-/// # let mut my_graph = Graph::default();
-/// # let my_image_node = my_graph.bind_node(image);
-/// my_graph.begin_cmd().with_name("custom vulkan commands")
-///         .record_cmd_buf(move |device, cmd_buf, bindings| {
-///             let my_image = &bindings[my_image_node];
-///
-///             assert_ne!(my_image.handle, vk::Image::null());
-///             assert_eq!(my_image.info.width, 32);
-///         });
-/// # Ok(()) }
-/// ```
-#[derive(Clone, Copy, Debug)]
-pub struct Bindings<'a> {
-    bindings: &'a [Binding],
-    exec: &'a Execution,
-}
-
-impl<'a> Bindings<'a> {
-    pub(super) fn new(bindings: &'a [Binding], exec: &'a Execution) -> Self {
-        Self { bindings, exec }
-    }
-
-    fn binding_ref(&self, node_idx: usize) -> &Binding {
-        // You must have called read or write for this node on this execution before indexing
-        // into the bindings data!
-        debug_assert!(
-            self.exec.accesses.contains_key(&node_idx),
-            "unexpected node access: call access, read, or write first"
-        );
-
-        &self.bindings[node_idx]
-    }
-}
-
-macro_rules! index {
-    ($name:ident, $handle:ident) => {
-        paste::paste! {
-            impl<'a> Index<[<$name Node>]> for Bindings<'a>
-            {
-                type Output = $handle;
-
-                fn index(&self, node: [<$name Node>]) -> &Self::Output {
-                    &*self.binding_ref(node.idx).[<as_ $name:snake>]().unwrap()
-                }
-            }
-        }
-    };
-}
-
-// Allow indexing the Bindings data during command execution:
-// (This gets you access to the driver images or other resources)
-index!(AccelerationStructure, AccelerationStructure);
-index!(AccelerationStructureLease, AccelerationStructure);
-index!(Buffer, Buffer);
-index!(BufferLease, Buffer);
-index!(Image, Image);
-index!(ImageLease, Image);
-index!(SwapchainImage, Image);
-
-impl Index<AnyAccelerationStructureNode> for Bindings<'_> {
-    type Output = AccelerationStructure;
-
-    fn index(&self, node: AnyAccelerationStructureNode) -> &Self::Output {
-        let node_idx = match node {
-            AnyAccelerationStructureNode::AccelerationStructure(node) => node.idx,
-            AnyAccelerationStructureNode::AccelerationStructureLease(node) => node.idx,
-        };
-        let binding = self.binding_ref(node_idx);
-
-        match node {
-            AnyAccelerationStructureNode::AccelerationStructure(_) => {
-                binding.as_acceleration_structure().unwrap()
-            }
-            AnyAccelerationStructureNode::AccelerationStructureLease(_) => {
-                binding.as_acceleration_structure_lease().unwrap()
-            }
-        }
-    }
-}
-
-impl Index<AnyBufferNode> for Bindings<'_> {
-    type Output = Buffer;
-
-    fn index(&self, node: AnyBufferNode) -> &Self::Output {
-        let node_idx = match node {
-            AnyBufferNode::Buffer(node) => node.idx,
-            AnyBufferNode::BufferLease(node) => node.idx,
-        };
-        let binding = self.binding_ref(node_idx);
-
-        match node {
-            AnyBufferNode::Buffer(_) => binding.as_buffer().unwrap(),
-            AnyBufferNode::BufferLease(_) => binding.as_buffer_lease().unwrap(),
-        }
-    }
-}
-
-impl Index<AnyImageNode> for Bindings<'_> {
-    type Output = Image;
-
-    fn index(&self, node: AnyImageNode) -> &Self::Output {
-        let node_idx = match node {
-            AnyImageNode::Image(node) => node.idx,
-            AnyImageNode::ImageLease(node) => node.idx,
-            AnyImageNode::SwapchainImage(node) => node.idx,
-        };
-        let binding = self.binding_ref(node_idx);
-
-        match node {
-            AnyImageNode::Image(_) => binding.as_image().unwrap(),
-            AnyImageNode::ImageLease(_) => binding.as_image_lease().unwrap(),
-            AnyImageNode::SwapchainImage(_) => binding.as_swapchain_image().unwrap(),
-        }
-    }
-}
-
 /// A general render pass which may contain acceleration structure commands, general commands, or
 /// have pipeline bound to then record commands specific to those pipeline types.
 pub struct CommandRef<'a> {
@@ -430,7 +287,7 @@ impl<'a> CommandRef<'a> {
 
     fn push_execute(
         &mut self,
-        func: impl FnOnce(&Device, vk::CommandBuffer, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(&Device, vk::CommandBuffer, Nodes<'_>) + Send + 'static,
     ) {
         let pass = self.as_mut();
         let exec = {
@@ -493,16 +350,16 @@ impl<'a> CommandRef<'a> {
     /// This is the entry point for building and updating an [`AccelerationStructure`] instance.
     pub fn record_accel_struct(
         mut self,
-        func: impl FnOnce(AccelerationStructureRef<'_>, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(AccelerationStructureRef<'_>, Nodes<'_>) + Send + 'static,
     ) -> Self {
-        self.push_execute(move |device, cmd_buf, bindings| {
+        self.push_execute(move |device, cmd_buf, nodes| {
             func(
                 AccelerationStructureRef {
-                    bindings,
+                    nodes,
                     cmd_buf,
                     device,
                 },
-                bindings,
+                nodes,
             );
         });
 
@@ -515,7 +372,7 @@ impl<'a> CommandRef<'a> {
     /// code and interfaces.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(&Device, vk::CommandBuffer, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(&Device, vk::CommandBuffer, Nodes<'_>) + Send + 'static,
     ) -> Self {
         self.push_execute(func);
 
@@ -616,6 +473,161 @@ impl From<(BindingIndex, [BindingOffset; 1])> for Descriptor {
 impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor {
     fn from(tuple: (DescriptorSetIndex, BindingIndex, [BindingOffset; 1])) -> Self {
         Self::ArrayBinding(tuple.0, tuple.1, tuple.2[0])
+    }
+}
+
+/// An indexable structure will provides access to Vulkan resources inside a command closure.
+///
+/// This type is available while recording commands in the following closures:
+///
+/// - [`PassRef::record_accel_struct`] for building and updating acceleration structures
+/// - [`PassRef::record_cmd_buf`] for general command streams
+/// - [`PipelineRef::record_pipeline`] for dispatched compute operations
+/// - [`PipelineRef::record_pipeline`] for raster drawing operations, such as triangle streams
+/// - [`PipelineRef::record_pipeline`] for ray-traced operations
+///
+/// # Examples
+///
+/// Basic usage:
+///
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use ash::vk;
+/// # use vk_graph::driver::DriverError;
+/// # use vk_graph::driver::device::{Device, DeviceInfo};
+/// # use vk_graph::driver::image::{Image, ImageInfo};
+/// # use vk_graph::Graph;
+/// # use vk_graph::node::ImageNode;
+/// # fn main() -> Result<(), DriverError> {
+/// # let device = Device::new(DeviceInfo::default())?;
+/// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
+/// # let image = Image::create(&device, info)?;
+/// # let mut my_graph = Graph::default();
+/// # let my_image_node = my_graph.bind_node(image);
+/// my_graph.begin_cmd().with_name("custom vulkan commands")
+///         .record_cmd_buf(move |device, cmd_buf, nodes| {
+///             let my_image: &Image = &nodes[my_image_node];
+///
+///             assert_ne!(my_image.handle, vk::Image::null());
+///             assert_eq!(my_image.info.width, 32);
+///         });
+/// # Ok(()) }
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct Nodes<'a> {
+    bindings: &'a [Binding],
+
+    #[cfg(debug_assertions)]
+    exec: &'a Execution,
+}
+
+impl<'a> Nodes<'a> {
+    pub(super) fn new(
+        bindings: &'a [Binding],
+        #[cfg(debug_assertions)] exec: &'a Execution,
+    ) -> Self {
+        Self {
+            bindings,
+            #[cfg(debug_assertions)]
+            exec,
+        }
+    }
+
+    fn binding(&self, node_idx: usize) -> &Binding {
+        // You must have called read or write for this node on this execution before indexing
+        // into the bindings data!
+        //
+        // Why: Code that attempts to access this function is attempting to get access to the Vulkan
+        // resource (buffer, image, or acceleration structure). In order to access any resources the
+        // access type must first be specified so the correct barriers may be added.
+        debug_assert!(
+            self.exec.accesses.contains_key(&node_idx),
+            "unexpected node access: call access, read, or write first"
+        );
+
+        &self.bindings[node_idx]
+    }
+}
+
+macro_rules! index {
+    ($name:ident, $handle:ident) => {
+        paste::paste! {
+            impl<'a> Index<[<$name Node>]> for Nodes<'a>
+            {
+                type Output = $handle;
+
+                fn index(&self, node: [<$name Node>]) -> &Self::Output {
+                    &*self.binding(node.idx).[<as_ $name:snake>]().unwrap()
+                }
+            }
+        }
+    };
+}
+
+// Allow indexing the Nodes data during command execution:
+// (This gets you access to the driver images or other resources)
+index!(AccelerationStructure, AccelerationStructure);
+index!(AccelerationStructureLease, AccelerationStructure);
+index!(Buffer, Buffer);
+index!(BufferLease, Buffer);
+index!(Image, Image);
+index!(ImageLease, Image);
+index!(SwapchainImage, Image);
+
+impl Index<AnyAccelerationStructureNode> for Nodes<'_> {
+    type Output = AccelerationStructure;
+
+    fn index(&self, node: AnyAccelerationStructureNode) -> &Self::Output {
+        let node_idx = match node {
+            AnyAccelerationStructureNode::AccelerationStructure(node) => node.idx,
+            AnyAccelerationStructureNode::AccelerationStructureLease(node) => node.idx,
+        };
+        let binding = self.binding(node_idx);
+
+        match node {
+            AnyAccelerationStructureNode::AccelerationStructure(_) => {
+                binding.as_acceleration_structure().unwrap()
+            }
+            AnyAccelerationStructureNode::AccelerationStructureLease(_) => {
+                binding.as_acceleration_structure_lease().unwrap()
+            }
+        }
+    }
+}
+
+impl Index<AnyBufferNode> for Nodes<'_> {
+    type Output = Buffer;
+
+    fn index(&self, node: AnyBufferNode) -> &Self::Output {
+        let node_idx = match node {
+            AnyBufferNode::Buffer(node) => node.idx,
+            AnyBufferNode::BufferLease(node) => node.idx,
+        };
+        let binding = self.binding(node_idx);
+
+        match node {
+            AnyBufferNode::Buffer(_) => binding.as_buffer().unwrap(),
+            AnyBufferNode::BufferLease(_) => binding.as_buffer_lease().unwrap(),
+        }
+    }
+}
+
+impl Index<AnyImageNode> for Nodes<'_> {
+    type Output = Image;
+
+    fn index(&self, node: AnyImageNode) -> &Self::Output {
+        let node_idx = match node {
+            AnyImageNode::Image(node) => node.idx,
+            AnyImageNode::ImageLease(node) => node.idx,
+            AnyImageNode::SwapchainImage(node) => node.idx,
+        };
+        let binding = self.binding(node_idx);
+
+        match node {
+            AnyImageNode::Image(_) => binding.as_image().unwrap(),
+            AnyImageNode::ImageLease(_) => binding.as_image_lease().unwrap(),
+            AnyImageNode::SwapchainImage(_) => binding.as_swapchain_image().unwrap(),
+        }
     }
 }
 

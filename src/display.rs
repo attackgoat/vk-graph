@@ -142,18 +142,18 @@ impl Display {
         Ok(Some(swapchain_image))
     }
 
-    /// Displays the given swapchain image using passes specified in `render_graph`, if possible.
+    /// Displays the given swapchain image using passes specified in `graph`, if possible.
     #[profiling::function]
     pub fn present_image(
         &mut self,
         pool: &mut impl ResolverPool,
-        render_graph: Graph,
+        graph: Graph,
         swapchain_image: SwapchainImageNode,
         queue_index: u32,
     ) -> Result<(), DisplayError> {
         trace!("present_image");
 
-        let mut resolver = render_graph.resolve();
+        let mut resolver = graph.resolve();
         let wait_dst_stage_mask = resolver.node_pipeline_stages(swapchain_image);
 
         // The swapchain should have been written to, otherwise it would be noise and that's a panic

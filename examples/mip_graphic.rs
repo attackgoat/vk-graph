@@ -46,18 +46,18 @@ fn main() -> Result<(), WindowError> {
         // https://vulkan.gpuinfo.org/listsurfaceusageflags.php
         assert!(
             frame
-                .render_graph
+                .graph
                 .node_info(frame.swapchain_image)
                 .usage
                 .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
         );
 
-        let image = frame.render_graph.bind_node(&image);
-        let swapchain_info = frame.render_graph.node_info(frame.swapchain_image);
+        let image = frame.graph.bind_node(&image);
+        let swapchain_info = frame.graph.node_info(frame.swapchain_image);
         let stripe_width = swapchain_info.width / mip_level_count;
 
         let mut pass = frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("splat mips")
             .bind_pipeline(&splat);
@@ -146,15 +146,15 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
         ],
     )?;
 
-    let mut render_graph = Graph::default();
+    let mut graph = Graph::default();
     let image_info = image.info;
-    let image = render_graph.bind_node(image);
+    let image = graph.bind_node(image);
 
     // NOTE: Each pass writes to a different mip level, and so although it's the same image they are
     // unable to be used as a single pass so we must call begin_pass for each. Without starting a
     // new pass for each level the Vulkan framebuffer would be set to the size of the first image.
     for mip_level in 0..image_info.mip_level_count {
-        render_graph
+        graph
             .begin_cmd()
             .with_name("fill mip levels")
             .bind_pipeline(&vertical_gradient)
@@ -195,7 +195,7 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
         .ok_or(DriverError::Unsupported)?;
 
     // Submits to the GPU but does not wait for anything to be finished
-    render_graph
+    graph
         .resolve()
         .submit(&mut LazyPool::new(device), queue_family_index, 0)
         .map(|_| ())

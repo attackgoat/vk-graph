@@ -36,11 +36,11 @@ fn main() -> Result<(), DriverError> {
     let image2 = pool.alias(image_info)?;
     assert!(Arc::ptr_eq(&image1, &image2));
 
-    let mut render_graph = Graph::default();
+    let mut graph = Graph::default();
 
     // Binding these images to any render graph will produce the same physical nodes
-    let image1 = render_graph.bind_node(image1);
-    let image2 = render_graph.bind_node(image2);
+    let image1 = graph.bind_node(image1);
+    let image2 = graph.bind_node(image2);
     assert_eq!(image1, image2);
 
     // Let's make up some different, yet compatible, image information:
@@ -52,11 +52,11 @@ fn main() -> Result<(), DriverError> {
     );
 
     // We alias the compatible information and still produce the same physical image and node
-    let image3 = render_graph.bind_node(pool.alias(image_info)?);
+    let image3 = graph.bind_node(pool.alias(image_info)?);
     assert_eq!(image1, image3);
 
     // Using the same information for a new LEASE will generate an entirely different image!!
-    let image4 = render_graph.bind_node(pool.lease(image_info)?);
+    let image4 = graph.bind_node(pool.lease(image_info)?);
     assert_ne!(image1, image4);
 
     Ok(())

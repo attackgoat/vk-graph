@@ -114,15 +114,15 @@ struct Context {
 impl Context {
     fn draw(&mut self) -> Result<(), DisplayError> {
         if let Some(swapchain_image) = self.display.acquire_next_image()? {
-            let mut render_graph = Graph::default();
-            let swapchain_image = render_graph.bind_node(swapchain_image);
+            let mut graph = Graph::default();
+            let swapchain_image = graph.bind_node(swapchain_image);
 
             // Rendering goes here!
-            render_graph.clear_color_image(swapchain_image, [1.0, 0.0, 1.0]);
+            graph.clear_color_image(swapchain_image, [1.0, 0.0, 1.0]);
 
             self.window.pre_present_notify();
             self.display
-                .present_image(&mut self.display_pool, render_graph, swapchain_image, 0)?;
+                .present_image(&mut self.display_pool, graph, swapchain_image, 0)?;
         }
 
         Ok(())

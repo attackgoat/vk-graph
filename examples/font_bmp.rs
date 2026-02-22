@@ -120,7 +120,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     window.run(|frame| {
-        let image_node = frame.render_graph.bind_node(
+        let image_node = frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d(
                 320,
                 200,
@@ -136,7 +136,7 @@ fn main() -> anyhow::Result<()> {
         // Fill the image with a smoke effect
         let elapsed_time = Instant::now() - start_time;
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("smoke")
             .bind_pipeline(&smoke_pipeline)
@@ -154,9 +154,9 @@ fn main() -> anyhow::Result<()> {
         let x = 320f32 * 0.5 / scale - width as f32 * 0.5;
         let y = 200f32 * 0.5 / scale - height as f32 * 0.5;
         let color = [196, 172, 230u8];
-        small_10px_font.print_scale(frame.render_graph, image_node, x, y, color, text, scale);
+        small_10px_font.print_scale(frame.graph, image_node, x, y, color, text, scale);
 
-        display.present_image(frame.render_graph, image_node, frame.swapchain_image);
+        display.present_image(frame.graph, image_node, frame.swapchain_image);
     })?;
 
     Ok(())

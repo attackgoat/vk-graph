@@ -45,15 +45,14 @@ fn main() -> anyhow::Result<()> {
     window.run(|frame| {
         angle += 0.016;
 
-        let scene_tlas =
-            create_tlas(frame.device, &mut pool, frame.render_graph, &scene_blas).unwrap();
+        let scene_tlas = create_tlas(frame.device, &mut pool, frame.graph, &scene_blas).unwrap();
 
-        let ground_mesh_index_buf = frame.render_graph.bind_node(&ground_mesh.index_buf);
-        let ground_mesh_vertex_buf = frame.render_graph.bind_node(&ground_mesh.vertex_buf);
-        let model_mesh_index_buf = frame.render_graph.bind_node(&model_mesh.index_buf);
-        let model_mesh_vertex_buf = frame.render_graph.bind_node(&model_mesh.vertex_buf);
+        let ground_mesh_index_buf = frame.graph.bind_node(&ground_mesh.index_buf);
+        let ground_mesh_vertex_buf = frame.graph.bind_node(&ground_mesh.vertex_buf);
+        let model_mesh_index_buf = frame.graph.bind_node(&model_mesh.index_buf);
+        let model_mesh_vertex_buf = frame.graph.bind_node(&model_mesh.vertex_buf);
 
-        let depth_image = frame.render_graph.bind_node(
+        let depth_image = frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -62,7 +61,7 @@ fn main() -> anyhow::Result<()> {
             ))
             .unwrap(),
         );
-        let camera_buf = frame.render_graph.bind_node({
+        let camera_buf = frame.graph.bind_node({
             let mut buf = pool
                 .lease(BufferInfo::host_mem(
                     size_of::<Camera>() as _,
@@ -89,7 +88,7 @@ fn main() -> anyhow::Result<()> {
         });
 
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("Mesh with ray-query shadows")
             .bind_pipeline(&gfx_pipeline)
@@ -177,8 +176,8 @@ fn create_blas(
     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
     let size = AccelerationStructure::size_of(device, &info);
 
-    let mut render_graph = Graph::default();
-    let blas = render_graph.bind_node(AccelerationStructure::create(
+    let mut graph = Graph::default();
+    let blas = graph.bind_node(AccelerationStructure::create(
         device,
         AccelerationStructureInfo::blas(size.create_size),
     )?);
@@ -190,7 +189,7 @@ fn create_blas(
         .unwrap()
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
-    let scratch_buf = render_graph.bind_node(Buffer::create(
+    let scratch_buf = graph.bind_node(Buffer::create(
         device,
         BufferInfo::device_mem(
             size.build_size,
@@ -199,9 +198,9 @@ fn create_blas(
         .to_builder()
         .alignment(accel_struct_scratch_offset_alignment),
     )?);
-    let scratch_data = render_graph.node_device_address(scratch_buf);
+    let scratch_data = graph.node_device_address(scratch_buf);
 
-    let mut pass = render_graph.begin_cmd().with_name("Build BLAS");
+    let mut pass = graph.begin_cmd().with_name("Build BLAS");
 
     for model in models.iter().copied() {
         let index_buf = pass.bind_node(&model.index_buf);
@@ -221,11 +220,9 @@ fn create_blas(
             )]);
         });
 
-    let blas = render_graph.unbind_node(blas);
+    let blas = graph.unbind_node(blas);
 
-    render_graph
-        .resolve()
-        .submit(&mut LazyPool::new(device), 0, 0)?;
+    graph.resolve().submit(&mut LazyPool::new(device), 0, 0)?;
 
     Ok(blas)
 }
@@ -320,7 +317,7 @@ fn create_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
 fn create_tlas(
     device: &Device,
     pool: &mut LazyPool,
-    render_graph: &mut Graph,
+    graph: &mut Graph,
     blas: &Arc<AccelerationStructure>,
 ) -> Result<AccelerationStructureLeaseNode, DriverError> {
     let instances = [vk::AccelerationStructureInstanceKHR {
@@ -365,8 +362,7 @@ fn create_tlas(
     )])
     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
     let size = AccelerationStructure::size_of(device, &info);
-    let tlas =
-        render_graph.bind_node(pool.lease(AccelerationStructureInfo::tlas(size.create_size))?);
+    let tlas = graph.bind_node(pool.lease(AccelerationStructureInfo::tlas(size.create_size))?);
 
     let accel_struct_scratch_offset_alignment = device
         .physical_device
@@ -375,7 +371,7 @@ fn create_tlas(
         .unwrap()
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
-    let scratch_buf = render_graph.bind_node(
+    let scratch_buf = graph.bind_node(
         pool.lease(
             BufferInfo::device_mem(
                 size.build_size,
@@ -385,11 +381,11 @@ fn create_tlas(
             .alignment(accel_struct_scratch_offset_alignment),
         )?,
     );
-    let scratch_data = render_graph.node_device_address(scratch_buf);
-    let blas = render_graph.bind_node(blas);
-    let instance_buf = render_graph.bind_node(instance_buf);
+    let scratch_data = graph.node_device_address(scratch_buf);
+    let blas = graph.bind_node(blas);
+    let instance_buf = graph.bind_node(instance_buf);
 
-    render_graph
+    graph
         .begin_cmd()
         .with_name("Build TLAS")
         .access_node(blas, AccessType::AccelerationStructureBuildRead)

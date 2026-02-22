@@ -86,11 +86,11 @@ fn main() -> anyhow::Result<()> {
             }),
         );
 
-        let cube_vertex_buf = frame.render_graph.bind_node(&cube_mesh.vertex_buf);
-        let scene_uniform_buf = frame.render_graph.bind_node(scene_uniform_buf);
+        let cube_vertex_buf = frame.graph.bind_node(&cube_mesh.vertex_buf);
+        let scene_uniform_buf = frame.graph.bind_node(scene_uniform_buf);
 
         let mut pass = frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("cube")
             .bind_pipeline(if will_render_msaa {

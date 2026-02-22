@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     let mut cache = LazyPool::new(&window.device);
 
     window.run(|frame| {
-        let img = frame.render_graph.bind_node(
+        let img = frame.graph.bind_node(
             cache
                 .lease(ImageInfo::image_2d(
                     100,
@@ -30,9 +30,9 @@ fn main() -> anyhow::Result<()> {
                 ))
                 .unwrap(),
         );
-        frame.render_graph.clear_color_image(img, [0., 1., 0., 1.]);
+        frame.graph.clear_color_image(img, [0., 1., 0., 1.]);
         frame
-            .render_graph
+            .graph
             .clear_color_image(frame.swapchain_image, [0., 0., 0., 1.]);
 
         let id = egui.register_texture(img);
@@ -41,7 +41,7 @@ fn main() -> anyhow::Result<()> {
             frame.window,
             frame.events,
             frame.swapchain_image,
-            frame.render_graph,
+            frame.graph,
             |ui| {
                 egui::Window::new("Test")
                     .resizable(true)

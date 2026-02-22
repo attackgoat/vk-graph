@@ -122,8 +122,8 @@ fn main() -> anyhow::Result<()> {
     )
     .context("FLOCKAROO_IMG_FRAG")?;
 
-    let mut render_graph = Graph::default();
-    let blank_image = render_graph.bind_node(
+    let mut graph = Graph::default();
+    let blank_image = graph.bind_node(
         cache
             .lease(ImageInfo::image_2d(
                 8,
@@ -135,7 +135,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let (width, height) = (1280, 720);
-    let framebuffer_image = render_graph.bind_node(
+    let framebuffer_image = graph.bind_node(
         cache
             .lease(ImageInfo::image_2d(
                 width,
@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
             ))
             .context("Framebuffer image")?,
     );
-    let temp_image = render_graph.bind_node(
+    let temp_image = graph.bind_node(
         cache
             .lease(ImageInfo::image_2d(
                 width,
@@ -162,16 +162,16 @@ fn main() -> anyhow::Result<()> {
             .context("Temp image")?,
     );
 
-    render_graph
+    graph
         .clear_color_image(framebuffer_image, [1.0, 1.0, 0.0, 1.0])
         .clear_color_image(blank_image, [0.0, 0.0, 0.0, 1.0])
         .clear_color_image(temp_image, [0.0, 1.0, 0.0, 1.0]);
 
-    let mut framebuffer_image_binding = Some(render_graph.unbind_node(framebuffer_image));
-    let mut blank_image_binding = Some(render_graph.unbind_node(blank_image));
-    let mut temp_image_binding = Some(render_graph.unbind_node(temp_image));
+    let mut framebuffer_image_binding = Some(graph.unbind_node(framebuffer_image));
+    let mut blank_image_binding = Some(graph.unbind_node(blank_image));
+    let mut temp_image_binding = Some(graph.unbind_node(temp_image));
 
-    render_graph.resolve().submit(&mut cache, 0, 0)?;
+    graph.resolve().submit(&mut cache, 0, 0)?;
 
     let started_at = Instant::now();
     let mut count = 0i32;
@@ -188,21 +188,13 @@ fn main() -> anyhow::Result<()> {
             count += 1;
 
             // Bind things to this graph (the graph will own our things until we unbind them)
-            let flowers_image = frame
-                .render_graph
-                .bind_node(flowers_image_binding.take().unwrap());
-            let noise_image = frame
-                .render_graph
-                .bind_node(noise_image_binding.take().unwrap());
+            let flowers_image = frame.graph.bind_node(flowers_image_binding.take().unwrap());
+            let noise_image = frame.graph.bind_node(noise_image_binding.take().unwrap());
             let framebuffer_image = frame
-                .render_graph
+                .graph
                 .bind_node(framebuffer_image_binding.take().unwrap());
-            let blank_image = frame
-                .render_graph
-                .bind_node(blank_image_binding.take().unwrap());
-            let temp_image = frame
-                .render_graph
-                .bind_node(temp_image_binding.take().unwrap());
+            let blank_image = frame.graph.bind_node(blank_image_binding.take().unwrap());
+            let temp_image = frame.graph.bind_node(temp_image_binding.take().unwrap());
 
             // We need to push a shader-toy defined set of constants to each pipeline - any copy
             // type will do but we are getting fancy here by defining a struct to be super precise
@@ -285,7 +277,7 @@ fn main() -> anyhow::Result<()> {
 
             // Fill a buffer using a single-pass CFD pipeline where previous output feeds next input
             frame
-                .render_graph
+                .graph
                 .begin_cmd()
                 .with_name("Buffer A")
                 .bind_pipeline(&buffer_pipeline)
@@ -302,7 +294,7 @@ fn main() -> anyhow::Result<()> {
 
             // Make the CFD look more like paint with a second pass
             frame
-                .render_graph
+                .graph
                 .begin_cmd()
                 .with_name("Image")
                 .bind_pipeline(&image_pipeline)
@@ -315,14 +307,14 @@ fn main() -> anyhow::Result<()> {
                 });
 
             // Done!
-            display.present_image(frame.render_graph, input, frame.swapchain_image);
+            display.present_image(frame.graph, input, frame.swapchain_image);
 
             // Unbind things from this graph (we want them back for the next frame!)
-            flowers_image_binding = Some(frame.render_graph.unbind_node(flowers_image));
-            noise_image_binding = Some(frame.render_graph.unbind_node(noise_image));
-            framebuffer_image_binding = Some(frame.render_graph.unbind_node(framebuffer_image));
-            blank_image_binding = Some(frame.render_graph.unbind_node(blank_image));
-            temp_image_binding = Some(frame.render_graph.unbind_node(temp_image));
+            flowers_image_binding = Some(frame.graph.unbind_node(flowers_image));
+            noise_image_binding = Some(frame.graph.unbind_node(noise_image));
+            framebuffer_image_binding = Some(frame.graph.unbind_node(framebuffer_image));
+            blank_image_binding = Some(frame.graph.unbind_node(blank_image));
+            temp_image_binding = Some(frame.graph.unbind_node(temp_image));
         })
         .context("Unable to run event loop")?;
 

@@ -322,13 +322,13 @@ fn main() -> anyhow::Result<()> {
             .unwrap()
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
-        let mut render_graph = Graph::default();
-        let index_node = render_graph.bind_node(&index_buf);
-        let vertex_node = render_graph.bind_node(&vertex_buf);
-        let blas_node = render_graph.bind_node(&blas);
+        let mut graph = Graph::default();
+        let index_node = graph.bind_node(&index_buf);
+        let vertex_node = graph.bind_node(&vertex_buf);
+        let blas_node = graph.bind_node(&blas);
 
         {
-            let scratch_buf = render_graph.bind_node(Buffer::create(
+            let scratch_buf = graph.bind_node(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     blas_size.build_size,
@@ -338,9 +338,9 @@ fn main() -> anyhow::Result<()> {
                 .to_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = render_graph.node_device_address(scratch_buf);
+            let scratch_data = graph.node_device_address(scratch_buf);
 
-            render_graph
+            graph
                 .begin_cmd()
                 .with_name("Build BLAS")
                 .access_node(index_node, AccessType::AccelerationStructureBuildRead)
@@ -357,8 +357,8 @@ fn main() -> anyhow::Result<()> {
         }
 
         {
-            let instance_node = render_graph.bind_node(instance_buf);
-            let scratch_buf = render_graph.bind_node(Buffer::create(
+            let instance_node = graph.bind_node(instance_buf);
+            let scratch_buf = graph.bind_node(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     tlas_size.build_size,
@@ -368,10 +368,10 @@ fn main() -> anyhow::Result<()> {
                 .to_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = render_graph.node_device_address(scratch_buf);
-            let tlas_node = render_graph.bind_node(&tlas);
+            let scratch_data = graph.node_device_address(scratch_buf);
+            let tlas_node = graph.bind_node(&tlas);
 
-            render_graph
+            graph
                 .begin_cmd()
                 .with_name("Build TLAS")
                 .access_node(blas_node, AccessType::AccelerationStructureBuildRead)
@@ -387,7 +387,7 @@ fn main() -> anyhow::Result<()> {
                 });
         }
 
-        render_graph.resolve().submit(&mut pool, 0, 0)?;
+        graph.resolve().submit(&mut pool, 0, 0)?;
     }
 
     // ------------------------------------------------------------------------------------------ //
@@ -398,12 +398,12 @@ fn main() -> anyhow::Result<()> {
     // - Trace the image
     // - Copy image to the swapchain
     window.run(|frame| {
-        let blas_node = frame.render_graph.bind_node(&blas);
-        let tlas_node = frame.render_graph.bind_node(&tlas);
-        let sbt_node = frame.render_graph.bind_node(&sbt_buf);
+        let blas_node = frame.graph.bind_node(&blas);
+        let tlas_node = frame.graph.bind_node(&tlas);
+        let sbt_node = frame.graph.bind_node(&sbt_buf);
 
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("ray-traced triangle")
             .bind_pipeline(&ray_trace_pipeline)

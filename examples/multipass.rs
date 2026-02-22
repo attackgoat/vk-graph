@@ -60,10 +60,10 @@ fn main() -> anyhow::Result<()> {
     window.run(|frame| {
         t += 0.016;
 
-        let index_buf = frame.render_graph.bind_node(&funky_shape.index_buf);
-        let vertex_buf = frame.render_graph.bind_node(&funky_shape.vertex_buf);
+        let index_buf = frame.graph.bind_node(&funky_shape.index_buf);
+        let vertex_buf = frame.graph.bind_node(&funky_shape.vertex_buf);
 
-        let depth_stencil = frame.render_graph.bind_node(
+        let depth_stencil = frame.graph.bind_node(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -79,15 +79,15 @@ fn main() -> anyhow::Result<()> {
         let obj_pos = Vec3::ZERO;
         let material = GOLD;
 
-        let camera_buf = bind_camera_buf(frame.render_graph, &mut pool, camera, model);
-        let light_buf = bind_light_buf(frame.render_graph, &mut pool);
+        let camera_buf = bind_camera_buf(frame.graph, &mut pool, camera, model);
+        let light_buf = bind_light_buf(frame.graph, &mut pool);
         let push_const_data = write_push_consts(obj_pos, material);
 
         let mut write = DepthStencilMode::DEPTH_WRITE;
 
         // Depth Prepass
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("Depth Prepass")
             .bind_pipeline(&prepass)
@@ -118,7 +118,7 @@ fn main() -> anyhow::Result<()> {
 
         // Renders a golden orb on an un-cleared swapchain image
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("funky shape PBR")
             .bind_pipeline(&pbr)
@@ -147,7 +147,7 @@ fn main() -> anyhow::Result<()> {
 
         // Renders a solid color wherever the golden orb did not draw
         frame
-            .render_graph
+            .graph
             .begin_cmd()
             .with_name("fill background")
             .bind_pipeline(&fill_background)
@@ -187,7 +187,7 @@ fn best_depth_stencil_format(device: &Device) -> vk::Format {
 }
 
 fn bind_camera_buf(
-    render_graph: &mut Graph,
+    graph: &mut Graph,
     pool: &mut LazyPool,
     camera: Camera,
     model: Mat4,
@@ -200,10 +200,10 @@ fn bind_camera_buf(
         .unwrap();
     write_camera_buf(&mut buf, camera, model);
 
-    render_graph.bind_node(buf)
+    graph.bind_node(buf)
 }
 
-fn bind_light_buf(render_graph: &mut Graph, pool: &mut LazyPool) -> BufferLeaseNode {
+fn bind_light_buf(graph: &mut Graph, pool: &mut LazyPool) -> BufferLeaseNode {
     let mut buf = pool
         .lease(BufferInfo::host_mem(
             64,
@@ -212,7 +212,7 @@ fn bind_light_buf(render_graph: &mut Graph, pool: &mut LazyPool) -> BufferLeaseN
         .unwrap();
     write_light_buf(&mut buf);
 
-    render_graph.bind_node(buf)
+    graph.bind_node(buf)
 }
 
 fn write_push_consts(obj_pos: Vec3, material: Material) -> [u8; 32] {

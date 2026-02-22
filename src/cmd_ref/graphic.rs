@@ -1,5 +1,5 @@
 use {
-    super::{AttachmentIndex, Bindings, Info, PipelineRef, Subresource, SubresourceAccess},
+    super::{AttachmentIndex, Info, Nodes, PipelineRef, Subresource, SubresourceAccess},
     crate::{
         AnyBufferNode, AnyImageNode, Area, Attachment, ClearColorValue, Node, NodeIndex,
         SampleCount,
@@ -51,15 +51,15 @@ use {
 /// my_graph.begin_cmd().with_name("my draw pass")
 ///         .bind_pipeline(&my_graphic_pipeline)
 ///         .store_color(0, swapchain_image)
-///         .record_pipeline(move |graphic, bindings| {
+///         .record_pipeline(move |graphic, nodes| {
 ///             // During this closure we have access to the draw methods!
 ///         });
 /// # Ok(()) }
 /// ```
 pub struct GraphicPipelineRef<'a> {
-    pub(super) bindings: Bindings<'a>,
     pub(super) cmd_buf: vk::CommandBuffer,
     pub(super) device: &'a Device,
+    pub(super) nodes: Nodes<'a>,
     pub(super) pipeline: GraphicPipeline,
 }
 
@@ -104,7 +104,7 @@ impl GraphicPipelineRef<'_> {
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_idx_buf)
     ///         .read_node(my_vtx_buf)
-    ///         .record_pipeline(move |pipeline, bindings| {
+    ///         .record_pipeline(move |pipeline, nodes| {
     ///             pipeline.bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
     ///                     .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///                     .draw_indexed(42, 1, 0, 0, 0);
@@ -123,7 +123,7 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.device.cmd_bind_index_buffer(
                 self.cmd_buf,
-                self.bindings[buffer].handle,
+                self.nodes[buffer].handle,
                 offset,
                 index_ty,
             );
@@ -167,7 +167,7 @@ impl GraphicPipelineRef<'_> {
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_vtx_buf)
-    ///         .record_pipeline(move |pipeline, bindings| {
+    ///         .record_pipeline(move |pipeline, nodes| {
     ///             pipeline.bind_vertex_buffer(0, my_vtx_buf, 0)
     ///                     .draw(42, 1, 0, 0);
     ///         });
@@ -186,7 +186,7 @@ impl GraphicPipelineRef<'_> {
             self.device.cmd_bind_vertex_buffers(
                 self.cmd_buf,
                 binding,
-                slice::from_ref(&self.bindings[buffer].handle),
+                slice::from_ref(&self.nodes[buffer].handle),
                 slice::from_ref(&offset),
             );
         }
@@ -221,7 +221,7 @@ impl GraphicPipelineRef<'_> {
             for (buffer, offset) in buffer_offsets {
                 let buffer = buffer.into();
 
-                buffers.push(self.bindings[buffer].handle);
+                buffers.push(self.nodes[buffer].handle);
                 offsets.push(offset);
             }
 
@@ -358,7 +358,7 @@ impl GraphicPipelineRef<'_> {
     ///         .read_node(my_idx_buf)
     ///         .read_node(my_vtx_buf)
     ///         .read_node(buf_node)
-    ///         .record_pipeline(move |pipeline, bindings| {
+    ///         .record_pipeline(move |pipeline, nodes| {
     ///             pipeline.bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
     ///                     .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///                     .draw_indexed_indirect(buf_node, 0, 1, 0);
@@ -378,7 +378,7 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.device.cmd_draw_indexed_indirect(
                 self.cmd_buf,
-                self.bindings[buffer].handle,
+                self.nodes[buffer].handle,
                 offset,
                 draw_count,
                 stride,
@@ -416,9 +416,9 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.device.cmd_draw_indexed_indirect_count(
                 self.cmd_buf,
-                self.bindings[buffer].handle,
+                self.nodes[buffer].handle,
                 offset,
-                self.bindings[count_buf].handle,
+                self.nodes[count_buf].handle,
                 count_buf_offset,
                 max_draw_count,
                 stride,
@@ -444,7 +444,7 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.device.cmd_draw_indirect(
                 self.cmd_buf,
-                self.bindings[buffer].handle,
+                self.nodes[buffer].handle,
                 offset,
                 draw_count,
                 stride,
@@ -473,9 +473,9 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.device.cmd_draw_indirect_count(
                 self.cmd_buf,
-                self.bindings[buffer].handle,
+                self.nodes[buffer].handle,
                 offset,
-                self.bindings[count_buf].handle,
+                self.nodes[count_buf].handle,
                 count_buf_offset,
                 max_draw_count,
                 stride,
@@ -543,7 +543,7 @@ impl GraphicPipelineRef<'_> {
     /// my_graph.begin_cmd().with_name("draw a quad")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
-    ///         .record_pipeline(move |pipeline, bindings| {
+    ///         .record_pipeline(move |pipeline, nodes| {
     ///             pipeline.push_constants(0, &[42])
     ///                     .draw(6, 1, 0, 0);
     ///         });
@@ -1468,7 +1468,7 @@ impl PipelineRef<'_, GraphicPipeline> {
     /// Begin recording a graphics pipeline command buffer.
     pub fn record_pipeline(
         mut self,
-        func: impl FnOnce(GraphicPipelineRef<'_>, Bindings<'_>) + Send + 'static,
+        func: impl FnOnce(GraphicPipelineRef<'_>, Nodes<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -1482,15 +1482,15 @@ impl PipelineRef<'_, GraphicPipeline> {
             .unwrap_graphic()
             .clone();
 
-        self.cmd.push_execute(move |device, cmd_buf, bindings| {
+        self.cmd.push_execute(move |device, cmd_buf, nodes| {
             func(
                 GraphicPipelineRef {
-                    bindings,
+                    nodes,
                     cmd_buf,
                     device,
                     pipeline,
                 },
-                bindings,
+                nodes,
             );
         });
 
