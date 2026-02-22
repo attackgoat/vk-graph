@@ -234,7 +234,7 @@ impl ImageLoader {
             }
         }
 
-        let image = graph.unbind_node(image);
+        let image = graph.node(image).clone();
 
         graph
             .resolve()

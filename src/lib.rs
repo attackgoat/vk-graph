@@ -195,13 +195,9 @@ let image = graph.bind_node(image);
 println!("{:?}", buffer); // BufferNode
 println!("{:?}", image); // ImageNode
 
-// Unbind nodes back into resources (Optional!)
-let buffer = graph.unbind_node(buffer);
-let image = graph.unbind_node(image);
-
-// Magically, they return to the correct types! (the graph wrapped them in Arc for us)
-println!("{:?}", buffer); // Arc<Buffer>
-println!("{:?}", image); // Arc<Image>
+// Borrow resources using nodes (Optional!)
+println!("{:?}", graph.node(buffer)); // &Arc<Buffer>
+println!("{:?}", graph.node(image)); // &Arc<Image>
 # Ok(()) }
 ```
 
@@ -361,7 +357,7 @@ mod info;
 mod resolver;
 
 pub use self::{
-    bind::{Bind, Unbind},
+    bind::{Bind, Bound},
     resolver::Resolver,
 };
 
@@ -1265,6 +1261,16 @@ impl Graph {
         None
     }
 
+    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
+    /// which the given node represents.
+    pub fn node<N>(&mut self, node: N) -> &<N as Edge<Self>>::Result
+    where
+        N: Edge<Self>,
+        N: Bound<Self, <N as Edge<Self>>::Result>,
+    {
+        node.borrow(self)
+    }
+
     /// Returns the device address of a buffer node.
     ///
     /// # Panics
@@ -1298,17 +1304,6 @@ impl Graph {
         }
 
         Resolver::new(self)
-    }
-
-    /// Removes a node from this graph.
-    ///
-    /// Future access to `node` on this graph will return invalid results.
-    pub fn unbind_node<N>(&mut self, node: N) -> <N as Edge<Self>>::Result
-    where
-        N: Edge<Self>,
-        N: Unbind<Self, <N as Edge<Self>>::Result>,
-    {
-        node.unbind(self)
     }
 
     /// Note: `data` must not exceed 65536 bytes.

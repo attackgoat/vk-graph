@@ -418,6 +418,13 @@ impl Image {
             }
         })
     }
+
+    /// Sets the debugging name assigned to this image.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
 }
 
 impl Debug for Image {

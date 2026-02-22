@@ -165,7 +165,6 @@ impl Egui {
                     );
 
                     graph.copy_buffer_to_image(tmp_buf, image);
-                    graph.unbind_node(tmp_buf);
                     (*id, image)
                 }
             })
@@ -194,7 +193,7 @@ impl Egui {
         for (id, tex) in bound_tex.iter() {
             if let AnyImageNode::ImageLease(tex) = tex {
                 if let egui::TextureId::Managed(_) = *id {
-                    self.textures.insert(*id, graph.unbind_node(*tex));
+                    self.textures.insert(*id, graph.node(*tex).clone());
                 }
             }
         }

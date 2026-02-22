@@ -16,86 +16,58 @@ use {
 /// A trait for resources which may be bound to a `Graph`.
 ///
 /// See [`Graph::bind_node`] and
-/// [`PassRef::bind_pipeline`](super::pass_ref::PassRef::bind_pipeline) for details.
+/// [`CommandRef::bind_pipeline`](super::cmd_ref::CommandRef::bind_pipeline) for details.
 pub trait Bind<Graph, Node> {
-    /// Binds the resource to a graph-like object.
+    /// Binds the resource to a graph.
     ///
-    /// Returns a reference Node object.
+    /// Returns a node handle.
     fn bind(self, graph: Graph) -> Node;
 }
 
 #[derive(Debug)]
 pub enum Binding {
-    AccelerationStructure(Arc<AccelerationStructure>, bool),
-    AccelerationStructureLease(Arc<Lease<AccelerationStructure>>, bool),
-    Buffer(Arc<Buffer>, bool),
-    BufferLease(Arc<Lease<Buffer>>, bool),
-    Image(Arc<Image>, bool),
-    ImageLease(Arc<Lease<Image>>, bool),
-    SwapchainImage(Box<SwapchainImage>, bool),
+    AccelerationStructure(Arc<AccelerationStructure>),
+    AccelerationStructureLease(Arc<Lease<AccelerationStructure>>),
+    Buffer(Arc<Buffer>),
+    BufferLease(Arc<Lease<Buffer>>),
+    Image(Arc<Image>),
+    ImageLease(Arc<Lease<Image>>),
+    SwapchainImage(Box<SwapchainImage>),
 }
 
 impl Binding {
     pub(super) fn as_driver_acceleration_structure(&self) -> Option<&AccelerationStructure> {
         Some(match self {
-            Self::AccelerationStructure(binding, _) => binding,
-            Self::AccelerationStructureLease(binding, _) => binding,
+            Self::AccelerationStructure(binding) => binding,
+            Self::AccelerationStructureLease(binding) => binding,
             _ => return None,
         })
     }
 
     pub(super) fn as_driver_buffer(&self) -> Option<&Buffer> {
         Some(match self {
-            Self::Buffer(binding, _) => binding,
-            Self::BufferLease(binding, _) => binding,
+            Self::Buffer(binding) => binding,
+            Self::BufferLease(binding) => binding,
             _ => return None,
         })
     }
 
     pub(super) fn as_driver_image(&self) -> Option<&Image> {
         Some(match self {
-            Self::Image(binding, _) => binding,
-            Self::ImageLease(binding, _) => binding,
-            Self::SwapchainImage(binding, _) => binding,
+            Self::Image(binding) => binding,
+            Self::ImageLease(binding) => binding,
+            Self::SwapchainImage(binding) => binding,
             _ => return None,
         })
     }
 
     pub(super) fn as_swapchain_image(&self) -> Option<&SwapchainImage> {
-        if let Self::SwapchainImage(binding, true) = self {
-            Some(binding)
-        } else if let Self::SwapchainImage(_, false) = self {
-            // User code might try this - but it is a programmer error
-            // to access a binding after it has been unbound so dont
-            None
-        } else {
+        let Self::SwapchainImage(binding) = self else {
             // The private code in this module should prevent this branch
             unreachable!();
-        }
-    }
+        };
 
-    pub(super) fn is_bound(&self) -> bool {
-        match self {
-            Self::AccelerationStructure(_, is_bound) => *is_bound,
-            Self::AccelerationStructureLease(_, is_bound) => *is_bound,
-            Self::Buffer(_, is_bound) => *is_bound,
-            Self::BufferLease(_, is_bound) => *is_bound,
-            Self::Image(_, is_bound) => *is_bound,
-            Self::ImageLease(_, is_bound) => *is_bound,
-            Self::SwapchainImage(_, is_bound) => *is_bound,
-        }
-    }
-
-    pub(super) fn unbind(&mut self) {
-        *match self {
-            Self::AccelerationStructure(_, is_bound) => is_bound,
-            Self::AccelerationStructureLease(_, is_bound) => is_bound,
-            Self::Buffer(_, is_bound) => is_bound,
-            Self::BufferLease(_, is_bound) => is_bound,
-            Self::Image(_, is_bound) => is_bound,
-            Self::ImageLease(_, is_bound) => is_bound,
-            Self::SwapchainImage(_, is_bound) => is_bound,
-        } = false;
+        Some(binding)
     }
 }
 
@@ -106,8 +78,7 @@ impl Bind<&mut Graph, SwapchainImageNode> for SwapchainImage {
 
         //trace!("Node {}: {:?}", res.idx, &self);
 
-        let binding = Binding::SwapchainImage(Box::new(self), true);
-        graph.bindings.push(binding);
+        graph.bindings.push(Binding::SwapchainImage(Box::new(self)));
 
         res
     }
@@ -123,7 +94,7 @@ macro_rules! bind {
 
                     // We will return a new node
                     let res = [<$name Node>]::new(graph.bindings.len());
-                    let binding = Binding::$name(Arc::new(self), true);
+                    let binding = Binding::$name(Arc::new(self));
                     graph.bindings.push(binding);
 
                     res
@@ -148,10 +119,8 @@ macro_rules! bind {
                     // We will return an existing node, if possible
                     // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
                     for (idx, existing_binding) in graph.bindings.iter_mut().enumerate() {
-                        if let Some((existing_binding, is_bound)) = existing_binding.[<as_ $name:snake _mut>]() {
+                        if let Some(existing_binding) = existing_binding.[<as_ $name:snake _mut>]() {
                             if Arc::ptr_eq(existing_binding, &self) {
-                                *is_bound = true;
-
                                 return [<$name Node>]::new(idx);
                             }
                         }
@@ -159,7 +128,7 @@ macro_rules! bind {
 
                     // Return a new node
                     let res = [<$name Node>]::new(graph.bindings.len());
-                    let binding = Binding::$name(self, true);
+                    let binding = Binding::$name(self);
                     graph.bindings.push(binding);
 
                     res
@@ -168,16 +137,16 @@ macro_rules! bind {
 
             impl Binding {
                 pub(super) fn [<as_ $name:snake>](&self) -> Option<&Arc<$name>> {
-                    if let Self::$name(binding, _) = self {
+                    if let Self::$name(binding) = self {
                         Some(&binding)
                     } else {
                         None
                     }
                 }
 
-                pub(super) fn [<as_ $name:snake _mut>](&mut self) -> Option<(&mut Arc<$name>, &mut bool)> {
-                    if let Self::$name(binding, is_bound) = self {
-                        Some((binding, is_bound))
+                pub(super) fn [<as_ $name:snake _mut>](&mut self) -> Option<&mut Arc<$name>> {
+                    if let Self::$name(binding) = self {
+                        Some(binding)
                     } else {
                         None
                     }
@@ -202,7 +171,7 @@ macro_rules! bind_lease {
 
                     // We will return a new node
                     let res = [<$name LeaseNode>]::new(graph.bindings.len());
-                    let binding = Binding::[<$name Lease>](Arc::new(self), true);
+                    let binding = Binding::[<$name Lease>](Arc::new(self));
                     graph.bindings.push(binding);
 
                     res
@@ -227,10 +196,8 @@ macro_rules! bind_lease {
                     // We will return an existing node, if possible
                     // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
                     for (idx, existing_binding) in graph.bindings.iter_mut().enumerate() {
-                        if let Some((existing_binding, is_bound)) = existing_binding.[<as_ $name:snake _lease_mut>]() {
+                        if let Some(existing_binding) = existing_binding.[<as_ $name:snake _lease_mut>]() {
                             if Arc::ptr_eq(existing_binding, &self) {
-                                *is_bound = true;
-
                                 return [<$name LeaseNode>]::new(idx);
                             }
                         }
@@ -238,7 +205,7 @@ macro_rules! bind_lease {
 
                     // We will return a new node
                     let res = [<$name LeaseNode>]::new(graph.bindings.len());
-                    let binding = Binding::[<$name Lease>](self, true);
+                    let binding = Binding::[<$name Lease>](self);
                     graph.bindings.push(binding);
 
                     res
@@ -247,16 +214,16 @@ macro_rules! bind_lease {
 
             impl Binding {
                 pub(super) fn [<as_ $name:snake _lease>](&self) -> Option<&Arc<Lease<$name>>> {
-                    if let Self::[<$name Lease>](binding, _) = self {
+                    if let Self::[<$name Lease>](binding) = self {
                         Some(binding)
                     } else {
                         None
                     }
                 }
 
-                pub(super) fn [<as_ $name:snake _lease_mut>](&mut self) -> Option<(&Arc<Lease<$name>>, &mut bool)> {
-                    if let Self::[<$name Lease>](binding, is_bound) = self {
-                        Some((binding, is_bound))
+                pub(super) fn [<as_ $name:snake _lease_mut>](&mut self) -> Option<&Arc<Lease<$name>>> {
+                    if let Self::[<$name Lease>](binding) = self {
+                        Some(binding)
                     } else {
                         None
                     }
@@ -270,12 +237,10 @@ bind_lease!(AccelerationStructure);
 bind_lease!(Image);
 bind_lease!(Buffer);
 
-/// A trait for resources which may be unbound from a `Graph`.
+/// A trait for resources which may be borrowed from a `Graph`.
 ///
-/// See [`Graph::unbind_node`] for details.
-pub trait Unbind<Graph, Binding> {
-    /// Unbinds the resource from a graph.
-    ///
-    /// Returns the original Binding object.
-    fn unbind(self, graph: &mut Graph) -> Binding;
+/// See [`Graph::node`] for details.
+pub trait Bound<Graph, Binding> {
+    /// Borrows the resource from a graph.
+    fn borrow(self, graph: &Graph) -> &Binding;
 }

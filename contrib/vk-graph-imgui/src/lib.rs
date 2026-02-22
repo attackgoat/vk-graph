@@ -281,24 +281,21 @@ impl ImGui {
         }
 
         let temp_buf = graph.bind_node(temp_buf);
-        let image = graph.bind_node({
-            let mut image = pool
-                .lease(ImageInfo::image_2d(
-                    texture.width,
-                    texture.height,
-                    vk::Format::R8G8B8A8_UNORM,
-                    vk::ImageUsageFlags::SAMPLED
-                        | vk::ImageUsageFlags::STORAGE
-                        | vk::ImageUsageFlags::TRANSFER_DST,
-                ))
-                .unwrap();
-            image.as_mut().name = Some("ImGui Font Atlas".to_string());
-
-            image
-        });
+        let image = graph.bind_node(
+            pool.lease(ImageInfo::image_2d(
+                texture.width,
+                texture.height,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::STORAGE
+                    | vk::ImageUsageFlags::TRANSFER_DST,
+            ))
+            .unwrap()
+            .with_name("ImGui Font Atlas"),
+        );
 
         graph.copy_buffer_to_image(temp_buf, image);
 
-        self.font_atlas_image = Some(graph.unbind_node(image));
+        self.font_atlas_image = Some(graph.node(image).clone());
     }
 }

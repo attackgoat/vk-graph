@@ -450,6 +450,13 @@ impl Buffer {
 
         &mut self.allocation.mapped_slice_mut().unwrap()[0..self.info.size as usize]
     }
+
+    /// Sets the debugging name assigned to this buffer.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
 }
 
 impl Debug for Buffer {

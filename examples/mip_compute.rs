@@ -1,8 +1,6 @@
 mod profile_with_puffin;
 
-use {
-    bytemuck::cast_slice, clap::Parser, std::sync::Arc, vk_graph_prelude::*, vk_shader_macros::glsl,
-};
+use {bytemuck::cast_slice, clap::Parser, vk_graph_prelude::*, vk_shader_macros::glsl};
 
 /// This program demonstrates a single render pass which uses multiple executions to record a chain
 /// of image copies which reduce an input image from 4x4 into 2x2 and finally 1x1. This is useful
@@ -16,7 +14,7 @@ fn main() -> Result<(), DriverError> {
 
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::new(device_info)?);
+    let device = Device::new(device_info)?;
 
     let mut graph = Graph::default();
 
@@ -140,7 +138,7 @@ fn main() -> Result<(), DriverError> {
         },
     );
 
-    let depth_pixel = graph.unbind_node(depth_pixel);
+    let depth_pixel = graph.node(depth_pixel).clone();
 
     graph
         .resolve()

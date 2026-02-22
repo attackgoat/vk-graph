@@ -241,7 +241,7 @@ impl<'a> CommandRef<'a> {
     fn assert_bound_graph_node(&self, node: impl Node) {
         let idx = node.index();
 
-        assert!(self.graph.bindings[idx].is_bound());
+        assert!(idx < self.graph.bindings.len());
     }
 
     /// Binds a Vulkan acceleration structure, buffer, or image to the graph associated with this

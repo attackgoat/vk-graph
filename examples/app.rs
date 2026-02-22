@@ -3,7 +3,6 @@ mod profile_with_puffin;
 use {
     clap::Parser,
     log::error,
-    std::sync::Arc,
     vk_graph::{
         Graph,
         display::{Display, DisplayError, DisplayInfo},
@@ -44,7 +43,7 @@ impl ApplicationHandler for Application {
 
         let args = Args::parse();
         let device_info = DeviceInfoBuilder::default().debug(args.debug);
-        let device = Arc::new(Device::from_display(&window, device_info).unwrap());
+        let device = Device::from_display(&window, device_info).unwrap();
 
         let surface = Surface::create(&device, &window, &window).unwrap();
         let surface_formats = Surface::formats(&surface).unwrap();

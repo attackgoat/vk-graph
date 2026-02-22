@@ -31,7 +31,7 @@ fn main() -> Result<(), DriverError> {
 
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::new(device_info)?);
+    let device = Device::new(device_info)?;
     let Vulkan11Properties {
         subgroup_size,
         subgroup_supported_operations,
@@ -116,7 +116,7 @@ fn exclusive_sum(
             compute.dispatch(workgroup_count, 1, 1);
         });
 
-    let output_buf = graph.unbind_node(output_buf);
+    let output_buf = graph.node(output_buf).clone();
     let mut cmd_buf = graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();

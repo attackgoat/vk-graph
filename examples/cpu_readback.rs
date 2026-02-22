@@ -1,8 +1,4 @@
-use {
-    clap::Parser,
-    std::{sync::Arc, time::Instant},
-    vk_graph_prelude::*,
-};
+use {clap::Parser, std::time::Instant, vk_graph_prelude::*};
 
 /// Example demonstrating the steps to take when reading the results of buffer or image operations
 /// on the CPU. These operations take time to submit and the GPU will execute them asynchronously.
@@ -12,7 +8,7 @@ fn main() -> Result<(), DriverError> {
     // For this example we create a headless device, but the same thing works using a window
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::new(device_info)?);
+    let device = Device::new(device_info)?;
 
     let mut graph = Graph::default();
 
@@ -34,8 +30,8 @@ fn main() -> Result<(), DriverError> {
     graph.copy_buffer(src_buf, dst_buf);
 
     // This line is optional - just bind a reference of Arc<Buffer> or a leased buffer so you retain
-    // the actual buffer for later use and you could then remove this unbind_node line
-    let dst_buf = graph.unbind_node(dst_buf);
+    // the actual buffer for later use and you could then remove this line
+    let dst_buf = graph.node(dst_buf).clone();
 
     // Resolve and wait (or you can check has_executed without blocking) - alternatively you might
     // use device.queue_wait_idle(0) or device.device_wait_idle() - but those block on larger scopes

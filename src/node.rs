@@ -1,7 +1,7 @@
 //! Bindings for Vulkan smart-pointer resources.
 
 use {
-    super::{Binding, Graph, Info, NodeIndex, Unbind},
+    super::{Binding, Bound, Graph, Info, NodeIndex},
     crate::{
         driver::{
             accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -225,50 +225,40 @@ node!(Image);
 node!(ImageLease);
 node!(SwapchainImage);
 
-macro_rules! node_unbind {
+macro_rules! node_bound {
     ($name:ident) => {
         paste::paste! {
-            impl Unbind<Graph, Arc<$name>> for [<$name Node>] {
-                fn unbind(self, graph: &mut Graph) -> Arc<$name> {
-                    let binding = &mut graph.bindings[self.idx];
-                    let res = Arc::clone(
-                        binding
-                            .[<as_ $name:snake>]()
-                            .unwrap()
-                    );
-                    binding.unbind();
-
-                    res
+            impl Bound<Graph, Arc<$name>> for [<$name Node>] {
+                fn borrow(self, graph: &Graph) -> &Arc<$name> {
+                    graph
+                        .bindings[self.idx]
+                        .[<as_ $name:snake>]()
+                        .unwrap()
                 }
             }
         }
     };
 }
 
-node_unbind!(AccelerationStructure);
-node_unbind!(Buffer);
-node_unbind!(Image);
+node_bound!(AccelerationStructure);
+node_bound!(Buffer);
+node_bound!(Image);
 
-macro_rules! node_unbind_lease {
+macro_rules! node_lease_bound {
     ($name:ident) => {
         paste::paste! {
-            impl Unbind<Graph, Arc<Lease<$name>>> for [<$name LeaseNode>] {
-                fn unbind(self, graph: &mut Graph) -> Arc<Lease<$name>> {
-                    let binding = &mut graph.bindings[self.idx];
-                    let res = Arc::clone(
-                        binding
-                            .[<as_ $name:snake _lease>]()
-                            .unwrap()
-                    );
-                    binding.unbind();
-
-                    res
+            impl Bound<Graph, Arc<Lease<$name>>> for [<$name LeaseNode>] {
+                fn borrow(self, graph: &Graph) -> &Arc<Lease<$name>> {
+                    graph
+                        .bindings[self.idx]
+                        .[<as_ $name:snake _lease>]()
+                        .unwrap()
                 }
             }
         }
     };
 }
 
-node_unbind_lease!(AccelerationStructure);
-node_unbind_lease!(Buffer);
-node_unbind_lease!(Image);
+node_lease_bound!(AccelerationStructure);
+node_lease_bound!(Buffer);
+node_lease_bound!(Image);

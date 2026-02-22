@@ -18,7 +18,7 @@ fn main() -> Result<(), DriverError> {
 
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::new(device_info)?);
+    let device = Device::new(device_info)?;
 
     // We wrap HashPool in an AliasPool container to enable resource aliasing
     let mut pool = AliasPool::new(HashPool::new(&device));

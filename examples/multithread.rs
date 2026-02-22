@@ -121,7 +121,7 @@ fn main() -> anyhow::Result<()> {
                     ],
                 );
 
-                let image = graph.unbind_node(image);
+                let image = graph.node(image).clone();
 
                 // Submit on a queue we are reserving for only this thread to use
                 graph
@@ -222,8 +222,10 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
         OrdinateOrientation::TopToBottom,
     )?;
 
+    let mut graph = Graph::default();
+
     // We happen to know this font only requires a single image, this uses the image crate
-    let temp_buf = Buffer::create_from_slice(
+    let temp_buf = graph.bind_node(Buffer::create_from_slice(
         device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         ImageReader::new(Cursor::new(
@@ -234,30 +236,27 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
         .into_rgba8()
         .to_vec()
         .as_slice(),
-    )?;
+    )?);
 
     // This image will hold the font glyphs
-    let page_0 = Image::create(
-        device,
-        ImageInfo::image_2d(
-            64,
-            64,
-            vk::Format::R8G8B8A8_UNORM,
-            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-        ),
-    )
-    .unwrap();
+    let page_0 = graph.bind_node(
+        Image::create(
+            device,
+            ImageInfo::image_2d(
+                64,
+                64,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            ),
+        )
+        .unwrap(),
+    );
 
-    let mut graph = Graph::default();
-    let page_0 = graph.bind_node(page_0);
-    let temp_buf = graph.bind_node(temp_buf);
     graph.copy_buffer_to_image(temp_buf, page_0);
 
-    // Unbind page_0 to get the Arc<Image> but we could have just bound a reference (with no unbind)
-    let page_0 = graph.unbind_node(page_0);
+    let page_0 = graph.node(page_0).clone();
 
-    // This copy happens in queue index 0! Notice the unbind above is OK because we already asked
-    // for the copy to happen first!
+    // This copy happens in queue index 0!
     graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
     BitmapFont::new(device, font, [page_0])

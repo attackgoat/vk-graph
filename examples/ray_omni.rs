@@ -220,7 +220,7 @@ fn create_blas(
             )]);
         });
 
-    let blas = graph.unbind_node(blas);
+    let blas = graph.node(blas).clone();
 
     graph.resolve().submit(&mut LazyPool::new(device), 0, 0)?;
 

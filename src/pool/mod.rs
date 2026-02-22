@@ -147,6 +147,33 @@ pub struct Lease<T> {
     item: ManuallyDrop<T>,
 }
 
+impl Lease<AccelerationStructure> {
+    /// Sets the debugging name assigned to this acceleration structure.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
+}
+
+impl Lease<Buffer> {
+    /// Sets the debugging name assigned to this buffer.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
+}
+
+impl Lease<Image> {
+    /// Sets the debugging name assigned to this image.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
+}
+
 impl<T> Lease<T> {
     #[inline(always)]
     fn new(cache_ref: CacheRef<T>, item: T) -> Self {

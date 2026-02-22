@@ -337,6 +337,13 @@ impl AccelerationStructure {
             }
         })
     }
+
+    /// Sets the debugging name assigned to this acceleration structure.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
 }
 
 impl Drop for AccelerationStructure {

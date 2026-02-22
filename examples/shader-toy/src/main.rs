@@ -167,9 +167,9 @@ fn main() -> anyhow::Result<()> {
         .clear_color_image(blank_image, [0.0, 0.0, 0.0, 1.0])
         .clear_color_image(temp_image, [0.0, 1.0, 0.0, 1.0]);
 
-    let mut framebuffer_image_binding = Some(graph.unbind_node(framebuffer_image));
-    let mut blank_image_binding = Some(graph.unbind_node(blank_image));
-    let mut temp_image_binding = Some(graph.unbind_node(temp_image));
+    let mut framebuffer_image_binding = Some(graph.node(framebuffer_image).clone());
+    let mut blank_image_binding = Some(graph.node(blank_image).clone());
+    let mut temp_image_binding = Some(graph.node(temp_image).clone());
 
     graph.resolve().submit(&mut cache, 0, 0)?;
 
@@ -310,11 +310,11 @@ fn main() -> anyhow::Result<()> {
             display.present_image(frame.graph, input, frame.swapchain_image);
 
             // Unbind things from this graph (we want them back for the next frame!)
-            flowers_image_binding = Some(frame.graph.unbind_node(flowers_image));
-            noise_image_binding = Some(frame.graph.unbind_node(noise_image));
-            framebuffer_image_binding = Some(frame.graph.unbind_node(framebuffer_image));
-            blank_image_binding = Some(frame.graph.unbind_node(blank_image));
-            temp_image_binding = Some(frame.graph.unbind_node(temp_image));
+            flowers_image_binding = Some(frame.graph.node(flowers_image).clone());
+            noise_image_binding = Some(frame.graph.node(noise_image).clone());
+            framebuffer_image_binding = Some(frame.graph.node(framebuffer_image).clone());
+            blank_image_binding = Some(frame.graph.node(blank_image).clone());
+            temp_image_binding = Some(frame.graph.node(temp_image).clone());
         })
         .context("Unable to run event loop")?;
 

@@ -22,7 +22,7 @@ fn main() -> Result<(), DriverError> {
     let mut graph = Graph::default();
     let args = Args::parse();
     let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::new(device_info)?);
+    let device = Device::new(device_info)?;
     let size = 4;
 
     // The 4x4 depth image will have pixels that look like this:
@@ -228,7 +228,7 @@ fn copy_image_to_buffer(
 
     graph.copy_image_to_buffer(reduced_image, result_buf);
 
-    Ok(graph.unbind_node(result_buf))
+    Ok(graph.node(result_buf).clone())
 }
 
 #[derive(Parser)]
