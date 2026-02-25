@@ -141,17 +141,6 @@ impl Device {
         })
     }
 
-    pub(crate) fn create_semaphore(this: &Self) -> Result<vk::Semaphore, DriverError> {
-        let create_info = vk::SemaphoreCreateInfo::default();
-        let allocation_callbacks = None;
-
-        unsafe { this.create_semaphore(&create_info, allocation_callbacks) }.map_err(|err| {
-            warn!("{err}");
-
-            DriverError::OutOfMemory
-        })
-    }
-
     /// Helper for times when you already know that the device supports the acceleration
     /// structure extension.
     ///
@@ -575,7 +564,10 @@ impl Deref for ReadOnlyDevice {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, std::mem::offset_of};
+    use {
+        super::*,
+        std::mem::{offset_of, size_of},
+    };
 
     type Info = DeviceInfo;
     type Builder = DeviceInfoBuilder;
@@ -584,6 +576,7 @@ mod tests {
     pub fn device_repr_c() {
         // HACK: The readonly crate uses a private implementation and so we can't further deref it
         // into the native object type. Because of this the ReadOnly part is manually implemented.
+        assert_eq!(size_of::<Device>(), size_of::<ReadOnlyDevice>());
         assert_eq!(offset_of!(Device, inner), offset_of!(ReadOnlyDevice, inner),);
         assert_eq!(
             offset_of!(Device, physical_device),

@@ -44,7 +44,7 @@ use {
             graphic::{GraphicPipeline, GraphicPipelineInfo},
             image::ImageInfo,
             shader::Shader,
-            AccessType,
+            sync::AccessType,
         },
         pool::{lazy::LazyPool, Pool as _},
         Graph,

@@ -8,9 +8,8 @@ pub use vk_graph::{
         BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
         PipelineRef, UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
-    display::{Display, DisplayError, DisplayInfo, DisplayInfoBuilder, ResolverPool},
     driver::{
-        AccessType, CommandBuffer, DriverError,
+        DriverError,
         accel_struct::{
             AccelerationStructure, AccelerationStructureGeometry,
             AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
@@ -19,6 +18,7 @@ pub use vk_graph::{
         },
         ash::vk,
         buffer::{Buffer, BufferInfo, BufferInfoBuilder, BufferSubresourceRange},
+        cmd_buf::CommandBuffer,
         compute::{ComputePipeline, ComputePipelineInfo, ComputePipelineInfoBuilder},
         device::{Device, DeviceInfo, DeviceInfoBuilder},
         graphic::{
@@ -44,6 +44,7 @@ pub use vk_graph::{
         swapchain::{
             Swapchain, SwapchainError, SwapchainImage, SwapchainInfo, SwapchainInfoBuilder,
         },
+        sync::AccessType,
     },
     node::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,

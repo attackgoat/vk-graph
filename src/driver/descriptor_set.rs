@@ -1,3 +1,5 @@
+//! TODO
+
 use {
     super::{DescriptorSetLayout, DriverError, device::Device},
     ash::vk,
@@ -5,6 +7,7 @@ use {
     std::{ops::Deref, slice, thread::panicking},
 };
 
+/// TODO
 #[derive(Debug)]
 #[readonly::make]
 pub struct DescriptorPool {
@@ -29,7 +32,7 @@ pub struct DescriptorPool {
 
 impl DescriptorPool {
     #[profiling::function]
-    pub fn create(
+    pub(crate) fn create(
         device: &Device,
         info: impl Into<DescriptorPoolInfo>,
     ) -> Result<Self, DriverError> {
@@ -160,7 +163,7 @@ impl DescriptorPool {
         })
     }
 
-    pub fn allocate_descriptor_set(
+    pub(crate) fn allocate_descriptor_set(
         this: &Self,
         layout: &DescriptorSetLayout,
     ) -> Result<DescriptorSet, DriverError> {
@@ -170,7 +173,7 @@ impl DescriptorPool {
     }
 
     #[profiling::function]
-    pub fn allocate_descriptor_sets<'a>(
+    pub(crate) fn allocate_descriptor_sets<'a>(
         &'a self,
         layout: &DescriptorSetLayout,
         count: u32,
@@ -219,25 +222,26 @@ impl Drop for DescriptorPool {
     }
 }
 
+/// TODO
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct DescriptorPoolInfo {
-    pub acceleration_structure_count: u32,
-    pub combined_image_sampler_count: u32,
-    pub input_attachment_count: u32,
-    pub max_sets: u32,
-    pub sampled_image_count: u32,
-    pub sampler_count: u32,
-    pub storage_buffer_count: u32,
-    pub storage_buffer_dynamic_count: u32,
-    pub storage_image_count: u32,
-    pub storage_texel_buffer_count: u32,
-    pub uniform_buffer_count: u32,
-    pub uniform_buffer_dynamic_count: u32,
-    pub uniform_texel_buffer_count: u32,
+    pub(crate) acceleration_structure_count: u32,
+    pub(crate) combined_image_sampler_count: u32,
+    pub(crate) input_attachment_count: u32,
+    pub(crate) max_sets: u32,
+    pub(crate) sampled_image_count: u32,
+    pub(crate) sampler_count: u32,
+    pub(crate) storage_buffer_count: u32,
+    pub(crate) storage_buffer_dynamic_count: u32,
+    pub(crate) storage_image_count: u32,
+    pub(crate) storage_texel_buffer_count: u32,
+    pub(crate) uniform_buffer_count: u32,
+    pub(crate) uniform_buffer_dynamic_count: u32,
+    pub(crate) uniform_texel_buffer_count: u32,
 }
 
 impl DescriptorPoolInfo {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.acceleration_structure_count
             + self.combined_image_sampler_count
             + self.input_attachment_count
@@ -255,7 +259,7 @@ impl DescriptorPoolInfo {
 }
 
 #[derive(Debug)]
-pub struct DescriptorSet {
+pub(crate) struct DescriptorSet {
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
     device: Device,

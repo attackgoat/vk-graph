@@ -28,7 +28,9 @@
 
 pub mod accel_struct;
 pub mod buffer;
+pub mod cmd_buf;
 pub mod compute;
+pub mod descriptor_set;
 pub mod device;
 pub mod graphic;
 pub mod image;
@@ -40,14 +42,11 @@ pub mod shader;
 pub mod surface;
 pub mod swapchain;
 
-mod cmd_buf;
-mod descriptor_set;
 mod descriptor_set_layout;
 
 pub use {
-    self::cmd_buf::CommandBuffer,
     ash::{self},
-    vk_sync::AccessType,
+    vk_sync::{self as sync},
 };
 
 /// Specifying depth and stencil resolve modes.
@@ -55,12 +54,11 @@ pub use {
 pub type ResolveMode = self::render_pass::ResolveMode;
 
 pub(crate) use self::{
-    cmd_buf::CommandBufferInfo,
-    descriptor_set::{DescriptorPool, DescriptorPoolInfo, DescriptorSet},
+    descriptor_set::DescriptorSet,
     descriptor_set_layout::DescriptorSetLayout,
     render_pass::{
-        AttachmentInfo, AttachmentRef, FramebufferAttachmentImageInfo, FramebufferInfo, RenderPass,
-        RenderPassInfo, SubpassDependency, SubpassInfo,
+        AttachmentInfo, AttachmentRef, FramebufferAttachmentImageInfo, FramebufferInfo,
+        SubpassDependency, SubpassInfo,
     },
     shader::{Descriptor, DescriptorBindingMap, DescriptorInfo},
     surface::Surface,
@@ -79,10 +77,12 @@ use {
         error::Error,
         fmt::{Display, Formatter},
     },
-    vk_sync::ImageLayout,
 };
 
-//pub type Result<T> = Result<T, DriverError>;
+// When removing, fix all the extra-overly-qualiified references in this file
+#[deprecated = "use from sync module"]
+#[doc(hidden)]
+pub type AccessType = self::sync::AccessType;
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
     match fmt {
@@ -635,24 +635,18 @@ pub(super) const fn image_subresource_range_from_layers(
     }
 }
 
-pub(super) const fn image_access_layout(access: AccessType) -> ImageLayout {
-    if matches!(access, AccessType::Present | AccessType::ComputeShaderWrite) {
-        ImageLayout::General
-    } else {
-        ImageLayout::Optimal
-    }
-}
-
-pub(super) const fn initial_image_layout_access(ty: AccessType) -> AccessType {
-    use AccessType::*;
+pub(super) const fn initial_image_layout_access(
+    ty: self::sync::AccessType,
+) -> self::sync::AccessType {
+    use self::sync::AccessType::*;
     match ty {
         DepthStencilAttachmentReadWrite => DepthStencilAttachmentRead,
         _ => ty,
     }
 }
 
-pub(super) const fn is_read_access(ty: AccessType) -> bool {
-    use AccessType::*;
+pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
+    use self::sync::AccessType::*;
     match ty {
         Nothing
         | CommandBufferWriteNVX
@@ -725,8 +719,8 @@ pub(super) const fn is_read_access(ty: AccessType) -> bool {
     }
 }
 
-pub(super) const fn is_write_access(ty: AccessType) -> bool {
-    use AccessType::*;
+pub(super) const fn is_write_access(ty: self::sync::AccessType) -> bool {
+    use self::sync::AccessType::*;
     match ty {
         Nothing
         | CommandBufferReadNVX
@@ -901,11 +895,11 @@ fn merge_push_constant_ranges(pcr: &[vk::PushConstantRange]) -> Vec<vk::PushCons
 }
 
 pub(super) const fn pipeline_stage_access_flags(
-    access_type: AccessType,
+    access_type: vk_sync::AccessType,
 ) -> (vk::PipelineStageFlags, vk::AccessFlags) {
     use {
-        AccessType as ty,
         vk::{AccessFlags as access, PipelineStageFlags as stage},
+        vk_sync::AccessType as ty,
     };
 
     match access_type {

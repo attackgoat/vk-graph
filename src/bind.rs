@@ -316,7 +316,7 @@ impl Bound for AnyImageNode {
 }
 
 impl Bound for SwapchainImageNode {
-    type Resource = Image;
+    type Resource = SwapchainImage;
 
     fn borrow(self, graph: &Graph) -> &Self::Resource {
         graph.resources[self.idx].as_swapchain_image().unwrap()

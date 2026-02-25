@@ -3,19 +3,19 @@
 #![warn(missing_docs)]
 
 mod frame;
+pub mod swapchain;
 
 pub use self::frame::FrameContext;
 
 use {
+    self::swapchain::{Swapchain, SwapchainError, SwapchainInfo},
     log::{error, info, trace, warn},
     std::{error, fmt},
     vk_graph::{
-        display::{Display, DisplayError, DisplayInfoBuilder},
         driver::{
             ash::vk,
             device::{Device, DeviceInfo},
             surface::Surface,
-            swapchain::{Swapchain, SwapchainInfo},
             DriverError,
         },
         pool::hash::HashPool,
@@ -78,10 +78,10 @@ impl Window {
         }
 
         impl<F> Application<F> {
-            fn create_display(
+            fn create_swapchain(
                 &mut self,
                 window: &winit::window::Window,
-            ) -> Result<Display, DriverError> {
+            ) -> Result<Swapchain, DriverError> {
                 let surface = Surface::create(&self.device, window, window)?;
                 let surface_formats = Surface::formats(&surface)?;
                 let surface_format = self
@@ -94,7 +94,8 @@ impl Window {
 
                 let mut swapchain_info =
                     SwapchainInfo::new(window_size.width, window_size.height, surface_format)
-                        .to_builder();
+                        .to_builder()
+                        .command_buffer_count(self.data.cmd_buf_count);
 
                 if let Some(min_image_count) = self.data.min_image_count {
                     swapchain_info = swapchain_info.min_image_count(min_image_count);
@@ -128,16 +129,11 @@ impl Window {
                     }
                 }
 
-                let swapchain = Swapchain::new(&self.device, surface, swapchain_info)?;
-                let display = Display::new(
-                    &self.device,
-                    swapchain,
-                    DisplayInfoBuilder::default().command_buffer_count(self.data.cmd_buf_count),
-                )?;
+                let swapchain = Swapchain::new(surface, swapchain_info)?;
 
-                trace!("created display");
+                trace!("created swapchain");
 
-                Ok(display)
+                Ok(swapchain)
             }
 
             fn window_mode_attributes(
@@ -248,7 +244,7 @@ impl Window {
                     }
                     Ok(res) => res,
                 };
-                let display = match self.create_display(&window) {
+                let swapchain = match self.create_swapchain(&window) {
                     Err(err) => {
                         warn!("Unable to create swapchain: {err}");
 
@@ -259,12 +255,12 @@ impl Window {
                     }
                     Ok(res) => res,
                 };
-                let display_pool = HashPool::new(&self.device);
+                let swapchain_pool = HashPool::new(&self.device);
 
                 self.active_window = Some(ActiveWindow {
-                    display,
-                    display_pool,
-                    display_resize: None,
+                    swapchain,
+                    swapchain_pool,
+                    swapchain_resize: None,
                     events: vec![],
                     window,
                 });
@@ -299,7 +295,7 @@ impl Window {
                             }
                         }
                         WindowEvent::Resized(size) => {
-                            active_window.display_resize = Some((size.width, size.height));
+                            active_window.swapchain_resize = Some((size.width, size.height));
                         }
                         _ => (),
                     }
@@ -312,9 +308,9 @@ impl Window {
         }
 
         struct ActiveWindow {
-            display: Display,
-            display_pool: HashPool,
-            display_resize: Option<(u32, u32)>,
+            swapchain: Swapchain,
+            swapchain_pool: HashPool,
+            swapchain_resize: Option<(u32, u32)>,
             events: Vec<Event<()>>,
             window: winit::window::Window,
         }
@@ -324,18 +320,18 @@ impl Window {
                 &mut self,
                 device: &Device,
                 mut f: impl FnMut(FrameContext),
-            ) -> Result<bool, DisplayError> {
-                if let Some((width, height)) = self.display_resize.take() {
-                    let mut swapchain_info = self.display.swapchain.info;
+            ) -> Result<bool, SwapchainError> {
+                if let Some((width, height)) = self.swapchain_resize.take() {
+                    let mut swapchain_info = self.swapchain.info;
                     swapchain_info.width = width;
                     swapchain_info.height = height;
-                    self.display.update_swapchain(swapchain_info);
+                    self.swapchain.set_info(swapchain_info);
                 }
 
-                if let Some(swapchain_image) = self.display.acquire_next_image()? {
+                if let Some(swapchain_image) = self.swapchain.acquire_next_image()? {
                     let mut graph = Graph::default();
                     let swapchain_image = graph.bind_resource(swapchain_image);
-                    let swapchain_info = self.display.swapchain.info;
+                    let swapchain_info = self.swapchain.info;
 
                     let mut will_exit = false;
 
@@ -361,8 +357,8 @@ impl Window {
                     }
 
                     self.window.pre_present_notify();
-                    self.display
-                        .present_image(&mut self.display_pool, graph, swapchain_image, 0)
+                    self.swapchain
+                        .present_image(&mut self.swapchain_pool, graph, swapchain_image, 0)
                         .inspect_err(|err| {
                             warn!("unable to present swapchain image: {err}");
                         })?;
@@ -388,10 +384,10 @@ impl Window {
         self.event_loop.run_app(&mut app)?;
 
         if let Some(ActiveWindow {
-            display, window, ..
+            swapchain, window, ..
         }) = app.active_window.take()
         {
-            drop(display);
+            drop(swapchain);
             drop(window);
         }
 

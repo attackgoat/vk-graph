@@ -14,15 +14,26 @@ use {
 
 // TODO: This needs to track completed command buffers and not constantly create semaphores
 
+#[doc(hidden)]
+#[repr(C)]
+pub struct ReadOnlySwapchainImage {
+    pub idx: u32,
+    image: Image,
+}
+
+#[doc(hidden)]
+impl Deref for ReadOnlySwapchainImage {
+    type Target = Image;
+
+    fn deref(&self) -> &Self::Target {
+        &self.image
+    }
+}
+
 /// Provides the ability to present rendering results to a [`Surface`].
 #[derive(Debug)]
 #[readonly::make]
 pub struct Swapchain {
-    /// The device which owns this buffer resource.
-    ///
-    /// _Note:_ This field is read-only.
-    pub device: Device,
-
     /// The native Vulkan resource handle of this swapchain.
     ///
     /// _Note:_ This field is read-only.
@@ -48,16 +59,10 @@ impl Swapchain {
     /// Prepares a [`vk::SwapchainKHR`] object which is lazily created after calling
     /// [`acquire_next_image`][Self::acquire_next_image].
     #[profiling::function]
-    pub fn new(
-        device: &Device,
-        surface: Surface,
-        info: impl Into<SwapchainInfo>,
-    ) -> Result<Self, DriverError> {
-        let device = device.clone();
+    pub fn new(surface: Surface, info: impl Into<SwapchainInfo>) -> Result<Self, DriverError> {
         let info = info.into();
 
         Ok(Swapchain {
-            device,
             images: Default::default(),
             handle: vk::SwapchainKHR::null(),
             handle_prev: vk::SwapchainKHR::null(),
@@ -85,7 +90,7 @@ impl Swapchain {
                 })?;
             }
 
-            let swapchain_ext = Device::expect_swapchain_ext(&self.device);
+            let swapchain_ext = Device::expect_swapchain_ext(&self.surface.device);
 
             let image_idx = unsafe {
                 swapchain_ext.acquire_next_image(self.handle, u64::MAX, acquired, vk::Fence::null())
@@ -201,17 +206,17 @@ impl Swapchain {
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(wait_semaphores)
             .swapchains(slice::from_ref(&self.handle))
-            .image_indices(slice::from_ref(&image.image_idx));
+            .image_indices(slice::from_ref(&image.idx));
 
-        let swapchain_ext = Device::expect_swapchain_ext(&self.device);
+        let swapchain_ext = Device::expect_swapchain_ext(&self.surface.device);
 
         unsafe {
             match swapchain_ext.queue_present(
-                Device::queue(&self.device, queue_family_index, queue_index),
+                Device::queue(&self.surface.device, queue_family_index, queue_index),
                 &present_info,
             ) {
                 Ok(_) => {
-                    Self::destroy_swapchain(&self.device, &mut self.handle_prev);
+                    Self::destroy_swapchain(&self.surface.device, &mut self.handle_prev);
                 }
                 Err(err)
                     if err == vk::Result::ERROR_DEVICE_LOST
@@ -232,13 +237,13 @@ impl Swapchain {
             }
         }
 
-        let image_idx = image.image_idx as usize;
+        let image_idx = image.idx as usize;
         self.images[image_idx] = image;
     }
 
     #[profiling::function]
     fn recreate_swapchain(&mut self) -> Result<(), DriverError> {
-        Self::destroy_swapchain(&self.device, &mut self.handle_prev);
+        Self::destroy_swapchain(&self.surface.device, &mut self.handle_prev);
 
         let surface_caps = Surface::capabilities(&self.surface)?;
 
@@ -277,7 +282,7 @@ impl Swapchain {
             surface_caps.current_transform
         };
 
-        let swapchain_ext = Device::expect_swapchain_ext(&self.device);
+        let swapchain_ext = Device::expect_swapchain_ext(&self.surface.device);
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface.handle)
             .min_image_count(min_image_count)
@@ -315,7 +320,7 @@ impl Swapchain {
             .enumerate()
             .map(|(image_idx, image)| {
                 let mut image = Image::from_raw(
-                    &self.device,
+                    &self.surface.device,
                     image,
                     ImageInfo::image_2d(
                         surface_width,
@@ -329,9 +334,8 @@ impl Swapchain {
                 image.name = Some(format!("swapchain{image_idx}"));
 
                 Ok(SwapchainImage {
-                    exec_idx: 0,
+                    idx: image_idx,
                     image,
-                    image_idx,
                 })
             })
             .collect::<Result<Box<_>, _>>()?;
@@ -355,6 +359,27 @@ impl Swapchain {
         Ok(())
     }
 
+    /// Updates the information which controls this swapchain.
+    ///
+    /// Previously acquired swapchain images should be discarded after calling this function.
+    pub fn set_info(&mut self, info: impl Into<SwapchainInfo>) {
+        let info: SwapchainInfo = info.into();
+
+        if self.info != info {
+            // attempt to reducing flickering when resizing windows on mac
+            #[cfg(target_os = "macos")]
+            if let Err(err) = unsafe { self.device.device_wait_idle() } {
+                warn!("device_wait_idle() failed: {err}");
+            }
+
+            self.info = info;
+
+            trace!("info: {:?}", self.info);
+
+            self.suboptimal = true;
+        }
+    }
+
     fn supported_surface_usage(
         &mut self,
         surface_capabilities: vk::ImageUsageFlags,
@@ -368,6 +393,7 @@ impl Swapchain {
             }
 
             if self
+                .surface
                 .device
                 .physical_device
                 .image_format_properties(
@@ -397,27 +423,6 @@ impl Swapchain {
 
         Ok(res)
     }
-
-    /// Updates the information which controls this swapchain.
-    ///
-    /// Previously acquired swapchain images should be discarded after calling this function.
-    pub fn update(&mut self, info: impl Into<SwapchainInfo>) {
-        let info: SwapchainInfo = info.into();
-
-        if self.info != info {
-            // attempt to reducing flickering when resizing windows on mac
-            #[cfg(target_os = "macos")]
-            if let Err(err) = unsafe { self.device.device_wait_idle() } {
-                warn!("device_wait_idle() failed: {err}");
-            }
-
-            self.info = info;
-
-            trace!("info: {:?}", self.info);
-
-            self.suboptimal = true;
-        }
-    }
 }
 
 impl Drop for Swapchain {
@@ -427,8 +432,8 @@ impl Drop for Swapchain {
             return;
         }
 
-        Self::destroy_swapchain(&self.device, &mut self.handle_prev);
-        Self::destroy_swapchain(&self.device, &mut self.handle);
+        Self::destroy_swapchain(&self.surface.device, &mut self.handle_prev);
+        Self::destroy_swapchain(&self.surface.device, &mut self.handle);
     }
 }
 
@@ -447,33 +452,37 @@ pub enum SwapchainError {
 
 /// An opaque type representing a swapchain image.
 #[derive(Debug)]
+#[repr(C)]
 pub struct SwapchainImage {
-    pub(crate) exec_idx: usize,
+    /// The index of this swapchain among the other swapchain images.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub idx: u32,
+
+    #[cfg(not(doc))]
+    idx: u32,
+
     image: Image,
-    image_idx: u32,
 }
 
 impl Clone for SwapchainImage {
     fn clone(&self) -> Self {
-        let Self {
-            exec_idx,
-            image,
-            image_idx,
-        } = self;
+        let Self { idx, image } = self;
 
         Self {
-            exec_idx: *exec_idx,
-            image: Image::clone_swapchain(image),
-            image_idx: *image_idx,
+            idx: *idx,
+            image: image.clone_swapchain(),
         }
     }
 }
 
+#[doc(hidden)]
 impl Deref for SwapchainImage {
-    type Target = Image;
+    type Target = ReadOnlySwapchainImage;
 
     fn deref(&self) -> &Self::Target {
-        &self.image
+        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 
@@ -496,9 +505,6 @@ pub struct SwapchainInfo {
     /// More images introduce more display lag, but smoother animation.
     #[builder(default = "2")]
     pub min_image_count: u32,
-
-    /// The format and color space of the surface.
-    pub surface: vk::SurfaceFormatKHR,
 
     /// `vk::PresentModeKHR` Determines timing and queueing with which frames are actually displayed to the user.
     /// `present_modes` is a set of these modes ordered by preference. If the first mode is not available it will fall
@@ -542,6 +548,9 @@ pub struct SwapchainInfo {
     /// * **Also known as**: "Fast Vsync"
     #[builder(default = vk::PresentModeKHR::MAILBOX)]
     pub present_mode: vk::PresentModeKHR,
+
+    /// The format and color space of the surface.
+    pub surface: vk::SurfaceFormatKHR,
 
     /// The initial width of the surface.
     pub width: u32,
@@ -609,10 +618,31 @@ impl From<UninitializedFieldError> for SwapchainInfoBuilderError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        std::mem::{offset_of, size_of},
+    };
 
     type Info = SwapchainInfo;
     type Builder = SwapchainInfoBuilder;
+
+    #[test]
+    pub fn swapchain_image_repr_c() {
+        // HACK: The readonly crate uses a private implementation and so we can't further deref it
+        // into the native object type. Because of this the ReadOnly part is manually implemented.
+        assert_eq!(
+            size_of::<SwapchainImage>(),
+            size_of::<ReadOnlySwapchainImage>()
+        );
+        assert_eq!(
+            offset_of!(SwapchainImage, idx),
+            offset_of!(ReadOnlySwapchainImage, idx),
+        );
+        assert_eq!(
+            offset_of!(SwapchainImage, image),
+            offset_of!(ReadOnlySwapchainImage, image),
+        );
+    }
 
     #[test]
     pub fn swapchain_info() {

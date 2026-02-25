@@ -1,6 +1,6 @@
 use {
     super::{PipelineRef, Resources},
-    crate::driver::{CommandBuffer, device::Device, ray_trace::RayTracePipeline},
+    crate::driver::{cmd_buf::CommandBuffer, device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
     std::ops::Deref,

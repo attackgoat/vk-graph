@@ -3,7 +3,7 @@ use {
     crate::{
         AnyBufferNode, AnyImageNode, Area, Attachment, ClearColorValue, Node,
         driver::{
-            CommandBuffer,
+            cmd_buf::CommandBuffer,
             graphic::{DepthStencilMode, GraphicPipeline},
             image::{
                 ImageInfo, ImageViewInfo, image_subresource_range_contains,

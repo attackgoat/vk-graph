@@ -2,7 +2,7 @@ use {
     super::{Resources, pipeline::PipelineRef},
     crate::{
         AnyBufferNode,
-        driver::{CommandBuffer, compute::ComputePipeline},
+        driver::{cmd_buf::CommandBuffer, compute::ComputePipeline},
     },
     ash::vk,
     log::trace,

@@ -351,7 +351,6 @@ layout.
 #![warn(missing_docs)]
 
 pub mod cmd_ref;
-pub mod display;
 pub mod driver;
 pub mod node;
 pub mod pool;
@@ -377,7 +376,8 @@ use {
         },
     },
     crate::driver::{
-        CommandBuffer, DescriptorBindingMap,
+        DescriptorBindingMap,
+        cmd_buf::CommandBuffer,
         compute::ComputePipeline,
         format_aspect_mask, format_texel_block_extent, format_texel_block_size,
         graphic::{DepthStencilMode, GraphicPipeline},

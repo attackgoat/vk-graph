@@ -24,9 +24,9 @@ use {
         SwapchainImageNode,
     },
     crate::driver::{
-        CommandBuffer,
         accel_struct::{AccelerationStructure, AccelerationStructureRange},
         buffer::{Buffer, BufferSubresourceRange},
+        cmd_buf::CommandBuffer,
         image::{Image, ImageViewInfo},
     },
     ash::vk,

@@ -3,12 +3,14 @@
 use {
     super::{Cache, Lease, Pool, PoolInfo, lease_command_buffer},
     crate::driver::{
-        CommandBuffer, CommandBufferInfo, DescriptorPool, DescriptorPoolInfo, DriverError,
-        RenderPass, RenderPassInfo,
+        DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
         buffer::{Buffer, BufferInfo},
+        cmd_buf::{CommandBuffer, CommandBufferInfo},
+        descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         device::Device,
         image::{Image, ImageInfo},
+        render_pass::{RenderPass, RenderPassInfo},
     },
     log::debug,
     paste::paste,
@@ -133,7 +135,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
             .command_buffer_cache
             .entry(info.queue_family_index)
             .or_insert_with(PoolInfo::default_cache);
-        let mut item = {
+        let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
 
@@ -150,7 +152,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
         })?;
 
         // Drop anything we were holding from the last submission
-        item.drop_fenced();
+        //item.wait_until_executed()?;
 
         Ok(Lease::new(Arc::downgrade(cache_ref), item))
     }

@@ -554,12 +554,16 @@ impl Deref for ReadOnlyInstance {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, std::mem::offset_of};
+    use {
+        super::*,
+        std::mem::{offset_of, size_of},
+    };
 
     #[test]
     pub fn instance_repr_c() {
         // HACK: The readonly crate uses a private implementation and so we can't further deref it
         // into the native object type. Because of this the ReadOnly part is manually implemented.
+        assert_eq!(size_of::<Instance>(), size_of::<ReadOnlyInstance>());
         assert_eq!(
             offset_of!(Instance, entry),
             offset_of!(ReadOnlyInstance, entry),

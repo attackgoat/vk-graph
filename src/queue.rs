@@ -2,23 +2,23 @@ use {
     super::{
         Area, Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
         cmd_ref::{Resources, SubresourceAccess, SubresourceRange},
-        node::SwapchainImageNode,
     },
     crate::{
+        Bound,
         driver::{
-            AttachmentInfo, AttachmentRef, CommandBuffer, CommandBufferInfo, Descriptor,
-            DescriptorInfo, DescriptorPool, DescriptorPoolInfo, DescriptorSet, DriverError,
-            FramebufferAttachmentImageInfo, FramebufferInfo, RenderPass, RenderPassInfo,
-            SubpassDependency, SubpassInfo,
+            AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DescriptorSet, DriverError,
+            FramebufferAttachmentImageInfo, FramebufferInfo, SubpassDependency, SubpassInfo,
             accel_struct::AccelerationStructure,
             buffer::Buffer,
+            cmd_buf::{CommandBuffer, CommandBufferInfo},
+            descriptor_set::{DescriptorPool, DescriptorPoolInfo},
             device::Device,
             format_aspect_mask,
             graphic::{DepthStencilMode, GraphicPipeline},
             image::{Image, ImageAccess},
-            image_access_layout, initial_image_layout_access, is_read_access, is_write_access,
+            initial_image_layout_access, is_read_access, is_write_access,
             pipeline_stage_access_flags,
-            swapchain::SwapchainImage,
+            render_pass::{RenderPass, RenderPassInfo},
         },
         pool::{Lease, Pool},
     },
@@ -34,11 +34,21 @@ use {
         ops::Range,
         slice,
     },
-    vk_sync::{AccessType, BufferBarrier, GlobalBarrier, ImageBarrier, cmd::pipeline_barrier},
+    vk_sync::{
+        AccessType, BufferBarrier, GlobalBarrier, ImageBarrier, ImageLayout, cmd::pipeline_barrier,
+    },
 };
 
 #[cfg(not(debug_assertions))]
 use std::hint::unreachable_unchecked;
+
+const fn image_access_layout(access: AccessType) -> ImageLayout {
+    if matches!(access, AccessType::Present | AccessType::ComputeShaderWrite) {
+        ImageLayout::General
+    } else {
+        ImageLayout::Optimal
+    }
+}
 
 #[derive(Default)]
 struct AccessCache {
@@ -2471,7 +2481,7 @@ impl Queue {
                     if pass_idx == schedule_idx {
                         // This was a scheduled pass - store it!
 
-                        cmd_buf.push_fenced_drop((pass, self.physical_passes.pop().unwrap()));
+                        cmd_buf.drop_after_executed((pass, self.physical_passes.pop().unwrap()));
                         break;
                     } else {
                         debug_assert!(pass_idx > schedule_idx);
@@ -2592,6 +2602,15 @@ impl Queue {
                 scheduled += 1;
             }
         });
+    }
+
+    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
+    /// which the given node represents.
+    pub fn resource<N>(&self, node: N) -> &N::Resource
+    where
+        N: Bound,
+    {
+        self.graph.resource(node)
     }
 
     /// Returns the stages that process the given node.
@@ -2864,14 +2883,12 @@ impl Queue {
                 .map_err(|_| DriverError::OutOfMemory)?;
         }
 
-        cmd_buf.waiting = true;
-
         // This graph contains references to buffers, images, and other resources which must be kept
         // alive until this graph execution completes on the GPU. Once those references are dropped
         // they will return to the pool for other things to use. The drop will happen the next time
         // someone tries to lease a command buffer and we notice this one has returned and the fence
         // has been signalled.
-        cmd_buf.push_fenced_drop(self);
+        cmd_buf.drop_after_executed(self);
 
         Ok(cmd_buf)
     }
@@ -2954,14 +2971,6 @@ impl Queue {
         }
 
         Ok(())
-    }
-
-    pub(crate) fn swapchain_image(&mut self, node: SwapchainImageNode) -> &SwapchainImage {
-        let Some(swapchain_image) = self.graph.resources[node.idx].as_swapchain_image() else {
-            panic!("invalid swapchain image node");
-        };
-
-        swapchain_image
     }
 
     #[profiling::function]
@@ -3241,8 +3250,10 @@ mod derecated {
     use crate::{
         Queue,
         driver::{
-            CommandBuffer, DescriptorPool, DescriptorPoolInfo, DriverError, RenderPass,
-            RenderPassInfo,
+            DriverError,
+            cmd_buf::CommandBuffer,
+            descriptor_set::{DescriptorPool, DescriptorPoolInfo},
+            render_pass::{RenderPass, RenderPassInfo},
         },
         node::Node,
         pool::Pool,

@@ -1,3 +1,5 @@
+//! TODO
+
 use {
     super::{DriverError, device::Device},
     ash::vk,
@@ -20,7 +22,12 @@ pub struct CommandBuffer {
     pub device: Device,
 
     droppables: Vec<Box<dyn Debug + Send + 'static>>,
-    pub(crate) fence: vk::Fence, // Keeps state because everyone wants this
+
+    /// The native Vulkan fence handle of this command buffer.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub fence: vk::Fence,
 
     /// The native Vulkan resource handle of this command buffer.
     ///
@@ -33,12 +40,12 @@ pub struct CommandBuffer {
     pub info: CommandBufferInfo,
 
     pub(crate) pool: vk::CommandPool,
-    pub(crate) waiting: bool,
 }
 
 impl CommandBuffer {
+    /// TODO
     #[profiling::function]
-    pub(crate) fn create(device: &Device, info: CommandBufferInfo) -> Result<Self, DriverError> {
+    pub fn create(device: &Device, info: CommandBufferInfo) -> Result<Self, DriverError> {
         let device = device.clone();
 
         let pool = unsafe {
@@ -81,13 +88,17 @@ impl CommandBuffer {
             handle,
             info,
             pool,
-            waiting: false,
         })
+    }
+
+    /// Drops an item after execution has been completed.
+    pub fn drop_after_executed(&mut self, x: impl Debug + Send + 'static) {
+        self.droppables.push(Box::new(x));
     }
 
     /// Signals that execution has completed and it is time to drop anything we collected.
     #[profiling::function]
-    pub(crate) fn drop_fenced(&mut self) {
+    fn drop_fenced(&mut self) {
         if !self.droppables.is_empty() {
             trace!("dropping {} shared references", self.droppables.len());
         }
@@ -119,23 +130,19 @@ impl CommandBuffer {
         }
     }
 
-    /// Drops an item after execution has been completed
-    pub(crate) fn push_fenced_drop(&mut self, thing_to_drop: impl Debug + Send + 'static) {
-        self.droppables.push(Box::new(thing_to_drop));
-    }
-
     /// Stalls by blocking the current thread until the GPU has executed the previous submission to
     /// this command buffer.
     ///
     /// See [`Self::has_executed`] to check without blocking.
     #[profiling::function]
     pub fn wait_until_executed(&mut self) -> Result<(), DriverError> {
-        if !self.waiting {
+        if self.droppables.is_empty() {
             return Ok(());
         }
 
         Device::wait_for_fence(&self.device, &self.fence)?;
-        self.waiting = false;
+
+        self.drop_fenced();
 
         Ok(())
     }
@@ -148,11 +155,9 @@ impl Drop for CommandBuffer {
             return;
         }
 
-        if self.waiting && Device::wait_for_fence(&self.device, &self.fence).is_err() {
+        if self.wait_until_executed().is_err() {
             return;
         }
-
-        self.drop_fenced();
 
         unsafe {
             self.device
@@ -180,6 +185,7 @@ pub struct CommandBufferInfo {
 }
 
 impl CommandBufferInfo {
+    /// TODO
     pub fn new(queue_family_index: u32) -> Self {
         Self { queue_family_index }
     }

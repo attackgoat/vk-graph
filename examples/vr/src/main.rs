@@ -27,7 +27,7 @@ use {
             device::Device,
             graphic::{DepthStencilMode, GraphicPipelineInfo},
             image::{Image, ImageInfo},
-            AccessType,
+            sync::AccessType,
         },
         pool::{lazy::LazyPool, Pool as _},
         Graph,

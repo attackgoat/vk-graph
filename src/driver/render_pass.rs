@@ -93,16 +93,10 @@ struct GraphicPipelineKey {
     subpass_idx: u32,
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
-pub(crate) struct RenderPassInfo {
-    pub attachments: Vec<AttachmentInfo>,
-    pub subpasses: Vec<SubpassInfo>,
-    pub dependencies: Vec<SubpassDependency>,
-}
-
+/// TODO
 #[derive(Debug)]
 #[readonly::make]
-pub(crate) struct RenderPass {
+pub struct RenderPass {
     /// The device which owns this render pass resource.
     ///
     /// _Note:_ This field is read-only.
@@ -127,7 +121,7 @@ pub(crate) struct RenderPass {
 
 impl RenderPass {
     #[profiling::function]
-    pub fn create(device: &Device, info: RenderPassInfo) -> Result<Self, DriverError> {
+    pub(crate) fn create(device: &Device, info: RenderPassInfo) -> Result<Self, DriverError> {
         //trace!("create: \n{:#?}", &info);
         trace!("create");
 
@@ -262,7 +256,10 @@ impl RenderPass {
     }
 
     #[profiling::function]
-    pub fn framebuffer(&mut self, info: FramebufferInfo) -> Result<vk::Framebuffer, DriverError> {
+    pub(crate) fn framebuffer(
+        &mut self,
+        info: FramebufferInfo,
+    ) -> Result<vk::Framebuffer, DriverError> {
         debug_assert!(!info.attachments.is_empty());
 
         let entry = self.framebuffers.entry(info);
@@ -319,7 +316,7 @@ impl RenderPass {
     }
 
     #[profiling::function]
-    pub fn pipeline_handle(
+    pub(crate) fn pipeline_handle(
         &mut self,
         pipeline: &GraphicPipeline,
         depth_stencil: Option<DepthStencilMode>,
@@ -456,6 +453,14 @@ impl Drop for RenderPass {
             self.device.destroy_render_pass(self.handle, None);
         }
     }
+}
+
+/// TODO
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct RenderPassInfo {
+    pub(crate) attachments: Vec<AttachmentInfo>,
+    pub(crate) subpasses: Vec<SubpassInfo>,
+    pub(crate) dependencies: Vec<SubpassDependency>,
 }
 
 /// Specifying depth and stencil resolve modes.

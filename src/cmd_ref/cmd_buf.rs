@@ -3,11 +3,11 @@ use {
     crate::{
         AnyAccelerationStructureNode,
         driver::{
-            CommandBuffer,
             accel_struct::{
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
                 DeviceOrHostAddress,
             },
+            cmd_buf::CommandBuffer,
             device::Device,
         },
     },
