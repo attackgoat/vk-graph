@@ -195,8 +195,8 @@ impl ImGui {
                 )
                 .clear_color(0, image)
                 .store_color(0, image)
-                .record_pipeline(move |pipeline, _| {
-                    pipeline
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf
                         .push_constants(0, &window_width.to_ne_bytes())
                         .push_constants(4, &window_height.to_ne_bytes())
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
@@ -213,7 +213,7 @@ impl ImGui {
                         let y = clip_rect[1].floor() as i32;
                         let width = (clip_rect[2] - clip_rect[0]).ceil() as u32;
                         let height = (clip_rect[3] - clip_rect[1]).ceil() as u32;
-                        pipeline
+                        cmd_buf
                             .set_scissor(
                                 0,
                                 &[vk::Rect2D {

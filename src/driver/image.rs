@@ -1235,6 +1235,7 @@ impl From<SampleCount> for vk::SampleCountFlags {
     }
 }
 
+#[allow(unused)]
 mod deprecated {
     use crate::driver::image::{ImageInfo, ImageViewInfo};
 

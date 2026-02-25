@@ -32,7 +32,7 @@ fn main() -> Result<(), DriverError> {
         .to_builder()
         .mip_level_count(3),
     )?);
-    let depth_info = graph.node_info(depth_pyramid);
+    let depth_info = graph.resource(depth_pyramid).info;
 
     // You would normally create this buffer by copying the depth attachment image
     #[allow(clippy::inconsistent_digit_grouping)]
@@ -85,26 +85,28 @@ fn main() -> Result<(), DriverError> {
 
     for mip_level in 1..depth_info.mip_level_count {
         pass = pass
-            .read_descriptor_as(
+            .shader_subresource_access(
                 0,
                 depth_pyramid,
                 depth_info
-                    .default_view_info()
+                    .into_image_view()
                     .to_builder()
                     .base_mip_level(mip_level - 1)
                     .mip_level_count(1),
+                AccessType::ComputeShaderReadOther,
             )
-            .write_descriptor_as(
+            .shader_subresource_access(
                 1,
                 depth_pyramid,
                 depth_info
-                    .default_view_info()
+                    .into_image_view()
                     .to_builder()
                     .base_mip_level(mip_level)
                     .mip_level_count(1),
+                AccessType::ComputeShaderWrite,
             )
-            .record_pipeline(move |compute, _| {
-                compute.dispatch(
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf.dispatch(
                     depth_info.width >> mip_level,
                     depth_info.height >> mip_level,
                     1,

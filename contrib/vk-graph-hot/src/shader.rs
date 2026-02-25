@@ -9,7 +9,7 @@ use {
     notify::{RecommendedWatcher, RecursiveMode, Watcher},
     shaderc::{CompileOptions, EnvVersion, ShaderKind, TargetEnv},
     std::path::{Path, PathBuf},
-    vk_graph::driver::{ash::vk, shader::SpecializationInfo, DriverError},
+    vk_graph::driver::{ash::vk, shader::SpecializationMap, DriverError},
 };
 
 /// Describes a shader program which runs on some pipeline stage.
@@ -79,18 +79,14 @@ pub struct HotShader {
     /// # let my_shader_code = [0u8; 1];
     /// // We instead specify 42 for MY_COUNT:
     /// let shader = HotShader::new_fragment(my_shader_code.as_slice())
-    ///     .specialization_info(SpecializationInfo::new(
-    ///         [vk::SpecializationMapEntry {
-    ///             constant_id: 0,
-    ///             offset: 0,
-    ///             size: 4,
-    ///         }],
-    ///         42u32.to_ne_bytes()
-    ///     ));
+    ///     .specialization(
+    ///         SpecializationMap::new(42u32.to_ne_bytes())
+    ///             .constant(0, 0, 4)
+    ///     );
     /// # Ok(()) }
     /// ```
     #[builder(default, setter(strip_option))]
-    pub specialization_info: Option<SpecializationInfo>,
+    pub specialization: Option<SpecializationMap>,
 
     /// The shader stage this structure applies to.
     pub stage: vk::ShaderStageFlags,

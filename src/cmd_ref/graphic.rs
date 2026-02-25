@@ -1,5 +1,5 @@
 use {
-    super::{AttachmentIndex, Nodes, PipelineRef, SubresourceAccess, SubresourceRange},
+    super::{AttachmentIndex, PipelineRef, Resources, SubresourceAccess, SubresourceRange},
     crate::{
         AnyBufferNode, AnyImageNode, Area, Attachment, ClearColorValue, Node,
         driver::{
@@ -48,18 +48,20 @@ use {
 /// # let mut my_graph = Graph::default();
 /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
 /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
-/// my_graph.begin_cmd().debug_name("my draw pass")
-///         .bind_pipeline(&my_graphic_pipeline)
-///         .store_color(0, swapchain_image)
-///         .record_pipeline(move |graphic, nodes| {
-///             // During this closure we have access to the draw methods!
-///         });
+/// my_graph
+///     .begin_cmd()
+///     .debug_name("my draw pass")
+///     .bind_pipeline(&my_graphic_pipeline)
+///     .store_color(0, swapchain_image)
+///     .record_cmd_buf(move |cmd_buf, resources| {
+///         // During this closure we have access to the draw methods!
+///     });
 /// # Ok(()) }
 /// ```
 pub struct GraphicPipelineRef<'a> {
     pub(super) cmd_buf: &'a CommandBuffer,
-    pub(super) nodes: Nodes<'a>,
     pub(super) pipeline: GraphicPipeline,
+    pub(super) resources: Resources<'a>,
 }
 
 impl GraphicPipelineRef<'_> {
@@ -74,7 +76,7 @@ impl GraphicPipelineRef<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::{AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -98,16 +100,19 @@ impl GraphicPipelineRef<'_> {
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
     /// # let my_idx_buf = my_graph.bind_resource(my_idx_buf);
     /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
-    /// my_graph.begin_cmd().debug_name("my indexed geometry draw pass")
-    ///         .bind_pipeline(&my_graphic_pipeline)
-    ///         .store_color(0, swapchain_image)
-    ///         .read_node(my_idx_buf)
-    ///         .read_node(my_vtx_buf)
-    ///         .record_pipeline(move |pipeline, nodes| {
-    ///             pipeline.bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
-    ///                     .bind_vertex_buffer(0, my_vtx_buf, 0)
-    ///                     .draw_indexed(42, 1, 0, 0, 0);
-    ///         });
+    /// my_graph
+    ///     .begin_cmd()
+    ///     .debug_name("my indexed geometry draw pass")
+    ///     .bind_pipeline(&my_graphic_pipeline)
+    ///     .store_color(0, swapchain_image)
+    ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
+    ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
+    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///         cmd_buf
+    ///             .bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
+    ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
+    ///             .draw_indexed(42, 1, 0, 0, 0);
+    ///     });
     /// # Ok(()) }
     /// ```
     #[profiling::function]
@@ -122,7 +127,7 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.cmd_buf.device.cmd_bind_index_buffer(
                 self.cmd_buf.handle,
-                self.nodes[buffer].handle,
+                self.resources[buffer].handle,
                 offset,
                 index_ty,
             );
@@ -141,7 +146,7 @@ impl GraphicPipelineRef<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::{AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -162,14 +167,17 @@ impl GraphicPipelineRef<'_> {
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
     /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
-    /// my_graph.begin_cmd().debug_name("my unindexed geometry draw pass")
-    ///         .bind_pipeline(&my_graphic_pipeline)
-    ///         .store_color(0, swapchain_image)
-    ///         .read_node(my_vtx_buf)
-    ///         .record_pipeline(move |pipeline, nodes| {
-    ///             pipeline.bind_vertex_buffer(0, my_vtx_buf, 0)
-    ///                     .draw(42, 1, 0, 0);
-    ///         });
+    /// my_graph
+    ///     .begin_cmd()
+    ///     .debug_name("my unindexed geometry draw pass")
+    ///     .bind_pipeline(&my_graphic_pipeline)
+    ///     .store_color(0, swapchain_image)
+    ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
+    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///         cmd_buf
+    ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
+    ///             .draw(42, 1, 0, 0);
+    ///     });
     /// # Ok(()) }
     /// ```
     #[profiling::function]
@@ -185,7 +193,7 @@ impl GraphicPipelineRef<'_> {
             self.cmd_buf.device.cmd_bind_vertex_buffers(
                 self.cmd_buf.handle,
                 binding,
-                slice::from_ref(&self.nodes[buffer].handle),
+                slice::from_ref(&self.resources[buffer].handle),
                 slice::from_ref(&offset),
             );
         }
@@ -220,7 +228,7 @@ impl GraphicPipelineRef<'_> {
             for (buffer, offset) in buffer_offsets {
                 let buffer = buffer.into();
 
-                buffers.push(self.nodes[buffer].handle);
+                buffers.push(self.resources[buffer].handle);
                 offsets.push(offset);
             }
 
@@ -310,7 +318,7 @@ impl GraphicPipelineRef<'_> {
     /// ```no_run
     /// # use std::mem::size_of;
     /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::{AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -351,17 +359,20 @@ impl GraphicPipelineRef<'_> {
     /// let buf = Buffer::create_from_slice(&device, buf_flags, cmd_data)?;
     /// let buf_node = my_graph.bind_resource(buf);
     ///
-    /// my_graph.begin_cmd().debug_name("draw a single triangle")
-    ///         .bind_pipeline(&my_graphic_pipeline)
-    ///         .store_color(0, swapchain_image)
-    ///         .read_node(my_idx_buf)
-    ///         .read_node(my_vtx_buf)
-    ///         .read_node(buf_node)
-    ///         .record_pipeline(move |pipeline, nodes| {
-    ///             pipeline.bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
-    ///                     .bind_vertex_buffer(0, my_vtx_buf, 0)
-    ///                     .draw_indexed_indirect(buf_node, 0, 1, 0);
-    ///         });
+    /// my_graph
+    ///     .begin_cmd()
+    ///     .debug_name("draw a single triangle")
+    ///     .bind_pipeline(&my_graphic_pipeline)
+    ///     .store_color(0, swapchain_image)
+    ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
+    ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
+    ///     .resource_access(buf_node, AccessType::IndirectBuffer)
+    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///         cmd_buf
+    ///             .bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
+    ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
+    ///             .draw_indexed_indirect(buf_node, 0, 1, 0);
+    ///     });
     /// # Ok(()) }
     /// ```
     #[profiling::function]
@@ -377,7 +388,7 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.cmd_buf.device.cmd_draw_indexed_indirect(
                 self.cmd_buf.handle,
-                self.nodes[buffer].handle,
+                self.resources[buffer].handle,
                 offset,
                 draw_count,
                 stride,
@@ -415,9 +426,9 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.cmd_buf.device.cmd_draw_indexed_indirect_count(
                 self.cmd_buf.handle,
-                self.nodes[buffer].handle,
+                self.resources[buffer].handle,
                 offset,
-                self.nodes[count_buf].handle,
+                self.resources[count_buf].handle,
                 count_buf_offset,
                 max_draw_count,
                 stride,
@@ -443,7 +454,7 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.cmd_buf.device.cmd_draw_indirect(
                 self.cmd_buf.handle,
-                self.nodes[buffer].handle,
+                self.resources[buffer].handle,
                 offset,
                 draw_count,
                 stride,
@@ -472,9 +483,9 @@ impl GraphicPipelineRef<'_> {
         unsafe {
             self.cmd_buf.device.cmd_draw_indirect_count(
                 self.cmd_buf.handle,
-                self.nodes[buffer].handle,
+                self.resources[buffer].handle,
                 offset,
-                self.nodes[count_buf].handle,
+                self.resources[count_buf].handle,
                 count_buf_offset,
                 max_draw_count,
                 stride,
@@ -539,13 +550,16 @@ impl GraphicPipelineRef<'_> {
     /// # let swapchain_image = Image::create(&device, info)?;
     /// # let mut my_graph = Graph::default();
     /// # let swapchain_image = my_graph.bind_resource(swapchain_image);
-    /// my_graph.begin_cmd().debug_name("draw a quad")
-    ///         .bind_pipeline(&my_graphic_pipeline)
-    ///         .store_color(0, swapchain_image)
-    ///         .record_pipeline(move |pipeline, nodes| {
-    ///             pipeline.push_constants(0, &[42])
-    ///                     .draw(6, 1, 0, 0);
-    ///         });
+    /// my_graph
+    ///     .begin_cmd()
+    ///     .debug_name("draw a quad")
+    ///     .bind_pipeline(&my_graphic_pipeline)
+    ///     .store_color(0, swapchain_image)
+    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///         cmd_buf
+    ///             .push_constants(0, &[42])
+    ///             .draw(6, 1, 0, 0);
+    ///     });
     /// # Ok(()) }
     /// ```
     ///
@@ -1456,9 +1470,9 @@ impl PipelineRef<'_, GraphicPipeline> {
     }
 
     /// Begin recording a graphics pipeline command buffer.
-    pub fn record_pipeline(
+    pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(GraphicPipelineRef<'_>, Nodes<'_>) + Send + 'static,
+        func: impl FnOnce(GraphicPipelineRef<'_>, Resources<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -1472,14 +1486,14 @@ impl PipelineRef<'_, GraphicPipeline> {
             .unwrap_graphic()
             .clone();
 
-        self.cmd.push_execute(move |cmd_buf, nodes| {
+        self.cmd.push_execute(move |cmd_buf, resources| {
             func(
                 GraphicPipelineRef {
-                    nodes,
                     cmd_buf,
                     pipeline,
+                    resources,
                 },
-                nodes,
+                resources,
             );
         });
 
@@ -2137,10 +2151,14 @@ impl PipelineRef<'_, GraphicPipeline> {
     }
 }
 
+#[allow(unused)]
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{Descriptor, PipelineRef, SubresourceRange, View, ViewInfo},
+            cmd_ref::{
+                Descriptor, PipelineRef, Resources, SubresourceRange, View, ViewInfo,
+                graphic::GraphicPipelineRef,
+            },
             driver::graphic::GraphicPipeline,
             node::Node,
         },
@@ -2184,6 +2202,15 @@ mod deprecated {
                 node_view,
                 AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
             )
+        }
+
+        #[deprecated = "use record_cmd_buf function"]
+        #[doc(hidden)]
+        pub fn record_subpass(
+            self,
+            func: impl FnOnce(GraphicPipelineRef<'_>, Resources<'_>) + Send + 'static,
+        ) -> Self {
+            self.record_cmd_buf(func)
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]

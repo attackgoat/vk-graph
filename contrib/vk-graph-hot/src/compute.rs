@@ -4,9 +4,12 @@ use {
     super::{compile_shader_and_watch, create_watcher, shader::HotShader},
     log::info,
     notify::RecommendedWatcher,
-    std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+    std::{
+        ops::Deref,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
     },
     vk_graph::driver::{
         compute::{ComputePipeline, ComputePipelineInfo},
@@ -48,8 +51,10 @@ impl HotComputePipeline {
 
     /// Returns the most recent compilation without checking for changes or re-compiling the shader
     /// source code.
+    #[deprecated = "use Deref instead"]
+    #[doc(hidden)]
     pub fn cold(&self) -> &ComputePipeline {
-        &self.pipeline
+        self
     }
 
     /// Returns the most recent compilation after checking for changes, and if needed re-compiling
@@ -74,12 +79,32 @@ impl HotComputePipeline {
             }
         }
 
-        self.cold()
+        self
     }
 }
 
 impl AsRef<ComputePipeline> for HotComputePipeline {
     fn as_ref(&self) -> &ComputePipeline {
+        self
+    }
+}
+
+impl Deref for HotComputePipeline {
+    type Target = ComputePipeline;
+
+    fn deref(&self) -> &Self::Target {
         &self.pipeline
+    }
+}
+
+#[allow(unused)]
+mod deprecated {
+    use {crate::compute::HotComputePipeline, vk_graph::driver::compute::ComputePipeline};
+
+    impl HotComputePipeline {
+        #[deprecated = "use Deref instead"]
+        fn as_ref(&self) -> &ComputePipeline {
+            self
+        }
     }
 }

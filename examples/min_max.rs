@@ -161,7 +161,7 @@ fn reduce_depth_image(
     depth_image: ImageNode,
     reduction_mode: vk::SamplerReductionMode,
 ) -> Result<ImageNode, DriverError> {
-    let depth_info = graph.node_info(depth_image);
+    let depth_info = graph.resource(depth_image).info;
 
     assert_eq!(depth_info.width, depth_info.height);
 
@@ -204,10 +204,10 @@ fn reduce_depth_image(
             )
             .image_sampler(0, SamplerInfo::LINEAR.reduction_mode(reduction_mode)),
         )?)
-        .read_descriptor(0, depth_image)
-        .write_descriptor(1, reduced_image)
-        .record_pipeline(move |compute, _| {
-            compute.dispatch(reduced_info.width, reduced_info.height, 1);
+        .shader_resource_access(0, depth_image, AccessType::ComputeShaderReadOther)
+        .shader_resource_access(1, reduced_image, AccessType::ComputeShaderWrite)
+        .record_cmd_buf(move |cmd_buf, _| {
+            cmd_buf.dispatch(reduced_info.width, reduced_info.height, 1);
         });
 
     Ok(reduced_image)
@@ -218,7 +218,7 @@ fn copy_image_to_buffer(
     graph: &mut Graph,
     reduced_image: ImageNode,
 ) -> Result<Arc<Buffer>, DriverError> {
-    let reduced_info = graph.node_info(reduced_image);
+    let reduced_info = graph.resource(reduced_image).info;
     let result_len = (reduced_info.width * reduced_info.height) as vk::DeviceSize
         * size_of::<f32>() as vk::DeviceSize;
     let result_buf = graph.bind_resource(Buffer::create(

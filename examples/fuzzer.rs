@@ -286,10 +286,10 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         .map(|(blas_node, _, _)| *blas_node)
         .collect::<Vec<_>>();
 
-    let mut cmd = cmd.record_accel_struct(move |accel_struct, nodes| {
+    let mut cmd = cmd.record_cmd_buf(move |cmd_buf, nodes| {
         for (blas_node, scratch_buf, build_data) in blas_nodes {
             let scratch_addr = nodes[scratch_buf].device_address();
-            accel_struct.build(&[BuildAccelerationStructureInfo::new(
+            cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 blas_node,
                 scratch_addr,
                 build_data,
@@ -307,11 +307,11 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             AccessType::AccelerationStructureBufferWrite,
         )
         .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
-        .record_accel_struct(move |accel_struct, nodes| {
-            let scratch_data = Buffer::device_address(&nodes[tlas_scratch_buf]);
-            accel_struct.build(&[BuildAccelerationStructureInfo::new(
+        .record_cmd_buf(move |cmd_buf, nodes| {
+            let scratch_addr = nodes[tlas_scratch_buf].device_address();
+            cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 tlas_node,
-                scratch_data,
+                scratch_addr,
                 tlas_geometry_info,
             )]);
         });
@@ -376,8 +376,8 @@ fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderReadOther)
         .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderReadOther)
         .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderReadOther)
-        .record_pipeline(|pipeline, _| {
-            pipeline
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf
                 .push_constants(0, &0f32.to_ne_bytes())
                 .dispatch(64, 64, 1);
         });
@@ -442,8 +442,8 @@ fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderWrite)
         .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderWrite)
         .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderWrite)
-        .record_pipeline(|pipeline, _| {
-            pipeline
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf
                 .push_constants(0, &5u32.to_ne_bytes())
                 .dispatch(64, 64, 1);
         });
@@ -472,8 +472,8 @@ fn record_pipeline_no_op(frame: &mut FrameContext, _: &mut HashPool) {
         .begin_cmd()
         .debug_name("no-op")
         .bind_pipeline(&pipeline)
-        .record_pipeline(|pipeline, _| {
-            pipeline.dispatch(1, 1, 1);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.dispatch(1, 1, 1);
         });
 }
 
@@ -580,8 +580,8 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         )
         .clear_color(0, image)
         .store_color(0, image)
-        .record_pipeline(|pipeline, _| {
-            pipeline
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf
                 .push_constants(0, &5u32.to_ne_bytes())
                 .draw(1, 1, 0, 0);
         });
@@ -623,8 +623,8 @@ fn record_graphic_load_store(frame: &mut FrameContext, _: &mut HashPool) {
         .bind_pipeline(&pipeline)
         .load_color(0, frame.swapchain_image)
         .store_color(0, frame.swapchain_image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 
@@ -803,8 +803,8 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             Some(depth_resolve_mode),
             Some(ResolveMode::SampleZero),
         )
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(3, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(3, 1, 0, 0);
         });
 }
 
@@ -851,8 +851,8 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
             .as_slice(),
         ))
         .store_color(0, image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -886,8 +886,8 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
         ))
         .load_color(0, image)
         .store_color(0, image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 
@@ -942,8 +942,8 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
             .as_slice(),
         ))
         .store_color(0, image_0)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -980,8 +980,8 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .load_color(0, image_0)
         .store_color(0, image_0)
         .store_color(1, image_1)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -1015,8 +1015,8 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         ))
         .clear_color(0, image_0)
         .store_color(0, image_0)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 
@@ -1073,8 +1073,8 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         ))
         .store_color(0, color_image)
         .store_depth_stencil(depth_image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -1106,8 +1106,8 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         ))
         .load_depth_stencil(depth_image)
         .store_depth_stencil(depth_image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 
@@ -1161,8 +1161,8 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
             .as_slice(),
         ))
         .store_depth_stencil(depth_image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -1197,8 +1197,8 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         .store_color(0, color_image)
         .load_depth_stencil(depth_image)
         .store_depth_stencil(depth_image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 
@@ -1242,8 +1242,8 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
             .as_slice(),
         ))
         .store_depth_stencil(depth_image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -1275,8 +1275,8 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
         ))
         .load_depth_stencil(depth_image)
         .store_depth_stencil(depth_image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 
@@ -1349,8 +1349,8 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
         .bind_pipeline(&pipeline_a)
         .clear_color(0, image)
         .store_color(0, image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -1358,8 +1358,8 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
         .debug_name("b")
         .bind_pipeline(&pipeline_b)
         .store_color(0, image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 
@@ -1408,8 +1408,8 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
         .debug_name("c")
         .bind_pipeline(&pipeline)
         .store_color(0, image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -1417,8 +1417,8 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
         .debug_name("d")
         .bind_pipeline(&pipeline)
         .store_color(0, image)
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 
@@ -1490,8 +1490,8 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
             images[0],
             AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
         )
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
     frame
         .graph
@@ -1505,8 +1505,8 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
             images[1],
             AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
         )
-        .record_pipeline(|pipeline, _| {
-            pipeline.draw(1, 1, 0, 0);
+        .record_cmd_buf(|cmd_buf, _| {
+            cmd_buf.draw(1, 1, 0, 0);
         });
 }
 

@@ -53,8 +53,8 @@ graph
     .shader_resource_access(3, fire_buffer, Access::FragmentShaderReadUniformBuffer)
     .clear_color(0, swapchain_image)
     .store_color(0, swapchain_image)
-    .record_pipeline(move |pipeline, _| {
-        pipeline
+    .record_cmd_buf(move |cmd_buf, _| {
+        cmd_buf
             .push_constants(some_u8_slice)
             .draw(6, 1, 0, 0);
     });

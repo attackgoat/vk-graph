@@ -215,9 +215,9 @@ impl BitmapFont {
             );
         }
 
-        pass.record_pipeline(move |pipeline, _| {
+        pass.record_cmd_buf(move |cmd_buf, _| {
             if let Some((x, y, width, height)) = scissor {
-                pipeline.set_scissor(
+                cmd_buf.set_scissor(
                     0,
                     &[vk::Rect2D {
                         offset: vk::Offset2D { x, y },
@@ -226,7 +226,7 @@ impl BitmapFont {
                 );
             }
 
-            pipeline
+            cmd_buf
                 .push_constants(0, cast_slice(&transform.to_cols_array()))
                 .push_constants(64, &(1.0 / image_info.width as f32).to_ne_bytes())
                 .push_constants(68, &(1.0 / image_info.height as f32).to_ne_bytes())

@@ -263,8 +263,8 @@ fn main() -> anyhow::Result<()> {
                 .store_color(0, frame.swapchain_image)
                 .clear_depth_stencil(depth_image)
                 .store_depth_stencil(depth_image)
-                .record_pipeline(move |pipeline, _| {
-                    pipeline
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf
                         .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
                         .push_constants(0, cast_slice(&model_transform))
@@ -295,8 +295,8 @@ fn main() -> anyhow::Result<()> {
                     .clear_color_value(0, shadow_faces_node, [light.range, light.range, 0.0, 0.0])
                     .store_color(0, shadow_faces_node)
                     .clear_depth_stencil(shadow_depth_image)
-                    .record_pipeline(move |pipeline, _| {
-                        pipeline
+                    .record_cmd_buf(move |cmd_buf, _| {
+                        cmd_buf
                             .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
                             .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
                             .push_constants(0, cast_slice(&model_transform))
@@ -349,8 +349,8 @@ fn main() -> anyhow::Result<()> {
                         )
                         .store_color_as(0, shadow_faces_node, shadow_faces_view_info)
                         .clear_depth_stencil(shadow_depth_image)
-                        .record_pipeline(move |pipeline, _| {
-                            pipeline
+                        .record_cmd_buf(move |cmd_buf, _| {
+                            cmd_buf
                                 .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
                                 .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
                                 .push_constants(0, cast_slice(&model_transform))
@@ -378,8 +378,8 @@ fn main() -> anyhow::Result<()> {
                             AccessType::ComputeShaderReadOther,
                         )
                         .shader_resource_access(1, temp_image, AccessType::ComputeShaderWrite)
-                        .record_pipeline(move |compute, _| {
-                            compute.dispatch(1, CUBEMAP_SIZE, 6);
+                        .record_cmd_buf(move |cmd_buf, _| {
+                            cmd_buf.dispatch(1, CUBEMAP_SIZE, 6);
                         })
                         .end_cmd()
                         .begin_cmd()
@@ -391,8 +391,8 @@ fn main() -> anyhow::Result<()> {
                             shadow_faces_node,
                             AccessType::ComputeShaderWrite,
                         )
-                        .record_pipeline(move |compute, _| {
-                            compute.dispatch(CUBEMAP_SIZE, 1, 6);
+                        .record_cmd_buf(move |cmd_buf, _| {
+                            cmd_buf.dispatch(CUBEMAP_SIZE, 1, 6);
                         });
                 }
             }
@@ -429,12 +429,14 @@ fn main() -> anyhow::Result<()> {
                 .clear_color(0, frame.swapchain_image)
                 .store_color(0, frame.swapchain_image)
                 .clear_depth_stencil(depth_image)
-                .record_pipeline(move |pipeline, _| {
-                    pipeline
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf
                         .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
                         .push_constants(0, cast_slice(&model_transform))
-                        .draw_indexed(model_mesh.index_count, 1, 0, 0, 0)
+                        .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
+
+                    cmd_buf
                         .bind_index_buffer(cube_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, cube_mesh_vertex_buf, 0)
                         .push_constants(0, cast_slice(&cube_transform))

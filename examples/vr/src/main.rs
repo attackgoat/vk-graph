@@ -380,8 +380,8 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_pipeline(move |pipeline, _| {
-                    pipeline
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)
                         .push_constants(0, bytes_of(&push_consts))
@@ -425,8 +425,8 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_pipeline(move |pipeline, _| {
-                    pipeline
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)
                         .push_constants(0, bytes_of(&push_consts))
@@ -463,8 +463,8 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_pipeline(move |pipeline, _| {
-                    pipeline
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)
                         .push_constants(0, bytes_of(&push_consts))

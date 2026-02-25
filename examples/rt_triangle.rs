@@ -338,7 +338,7 @@ fn main() -> anyhow::Result<()> {
                 .to_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = graph.resource(scratch_buf).device_address();
+            let scratch_addr = graph.resource(scratch_buf).device_address();
 
             graph
                 .begin_cmd()
@@ -347,10 +347,10 @@ fn main() -> anyhow::Result<()> {
                 .resource_access(vertex_node, AccessType::AccelerationStructureBuildRead)
                 .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
                 .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_accel_struct(move |accel_struct, _| {
-                    accel_struct.build(&[BuildAccelerationStructureInfo::new(
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                         blas_node,
-                        scratch_data,
+                        scratch_addr,
                         blas_geometry_info,
                     )]);
                 });
@@ -368,7 +368,7 @@ fn main() -> anyhow::Result<()> {
                 .to_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = graph.resource(scratch_buf).device_address();
+            let scratch_addr = graph.resource(scratch_buf).device_address();
             let tlas_node = graph.bind_resource(&tlas);
 
             graph
@@ -378,10 +378,10 @@ fn main() -> anyhow::Result<()> {
                 .resource_access(instance_node, AccessType::AccelerationStructureBuildRead)
                 .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
                 .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_accel_struct(move |accel_struct, _| {
-                    accel_struct.build(&[BuildAccelerationStructureInfo::new(
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                         tlas_node,
-                        scratch_data,
+                        scratch_addr,
                         tlas_geometry_info,
                     )]);
                 });
@@ -418,8 +418,8 @@ fn main() -> anyhow::Result<()> {
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
             .shader_resource_access(1, frame.swapchain_image, AccessType::AnyShaderWrite)
-            .record_pipeline(move |pipeline, _| {
-                pipeline.trace_rays(
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf.trace_rays(
                     &sbt_rgen,
                     &sbt_miss,
                     &sbt_hit,

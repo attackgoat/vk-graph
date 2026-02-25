@@ -108,7 +108,7 @@ fn main() -> anyhow::Result<()> {
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        pass.node_info(frame.swapchain_image).fmt,
+                        pass.resource(frame.swapchain_image).info.fmt,
                         vk::ImageUsageFlags::COLOR_ATTACHMENT
                             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     )
@@ -156,8 +156,8 @@ fn main() -> anyhow::Result<()> {
                 .store_color(0, frame.swapchain_image);
         }
 
-        pass.record_pipeline(move |pipeline, _| {
-            pipeline
+        pass.record_cmd_buf(move |cmd_buf, _| {
+            cmd_buf
                 .bind_vertex_buffer(0, cube_vertex_buf, 0)
                 .push_constants(0, bytes_of(&world_transform))
                 .draw(cube_mesh.vertex_count, 1, 0, 0);

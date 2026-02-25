@@ -4,9 +4,12 @@ use {
     super::{compile_shader_and_watch, create_watcher, shader::HotShader},
     log::info,
     notify::RecommendedWatcher,
-    std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+    std::{
+        ops::Deref,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
     },
     vk_graph::driver::{
         device::Device,
@@ -66,8 +69,10 @@ impl HotRayTracePipeline {
 
     /// Returns the most recent compilation without checking for changes or re-compiling the shader
     /// source code.
+    #[deprecated = "use Deref instead"]
+    #[doc(hidden)]
     pub fn cold(&self) -> &RayTracePipeline {
-        &self.pipeline
+        self
     }
 
     /// Returns the most recent compilation after checking for changes, and if needed re-compiling
@@ -98,12 +103,32 @@ impl HotRayTracePipeline {
             }
         }
 
-        self.cold()
+        self
     }
 }
 
 impl AsRef<RayTracePipeline> for HotRayTracePipeline {
     fn as_ref(&self) -> &RayTracePipeline {
+        self
+    }
+}
+
+impl Deref for HotRayTracePipeline {
+    type Target = RayTracePipeline;
+
+    fn deref(&self) -> &Self::Target {
         &self.pipeline
+    }
+}
+
+#[allow(unused)]
+mod deprecated {
+    use {crate::ray_trace::HotRayTracePipeline, vk_graph::driver::ray_trace::RayTracePipeline};
+
+    impl HotRayTracePipeline {
+        #[deprecated = "use Deref instead"]
+        fn as_ref(&self) -> &RayTracePipeline {
+            self
+        }
     }
 }

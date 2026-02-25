@@ -175,7 +175,7 @@ impl Egui {
 
         // Add user textures.
         for (id, node) in self.user_textures.drain() {
-            bound_tex.insert(id, AnyImageNode::from(node));
+            bound_tex.insert(id, node);
         }
 
         bound_tex
@@ -290,8 +290,8 @@ impl Egui {
                         )
                         .load_color(0, target)
                         .store_color(0, target)
-                        .record_pipeline(move |pipeline, _| {
-                            pipeline
+                        .record_cmd_buf(move |cmd_buf, _| {
+                            cmd_buf
                                 .bind_index_buffer(idx_buf, 0, vk::IndexType::UINT32)
                                 .bind_vertex_buffer(0, vert_buf, 0)
                                 .push_constants(0, cast_slice(&[push_constants]))

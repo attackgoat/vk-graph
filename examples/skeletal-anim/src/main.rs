@@ -133,12 +133,16 @@ fn main() -> Result<(), WindowError> {
             .resource_access(vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
             .shader_resource_access(1, animation_buf, AccessType::VertexShaderReadOther)
-            .read_descriptor(2, texture)
+            .shader_resource_access(
+                2,
+                texture,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
             .clear_depth_stencil(depth_image)
-            .record_pipeline(move |pipeline, _| {
-                pipeline
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)
                     .push_constants(0, bytes_of(&Mat4::IDENTITY))

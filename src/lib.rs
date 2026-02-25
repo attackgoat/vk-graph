@@ -196,8 +196,8 @@ println!("{:?}", buffer); // BufferNode
 println!("{:?}", image); // ImageNode
 
 // Borrow resources using nodes (Optional!)
-println!("{:?}", graph.node(buffer)); // &Arc<Buffer>
-println!("{:?}", graph.node(image)); // &Arc<Image>
+println!("{:?}", graph.resource(buffer)); // &Arc<Buffer>
+println!("{:?}", graph.resource(image)); // &Arc<Image>
 # Ok(()) }
 ```
 
@@ -218,11 +218,12 @@ Example:
 ```no_run
 # use std::sync::Arc;
 # use ash::vk;
-# use vk_graph::driver::DriverError;
+# use vk_graph::driver::{AccessType, DriverError};
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
 # use vk_graph::Graph;
+# use vk_graph::node::{BufferNode, ImageNode};
 # use vk_graph::pool::{Pool};
 # use vk_graph::pool::lazy::{LazyPool};
 # fn main() -> Result<(), DriverError> {
@@ -232,21 +233,24 @@ Example:
 # let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
 # let image = Image::create(&device, info)?;
 let mut graph = Graph::default();
-let buffer_node = graph.bind_resource(buffer);
-let image_node = graph.bind_resource(image);
+let buffer: BufferNode = graph.bind_resource(buffer);
+let image: ImageNode = graph.bind_resource(image);
 graph
-    .begin_cmd().debug_name("Do some raw Vulkan or interop with another Vulkan library")
-    .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
+    .begin_cmd()
+    .debug_name("Do some raw Vulkan or interop with another Vulkan library")
+    .record_cmd_buf(|cmd_buf, nodes| {
         // I always run first!
     })
-    .read_node(buffer_node) // <-- These two functions, read_node/write_node, completely
-    .write_node(image_node) //     handle vulkan synchronization.
-    .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
-        // device is &ash::Device
-        // cmd_buf is vk::CommandBuffer
-        // bindings is a magical object you can retrieve the Vulkan resource from
-        let vk_buffer: vk::Buffer = nodes[buffer_node].handle;
-        let vk_image: vk::Image = nodes[image_node].handle;
+    .resource_access(buffer, AccessType::HostRead)
+    .resource_access(image, AccessType::HostWrite)
+    .record_cmd_buf(move |cmd_buf, nodes| {
+        // Raw ash types are available
+        let device: &ash::Device = &cmd_buf.device;
+        let cmd_buf: vk::CommandBuffer = cmd_buf.handle;
+
+        // nodes is a magical object you can retrieve the Vulkan resource from
+        let buffer: vk::Buffer = nodes[buffer].handle;
+        let image: vk::Image = nodes[image].handle;
 
         // You are free to READ vk_buffer and WRITE vk_image!
     });
@@ -272,10 +276,11 @@ Pipeline instances may be bound to a [`PassRef`] in order to execute the associa
 # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
 # let mut graph = Graph::default();
 graph
-    .begin_cmd().debug_name("My compute pass")
+    .begin_cmd()
+    .debug_name("My compute pass")
     .bind_pipeline(&my_compute_pipeline)
-    .record_pipeline(|compute, _| {
-        compute.push_constants(0, &42u32.to_ne_bytes())
+    .record_cmd_buf(|cmd_buf, _| {
+        cmd_buf.push_constants(0, &42u32.to_ne_bytes())
                .dispatch(128, 1, 1);
     });
 # Ok(()) }
@@ -361,7 +366,9 @@ pub use self::{
 
 use {
     self::{
-        cmd_ref::{AttachmentIndex, CommandRef, Descriptor, Nodes, SubresourceAccess, ViewInfo},
+        cmd_ref::{
+            AttachmentIndex, CommandRef, Descriptor, Resources, SubresourceAccess, ViewInfo,
+        },
         node::Node,
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
@@ -390,7 +397,7 @@ use {
     vk_sync::AccessType,
 };
 
-type ExecFn = Box<dyn FnOnce(&CommandBuffer, Nodes<'_>) + Send>;
+type ExecFn = Box<dyn FnOnce(&CommandBuffer, Resources<'_>) + Send>;
 type NodeIndex = usize;
 
 #[derive(Clone, Copy, Debug)]
@@ -1254,6 +1261,7 @@ impl Graph {
     }
 }
 
+#[allow(unused)]
 pub(crate) mod deprecated {
     use {
         crate::{

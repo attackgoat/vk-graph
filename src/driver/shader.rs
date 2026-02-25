@@ -683,7 +683,7 @@ pub struct Shader {
     /// #version 460 core
     /// #pragma shader_stage(compute)
     ///
-    /// // Defaults to 6 if not set using Shader specialization_info!
+    /// // Defaults to 6 if not set using Shader specialization!
     /// layout(constant_id = 0) const uint MY_COUNT = 6;
     ///
     /// layout(set = 0, binding = 0) uniform sampler2D my_samplers[MY_COUNT];
@@ -706,14 +706,10 @@ pub struct Shader {
     /// # let my_shader_code = [0u8; 1];
     /// // We instead specify 42 for MY_COUNT:
     /// let shader = Shader::new_fragment(my_shader_code.as_slice())
-    ///     .specialization_info(SpecializationMap::new(
-    ///         [vk::SpecializationMapEntry {
-    ///             constant_id: 0,
-    ///             offset: 0,
-    ///             size: 4,
-    ///         }],
-    ///         42u32.to_ne_bytes()
-    ///     ));
+    ///     .specialization(
+    ///         SpecializationMap::new(42u32.to_ne_bytes())
+    ///             .constant(0, 0, 4)
+    ///     );
     /// # Ok(()) }
     /// ```
     #[builder(default, setter(strip_option))]

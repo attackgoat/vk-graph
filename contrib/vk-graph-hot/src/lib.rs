@@ -141,8 +141,8 @@ fn compile_shader_and_watch(
 
     base_shader = base_shader.entry_name(shader.entry_name.clone());
 
-    if let Some(specialization_info) = &shader.specialization_info {
-        base_shader = base_shader.specialization_info(specialization_info.clone());
+    if let Some(specialization) = &shader.specialization {
+        base_shader = base_shader.specialization(specialization.clone());
     }
 
     Ok(base_shader)

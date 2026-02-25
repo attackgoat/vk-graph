@@ -101,8 +101,8 @@ fn main() -> anyhow::Result<()> {
             .resource_access(vertex_buf, AccessType::VertexBuffer)
             .clear_depth_stencil(depth_stencil)
             .store_depth_stencil(depth_stencil)
-            .record_pipeline(move |pipeline, _| {
-                pipeline
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)
                     .push_constants(0, bytes_of(&obj_pos))
@@ -142,8 +142,8 @@ fn main() -> anyhow::Result<()> {
             .load_depth_stencil(depth_stencil)
             .store_depth_stencil(depth_stencil)
             .store_color(0, frame.swapchain_image)
-            .record_pipeline(move |pipeline, _| {
-                pipeline
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)
                     .push_constants(0, &push_const_data)
@@ -167,8 +167,8 @@ fn main() -> anyhow::Result<()> {
             .load_depth_stencil(depth_stencil)
             .load_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
-            .record_pipeline(move |pipeline, _| {
-                pipeline.draw(6, 1, 0, 0);
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf.draw(6, 1, 0, 0);
             });
     })?;
 

@@ -1,11 +1,12 @@
 use {
-    super::{Nodes, pipeline::PipelineRef},
+    super::{Resources, pipeline::PipelineRef},
     crate::{
         AnyBufferNode,
         driver::{CommandBuffer, compute::ComputePipeline},
     },
     ash::vk,
     log::trace,
+    std::ops::Deref,
 };
 
 /// Recording interface for computing commands.
@@ -32,17 +33,18 @@ use {
 /// # let shader = Shader::new_compute([0u8; 1].as_slice());
 /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
 /// # let mut my_graph = Graph::default();
-/// my_graph.begin_cmd()
-///         .bind_pipeline(&my_compute_pipeline)
-///         .record_pipeline(move |pipeline, nodes| {
-///             // During this closure we have access to the compute dispatch methods!
-///         });
+/// my_graph
+///     .begin_cmd()
+///     .bind_pipeline(&my_compute_pipeline)
+///     .record_cmd_buf(move |cmd_buf, resources| {
+///         // During this closure we have access to the compute dispatch methods!
+///     });
 /// # Ok(()) }
 /// ```
 pub struct ComputePipelineRef<'a> {
     pub(super) cmd_buf: &'a CommandBuffer,
-    pub(super) nodes: Nodes<'a>,
     pub(super) pipeline: ComputePipeline,
+    pub(super) resources: Resources<'a>,
 }
 
 impl ComputePipelineRef<'_> {
@@ -72,7 +74,7 @@ impl ComputePipelineRef<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::{AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
@@ -87,12 +89,14 @@ impl ComputePipelineRef<'_> {
     /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
     /// # let my_buf_node = my_graph.bind_resource(my_buf);
-    /// my_graph.begin_cmd().debug_name("fill my_buf_node with data")
-    ///         .bind_pipeline(&my_compute_pipeline)
-    ///         .write_descriptor(0, my_buf_node)
-    ///         .record_pipeline(move |compute, nodes| {
-    ///             compute.dispatch(128, 64, 32);
-    ///         });
+    /// my_graph
+    ///     .begin_cmd()
+    ///     .debug_name("fill my_buf_node with data")
+    ///     .bind_pipeline(&my_compute_pipeline)
+    ///     .shader_resource_access(0, my_buf_node, AccessType::ComputeShaderWrite)
+    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///         cmd_buf.dispatch(128, 64, 32);
+    ///     });
     /// # Ok(()) }
     /// ```
     ///
@@ -159,9 +163,9 @@ impl ComputePipelineRef<'_> {
     /// Basic usage:
     ///
     /// ```no_run
-    /// # use std::mem::size_of;
     /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
+    /// # use bytemuck::{bytes_of, Pod, Zeroable};
+    /// # use vk_graph::driver::{AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
@@ -176,28 +180,28 @@ impl ComputePipelineRef<'_> {
     /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
     /// # let my_buf_node = my_graph.bind_resource(my_buf);
-    /// const CMD_SIZE: usize = size_of::<vk::DispatchIndirectCommand>();
-    ///
-    /// let cmd = vk::DispatchIndirectCommand {
+    /// # #[repr(C)]
+    /// # #[derive(Clone, Copy, Pod, Zeroable)]
+    /// # struct DispatchIndirectCommand { x: u32, y: u32, z: u32, }
+    /// let args = DispatchIndirectCommand {
     ///     x: 1,
     ///     y: 2,
     ///     z: 3,
     /// };
-    /// let cmd_data = unsafe {
-    ///     std::slice::from_raw_parts(&cmd as *const _ as *const _, CMD_SIZE)
-    /// };
+    /// let data = bytes_of(&args);
+    /// let usage = vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER;
+    /// let args_buf = Buffer::create_from_slice(&device, usage, data)?;
+    /// let args_buf = my_graph.bind_resource(args_buf);
     ///
-    /// let args_buf_flags = vk::BufferUsageFlags::STORAGE_BUFFER;
-    /// let args_buf = Buffer::create_from_slice(&device, args_buf_flags, cmd_data)?;
-    /// let args_buf_node = my_graph.bind_resource(args_buf);
-    ///
-    /// my_graph.begin_cmd().debug_name("fill my_buf_node with data")
-    ///         .bind_pipeline(&my_compute_pipeline)
-    ///         .read_node(args_buf_node)
-    ///         .write_descriptor(0, my_buf_node)
-    ///         .record_pipeline(move |compute, nodes| {
-    ///             compute.dispatch_indirect(args_buf_node, 0);
-    ///         });
+    /// my_graph
+    ///     .begin_cmd()
+    ///     .debug_name("fill my_buf_node with data")
+    ///     .bind_pipeline(&my_compute_pipeline)
+    ///     .resource_access(args_buf, AccessType::IndirectBuffer)
+    ///     .shader_resource_access(0, my_buf_node, AccessType::ComputeShaderWrite)
+    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///         cmd_buf.dispatch_indirect(args_buf, 0);
+    ///     });
     /// # Ok(()) }
     /// ```
     ///
@@ -214,7 +218,7 @@ impl ComputePipelineRef<'_> {
         unsafe {
             self.cmd_buf.device.cmd_dispatch_indirect(
                 self.cmd_buf.handle,
-                self.nodes[args_buf].handle,
+                self.resources[args_buf].handle,
                 args_offset,
             );
         }
@@ -272,12 +276,15 @@ impl ComputePipelineRef<'_> {
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
-    /// my_graph.begin_cmd().debug_name("compute the ultimate question")
-    ///         .bind_pipeline(&my_compute_pipeline)
-    ///         .record_pipeline(move |compute, nodes| {
-    ///             compute.push_constants(0, &[42])
-    ///                    .dispatch(1, 1, 1);
-    ///         });
+    /// my_graph
+    ///     .begin_cmd()
+    ///     .debug_name("compute the ultimate question")
+    ///     .bind_pipeline(&my_compute_pipeline)
+    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///         cmd_buf
+    ///             .push_constants(0, &[42])
+    ///             .dispatch(1, 1, 1);
+    ///     });
     /// # Ok(()) }
     /// ```
     ///
@@ -313,12 +320,20 @@ impl ComputePipelineRef<'_> {
     }
 }
 
+impl<'a> Deref for ComputePipelineRef<'a> {
+    type Target = CommandBuffer;
+
+    fn deref(&self) -> &Self::Target {
+        self.cmd_buf
+    }
+}
+
 // NOTE: local implementation of type from super module
 impl PipelineRef<'_, ComputePipeline> {
     /// Begin recording a compute pipeline command buffer.
-    pub fn record_pipeline(
+    pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(ComputePipelineRef<'_>, Nodes<'_>) + Send + 'static,
+        func: impl FnOnce(ComputePipelineRef<'_>, Resources<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -332,14 +347,14 @@ impl PipelineRef<'_, ComputePipeline> {
             .unwrap_compute()
             .clone();
 
-        self.cmd.push_execute(move |cmd_buf, nodes| {
+        self.cmd.push_execute(move |cmd_buf, resources| {
             func(
                 ComputePipelineRef {
-                    nodes,
                     cmd_buf,
                     pipeline,
+                    resources,
                 },
-                nodes,
+                resources,
             );
         });
 
@@ -347,10 +362,14 @@ impl PipelineRef<'_, ComputePipeline> {
     }
 }
 
+#[allow(unused)]
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{Descriptor, PipelineRef, SubresourceRange, View, ViewInfo},
+            cmd_ref::{
+                Descriptor, PipelineRef, Resources, SubresourceRange, View, ViewInfo,
+                compute::ComputePipelineRef,
+            },
             driver::compute::ComputePipeline,
             node::Node,
         },
@@ -390,6 +409,15 @@ mod deprecated {
                 node_view,
                 AccessType::ComputeShaderReadOther,
             )
+        }
+
+        #[deprecated = "use record_cmd_buf function"]
+        #[doc(hidden)]
+        pub fn record_compute(
+            self,
+            func: impl FnOnce(ComputePipelineRef<'_>, Resources<'_>) + Send + 'static,
+        ) -> Self {
+            self.record_cmd_buf(func)
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderWrite"]

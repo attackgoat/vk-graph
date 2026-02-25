@@ -115,7 +115,7 @@ impl<'a> CommandRef<'a> {
         self.graph
     }
 
-    fn push_execute(&mut self, func: impl FnOnce(&CommandBuffer, Nodes<'_>) + Send + 'static) {
+    fn push_execute(&mut self, func: impl FnOnce(&CommandBuffer, Resources<'_>) + Send + 'static) {
         let cmd = self.cmd_mut();
         let exec = {
             let last_exec = cmd.execs.last_mut().unwrap();
@@ -158,26 +158,16 @@ impl<'a> CommandRef<'a> {
     /// Begin recording an acceleration structure command buffer.
     ///
     /// This is the entry point for building and updating an [`AccelerationStructure`] instance.
-    pub fn record_accel_struct(
-        mut self,
-        func: impl FnOnce(AccelerationStructureRef<'_>, Nodes<'_>) + Send + 'static,
-    ) -> Self {
-        self.push_execute(move |cmd_buf, nodes| {
-            func(AccelerationStructureRef { nodes, cmd_buf }, nodes);
-        });
-
-        self
-    }
-
-    /// Begin recording a general command buffer.
     ///
     /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
     /// code and interfaces.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(&CommandBuffer, Nodes<'_>) + Send + 'static,
+        func: impl FnOnce(AccelerationStructureRef<'_>, Resources<'_>) + Send + 'static,
     ) -> Self {
-        self.push_execute(func);
+        self.push_execute(move |cmd_buf, resources| {
+            func(AccelerationStructureRef { cmd_buf, resources }, resources);
+        });
 
         self
     }
@@ -198,7 +188,7 @@ impl<'a> CommandRef<'a> {
     pub fn resource_access<N>(mut self, node: N, access: AccessType) -> Self
     where
         N: Node + View,
-        SubresourceRange: From<<N as View>::Range>,
+        SubresourceRange: From<N::Range>,
     {
         self.set_resource_access(node, access);
         self
@@ -221,7 +211,7 @@ impl<'a> CommandRef<'a> {
     pub fn set_resource_access<N>(&mut self, node: N, access: AccessType)
     where
         N: Node + View,
-        SubresourceRange: From<<N as View>::Range>,
+        SubresourceRange: From<N::Range>,
     {
         let subresource = node.default_range(&self.graph.resources).into();
         self.push_node_access(node, access, subresource);
@@ -238,7 +228,7 @@ impl<'a> CommandRef<'a> {
         access: AccessType,
     ) where
         N: Node + View,
-        SubresourceRange: From<<N as View>::Range>,
+        SubresourceRange: From<N::Range>,
     {
         let subresource = subresource.into().into();
         self.push_node_access(node, access, subresource);
@@ -256,7 +246,7 @@ impl<'a> CommandRef<'a> {
     ) -> Self
     where
         N: Node + View,
-        SubresourceRange: From<<N as View>::Range>,
+        SubresourceRange: From<N::Range>,
     {
         self.set_subresource_access(node, subresource, access);
         self
@@ -357,32 +347,34 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor
 /// # let image = Image::create(&device, info)?;
 /// # let mut my_graph = Graph::default();
 /// # let my_image_node = my_graph.bind_resource(image);
-/// my_graph.begin_cmd().debug_name("custom vulkan commands")
-///         .record_cmd_buf(move |device, cmd_buf, nodes| {
-///             let my_image: &Image = &nodes[my_image_node];
+/// my_graph
+///     .begin_cmd()
+///     .debug_name("custom vulkan commands")
+///     .record_cmd_buf(move |cmd_buf, resources| {
+///         let my_image: &Image = &resources[my_image_node];
 ///
-///             assert_ne!(my_image.handle, vk::Image::null());
-///             assert_eq!(my_image.info.width, 32);
-///         });
+///         assert_ne!(my_image.handle, vk::Image::null());
+///         assert_eq!(my_image.info.width, 32);
+///     });
 /// # Ok(()) }
 /// ```
 #[derive(Clone, Copy, Debug)]
-pub struct Nodes<'a> {
+pub struct Resources<'a> {
     #[cfg(debug_assertions)]
     exec: &'a Execution,
 
     resources: &'a [Resource],
 }
 
-impl<'a> Nodes<'a> {
+impl<'a> Resources<'a> {
     pub(super) fn new(
         resources: &'a [Resource],
         #[cfg(debug_assertions)] exec: &'a Execution,
     ) -> Self {
         Self {
-            resources,
             #[cfg(debug_assertions)]
             exec,
+            resources,
         }
     }
 
@@ -406,7 +398,7 @@ impl<'a> Nodes<'a> {
 macro_rules! index {
     ($name:ident, $handle:ident) => {
         paste::paste! {
-            impl<'a> Index<[<$name Node>]> for Nodes<'a>
+            impl<'a> Index<[<$name Node>]> for Resources<'a>
             {
                 type Output = $handle;
 
@@ -428,7 +420,7 @@ index!(Image, Image);
 index!(ImageLease, Image);
 index!(SwapchainImage, Image);
 
-impl Index<AnyAccelerationStructureNode> for Nodes<'_> {
+impl Index<AnyAccelerationStructureNode> for Resources<'_> {
     type Output = AccelerationStructure;
 
     fn index(&self, node: AnyAccelerationStructureNode) -> &Self::Output {
@@ -439,7 +431,7 @@ impl Index<AnyAccelerationStructureNode> for Nodes<'_> {
     }
 }
 
-impl Index<AnyBufferNode> for Nodes<'_> {
+impl Index<AnyBufferNode> for Resources<'_> {
     type Output = Buffer;
 
     fn index(&self, node: AnyBufferNode) -> &Self::Output {
@@ -450,7 +442,7 @@ impl Index<AnyBufferNode> for Nodes<'_> {
     }
 }
 
-impl Index<AnyImageNode> for Nodes<'_> {
+impl Index<AnyImageNode> for Resources<'_> {
     type Output = Image;
 
     fn index(&self, node: AnyImageNode) -> &Self::Output {
@@ -674,10 +666,11 @@ impl From<Range<vk::DeviceSize>> for ViewInfo {
     }
 }
 
+#[allow(unused)]
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{CommandRef, SubresourceRange, View},
+            cmd_ref::{AccelerationStructureRef, CommandRef, Resources, SubresourceRange, View},
             deprecated::Info,
             node::Node,
         },
@@ -691,10 +684,35 @@ mod deprecated {
         pub fn access_node_mut<N>(&mut self, node: N, access: AccessType) -> &mut Self
         where
             N: Node + View,
-            SubresourceRange: From<<N as View>::Range>,
+            SubresourceRange: From<N::Range>,
         {
             self.set_resource_access(node, access);
             self
+        }
+
+        #[deprecated = "use resource_access function"]
+        #[doc(hidden)]
+        pub fn access_resource<N>(mut self, node: N, access: AccessType) -> Self
+        where
+            N: Node + View,
+            SubresourceRange: From<N::Range>,
+        {
+            self.resource_access(node, access)
+        }
+
+        #[deprecated = "use subresource_access function"]
+        #[doc(hidden)]
+        pub fn access_subresource<N>(
+            mut self,
+            node: N,
+            subresource: impl Into<N::Range>,
+            access: AccessType,
+        ) -> Self
+        where
+            N: Node + View,
+            SubresourceRange: From<N::Range>,
+        {
+            self.subresource_access(node, subresource, access)
         }
 
         #[deprecated = "use device_address function of resource function result"]
@@ -715,6 +733,19 @@ mod deprecated {
             N: Node + Info,
         {
             node.info(&self.graph.resources)
+        }
+
+        #[deprecated = "use record_cmd_buf function"]
+        #[doc(hidden)]
+        pub fn record_accel_struct(
+            mut self,
+            func: impl FnOnce(AccelerationStructureRef<'_>, Resources<'_>) + Send + 'static,
+        ) -> Self {
+            self.push_execute(move |cmd_buf, resources| {
+                func(AccelerationStructureRef { cmd_buf, resources }, resources);
+            });
+
+            self
         }
     }
 }

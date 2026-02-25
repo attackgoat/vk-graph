@@ -134,8 +134,8 @@ fn main() -> anyhow::Result<()> {
             .debug_name("smoke")
             .bind_pipeline(&smoke_pipeline)
             .shader_resource_access(0, image_node, AccessType::ComputeShaderWrite)
-            .record_pipeline(move |pipeline, _| {
-                pipeline
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf
                     .push_constants(0, &elapsed_time.as_secs_f32().to_ne_bytes())
                     .dispatch(frame.width.div_ceil(subgroup_size), frame.height, 1);
             });

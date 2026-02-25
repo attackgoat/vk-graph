@@ -91,8 +91,8 @@ fn main() -> Result<(), WindowError> {
             .resource_access(vertex_node, AccessType::VertexBuffer)
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
-            .record_pipeline(move |pipeline, _| {
-                pipeline
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf
                     .bind_index_buffer(index_node, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_node, 0)
                     .draw_indexed(3, 1, 0, 0, 0);

@@ -98,10 +98,10 @@ fn exclusive_sum(
             .begin_cmd()
             .debug_name("exclusive sum reduce")
             .bind_pipeline(reduce_pipeline)
-            .read_descriptor(0, input_buf)
-            .write_descriptor(1, workgroup_buf)
-            .record_pipeline(move |compute, _| {
-                compute.dispatch(reduce_count, 1, 1);
+            .shader_resource_access(0, input_buf, AccessType::ComputeShaderReadOther)
+            .shader_resource_access(1, workgroup_buf, AccessType::ComputeShaderWrite)
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf.dispatch(reduce_count, 1, 1);
             });
     }
 
@@ -109,11 +109,11 @@ fn exclusive_sum(
         .begin_cmd()
         .debug_name("exclusive sum scan")
         .bind_pipeline(scan_pipeline)
-        .read_descriptor(0, workgroup_buf)
-        .read_descriptor(1, input_buf)
-        .write_descriptor(2, output_buf)
-        .record_pipeline(move |compute, _| {
-            compute.dispatch(workgroup_count, 1, 1);
+        .shader_resource_access(0, workgroup_buf, AccessType::ComputeShaderReadOther)
+        .shader_resource_access(1, input_buf, AccessType::ComputeShaderReadOther)
+        .shader_resource_access(2, output_buf, AccessType::ComputeShaderWrite)
+        .record_cmd_buf(move |cmd_buf, _| {
+            cmd_buf.dispatch(workgroup_count, 1, 1);
         });
 
     let output_buf = graph.resource(output_buf).clone();

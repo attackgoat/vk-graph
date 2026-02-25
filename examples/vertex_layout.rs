@@ -103,8 +103,8 @@ fn draw_triangle(frame: &mut FrameContext, pipeline: &GraphicPipeline, vertex_bu
         .load_color(0, frame.swapchain_image)
         .store_color(0, frame.swapchain_image)
         .resource_access(vertex_buf, AccessType::VertexBuffer)
-        .record_pipeline(move |pipeline, _| {
-            pipeline
+        .record_cmd_buf(move |cmd_buf, _| {
+            cmd_buf
                 .bind_vertex_buffer(0, vertex_buf, 0)
                 .draw(3, 1, 0, 0);
         });

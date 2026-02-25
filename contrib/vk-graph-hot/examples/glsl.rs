@@ -34,10 +34,12 @@ fn main() -> Result<(), WindowError> {
             .debug_name("make some noise")
             .bind_pipeline(pipeline.hot())
             .write_descriptor(0, frame.swapchain_image)
-            .record_pipeline(move |pipeline, _| {
-                pipeline
-                    .push_constants(&frame_index.to_ne_bytes())
-                    .dispatch(frame.width, frame.height, 1);
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf.push_constants(&frame_index.to_ne_bytes()).dispatch(
+                    frame.width,
+                    frame.height,
+                    1,
+                );
             });
 
         frame_index += 1;

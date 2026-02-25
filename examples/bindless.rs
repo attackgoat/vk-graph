@@ -44,8 +44,8 @@ fn main() -> Result<(), WindowError> {
 
         cmd.clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
-            .record_pipeline(move |pipeline, _| {
-                pipeline.draw_indirect(draw_buf_node, 0, 64, 16);
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf.draw_indirect(draw_buf_node, 0, 64, 16);
             });
     })
 }

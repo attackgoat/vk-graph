@@ -1,7 +1,7 @@
 use {
     super::{
         Area, Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
-        cmd_ref::{Nodes, SubresourceAccess, SubresourceRange},
+        cmd_ref::{Resources, SubresourceAccess, SubresourceRange},
         node::SwapchainImageNode,
     },
     crate::{
@@ -2525,7 +2525,7 @@ impl Resolver {
                     let exec_func = exec.func.take().unwrap().0;
                     exec_func(
                         cmd_buf,
-                        Nodes::new(
+                        Resources::new(
                             &self.graph.resources,
                             #[cfg(debug_assertions)]
                             exec,

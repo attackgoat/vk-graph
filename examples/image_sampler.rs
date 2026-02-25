@@ -71,10 +71,14 @@ fn main() -> anyhow::Result<()> {
             .begin_cmd()
             .debug_name("Draw gulf image to swapchain")
             .bind_pipeline(&pipelines[pipeline_index])
-            .shader_resource_access(0, gulf_image, AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer)
+            .shader_resource_access(
+                0,
+                gulf_image,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
             .store_color(0, frame.swapchain_image)
-            .record_pipeline(|pipeline, _| {
-                pipeline.draw(3, 1, 0, 0);
+            .record_cmd_buf(|cmd_buf, _| {
+                cmd_buf.draw(3, 1, 0, 0);
             });
     })?;
 

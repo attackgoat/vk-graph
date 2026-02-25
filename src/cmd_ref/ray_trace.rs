@@ -1,16 +1,17 @@
 use {
-    super::{Nodes, PipelineRef},
+    super::{PipelineRef, Resources},
     crate::driver::{CommandBuffer, device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
+    std::ops::Deref,
 };
 
 // NOTE: local implementation of type from super module
 impl PipelineRef<'_, RayTracePipeline> {
     /// Begin recording a ray trace pipeline command buffer.
-    pub fn record_pipeline(
+    pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(RayTracePipelineRef<'_>, Nodes<'_>) + Send + 'static,
+        func: impl FnOnce(RayTracePipelineRef<'_>, Resources<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -27,7 +28,7 @@ impl PipelineRef<'_, RayTracePipeline> {
         #[cfg(debug_assertions)]
         let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
-        self.cmd.push_execute(move |cmd_buf, nodes| {
+        self.cmd.push_execute(move |cmd_buf, resources| {
             func(
                 RayTracePipelineRef {
                     cmd_buf,
@@ -37,7 +38,7 @@ impl PipelineRef<'_, RayTracePipeline> {
 
                     pipeline,
                 },
-                nodes,
+                resources,
             );
         });
 
@@ -72,9 +73,10 @@ impl PipelineRef<'_, RayTracePipeline> {
 ///     [RayTraceShaderGroup::new_general(0)],
 /// )?;
 /// # let mut my_graph = Graph::default();
-/// my_graph.begin_cmd().debug_name("my ray trace pass")
+/// my_graph.begin_cmd()
+///         .debug_name("my ray trace pass")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
-///         .record_pipeline(move |pipeline, nodes| {
+///         .record_cmd_buf(move |cmd_buf, nodes| {
 ///             // During this closure we have access to the ray trace methods!
 ///         });
 /// # Ok(()) }
@@ -146,10 +148,11 @@ impl RayTracePipelineRef<'_> {
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let mut my_graph = Graph::default();
-    /// my_graph.begin_cmd().debug_name("draw a cornell box")
+    /// my_graph.begin_cmd()
+    ///         .debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_pipeline(move |pipeline, nodes| {
-    ///             pipeline.push_constants(0, &[0xcb])
+    ///         .record_cmd_buf(move |cmd_buf, nodes| {
+    ///             cmd_buf.push_constants(0, &[0xcb])
     ///                     .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
@@ -238,10 +241,11 @@ impl RayTracePipelineRef<'_> {
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let mut my_graph = Graph::default();
-    /// my_graph.begin_cmd().debug_name("draw a cornell box")
+    /// my_graph.begin_cmd()
+    ///         .debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_pipeline(move |pipeline, nodes| {
-    ///             pipeline.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
+    ///         .record_cmd_buf(move |cmd_buf, nodes| {
+    ///             cmd_buf.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
     /// ```
@@ -312,10 +316,22 @@ impl RayTracePipelineRef<'_> {
     }
 }
 
+impl<'a> Deref for RayTracePipelineRef<'a> {
+    type Target = CommandBuffer;
+
+    fn deref(&self) -> &Self::Target {
+        self.cmd_buf
+    }
+}
+
+#[allow(unused)]
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{Descriptor, PipelineRef, SubresourceRange, View, ViewInfo},
+            cmd_ref::{
+                Descriptor, PipelineRef, Resources, SubresourceRange, View, ViewInfo,
+                ray_trace::RayTracePipelineRef,
+            },
             driver::ray_trace::RayTracePipeline,
             node::Node,
         },
@@ -359,6 +375,15 @@ mod deprecated {
                 node_view,
                 AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
             )
+        }
+
+        #[deprecated = "use record_cmd_buf function"]
+        #[doc(hidden)]
+        pub fn record_ray_trace(
+            self,
+            func: impl FnOnce(RayTracePipelineRef<'_>, Resources<'_>) + Send + 'static,
+        ) -> Self {
+            self.record_cmd_buf(func)
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]

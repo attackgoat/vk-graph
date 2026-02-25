@@ -44,8 +44,8 @@ impl ComputePresenter {
             .bind_pipeline(&self.0[0])
             .shader_resource_access(0, image, AccessType::ComputeShaderReadOther)
             .shader_resource_access(1, swapchain, AccessType::ComputeShaderWrite)
-            .record_pipeline(move |pipeline, _| {
-                pipeline.dispatch(swapchain_info.width, swapchain_info.height, 1);
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf.dispatch(swapchain_info.width, swapchain_info.height, 1);
             });
     }
 
@@ -72,8 +72,8 @@ impl ComputePresenter {
             .shader_resource_access((0, [0]), top_image, AccessType::ComputeShaderReadOther)
             .shader_resource_access((0, [1]), bottom_image, AccessType::ComputeShaderReadOther)
             .shader_resource_access(1, swapchain, AccessType::ComputeShaderWrite)
-            .record_pipeline(move |pipeline, _| {
-                pipeline.dispatch(swapchain_info.width, swapchain_info.height, 1);
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf.dispatch(swapchain_info.width, swapchain_info.height, 1);
             });
     }
 }
@@ -130,9 +130,9 @@ impl GraphicPresenter {
                 AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
             )
             .store_color(0, swapchain)
-            .record_pipeline(move |pipeline, _| {
+            .record_cmd_buf(move |cmd_buf, _| {
                 // Draw a quad with implicit vertices (no buffer)
-                pipeline
+                cmd_buf
                     .push_constants(0, cast_slice(&transform.to_cols_array()))
                     .draw(6, 1, 0, 0);
             });

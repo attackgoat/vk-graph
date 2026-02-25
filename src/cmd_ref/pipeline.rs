@@ -46,7 +46,7 @@ impl<'a, T> PipelineRef<'a, T> {
     pub fn resource_access<N>(mut self, node: N, access: AccessType) -> Self
     where
         N: Node + View,
-        SubresourceRange: From<<N as View>::Range>,
+        SubresourceRange: From<N::Range>,
     {
         self.cmd.set_resource_access(node, access);
         self
@@ -59,7 +59,7 @@ impl<'a, T> PipelineRef<'a, T> {
     pub fn set_resource_access<N>(&mut self, node: N, access: AccessType) -> &mut Self
     where
         N: Node + View,
-        SubresourceRange: From<<N as View>::Range>,
+        SubresourceRange: From<N::Range>,
     {
         self.cmd.set_resource_access(node, access);
         self
@@ -138,7 +138,7 @@ impl<'a, T> PipelineRef<'a, T> {
     ) -> &mut Self
     where
         N: Node + View,
-        SubresourceRange: From<<N as View>::Range>,
+        SubresourceRange: From<N::Range>,
     {
         self.cmd.set_subresource_access(node, subresource, access);
         self
@@ -198,20 +198,51 @@ impl<'a, T> PipelineRef<'a, T> {
     ) -> Self
     where
         N: Node + View,
-        SubresourceRange: From<<N as View>::Range>,
+        SubresourceRange: From<N::Range>,
     {
         self.cmd.set_subresource_access(node, subresource, access);
         self
     }
 }
 
+#[allow(unused)]
 mod deprecated {
     use {
-        crate::{cmd_ref::PipelineRef, deprecated::Info, node::Node},
+        crate::{
+            cmd_ref::{PipelineRef, SubresourceRange, View},
+            deprecated::Info,
+            node::Node,
+        },
         ash::vk,
+        vk_sync::AccessType,
     };
 
     impl<'a, T> PipelineRef<'a, T> {
+        #[deprecated = "use resource_access function"]
+        #[doc(hidden)]
+        pub fn access_resource<N>(mut self, node: N, access: AccessType) -> Self
+        where
+            N: Node + View,
+            SubresourceRange: From<N::Range>,
+        {
+            self.resource_access(node, access)
+        }
+
+        #[deprecated = "use subresource_access function"]
+        #[doc(hidden)]
+        pub fn access_subresource<N>(
+            mut self,
+            node: N,
+            subresource: impl Into<N::Range>,
+            access: AccessType,
+        ) -> Self
+        where
+            N: Node + View,
+            SubresourceRange: From<N::Range>,
+        {
+            self.subresource_access(node, subresource, access)
+        }
+
         #[deprecated = "use device_address function of resource function result"]
         #[doc(hidden)]
         pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {

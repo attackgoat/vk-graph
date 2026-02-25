@@ -47,16 +47,17 @@ fn main() -> Result<(), WindowError> {
         assert!(
             frame
                 .graph
-                .resource(frame.swapchain_image).info
+                .resource(frame.swapchain_image)
+                .info
                 .usage
                 .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
         );
 
         let image = frame.graph.bind_resource(&image);
-        let swapchain_info = frame.graph.node_info(frame.swapchain_image);
+        let swapchain_info = frame.graph.resource(frame.swapchain_image).info;
         let stripe_width = swapchain_info.width / mip_level_count;
 
-        let mut pass = frame
+        let mut cmd = frame
             .graph
             .begin_cmd()
             .debug_name("splat mips")
@@ -64,7 +65,7 @@ fn main() -> Result<(), WindowError> {
 
         for mip_level in 0..mip_level_count {
             let stripe_x = mip_level * stripe_width;
-            pass = pass
+            cmd = cmd
                 .shader_subresource_access(
                     0,
                     image,
@@ -78,8 +79,8 @@ fn main() -> Result<(), WindowError> {
                 .load_color(0, frame.swapchain_image)
                 .store_color(0, frame.swapchain_image)
                 .set_render_area(stripe_x as _, 0, stripe_width, swapchain_info.height)
-                .record_pipeline(|cmd, _| {
-                    cmd.draw(6, 1, 0, 0);
+                .record_cmd_buf(|cmd_buf, _| {
+                    cmd_buf.draw(6, 1, 0, 0);
                 });
         }
     })
@@ -168,8 +169,8 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
                     .base_mip_level(mip_level)
                     .mip_level_count(1),
             )
-            .record_pipeline(|pipeline, _| {
-                pipeline
+            .record_cmd_buf(|cmd_buf, _| {
+                cmd_buf
                     .push_constants(
                         0,
                         bytes_of(&PushConstants {

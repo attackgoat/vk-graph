@@ -1,5 +1,5 @@
 use {
-    super::Nodes,
+    super::Resources,
     crate::{
         AnyAccelerationStructureNode,
         driver::{
@@ -12,7 +12,7 @@ use {
         },
     },
     ash::vk,
-    std::cell::RefCell,
+    std::{cell::RefCell, ops::Deref},
 };
 
 /// Recording interface for acceleration structure commands.
@@ -45,7 +45,7 @@ use {
 /// ```
 pub struct AccelerationStructureRef<'a> {
     pub(super) cmd_buf: &'a CommandBuffer,
-    pub(super) nodes: Nodes<'a>,
+    pub(super) resources: Resources<'a>,
 }
 
 impl AccelerationStructureRef<'_> {
@@ -71,7 +71,7 @@ impl AccelerationStructureRef<'_> {
     /// ```no_run
     /// # use ash::vk;
     /// # use vk_graph::cmd_ref::BuildAccelerationStructureInfo;
-    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::{AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, AccelerationStructureInfo, DeviceOrHostAddress};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
@@ -90,27 +90,27 @@ impl AccelerationStructureRef<'_> {
     /// # let my_idx_buf = Buffer::create(&device, buf_info)?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
-    /// # let index_node = my_graph.bind_resource(my_idx_buf);
-    /// # let vertex_node = my_graph.bind_resource(my_vtx_buf);
+    /// # let index_buf = my_graph.bind_resource(my_idx_buf);
+    /// # let vertex_buf = my_graph.bind_resource(my_vtx_buf);
     /// my_graph.begin_cmd()
-    ///         .read_node(index_node)
-    ///         .read_node(vertex_node)
-    ///         .write_node(blas_node)
-    ///         .write_node(scratch_buf)
-    ///         .record_accel_struct(move |accel_struct, nodes| {
-    ///             let scratch_addr = nodes[scratch_buf].device_address();
+    ///         .resource_access(index_buf, AccessType::IndexBuffer)
+    ///         .resource_access(vertex_buf, AccessType::VertexBuffer)
+    ///         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+    ///         .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
+    ///         .record_cmd_buf(move |cmd_buf, resources| {
+    ///             let scratch_addr = resources[scratch_buf].device_address();
     ///             let geom = AccelerationStructureGeometry {
     ///                 max_primitive_count: 64,
     ///                 flags: vk::GeometryFlagsKHR::OPAQUE,
     ///                 geometry: AccelerationStructureGeometryData::Triangles {
     ///                     index_addr: DeviceOrHostAddress::DeviceAddress(
-    ///                         nodes[index_node].device_address()
+    ///                         resources[index_buf].device_address()
     ///                     ),
     ///                     index_type: vk::IndexType::UINT32,
     ///                     max_vertex: 42,
     ///                     transform_addr: None,
     ///                     vertex_addr: DeviceOrHostAddress::DeviceAddress(
-    ///                         nodes[vertex_node].device_address(),
+    ///                         resources[vertex_buf].device_address(),
     ///                     ),
     ///                     vertex_format: vk::Format::R32G32B32_SFLOAT,
     ///                     vertex_stride: 12,
@@ -124,13 +124,13 @@ impl AccelerationStructureRef<'_> {
     ///             };
     ///             let info = AccelerationStructureGeometryInfo::blas([(geom, build_range)]);
     ///
-    ///             accel_struct.build(&[
+    ///             cmd_buf.build_accel_struct(&[
     ///                 BuildAccelerationStructureInfo::new(blas_node, scratch_addr, info)
     ///             ]);
     ///         });
     /// # Ok(()) }
     /// ```
-    pub fn build(&self, infos: &[BuildAccelerationStructureInfo]) -> &Self {
+    pub fn build_accel_struct(&self, infos: &[BuildAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
             geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
@@ -180,7 +180,7 @@ impl AccelerationStructureRef<'_> {
                             .ty(info.build_data.ty)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(self.nodes[info.accel_struct].handle)
+                            .dst_acceleration_structure(self.resources[info.accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -207,7 +207,10 @@ impl AccelerationStructureRef<'_> {
     /// `range` is a buffer device address which points to `info.geometry.len()`
     /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
     /// addresses where geometry data is stored, as defined by `info`.
-    pub fn build_indirect(&self, infos: &[BuildAccelerationStructureIndirectInfo]) -> &Self {
+    pub fn build_accel_struct_indirect(
+        &self,
+        infos: &[BuildAccelerationStructureIndirectInfo],
+    ) -> &Self {
         #[derive(Default)]
         struct Tls {
             geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
@@ -252,7 +255,7 @@ impl AccelerationStructureRef<'_> {
                             .ty(info.build_data.ty)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(self.nodes[info.accel_struct].handle)
+                            .dst_acceleration_structure(self.resources[info.accel_struct].handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_data.into()),
                     );
@@ -293,7 +296,7 @@ impl AccelerationStructureRef<'_> {
     ///   [`AccelerationStructure::size_of`] aligned to `min_accel_struct_scratch_offset_alignment`
     ///   of
     ///   [`PhysicalDevice::accel_struct_properties`](crate::driver::physical_device::PhysicalDevice::accel_struct_properties).
-    pub fn update(&self, infos: &[UpdateAccelerationStructureInfo]) -> &Self {
+    pub fn update_accel_struct(&self, infos: &[UpdateAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
             geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
@@ -343,8 +346,12 @@ impl AccelerationStructureRef<'_> {
                             .ty(info.update_data.ty)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .dst_acceleration_structure(self.nodes[info.dst_accel_struct].handle)
-                            .src_acceleration_structure(self.nodes[info.src_accel_struct].handle)
+                            .dst_acceleration_structure(
+                                self.resources[info.dst_accel_struct].handle,
+                            )
+                            .src_acceleration_structure(
+                                self.resources[info.src_accel_struct].handle,
+                            )
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -371,7 +378,10 @@ impl AccelerationStructureRef<'_> {
     /// `range` is a buffer device address which points to `info.geometry.len()`
     /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
     /// addresses where geometry data is stored, as defined by `info`.
-    pub fn update_indirect(&self, infos: &[UpdateAccelerationStructureIndirectInfo]) -> &Self {
+    pub fn update_accel_struct_indirect(
+        &self,
+        infos: &[UpdateAccelerationStructureIndirectInfo],
+    ) -> &Self {
         #[derive(Default)]
         struct Tls {
             geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
@@ -416,8 +426,12 @@ impl AccelerationStructureRef<'_> {
                             .ty(info.update_data.ty)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .src_acceleration_structure(self.nodes[info.src_accel_struct].handle)
-                            .dst_acceleration_structure(self.nodes[info.dst_accel_struct].handle)
+                            .src_acceleration_structure(
+                                self.resources[info.src_accel_struct].handle,
+                            )
+                            .dst_acceleration_structure(
+                                self.resources[info.dst_accel_struct].handle,
+                            )
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -444,6 +458,14 @@ impl AccelerationStructureRef<'_> {
         });
 
         self
+    }
+}
+
+impl<'a> Deref for AccelerationStructureRef<'a> {
+    type Target = CommandBuffer;
+
+    fn deref(&self) -> &Self::Target {
+        self.cmd_buf
     }
 }
 

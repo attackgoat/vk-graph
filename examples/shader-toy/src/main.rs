@@ -44,6 +44,7 @@ use {
             graphic::{GraphicPipeline, GraphicPipelineInfo},
             image::ImageInfo,
             shader::Shader,
+            AccessType,
         },
         pool::{lazy::LazyPool, Pool as _},
         Graph,
@@ -167,9 +168,9 @@ fn main() -> anyhow::Result<()> {
         .clear_color_image(blank_image, [0.0, 0.0, 0.0, 1.0])
         .clear_color_image(temp_image, [0.0, 1.0, 0.0, 1.0]);
 
-    let mut framebuffer_image_binding = Some(graph.node(framebuffer_image).clone());
-    let mut blank_image_binding = Some(graph.node(blank_image).clone());
-    let mut temp_image_binding = Some(graph.node(temp_image).clone());
+    let mut framebuffer_image_binding = Some(graph.resource(framebuffer_image).clone());
+    let mut blank_image_binding = Some(graph.resource(blank_image).clone());
+    let mut temp_image_binding = Some(graph.resource(temp_image).clone());
 
     graph.resolve().submit(&mut cache, 0, 0)?;
 
@@ -289,13 +290,29 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Buffer A")
                 .bind_pipeline(&buffer_pipeline)
-                .read_descriptor(0, input)
-                .read_descriptor(1, noise_image)
-                .read_descriptor(2, flowers_image)
-                .read_descriptor(3, blank_image)
+                .shader_resource_access(
+                    0,
+                    input,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
+                .shader_resource_access(
+                    1,
+                    noise_image,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
+                .shader_resource_access(
+                    2,
+                    flowers_image,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
+                .shader_resource_access(
+                    3,
+                    blank_image,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
                 .store_color(0, output)
-                .record_pipeline(move |pipeline, _| {
-                    pipeline
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf
                         .push_constants(0, bytes_of(&push_consts))
                         .draw(6, 1, 0, 0);
                 });
@@ -306,10 +323,14 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Image")
                 .bind_pipeline(&image_pipeline)
-                .read_descriptor(0, output)
+                .shader_resource_access(
+                    0,
+                    output,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
                 .store_color(0, input)
-                .record_pipeline(move |pipeline, _| {
-                    pipeline
+                .record_cmd_buf(move |cmd_buf, _| {
+                    cmd_buf
                         .push_constants(0, bytes_of(&push_consts))
                         .draw(6, 1, 0, 0);
                 });
@@ -318,11 +339,11 @@ fn main() -> anyhow::Result<()> {
             display.present_image(frame.graph, input, frame.swapchain_image);
 
             // Unbind things from this graph (we want them back for the next frame!)
-            flowers_image_binding = Some(frame.graph.node(flowers_image).clone());
-            noise_image_binding = Some(frame.graph.node(noise_image).clone());
-            framebuffer_image_binding = Some(frame.graph.node(framebuffer_image).clone());
-            blank_image_binding = Some(frame.graph.node(blank_image).clone());
-            temp_image_binding = Some(frame.graph.node(temp_image).clone());
+            flowers_image_binding = Some(frame.graph.resource(flowers_image).clone());
+            noise_image_binding = Some(frame.graph.resource(noise_image).clone());
+            framebuffer_image_binding = Some(frame.graph.resource(framebuffer_image).clone());
+            blank_image_binding = Some(frame.graph.resource(blank_image).clone());
+            temp_image_binding = Some(frame.graph.resource(temp_image).clone());
         })
         .context("Unable to run event loop")?;
 

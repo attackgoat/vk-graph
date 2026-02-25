@@ -106,13 +106,13 @@ fn main() -> anyhow::Result<()> {
             .clear_depth_stencil(depth_image)
             .clear_color_value(0, frame.swapchain_image, [0xff, 0xff, 0xff, 0xff])
             .store_color(0, frame.swapchain_image)
-            .record_pipeline(move |pipeline, _| {
-                pipeline
+            .record_cmd_buf(move |cmd_buf, _| {
+                cmd_buf
                     .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                     .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
                     .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
 
-                pipeline
+                cmd_buf
                     .bind_index_buffer(ground_mesh_index_buf, 0, vk::IndexType::UINT32)
                     .bind_vertex_buffer(0, ground_mesh_vertex_buf, 0)
                     .draw_indexed(ground_mesh.index_count, 1, 0, 0, 0);
@@ -212,8 +212,8 @@ fn create_blas(
 
     pass.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-        .record_accel_struct(move |accel_struct, _| {
-            accel_struct.build(&[BuildAccelerationStructureInfo::new(
+        .record_cmd_buf(move |cmd_buf, _| {
+            cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 blas,
                 scratch_addr,
                 info,
@@ -392,8 +392,8 @@ fn create_tlas(
         .resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
         .resource_access(tlas, AccessType::AccelerationStructureBuildWrite)
-        .record_accel_struct(move |accel_struct, _| {
-            accel_struct.build(&[BuildAccelerationStructureInfo::new(
+        .record_cmd_buf(move |cmd_buf, _| {
+            cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 tlas,
                 scratch_addr,
                 info,
