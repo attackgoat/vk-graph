@@ -222,7 +222,7 @@ fn create_blas(
 
     let blas = graph.resource(blas).clone();
 
-    graph.resolve().submit(&mut LazyPool::new(device), 0, 0)?;
+    graph.queue().submit(&mut LazyPool::new(device), 0, 0)?;
 
     Ok(blas)
 }

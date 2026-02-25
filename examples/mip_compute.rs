@@ -143,7 +143,7 @@ fn main() -> Result<(), DriverError> {
     let depth_pixel = graph.resource(depth_pixel).clone();
 
     graph
-        .resolve()
+        .queue()
         .submit(&mut HashPool::new(&device), 0, 0)?
         .wait_until_executed()?;
 

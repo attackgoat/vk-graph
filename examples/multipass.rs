@@ -305,7 +305,7 @@ fn create_funky_shape(device: &Device, pool: &mut LazyPool) -> Result<Shape, Dri
         .copy_buffer(vertex_buf_host, vertex_buf_gpu);
 
     // Submit the graph, which runs the operations on the GPU
-    graph.resolve().submit(pool, 0, 0)?;
+    graph.queue().submit(pool, 0, 0)?;
 
     // (We drop the graph here; it's okay the cache keeps things alive until they're done)
 

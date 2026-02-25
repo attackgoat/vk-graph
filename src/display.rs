@@ -153,8 +153,8 @@ impl Display {
     ) -> Result<(), DisplayError> {
         trace!("present_image");
 
-        let mut resolver = graph.resolve();
-        let wait_dst_stage_mask = resolver.node_pipeline_stages(swapchain_image);
+        let mut queue = graph.queue();
+        let wait_dst_stage_mask = queue.resource_stages(swapchain_image);
 
         // The swapchain should have been written to, otherwise it would be noise and that's a panic
         assert!(
@@ -162,7 +162,7 @@ impl Display {
             "uninitialized swapchain image: write something each frame!",
         );
 
-        let exec_idx = resolver.swapchain_image(swapchain_image).exec_idx;
+        let exec_idx = queue.swapchain_image(swapchain_image).exec_idx;
         let exec = &mut self.execs[exec_idx];
 
         debug_assert!(exec.queue.is_none());
@@ -180,11 +180,11 @@ impl Display {
                 .map_err(|_| ())?;
         }
 
-        // resolver.record_node_dependencies(&mut *self.pool, cmd_buf, swapchain_image)?;
-        resolver.record_node(pool, &mut exec.cmd_buf, swapchain_image)?;
+        // queue.record_node_dependencies(&mut *self.pool, cmd_buf, swapchain_image)?;
+        queue.submit_resource(swapchain_image, pool, &mut exec.cmd_buf)?;
 
         {
-            let swapchain_image = resolver.swapchain_image(swapchain_image);
+            let swapchain_image = queue.swapchain_image(swapchain_image);
             for (access, range) in Image::access(
                 swapchain_image,
                 AccessType::Present,
@@ -228,50 +228,52 @@ impl Display {
         // before present which use nodes that are unused in the remainder of the graph.
         // These operations are still important, but they don't need to wait for any of the above
         // things so we do them last
-        resolver.record_unscheduled_passes(pool, &mut exec.cmd_buf)?;
+        queue.submit_cmd_buf(pool, &mut exec.cmd_buf)?;
 
-        let queue = Device::queue(
-            &exec.cmd_buf.device,
-            self.info.queue_family_index,
-            queue_index,
-        );
+        {
+            let queue = Device::queue(
+                &exec.cmd_buf.device,
+                self.info.queue_family_index,
+                queue_index,
+            );
 
-        unsafe {
-            exec.cmd_buf
-                .device
-                .end_command_buffer(exec.cmd_buf.handle)
-                .map_err(|err| {
-                    warn!("unable to end display command buffer: {err}");
+            unsafe {
+                exec.cmd_buf
+                    .device
+                    .end_command_buffer(exec.cmd_buf.handle)
+                    .map_err(|err| {
+                        warn!("unable to end display command buffer: {err}");
 
-                    DriverError::InvalidData
-                })?;
-            exec.cmd_buf
-                .device
-                .queue_submit(
-                    queue,
-                    slice::from_ref(
-                        &vk::SubmitInfo::default()
-                            .command_buffers(slice::from_ref(&exec.cmd_buf.handle))
-                            .wait_semaphores(slice::from_ref(&exec.swapchain_acquired))
-                            .wait_dst_stage_mask(slice::from_ref(&wait_dst_stage_mask))
-                            .signal_semaphores(slice::from_ref(&exec.swapchain_rendered)),
-                    ),
-                    exec.cmd_buf.fence,
-                )
-                .map_err(|err| {
-                    warn!("unable to submit display command buffer: {err}");
+                        DriverError::InvalidData
+                    })?;
+                exec.cmd_buf
+                    .device
+                    .queue_submit(
+                        queue,
+                        slice::from_ref(
+                            &vk::SubmitInfo::default()
+                                .command_buffers(slice::from_ref(&exec.cmd_buf.handle))
+                                .wait_semaphores(slice::from_ref(&exec.swapchain_acquired))
+                                .wait_dst_stage_mask(slice::from_ref(&wait_dst_stage_mask))
+                                .signal_semaphores(slice::from_ref(&exec.swapchain_rendered)),
+                        ),
+                        exec.cmd_buf.fence,
+                    )
+                    .map_err(|err| {
+                        warn!("unable to submit display command buffer: {err}");
 
-                    DriverError::InvalidData
-                })?
+                        DriverError::InvalidData
+                    })?
+            }
+
+            exec.cmd_buf.waiting = true;
+            exec.queue = Some(queue);
         }
-
-        exec.cmd_buf.waiting = true;
-        exec.queue = Some(queue);
 
         let elapsed = Instant::now() - started;
         trace!("🔜🔜🔜 vkQueueSubmit took {} μs", elapsed.as_micros(),);
 
-        let swapchain_image = resolver.swapchain_image(swapchain_image).clone();
+        let swapchain_image = queue.swapchain_image(swapchain_image).clone();
 
         self.swapchain.present_image(
             swapchain_image,
@@ -282,7 +284,7 @@ impl Display {
 
         // Store the resolved graph because it contains bindings, leases, and other shared resources
         // that need to be kept alive until the fence is waited upon.
-        exec.cmd_buf.push_fenced_drop(resolver);
+        exec.cmd_buf.push_fenced_drop(queue);
 
         Ok(())
     }

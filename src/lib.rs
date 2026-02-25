@@ -357,11 +357,11 @@ pub mod node;
 pub mod pool;
 
 mod bind;
-mod resolver;
+mod queue;
 
 pub use self::{
     bind::{BindGraph, Bound, Resource},
-    resolver::Resolver,
+    queue::Queue,
 };
 
 use {
@@ -651,12 +651,6 @@ pub struct Graph {
 }
 
 impl Graph {
-    /// Constructs a new `Graph`.
-    #[deprecated = "use default function instead"]
-    pub fn new() -> Self {
-        Default::default()
-    }
-
     /// Allocates and begins writing a new command.
     pub fn begin_cmd(&mut self) -> CommandRef<'_> {
         CommandRef::new(self)
@@ -1204,7 +1198,7 @@ impl Graph {
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given node represents.
-    pub fn resource<N>(&self, node: N) -> &<N as Bound>::Resource
+    pub fn resource<N>(&self, node: N) -> &N::Resource
     where
         N: Bound,
     {
@@ -1214,13 +1208,13 @@ impl Graph {
     /// Finalizes the graph and provides an object with functions for submitting the resulting
     /// commands.
     #[profiling::function]
-    pub fn resolve(mut self) -> Resolver {
+    pub fn queue(mut self) -> Queue {
         // The final execution of each pass has no function
         for pass in &mut self.cmds {
             pass.execs.pop();
         }
 
-        Resolver::new(self)
+        Queue::new(self)
     }
 
     /// Note: `data` must not exceed 65536 bytes.
@@ -1279,6 +1273,12 @@ pub(crate) mod deprecated {
     };
 
     impl Graph {
+        #[deprecated = "use default function instead"]
+        #[doc(hidden)]
+        pub fn new() -> Self {
+            Default::default()
+        }
+
         #[deprecated = "use device_address function of resource function result"]
         #[doc(hidden)]
         pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {

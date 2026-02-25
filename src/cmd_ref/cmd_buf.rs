@@ -43,12 +43,12 @@ use {
 ///         });
 /// # Ok(()) }
 /// ```
-pub struct AccelerationStructureRef<'a> {
+pub struct CommandBufferRef<'a> {
     pub(super) cmd_buf: &'a CommandBuffer,
     pub(super) resources: Resources<'a>,
 }
 
-impl AccelerationStructureRef<'_> {
+impl CommandBufferRef<'_> {
     /// Build acceleration structures.
     ///
     /// There is no ordering or synchronization implied between any of the individual acceleration
@@ -461,7 +461,7 @@ impl AccelerationStructureRef<'_> {
     }
 }
 
-impl<'a> Deref for AccelerationStructureRef<'a> {
+impl<'a> Deref for CommandBufferRef<'a> {
     type Target = CommandBuffer;
 
     fn deref(&self) -> &Self::Target {

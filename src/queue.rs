@@ -176,12 +176,12 @@ impl Drop for PhysicalPass {
 /// <http://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/>
 /// <https://github.com/EmbarkStudios/kajiya>
 #[derive(Debug)]
-pub struct Resolver {
+pub struct Queue {
     pub(super) graph: Graph,
     physical_passes: Vec<PhysicalPass>,
 }
 
-impl Resolver {
+impl Queue {
     pub(super) fn new(graph: Graph) -> Self {
         let physical_passes = Vec::with_capacity(graph.cmds.len());
 
@@ -688,7 +688,7 @@ impl Resolver {
     /// A fully-resolved graph contains no additional work and may be discarded, although doing so
     /// will stall the GPU while the fences are waited on. It is preferrable to wait a few frame so
     /// that the fences will have already been signalled.
-    pub fn is_resolved(&self) -> bool {
+    pub fn is_submitted(&self) -> bool {
         self.graph.cmds.is_empty()
     }
 
@@ -1847,41 +1847,6 @@ impl Resolver {
         }
     }
 
-    /// Returns the stages that process the given node.
-    ///
-    /// Note that this value must be retrieved before resolving a node as there will be no
-    /// data left to inspect afterwards!
-    #[profiling::function]
-    pub fn node_pipeline_stages(&self, node: impl Node) -> vk::PipelineStageFlags {
-        let node_idx = node.index();
-        let mut res = Default::default();
-
-        'pass: for pass in self.graph.cmds.iter() {
-            for exec in pass.execs.iter() {
-                if exec.accesses.contains_key(&node_idx) {
-                    res |= pass
-                        .execs
-                        .iter()
-                        .filter_map(|exec| exec.pipeline.as_ref())
-                        .map(|pipeline| pipeline.stage())
-                        .reduce(|j, k| j | k)
-                        .unwrap_or(vk::PipelineStageFlags::TRANSFER);
-
-                    // The execution pipelines of a pass are always the same type
-                    continue 'pass;
-                }
-            }
-        }
-
-        debug_assert_ne!(
-            res,
-            Default::default(),
-            "The given node was not accessed in this graph"
-        );
-
-        res
-    }
-
     #[profiling::function]
     fn record_execution_barriers<'a>(
         cmd_buf: &CommandBuffer,
@@ -2319,57 +2284,6 @@ impl Resolver {
         });
     }
 
-    /// Records any pending render graph passes that are required by the given node, but does not
-    /// record any passes that actually contain the given node.
-    ///
-    /// As a side effect, the graph is optimized for the given node. Future calls may further optimize
-    /// the graph, but only on top of the existing optimizations. This only matters if you are pulling
-    /// multiple images out and you care - in that case pull the "most important" image first.
-    #[profiling::function]
-    pub fn record_node_dependencies<P>(
-        &mut self,
-        pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
-        node: impl Node,
-    ) -> Result<(), DriverError>
-    where
-        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
-    {
-        let node_idx = node.index();
-
-        debug_assert!(self.graph.resources.get(node_idx).is_some());
-
-        // We record up to but not including the first pass which accesses the target node
-        if let Some(end_pass_idx) = self.graph.first_node_access_pass_index(node) {
-            self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)?;
-        }
-
-        Ok(())
-    }
-
-    /// Records any pending render graph passes that the given node requires.
-    #[profiling::function]
-    pub fn record_node<P>(
-        &mut self,
-        pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
-        node: impl Node,
-    ) -> Result<(), DriverError>
-    where
-        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
-    {
-        let node_idx = node.index();
-
-        debug_assert!(self.graph.resources.get(node_idx).is_some());
-
-        if self.graph.cmds.is_empty() {
-            return Ok(());
-        }
-
-        let end_pass_idx = self.graph.cmds.len();
-        self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)
-    }
-
     #[profiling::function]
     fn record_node_passes<P>(
         &mut self,
@@ -2578,35 +2492,6 @@ impl Resolver {
         Ok(())
     }
 
-    /// Records any pending render graph passes that have not been previously scheduled.
-    #[profiling::function]
-    pub fn record_unscheduled_passes<P>(
-        &mut self,
-        pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
-    ) -> Result<(), DriverError>
-    where
-        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
-    {
-        if self.graph.cmds.is_empty() {
-            return Ok(());
-        }
-
-        thread_local! {
-            static SCHEDULE: RefCell<Schedule> = Default::default();
-        }
-
-        SCHEDULE.with_borrow_mut(|schedule| {
-            schedule
-                .access_cache
-                .update(&self.graph, self.graph.cmds.len());
-            schedule.passes.clear();
-            schedule.passes.extend(0..self.graph.cmds.len());
-
-            self.record_scheduled_passes(pool, cmd_buf, schedule, self.graph.cmds.len())
-        })
-    }
-
     #[profiling::function]
     fn render_area(bindings: &[Resource], pass: &Command) -> Area {
         // set_render_area was not specified so we're going to guess using the minimum common
@@ -2707,6 +2592,41 @@ impl Resolver {
                 scheduled += 1;
             }
         });
+    }
+
+    /// Returns the stages that process the given node.
+    ///
+    /// Note that this value must be retrieved before resolving a node as there will be no
+    /// data left to inspect afterwards!
+    #[profiling::function]
+    pub fn resource_stages(&self, node: impl Node) -> vk::PipelineStageFlags {
+        let node_idx = node.index();
+        let mut res = Default::default();
+
+        'pass: for pass in self.graph.cmds.iter() {
+            for exec in pass.execs.iter() {
+                if exec.accesses.contains_key(&node_idx) {
+                    res |= pass
+                        .execs
+                        .iter()
+                        .filter_map(|exec| exec.pipeline.as_ref())
+                        .map(|pipeline| pipeline.stage())
+                        .reduce(|j, k| j | k)
+                        .unwrap_or(vk::PipelineStageFlags::TRANSFER);
+
+                    // The execution pipelines of a pass are always the same type
+                    continue 'pass;
+                }
+            }
+        }
+
+        debug_assert_ne!(
+            res,
+            Default::default(),
+            "The given node was not accessed in this graph"
+        );
+
+        res
     }
 
     /// Returns a vec of pass indexes that are required to be executed, in order, for the given
@@ -2918,7 +2838,7 @@ impl Resolver {
                 .map_err(|_| DriverError::OutOfMemory)?;
         }
 
-        self.record_unscheduled_passes(pool, &mut cmd_buf)?;
+        self.submit_cmd_buf(pool, &mut cmd_buf)?;
 
         let queue = Device::queue(&cmd_buf.device, queue_family_index, queue_index);
 
@@ -2954,6 +2874,86 @@ impl Resolver {
         cmd_buf.push_fenced_drop(self);
 
         Ok(cmd_buf)
+    }
+
+    /// Records any pending render graph passes that have not been previously scheduled.
+    #[profiling::function]
+    pub fn submit_cmd_buf<P>(
+        &mut self,
+        pool: &mut P,
+        cmd_buf: &mut CommandBuffer,
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        if self.graph.cmds.is_empty() {
+            return Ok(());
+        }
+
+        thread_local! {
+            static SCHEDULE: RefCell<Schedule> = Default::default();
+        }
+
+        SCHEDULE.with_borrow_mut(|schedule| {
+            schedule
+                .access_cache
+                .update(&self.graph, self.graph.cmds.len());
+            schedule.passes.clear();
+            schedule.passes.extend(0..self.graph.cmds.len());
+
+            self.record_scheduled_passes(pool, cmd_buf, schedule, self.graph.cmds.len())
+        })
+    }
+
+    /// Records any pending render graph passes that the given node requires.
+    #[profiling::function]
+    pub fn submit_resource<P>(
+        &mut self,
+        node: impl Node,
+        pool: &mut P,
+        cmd_buf: &mut CommandBuffer,
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        let node_idx = node.index();
+
+        debug_assert!(self.graph.resources.get(node_idx).is_some());
+
+        if self.graph.cmds.is_empty() {
+            return Ok(());
+        }
+
+        let end_pass_idx = self.graph.cmds.len();
+        self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)
+    }
+
+    /// Records any pending render graph passes that are required by the given node, but does not
+    /// record any passes that actually contain the given node.
+    ///
+    /// As a side effect, the graph is optimized for the given node. Future calls may further optimize
+    /// the graph, but only on top of the existing optimizations. This only matters if you are pulling
+    /// multiple images out and you care - in that case pull the "most important" image first.
+    #[profiling::function]
+    pub fn submit_resource_dependencies<P>(
+        &mut self,
+        node: impl Node,
+        pool: &mut P,
+        cmd_buf: &mut CommandBuffer,
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        let node_idx = node.index();
+
+        debug_assert!(self.graph.resources.get(node_idx).is_some());
+
+        // We record up to but not including the first pass which accesses the target node
+        if let Some(end_pass_idx) = self.graph.first_node_access_pass_index(node) {
+            self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn swapchain_image(&mut self, node: SwapchainImageNode) -> &SwapchainImage {
@@ -3233,4 +3233,54 @@ impl Resolver {
 struct Schedule {
     access_cache: AccessCache,
     passes: Vec<usize>,
+}
+
+#[allow(private_bounds)]
+#[allow(unused)]
+mod derecated {
+    use crate::{
+        Queue,
+        driver::{
+            CommandBuffer, DescriptorPool, DescriptorPoolInfo, DriverError, RenderPass,
+            RenderPassInfo,
+        },
+        node::Node,
+        pool::Pool,
+    };
+
+    impl Queue {
+        #[deprecated = "use is_submitted function"]
+        #[doc(hidden)]
+        pub fn is_resolved(&self) -> bool {
+            self.is_submitted()
+        }
+
+        #[deprecated = "use submit_resource function"]
+        #[doc(hidden)]
+        pub fn record_node<P>(
+            &mut self,
+            pool: &mut P,
+            cmd_buf: &mut CommandBuffer,
+            node: impl Node,
+        ) -> Result<(), DriverError>
+        where
+            P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+        {
+            self.submit_resource(node, pool, cmd_buf)
+        }
+
+        #[deprecated = "use submit_resource function"]
+        #[doc(hidden)]
+        pub fn record_node_dependencies<P>(
+            &mut self,
+            pool: &mut P,
+            cmd_buf: &mut CommandBuffer,
+            node: impl Node,
+        ) -> Result<(), DriverError>
+        where
+            P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+        {
+            self.submit_resource_dependencies(node, pool, cmd_buf)
+        }
+    }
 }

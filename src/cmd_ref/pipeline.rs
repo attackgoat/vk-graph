@@ -32,7 +32,7 @@ impl<'a, T> PipelineRef<'a, T> {
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given node represents.
-    pub fn resource<N>(&self, node: N) -> &<N as Bound>::Resource
+    pub fn resource<N>(&self, node: N) -> &N::Resource
     where
         N: Bound,
     {

@@ -1,17 +1,16 @@
 //! Strongly-typed rendering commands.
 
-mod accel_struct;
 mod bind;
+mod cmd_buf;
 mod compute;
 mod graphic;
 mod pipeline;
 mod ray_trace;
 
 pub use self::{
-    accel_struct::{
-        AccelerationStructureRef, BuildAccelerationStructureIndirectInfo,
-        BuildAccelerationStructureInfo, UpdateAccelerationStructureIndirectInfo,
-        UpdateAccelerationStructureInfo,
+    cmd_buf::{
+        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandBufferRef,
+        UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
     pipeline::PipelineRef,
 };
@@ -163,10 +162,10 @@ impl<'a> CommandRef<'a> {
     /// code and interfaces.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(AccelerationStructureRef<'_>, Resources<'_>) + Send + 'static,
+        func: impl FnOnce(CommandBufferRef<'_>, Resources<'_>) + Send + 'static,
     ) -> Self {
         self.push_execute(move |cmd_buf, resources| {
-            func(AccelerationStructureRef { cmd_buf, resources }, resources);
+            func(CommandBufferRef { cmd_buf, resources }, resources);
         });
 
         self
@@ -174,7 +173,7 @@ impl<'a> CommandRef<'a> {
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given node represents.
-    pub fn resource<N>(&self, node: N) -> &<N as Bound>::Resource
+    pub fn resource<N>(&self, node: N) -> &N::Resource
     where
         N: Bound,
     {
@@ -670,7 +669,7 @@ impl From<Range<vk::DeviceSize>> for ViewInfo {
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{AccelerationStructureRef, CommandRef, Resources, SubresourceRange, View},
+            cmd_ref::{CommandBufferRef, CommandRef, Resources, SubresourceRange, View},
             deprecated::Info,
             node::Node,
         },
@@ -739,10 +738,10 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_accel_struct(
             mut self,
-            func: impl FnOnce(AccelerationStructureRef<'_>, Resources<'_>) + Send + 'static,
+            func: impl FnOnce(CommandBufferRef<'_>, Resources<'_>) + Send + 'static,
         ) -> Self {
             self.push_execute(move |cmd_buf, resources| {
-                func(AccelerationStructureRef { cmd_buf, resources }, resources);
+                func(CommandBufferRef { cmd_buf, resources }, resources);
             });
 
             self
