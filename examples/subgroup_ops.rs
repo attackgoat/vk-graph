@@ -68,13 +68,13 @@ fn exclusive_sum(
 ) -> Result<Vec<u32>, DriverError> {
     let mut graph = Graph::default();
 
-    let input_buf = graph.bind_node(Buffer::create_from_slice(
+    let input_buf = graph.bind_resource(Buffer::create_from_slice(
         device,
         vk::BufferUsageFlags::STORAGE_BUFFER,
         cast_slice(input_data),
     )?);
 
-    let output_buf = graph.bind_node(Arc::new(Buffer::create(
+    let output_buf = graph.bind_resource(Arc::new(Buffer::create(
         device,
         BufferInfo::host_mem(
             input_data.len() as vk::DeviceSize * size_of::<u32>() as vk::DeviceSize,
@@ -85,7 +85,7 @@ fn exclusive_sum(
     let workgroup_count =
         input_data.len() as u32 / device.physical_device.properties_v1_1.subgroup_size;
     let reduce_count = workgroup_count - 1;
-    let workgroup_buf = graph.bind_node(Buffer::create(
+    let workgroup_buf = graph.bind_resource(Buffer::create(
         device,
         BufferInfo::device_mem(
             reduce_count.max(1) as vk::DeviceSize * size_of::<u32>() as vk::DeviceSize,
@@ -96,7 +96,7 @@ fn exclusive_sum(
     if reduce_count > 0 {
         graph
             .begin_cmd()
-            .with_name("exclusive sum reduce")
+            .debug_name("exclusive sum reduce")
             .bind_pipeline(reduce_pipeline)
             .read_descriptor(0, input_buf)
             .write_descriptor(1, workgroup_buf)
@@ -107,7 +107,7 @@ fn exclusive_sum(
 
     graph
         .begin_cmd()
-        .with_name("exclusive sum scan")
+        .debug_name("exclusive sum scan")
         .bind_pipeline(scan_pipeline)
         .read_descriptor(0, workgroup_buf)
         .read_descriptor(1, input_buf)
@@ -116,7 +116,7 @@ fn exclusive_sum(
             compute.dispatch(workgroup_count, 1, 1);
         });
 
-    let output_buf = graph.node(output_buf).clone();
+    let output_buf = graph.resource(output_buf).clone();
     let mut cmd_buf = graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();
@@ -184,19 +184,16 @@ fn create_reduce_pipeline(device: &Device) -> Result<ComputePipeline, DriverErro
             )
             .as_slice(),
         )
-        .specialization_info(SpecializationInfo {
-            data: device
-                .physical_device
-                .properties_v1_1
-                .subgroup_size
-                .to_ne_bytes()
-                .to_vec(),
-            map_entries: vec![vk::SpecializationMapEntry {
-                constant_id: 0,
-                offset: 0,
-                size: size_of::<u32>(),
-            }],
-        }),
+        .specialization(
+            SpecializationMap::new(
+                device
+                    .physical_device
+                    .properties_v1_1
+                    .subgroup_size
+                    .to_ne_bytes(),
+            )
+            .constant(0, 0, 4),
+        ),
     )
 }
 
@@ -243,14 +240,16 @@ fn create_exclusive_sum_pipeline(device: &Device) -> Result<ComputePipeline, Dri
                 }
                 "#
         ).as_slice())
-            .specialization_info(SpecializationInfo {
-                data: device.physical_device.properties_v1_1.subgroup_size.to_ne_bytes().to_vec(),
-                map_entries: vec![vk::SpecializationMapEntry {
-                    constant_id: 0,
-                    offset: 0,
-                    size: size_of::<u32>(),
-                }],
-            }),
+            .specialization(
+                SpecializationMap::new(
+                    device
+                        .physical_device
+                        .properties_v1_1
+                        .subgroup_size
+                        .to_ne_bytes(),
+                )
+                .constant(0, 0, 4),
+            ),
         )
 }
 

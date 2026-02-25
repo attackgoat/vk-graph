@@ -144,12 +144,12 @@ fn fill_depth_image(
     // device.physical_device.sampler_filter_minmax_properties.image_component_mapping
 
     let depth_data = (0..size.pow(2)).map(|x| x as f32).collect::<Box<_>>();
-    let depth_data = graph.bind_node(Buffer::create_from_slice(
+    let depth_data = graph.bind_resource(Buffer::create_from_slice(
         device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         cast_slice(&depth_data),
     )?);
-    let depth_image = graph.bind_node(Image::create(device, info)?);
+    let depth_image = graph.bind_resource(Image::create(device, info)?);
     graph.copy_buffer_to_image(depth_data, depth_image);
 
     Ok(depth_image)
@@ -173,11 +173,11 @@ fn reduce_depth_image(
         vk::Format::R32_SFLOAT,
         vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
     );
-    let reduced_image = graph.bind_node(Image::create(device, reduced_info)?);
+    let reduced_image = graph.bind_resource(Image::create(device, reduced_info)?);
 
     graph
         .begin_cmd()
-        .with_name("Reduce depth image")
+        .debug_name("Reduce depth image")
         .bind_pipeline(ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
@@ -221,14 +221,14 @@ fn copy_image_to_buffer(
     let reduced_info = graph.node_info(reduced_image);
     let result_len = (reduced_info.width * reduced_info.height) as vk::DeviceSize
         * size_of::<f32>() as vk::DeviceSize;
-    let result_buf = graph.bind_node(Buffer::create(
+    let result_buf = graph.bind_resource(Buffer::create(
         device,
         BufferInfo::host_mem(result_len, vk::BufferUsageFlags::TRANSFER_DST),
     )?);
 
     graph.copy_image_to_buffer(reduced_image, result_buf);
 
-    Ok(graph.node(result_buf).clone())
+    Ok(graph.resource(result_buf).clone())
 }
 
 #[derive(Parser)]

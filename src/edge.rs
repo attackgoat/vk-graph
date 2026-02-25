@@ -9,8 +9,7 @@ use {
             accel_struct::AccelerationStructure, buffer::Buffer, compute::ComputePipeline,
             graphic::GraphicPipeline, image::Image, ray_trace::RayTracePipeline,
             swapchain::SwapchainImage,
-        },
-        pool::Lease,
+        }, pool::Lease
     },
     std::sync::Arc,
 };
@@ -18,20 +17,20 @@ use {
 /// A marker trait that says some graph object can transition into a different
 /// graph object; it is a one-way transition unless the other direction has
 /// been implemented too.
-pub trait Edge<Graph> {
+pub trait Edge<G = Graph> {
     type Result;
 }
 
 macro_rules! node {
     ($src:ty => $dst:ty) => {
-        impl Edge<Graph> for $src {
+        impl Edge for $src {
             type Result = $dst;
         }
     };
 }
 
-// Edges that can be bound as nodes to the render graph:
-// Ex: Graph::bind_node(&mut self, binding: X) -> Y
+// Edges that can be bound as nodes to the graph:
+// Ex: Graph::bind_resource(&mut self, binding: X) -> Y
 node!(AccelerationStructure => AccelerationStructureNode);
 node!(Arc<AccelerationStructure> => AccelerationStructureNode);
 node!(Lease<AccelerationStructure> => AccelerationStructureLeaseNode);
@@ -46,8 +45,8 @@ node!(Lease<Image> => ImageLeaseNode);
 node!(Arc<Lease<Image>> => ImageLeaseNode);
 node!(SwapchainImage => SwapchainImageNode);
 
-// Edges that can be unbound from the render graph:
-// Ex: Graph::unbind_node(&mut self, node: X) -> Y
+// Edges that can be borrowed from the graph:
+// Ex: Graph::node(&mut self, node: X) -> Y
 node!(AccelerationStructureNode => Arc<AccelerationStructure>);
 node!(AccelerationStructureLeaseNode => Arc<Lease<AccelerationStructure>>);
 node!(BufferNode => Arc<Buffer>);
@@ -58,7 +57,7 @@ node!(SwapchainImageNode => SwapchainImage);
 
 macro_rules! node_ref {
     ($src:ty => $dst:ty) => {
-        impl<'a> Edge<Graph> for &'a $src {
+        impl<'a> Edge for &'a $src {
             type Result = $dst;
         }
     };

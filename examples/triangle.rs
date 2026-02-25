@@ -79,16 +79,16 @@ fn main() -> Result<(), WindowError> {
     )?);
 
     window.run(|frame| {
-        let index_node = frame.graph.bind_node(&index_buf);
-        let vertex_node = frame.graph.bind_node(&vertex_buf);
+        let index_node = frame.graph.bind_resource(&index_buf);
+        let vertex_node = frame.graph.bind_resource(&vertex_buf);
 
         frame
             .graph
             .begin_cmd()
-            .with_name("Triangle Example")
+            .debug_name("Triangle Example")
             .bind_pipeline(&triangle_pipeline)
-            .access_node(index_node, AccessType::IndexBuffer)
-            .access_node(vertex_node, AccessType::VertexBuffer)
+            .resource_access(index_node, AccessType::IndexBuffer)
+            .resource_access(vertex_node, AccessType::VertexBuffer)
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
             .record_pipeline(move |pipeline, _| {

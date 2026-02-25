@@ -1,6 +1,6 @@
 use {
     super::{Nodes, PipelineRef},
-    crate::driver::{device::Device, ray_trace::RayTracePipeline},
+    crate::driver::{CommandBuffer, device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
 };
@@ -14,7 +14,7 @@ impl PipelineRef<'_, RayTracePipeline> {
     ) -> Self {
         let pipeline = self
             .cmd
-            .as_ref()
+            .cmd()
             .execs
             .last()
             .unwrap()
@@ -27,11 +27,10 @@ impl PipelineRef<'_, RayTracePipeline> {
         #[cfg(debug_assertions)]
         let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
-        self.cmd.push_execute(move |device, cmd_buf, nodes| {
+        self.cmd.push_execute(move |cmd_buf, nodes| {
             func(
                 RayTracePipelineRef {
                     cmd_buf,
-                    device,
 
                     #[cfg(debug_assertions)]
                     dynamic_stack_size,
@@ -73,7 +72,7 @@ impl PipelineRef<'_, RayTracePipeline> {
 ///     [RayTraceShaderGroup::new_general(0)],
 /// )?;
 /// # let mut my_graph = Graph::default();
-/// my_graph.begin_cmd().with_name("my ray trace pass")
+/// my_graph.begin_cmd().debug_name("my ray trace pass")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
 ///         .record_pipeline(move |pipeline, nodes| {
 ///             // During this closure we have access to the ray trace methods!
@@ -81,8 +80,7 @@ impl PipelineRef<'_, RayTracePipeline> {
 /// # Ok(()) }
 /// ```
 pub struct RayTracePipelineRef<'a> {
-    cmd_buf: vk::CommandBuffer,
-    device: &'a Device,
+    cmd_buf: &'a CommandBuffer,
 
     #[cfg(debug_assertions)]
     dynamic_stack_size: bool,
@@ -148,7 +146,7 @@ impl RayTracePipelineRef<'_> {
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let mut my_graph = Graph::default();
-    /// my_graph.begin_cmd().with_name("draw a cornell box")
+    /// my_graph.begin_cmd().debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
     ///         .record_pipeline(move |pipeline, nodes| {
     ///             pipeline.push_constants(0, &[0xcb])
@@ -173,8 +171,8 @@ impl RayTracePipelineRef<'_> {
                 );
 
                 unsafe {
-                    self.device.cmd_push_constants(
-                        self.cmd_buf,
+                    self.cmd_buf.device.cmd_push_constants(
+                        self.cmd_buf.handle,
                         self.pipeline.inner.layout,
                         push_const.stage_flags,
                         start,
@@ -197,11 +195,11 @@ impl RayTracePipelineRef<'_> {
         #[cfg(debug_assertions)]
         assert!(self.dynamic_stack_size);
 
-        let ray_trace_ext = Device::expect_ray_trace_ext(self.device);
+        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd_buf.device);
 
         unsafe {
             ray_trace_ext
-                .cmd_set_ray_tracing_pipeline_stack_size(self.cmd_buf, pipeline_stack_size);
+                .cmd_set_ray_tracing_pipeline_stack_size(self.cmd_buf.handle, pipeline_stack_size);
         }
 
         self
@@ -240,7 +238,7 @@ impl RayTracePipelineRef<'_> {
     /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
     /// # let mut my_graph = Graph::default();
-    /// my_graph.begin_cmd().with_name("draw a cornell box")
+    /// my_graph.begin_cmd().debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
     ///         .record_pipeline(move |pipeline, nodes| {
     ///             pipeline.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
@@ -261,11 +259,11 @@ impl RayTracePipelineRef<'_> {
         height: u32,
         depth: u32,
     ) -> &Self {
-        let ray_trace_ext = Device::expect_ray_trace_ext(self.device);
+        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd_buf.device);
 
         unsafe {
             ray_trace_ext.cmd_trace_rays(
-                self.cmd_buf,
+                self.cmd_buf.handle,
                 raygen_shader_binding_table,
                 miss_shader_binding_table,
                 hit_shader_binding_table,
@@ -297,11 +295,11 @@ impl RayTracePipelineRef<'_> {
         callable_shader_binding_table: &vk::StridedDeviceAddressRegionKHR,
         indirect_device_address: vk::DeviceAddress,
     ) -> &Self {
-        let ray_trace_ext = Device::expect_ray_trace_ext(self.device);
+        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd_buf.device);
 
         unsafe {
             ray_trace_ext.cmd_trace_rays_indirect(
-                self.cmd_buf,
+                self.cmd_buf.handle,
                 raygen_shader_binding_table,
                 miss_shader_binding_table,
                 hit_shader_binding_table,
@@ -311,5 +309,85 @@ impl RayTracePipelineRef<'_> {
         }
 
         self
+    }
+}
+
+mod deprecated {
+    use {
+        crate::{
+            cmd_ref::{Descriptor, PipelineRef, SubresourceRange, View, ViewInfo},
+            driver::ray_trace::RayTracePipeline,
+            node::Node,
+        },
+        vk_sync::AccessType,
+    };
+
+    impl PipelineRef<'_, RayTracePipeline> {
+        #[deprecated = "use shader_resource_access function with AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer"]
+        #[doc(hidden)]
+        pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_resource_access(
+                descriptor,
+                node,
+                AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+            )
+        }
+
+        #[deprecated = "use shader_subresource_access function with AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer"]
+        #[doc(hidden)]
+        pub fn read_descriptor_as<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            node_view: impl Into<N::Info>,
+        ) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_subresource_access(
+                descriptor,
+                node,
+                node_view,
+                AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+            )
+        }
+
+        #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]
+        #[doc(hidden)]
+        pub fn write_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_resource_access(descriptor, node, AccessType::AnyShaderWrite)
+        }
+
+        #[deprecated = "use shader_subresource_access function with AccessType::AnyShaderWrite"]
+        #[doc(hidden)]
+        pub fn write_descriptor_as<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            node_view: impl Into<N::Info>,
+        ) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_subresource_access(descriptor, node, node_view, AccessType::AnyShaderWrite)
+        }
     }
 }

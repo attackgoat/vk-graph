@@ -3,7 +3,7 @@
 #![warn(missing_docs)]
 
 pub use vk_graph::{
-    Bind, Bound, ClearColorValue, Graph,
+    BindGraph, Bound, ClearColorValue, Graph,
     cmd_ref::{
         BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
         PipelineRef, UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
@@ -39,7 +39,7 @@ pub use vk_graph::{
             RayTraceShaderGroup, RayTraceShaderGroupType,
         },
         render_pass::ResolveMode,
-        shader::{SamplerInfo, SamplerInfoBuilder, Shader, ShaderBuilder, SpecializationInfo},
+        shader::{SamplerInfo, SamplerInfoBuilder, Shader, ShaderBuilder, SpecializationMap},
         surface::Surface,
         swapchain::{
             Swapchain, SwapchainError, SwapchainImage, SwapchainInfo, SwapchainInfoBuilder,

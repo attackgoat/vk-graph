@@ -17,7 +17,7 @@ pub fn set_cursor_position(window: &Window, x: u32, y: u32) {
     window.set_cursor_position(position).unwrap_or_default();
 }
 
-/// A request to render a single frame to the provided render graph.
+/// A request to render a single frame to the provided graph.
 pub struct FrameContext<'a> {
     /// The device this frame belongs to.
     pub device: &'a Device,
@@ -28,7 +28,7 @@ pub struct FrameContext<'a> {
     /// The height, in pixels, of the current frame.
     pub height: u32,
 
-    /// A render graph which rendering commands should be recorded into.
+    /// A graph which rendering commands should be recorded into.
     ///
     /// Make sure to write to `swapchain_image` as part of this graph.
     pub graph: &'a mut Graph,

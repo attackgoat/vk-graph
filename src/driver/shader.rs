@@ -700,13 +700,13 @@ pub struct Shader {
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::shader::{Shader, SpecializationInfo};
+    /// # use vk_graph::driver::shader::{Shader, SpecializationMap};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_shader_code = [0u8; 1];
     /// // We instead specify 42 for MY_COUNT:
     /// let shader = Shader::new_fragment(my_shader_code.as_slice())
-    ///     .specialization_info(SpecializationInfo::new(
+    ///     .specialization_info(SpecializationMap::new(
     ///         [vk::SpecializationMapEntry {
     ///             constant_id: 0,
     ///             offset: 0,
@@ -717,7 +717,7 @@ pub struct Shader {
     /// # Ok(()) }
     /// ```
     #[builder(default, setter(strip_option))]
-    pub specialization_info: Option<SpecializationInfo>,
+    pub specialization: Option<SpecializationMap>,
 
     /// Shader code.
     ///
@@ -1146,16 +1146,21 @@ impl Shader {
     fn reflect_entry_point(
         entry_name: &str,
         spirv: impl Into<SpirvBinary>,
-        specialization_info: Option<&SpecializationInfo>,
+        specialization: Option<&SpecializationMap>,
     ) -> Result<EntryPoint, DriverError> {
         let mut config = ReflectConfig::new();
         config.ref_all_rscs(true).spv(spirv);
 
-        if let Some(spec_info) = specialization_info {
-            for spec in &spec_info.map_entries {
+        if let Some(specialization) = specialization {
+            for &vk::SpecializationMapEntry {
+                constant_id,
+                offset,
+                size,
+            } in &specialization.entries
+            {
                 config.specialize(
-                    spec.constant_id,
-                    spec_info.data[spec.offset as usize..spec.offset as usize + spec.size].into(),
+                    constant_id,
+                    specialization.data[offset as usize..offset as usize + size].into(),
                 );
             }
         }
@@ -1410,7 +1415,7 @@ impl ShaderBuilder {
                     .as_ref()
                     .map(|spirv| spirv.words())
                     .expect("spirv code must be set at initialization"),
-                self.specialization_info
+                self.specialization
                     .as_ref()
                     .map(|opt| opt.as_ref())
                     .unwrap_or_default(),
@@ -1497,32 +1502,44 @@ impl From<UninitializedFieldError> for ShaderBuilderError {
 }
 
 /// Describes specialized constant values.
-#[derive(Clone, Debug)]
-pub struct SpecializationInfo {
+#[derive(Clone, Debug, Default)]
+pub struct SpecializationMap {
     /// A buffer of data which holds the constant values.
     pub data: Vec<u8>,
 
     /// Mapping of locations within the constant value data which describe each individual constant.
-    pub map_entries: Vec<vk::SpecializationMapEntry>,
+    pub entries: Vec<vk::SpecializationMapEntry>,
 }
 
-impl SpecializationInfo {
-    /// Constructs a new `SpecializationInfo`.
-    pub fn new(
-        map_entries: impl Into<Vec<vk::SpecializationMapEntry>>,
-        data: impl Into<Vec<u8>>,
-    ) -> Self {
+impl SpecializationMap {
+    /// Constructs a new `SpecializationMap`.
+    pub fn new(data: impl Into<Vec<u8>>) -> Self {
         Self {
             data: data.into(),
-            map_entries: map_entries.into(),
+            entries: Default::default(),
         }
+    }
+
+    /// Adds a single constant offset and size to the map and returns the map for further building.
+    pub fn constant(mut self, constant_id: u32, offset: u32, size: usize) -> Self {
+        self.set_constant(constant_id, offset, size);
+        self
+    }
+
+    /// Adds a single constant offset and size to the map and returns the map for further building.
+    pub fn set_constant(&mut self, constant_id: u32, offset: u32, size: usize) {
+        self.entries.push(vk::SpecializationMapEntry {
+            constant_id,
+            offset,
+            size,
+        });
     }
 }
 
-impl<'a> From<&'a SpecializationInfo> for vk::SpecializationInfo<'a> {
-    fn from(value: &'a SpecializationInfo) -> Self {
+impl<'a> From<&'a SpecializationMap> for vk::SpecializationInfo<'a> {
+    fn from(value: &'a SpecializationMap) -> Self {
         vk::SpecializationInfo::default()
-            .map_entries(&value.map_entries)
+            .map_entries(&value.entries)
             .data(&value.data)
     }
 }

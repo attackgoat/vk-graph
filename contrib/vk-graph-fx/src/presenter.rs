@@ -34,18 +34,18 @@ impl ComputePresenter {
     ) {
         let image = image.into();
         // let image_info = graph.node_info(image);
-        let swapchain_info = graph.node_info(swapchain);
+        let swapchain_info = graph.resource(swapchain).info;
 
         // TODO: Notice non-sRGB images and run a different pipeline
 
         graph
             .begin_cmd()
-            .with_name("present (from compute)")
+            .debug_name("present (from compute)")
             .bind_pipeline(&self.0[0])
-            .read_descriptor(0, image)
-            .write_descriptor(1, swapchain)
-            .record_pipeline(move |compute, _| {
-                compute.dispatch(swapchain_info.width, swapchain_info.height, 1);
+            .shader_resource_access(0, image, AccessType::ComputeShaderReadOther)
+            .shader_resource_access(1, swapchain, AccessType::ComputeShaderWrite)
+            .record_pipeline(move |pipeline, _| {
+                pipeline.dispatch(swapchain_info.width, swapchain_info.height, 1);
             });
     }
 
@@ -61,19 +61,19 @@ impl ComputePresenter {
         let bottom_image = bottom_image.into();
         // let top_image_info = graph.node_info(top_image);
         // let bottom_image_info = graph.node_info(bottom_image);
-        let swapchain_info = graph.node_info(swapchain);
+        let swapchain_info = graph.resource(swapchain).info;
 
         // TODO: Notice non-sRGB images and run a different pipeline
 
         graph
             .begin_cmd()
-            .with_name("present (from compute)")
+            .debug_name("present (from compute)")
             .bind_pipeline(&self.0[1])
-            .read_descriptor((0, [0]), top_image)
-            .read_descriptor((0, [1]), bottom_image)
-            .write_descriptor(1, swapchain)
-            .record_pipeline(move |compute, _| {
-                compute.dispatch(swapchain_info.width, swapchain_info.height, 1);
+            .shader_resource_access((0, [0]), top_image, AccessType::ComputeShaderReadOther)
+            .shader_resource_access((0, [1]), bottom_image, AccessType::ComputeShaderReadOther)
+            .shader_resource_access(1, swapchain, AccessType::ComputeShaderWrite)
+            .record_pipeline(move |pipeline, _| {
+                pipeline.dispatch(swapchain_info.width, swapchain_info.height, 1);
             });
     }
 }
@@ -106,8 +106,8 @@ impl GraphicPresenter {
         swapchain: SwapchainImageNode,
     ) {
         let image = image.into();
-        let image_info = graph.node_info(image);
-        let swapchain_info = graph.node_info(swapchain);
+        let image_info = graph.resource(image).info;
+        let swapchain_info = graph.resource(swapchain).info;
 
         let (image_width, image_height) = (image_info.width as f32, image_info.height as f32);
         let (swapchain_width, swapchain_height) =
@@ -122,9 +122,13 @@ impl GraphicPresenter {
 
         graph
             .begin_cmd()
-            .with_name("present (from graphic)")
+            .debug_name("present (from graphic)")
             .bind_pipeline(&self.pipeline)
-            .read_descriptor(0, image)
+            .shader_resource_access(
+                0,
+                image,
+                AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+            )
             .store_color(0, swapchain)
             .record_pipeline(move |pipeline, _| {
                 // Draw a quad with implicit vertices (no buffer)

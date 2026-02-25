@@ -109,18 +109,11 @@ fn main() -> anyhow::Result<()> {
             }
             "#,
         )
-        .as_slice()).specialization_info(SpecializationInfo {
-            data: subgroup_size.to_ne_bytes().to_vec(),
-            map_entries: vec![vk::SpecializationMapEntry {
-                constant_id: 0,
-                offset: 0,
-                size: 4,
-            }],
-        }),
+        .as_slice()).specialization(SpecializationMap::new(subgroup_size.to_ne_bytes()).constant(0,0,4)),
     )?;
 
     window.run(|frame| {
-        let image_node = frame.graph.bind_node(
+        let image_node = frame.graph.bind_resource(
             pool.lease(ImageInfo::image_2d(
                 320,
                 200,
@@ -138,11 +131,11 @@ fn main() -> anyhow::Result<()> {
         frame
             .graph
             .begin_cmd()
-            .with_name("smoke")
+            .debug_name("smoke")
             .bind_pipeline(&smoke_pipeline)
-            .write_descriptor(0, image_node)
-            .record_pipeline(move |compute, _| {
-                compute
+            .shader_resource_access(0, image_node, AccessType::ComputeShaderWrite)
+            .record_pipeline(move |pipeline, _| {
+                pipeline
                     .push_constants(0, &elapsed_time.as_secs_f32().to_ne_bytes())
                     .dispatch(frame.width.div_ceil(subgroup_size), frame.height, 1);
             });

@@ -123,7 +123,7 @@ fn main() -> anyhow::Result<()> {
     .context("FLOCKAROO_IMG_FRAG")?;
 
     let mut graph = Graph::default();
-    let blank_image = graph.bind_node(
+    let blank_image = graph.bind_resource(
         cache
             .lease(ImageInfo::image_2d(
                 8,
@@ -135,7 +135,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let (width, height) = (1280, 720);
-    let framebuffer_image = graph.bind_node(
+    let framebuffer_image = graph.bind_resource(
         cache
             .lease(ImageInfo::image_2d(
                 width,
@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
             ))
             .context("Framebuffer image")?,
     );
-    let temp_image = graph.bind_node(
+    let temp_image = graph.bind_resource(
         cache
             .lease(ImageInfo::image_2d(
                 width,
@@ -188,13 +188,21 @@ fn main() -> anyhow::Result<()> {
             count += 1;
 
             // Bind things to this graph (the graph will own our things until we unbind them)
-            let flowers_image = frame.graph.bind_node(flowers_image_binding.take().unwrap());
-            let noise_image = frame.graph.bind_node(noise_image_binding.take().unwrap());
+            let flowers_image = frame
+                .graph
+                .bind_resource(flowers_image_binding.take().unwrap());
+            let noise_image = frame
+                .graph
+                .bind_resource(noise_image_binding.take().unwrap());
             let framebuffer_image = frame
                 .graph
-                .bind_node(framebuffer_image_binding.take().unwrap());
-            let blank_image = frame.graph.bind_node(blank_image_binding.take().unwrap());
-            let temp_image = frame.graph.bind_node(temp_image_binding.take().unwrap());
+                .bind_resource(framebuffer_image_binding.take().unwrap());
+            let blank_image = frame
+                .graph
+                .bind_resource(blank_image_binding.take().unwrap());
+            let temp_image = frame
+                .graph
+                .bind_resource(temp_image_binding.take().unwrap());
 
             // We need to push a shader-toy defined set of constants to each pipeline - any copy
             // type will do but we are getting fancy here by defining a struct to be super precise
@@ -279,7 +287,7 @@ fn main() -> anyhow::Result<()> {
             frame
                 .graph
                 .begin_cmd()
-                .with_name("Buffer A")
+                .debug_name("Buffer A")
                 .bind_pipeline(&buffer_pipeline)
                 .read_descriptor(0, input)
                 .read_descriptor(1, noise_image)
@@ -296,7 +304,7 @@ fn main() -> anyhow::Result<()> {
             frame
                 .graph
                 .begin_cmd()
-                .with_name("Image")
+                .debug_name("Image")
                 .bind_pipeline(&image_pipeline)
                 .read_descriptor(0, output)
                 .store_color(0, input)

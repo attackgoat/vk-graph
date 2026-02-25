@@ -12,12 +12,12 @@ fn main() -> Result<(), DriverError> {
 
     let mut graph = Graph::default();
 
-    let src_buf = graph.bind_node(Buffer::create_from_slice(
+    let src_buf = graph.bind_resource(Buffer::create_from_slice(
         &device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         [1, 2, 3, 4],
     )?);
-    let dst_buf = graph.bind_node(Buffer::create_from_slice(
+    let dst_buf = graph.bind_resource(Buffer::create_from_slice(
         &device,
         vk::BufferUsageFlags::TRANSFER_DST,
         [0, 0, 0, 0],
@@ -29,9 +29,9 @@ fn main() -> Result<(), DriverError> {
     // graph and wait on the result
     graph.copy_buffer(src_buf, dst_buf);
 
-    // This line is optional - just bind a reference of Arc<Buffer> or a leased buffer so you retain
+    // This line is optional - just bind a borrow of Arc<Buffer> or a leased buffer so you retain
     // the actual buffer for later use and you could then remove this line
-    let dst_buf = graph.node(dst_buf).clone();
+    let dst_buf = graph.resource(dst_buf).clone();
 
     // Resolve and wait (or you can check has_executed without blocking) - alternatively you might
     // use device.queue_wait_idle(0) or device.device_wait_idle() - but those block on larger scopes

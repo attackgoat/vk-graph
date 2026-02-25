@@ -1,13 +1,13 @@
 use {
-    super::{AttachmentIndex, Info, Nodes, PipelineRef, Subresource, SubresourceAccess},
+    super::{AttachmentIndex, Nodes, PipelineRef, SubresourceAccess, SubresourceRange},
     crate::{
-        AnyBufferNode, AnyImageNode, Area, Attachment, ClearColorValue, Node, NodeIndex,
-        SampleCount,
+        AnyBufferNode, AnyImageNode, Area, Attachment, ClearColorValue, Node,
         driver::{
-            device::Device,
+            CommandBuffer,
             graphic::{DepthStencilMode, GraphicPipeline},
             image::{
-                ImageViewInfo, image_subresource_range_contains, image_subresource_range_intersects,
+                ImageInfo, ImageViewInfo, image_subresource_range_contains,
+                image_subresource_range_intersects,
             },
             render_pass::ResolveMode,
         },
@@ -47,8 +47,8 @@ use {
 /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
 /// # let mut my_graph = Graph::default();
 /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
-/// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
-/// my_graph.begin_cmd().with_name("my draw pass")
+/// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
+/// my_graph.begin_cmd().debug_name("my draw pass")
 ///         .bind_pipeline(&my_graphic_pipeline)
 ///         .store_color(0, swapchain_image)
 ///         .record_pipeline(move |graphic, nodes| {
@@ -57,8 +57,7 @@ use {
 /// # Ok(()) }
 /// ```
 pub struct GraphicPipelineRef<'a> {
-    pub(super) cmd_buf: vk::CommandBuffer,
-    pub(super) device: &'a Device,
+    pub(super) cmd_buf: &'a CommandBuffer,
     pub(super) nodes: Nodes<'a>,
     pub(super) pipeline: GraphicPipeline,
 }
@@ -92,14 +91,14 @@ impl GraphicPipelineRef<'_> {
     /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
-    /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
+    /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::INDEX_BUFFER);
     /// # let my_idx_buf = Buffer::create(&device, buf_info)?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
-    /// # let my_idx_buf = my_graph.bind_node(my_idx_buf);
-    /// # let my_vtx_buf = my_graph.bind_node(my_vtx_buf);
-    /// my_graph.begin_cmd().with_name("my indexed geometry draw pass")
+    /// # let my_idx_buf = my_graph.bind_resource(my_idx_buf);
+    /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
+    /// my_graph.begin_cmd().debug_name("my indexed geometry draw pass")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_idx_buf)
@@ -121,8 +120,8 @@ impl GraphicPipelineRef<'_> {
         let buffer = buffer.into();
 
         unsafe {
-            self.device.cmd_bind_index_buffer(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_bind_index_buffer(
+                self.cmd_buf.handle,
                 self.nodes[buffer].handle,
                 offset,
                 index_ty,
@@ -161,9 +160,9 @@ impl GraphicPipelineRef<'_> {
     /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
-    /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
-    /// # let my_vtx_buf = my_graph.bind_node(my_vtx_buf);
-    /// my_graph.begin_cmd().with_name("my unindexed geometry draw pass")
+    /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
+    /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
+    /// my_graph.begin_cmd().debug_name("my unindexed geometry draw pass")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_vtx_buf)
@@ -183,8 +182,8 @@ impl GraphicPipelineRef<'_> {
         let buffer = buffer.into();
 
         unsafe {
-            self.device.cmd_bind_vertex_buffers(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_bind_vertex_buffers(
+                self.cmd_buf.handle,
                 binding,
                 slice::from_ref(&self.nodes[buffer].handle),
                 slice::from_ref(&offset),
@@ -226,8 +225,8 @@ impl GraphicPipelineRef<'_> {
             }
 
             unsafe {
-                self.device.cmd_bind_vertex_buffers(
-                    self.cmd_buf,
+                self.cmd_buf.device.cmd_bind_vertex_buffers(
+                    self.cmd_buf.handle,
                     first_binding,
                     buffers.as_slice(),
                     offsets.as_slice(),
@@ -253,8 +252,8 @@ impl GraphicPipelineRef<'_> {
         first_instance: u32,
     ) -> &Self {
         unsafe {
-            self.device.cmd_draw(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_draw(
+                self.cmd_buf.handle,
                 vertex_count,
                 instance_count,
                 first_vertex,
@@ -281,8 +280,8 @@ impl GraphicPipelineRef<'_> {
         first_instance: u32,
     ) -> &Self {
         unsafe {
-            self.device.cmd_draw_indexed(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_draw_indexed(
+                self.cmd_buf.handle,
                 index_count,
                 instance_count,
                 first_index,
@@ -331,10 +330,10 @@ impl GraphicPipelineRef<'_> {
     /// # let my_idx_buf = Buffer::create(&device, buf_info)?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
-    /// # let my_idx_buf = my_graph.bind_node(my_idx_buf);
-    /// # let my_vtx_buf = my_graph.bind_node(my_vtx_buf);
+    /// # let my_idx_buf = my_graph.bind_resource(my_idx_buf);
+    /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
-    /// # let swapchain_image = my_graph.bind_node(Image::create(&device, info)?);
+    /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
     /// const CMD_SIZE: usize = size_of::<vk::DrawIndexedIndirectCommand>();
     ///
     /// let cmd = vk::DrawIndexedIndirectCommand {
@@ -350,9 +349,9 @@ impl GraphicPipelineRef<'_> {
     ///
     /// let buf_flags = vk::BufferUsageFlags::STORAGE_BUFFER;
     /// let buf = Buffer::create_from_slice(&device, buf_flags, cmd_data)?;
-    /// let buf_node = my_graph.bind_node(buf);
+    /// let buf_node = my_graph.bind_resource(buf);
     ///
-    /// my_graph.begin_cmd().with_name("draw a single triangle")
+    /// my_graph.begin_cmd().debug_name("draw a single triangle")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .read_node(my_idx_buf)
@@ -376,8 +375,8 @@ impl GraphicPipelineRef<'_> {
         let buffer = buffer.into();
 
         unsafe {
-            self.device.cmd_draw_indexed_indirect(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_draw_indexed_indirect(
+                self.cmd_buf.handle,
                 self.nodes[buffer].handle,
                 offset,
                 draw_count,
@@ -414,8 +413,8 @@ impl GraphicPipelineRef<'_> {
         let count_buf = count_buf.into();
 
         unsafe {
-            self.device.cmd_draw_indexed_indirect_count(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_draw_indexed_indirect_count(
+                self.cmd_buf.handle,
                 self.nodes[buffer].handle,
                 offset,
                 self.nodes[count_buf].handle,
@@ -442,8 +441,8 @@ impl GraphicPipelineRef<'_> {
         let buffer = buffer.into();
 
         unsafe {
-            self.device.cmd_draw_indirect(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_draw_indirect(
+                self.cmd_buf.handle,
                 self.nodes[buffer].handle,
                 offset,
                 draw_count,
@@ -471,8 +470,8 @@ impl GraphicPipelineRef<'_> {
         let count_buf = count_buf.into();
 
         unsafe {
-            self.device.cmd_draw_indirect_count(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_draw_indirect_count(
+                self.cmd_buf.handle,
                 self.nodes[buffer].handle,
                 offset,
                 self.nodes[count_buf].handle,
@@ -539,8 +538,8 @@ impl GraphicPipelineRef<'_> {
     /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
     /// # let swapchain_image = Image::create(&device, info)?;
     /// # let mut my_graph = Graph::default();
-    /// # let swapchain_image = my_graph.bind_node(swapchain_image);
-    /// my_graph.begin_cmd().with_name("draw a quad")
+    /// # let swapchain_image = my_graph.bind_resource(swapchain_image);
+    /// my_graph.begin_cmd().debug_name("draw a quad")
     ///         .bind_pipeline(&my_graphic_pipeline)
     ///         .store_color(0, swapchain_image)
     ///         .record_pipeline(move |pipeline, nodes| {
@@ -567,8 +566,8 @@ impl GraphicPipelineRef<'_> {
                 );
 
                 unsafe {
-                    self.device.cmd_push_constants(
-                        self.cmd_buf,
+                    self.cmd_buf.device.cmd_push_constants(
+                        self.cmd_buf.handle,
                         self.pipeline.inner.layout,
                         push_const.stage_flags,
                         start,
@@ -585,8 +584,9 @@ impl GraphicPipelineRef<'_> {
     #[profiling::function]
     pub fn set_scissor(&self, first_scissor: u32, scissors: &[vk::Rect2D]) -> &Self {
         unsafe {
-            self.device
-                .cmd_set_scissor(self.cmd_buf, first_scissor, scissors);
+            self.cmd_buf
+                .device
+                .cmd_set_scissor(self.cmd_buf.handle, first_scissor, scissors);
         }
 
         self
@@ -596,8 +596,9 @@ impl GraphicPipelineRef<'_> {
     #[profiling::function]
     pub fn set_viewport(&self, first_viewport: u32, viewports: &[vk::Viewport]) -> &Self {
         unsafe {
-            self.device
-                .cmd_set_viewport(self.cmd_buf, first_viewport, viewports);
+            self.cmd_buf
+                .device
+                .cmd_set_viewport(self.cmd_buf.handle, first_viewport, viewports);
         }
 
         self
@@ -613,8 +614,8 @@ impl PipelineRef<'_, GraphicPipeline> {
         attachment_idx: AttachmentIndex,
         image: impl Into<AnyImageNode>,
     ) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = image.info(&self.cmd.graph.bindings);
+        let image = image.into();
+        let image_info = self.resource(image).info;
         let image_view_info: ImageViewInfo = image_info.into();
 
         self.attach_color_as(attachment_idx, image, image_view_info)
@@ -631,12 +632,12 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         debug_assert!(
             !self
                 .cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -647,7 +648,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             !self
                 .cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -657,7 +658,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -670,7 +671,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -678,7 +679,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .map(|(attachment, _)| *attachment),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -691,7 +692,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -699,7 +700,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .copied(),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -713,7 +714,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         self.cmd.push_node_access(
             image,
             AccessType::ColorAttachmentWrite,
-            Subresource::Image(image_view_info.into()),
+            SubresourceRange::Image(image_view_info.into()),
         );
 
         self
@@ -722,9 +723,8 @@ impl PipelineRef<'_, GraphicPipeline> {
     /// Specifies `VK_ATTACHMENT_LOAD_OP_DONT_CARE` for the render pass attachment, and loads an
     /// image into the framebuffer.
     pub fn attach_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = image.info(&self.cmd.graph.bindings);
-        let image_view_info: ImageViewInfo = image_info.into();
+        let image = image.into();
+        let image_view_info = self.resource(image).info;
 
         self.attach_depth_stencil_as(image, image_view_info)
     }
@@ -739,11 +739,11 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         debug_assert!(
             self.cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -753,7 +753,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
         debug_assert!(
             self.cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -763,7 +763,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -773,14 +773,14 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
                     .depth_stencil_resolve
                     .map(|(attachment, ..)| attachment),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -790,9 +790,9 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
         debug_assert!(
             Attachment::are_compatible(
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_store,
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_store,
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -816,7 +816,7 @@ impl PipelineRef<'_, GraphicPipeline> {
             } else {
                 AccessType::StencilAttachmentWriteDepthReadOnly
             },
-            Subresource::Image(image_view_info.into()),
+            SubresourceRange::Image(image_view_info.into()),
         );
 
         self
@@ -838,8 +838,8 @@ impl PipelineRef<'_, GraphicPipeline> {
         image: impl Into<AnyImageNode>,
         color: impl Into<ClearColorValue>,
     ) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = image.info(&self.cmd.graph.bindings);
+        let image = image.into();
+        let image_info = self.resource(image).info;
         let image_view_info: ImageViewInfo = image_info.into();
 
         self.clear_color_value_as(attachment_idx, image, color, image_view_info)
@@ -856,14 +856,14 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         let color = color.into();
 
         debug_assert!(
             !self
                 .cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -874,7 +874,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             !self
                 .cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -884,7 +884,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -900,7 +900,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -908,7 +908,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .map(|(attachment, _)| *attachment),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -921,7 +921,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -929,7 +929,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .copied(),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -946,7 +946,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         // Upgrade existing read access to read-write
         if let Some(accesses) = self
             .cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -982,7 +982,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         }
 
         self.cmd
-            .push_node_access(image, image_access, Subresource::Image(image_range));
+            .push_node_access(image, image_access, SubresourceRange::Image(image_range));
 
         self
     }
@@ -999,8 +999,8 @@ impl PipelineRef<'_, GraphicPipeline> {
         depth: f32,
         stencil: u32,
     ) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = image.info(&self.cmd.graph.bindings);
+        let image = image.into();
+        let image_info = self.resource(image).info;
         let image_view_info: ImageViewInfo = image_info.into();
 
         self.clear_depth_stencil_value_as(image, depth, stencil, image_view_info)
@@ -1017,11 +1017,11 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         debug_assert!(
             self.cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -1031,7 +1031,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
         debug_assert!(
             self.cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -1041,7 +1041,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1053,14 +1053,14 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
                     .depth_stencil_resolve
                     .map(|(attachment, ..)| attachment),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1071,9 +1071,9 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
         debug_assert!(
             Attachment::are_compatible(
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_store,
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_store,
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1107,7 +1107,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         // Upgrade existing read access to read-write
         if let Some(accesses) = self
             .cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1172,18 +1172,9 @@ impl PipelineRef<'_, GraphicPipeline> {
         }
 
         self.cmd
-            .push_node_access(image, image_access, Subresource::Image(image_range));
+            .push_node_access(image, image_access, SubresourceRange::Image(image_range));
 
         self
-    }
-
-    fn image_info(&self, node_idx: NodeIndex) -> (vk::Format, SampleCount) {
-        let image_info = self.cmd.graph.bindings[node_idx]
-            .as_driver_image()
-            .unwrap()
-            .info;
-
-        (image_info.fmt, image_info.sample_count)
     }
 
     /// Specifies `VK_ATTACHMENT_LOAD_OP_LOAD` for the render pass attachment, and loads an image
@@ -1193,8 +1184,8 @@ impl PipelineRef<'_, GraphicPipeline> {
         attachment_idx: AttachmentIndex,
         image: impl Into<AnyImageNode>,
     ) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = self.node_info(image);
+        let image = image.into();
+        let image_info = self.resource(image).info;
 
         // Use the plain node information as the whole view of the node
         let image_view_info = image_info;
@@ -1213,12 +1204,12 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         debug_assert!(
             !self
                 .cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -1229,7 +1220,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             !self
                 .cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -1239,7 +1230,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1252,7 +1243,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1260,7 +1251,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .map(|(attachment, _)| *attachment),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1273,7 +1264,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1281,7 +1272,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .copied(),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1298,7 +1289,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         // Upgrade existing write access to read-write
         if let Some(accesses) = self
             .cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1334,7 +1325,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         }
 
         self.cmd
-            .push_node_access(image, image_access, Subresource::Image(image_range));
+            .push_node_access(image, image_access, SubresourceRange::Image(image_range));
 
         self
     }
@@ -1342,9 +1333,8 @@ impl PipelineRef<'_, GraphicPipeline> {
     /// Specifies `VK_ATTACHMENT_LOAD_OP_LOAD` for the render pass attachment, and loads an image
     /// into the framebuffer.
     pub fn load_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = self.node_info(image);
-        let image_view_info: ImageViewInfo = image_info.into();
+        let image = image.into();
+        let image_view_info = self.resource(image).info;
 
         self.load_depth_stencil_as(image, image_view_info)
     }
@@ -1359,11 +1349,11 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         debug_assert!(
             self.cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -1373,7 +1363,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
         debug_assert!(
             self.cmd
-                .as_ref()
+                .cmd()
                 .execs
                 .last()
                 .unwrap()
@@ -1383,7 +1373,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         );
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1392,20 +1382,20 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
                     .depth_stencil_resolve
                     .map(|(attachment, ..)| attachment),
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_load
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_load
             ),
             "depth/stencil attachment load incompatible with existing resolve"
         );
         debug_assert!(
             Attachment::are_compatible(
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_store,
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_load
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_store,
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_load
             ),
             "depth/stencil attachment load incompatible with existing store"
         );
@@ -1416,7 +1406,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         // Upgrade existing write access to read-write
         if let Some(accesses) = self
             .cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1460,7 +1450,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         }
 
         self.cmd
-            .push_node_access(image, image_access, Subresource::Image(image_range));
+            .push_node_access(image, image_access, SubresourceRange::Image(image_range));
 
         self
     }
@@ -1472,7 +1462,7 @@ impl PipelineRef<'_, GraphicPipeline> {
     ) -> Self {
         let pipeline = self
             .cmd
-            .as_ref()
+            .cmd()
             .execs
             .last()
             .unwrap()
@@ -1482,12 +1472,11 @@ impl PipelineRef<'_, GraphicPipeline> {
             .unwrap_graphic()
             .clone();
 
-        self.cmd.push_execute(move |device, cmd_buf, nodes| {
+        self.cmd.push_execute(move |cmd_buf, nodes| {
             func(
                 GraphicPipelineRef {
                     nodes,
                     cmd_buf,
-                    device,
                     pipeline,
                 },
                 nodes,
@@ -1505,11 +1494,8 @@ impl PipelineRef<'_, GraphicPipeline> {
         dst_attachment_idx: AttachmentIndex,
         image: impl Into<AnyImageNode>,
     ) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = self.node_info(image);
-
-        // Use the plain node information as the whole view of the node
-        let image_view_info = image_info;
+        let image = image.into();
+        let image_view_info = self.resource(image).info;
 
         self.resolve_color_as(
             src_attachment_idx,
@@ -1531,10 +1517,10 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1550,7 +1536,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1558,7 +1544,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&dst_attachment_idx)
                     .copied(),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1571,7 +1557,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1579,7 +1565,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&dst_attachment_idx)
                     .map(|(attachment, _)| *attachment),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1592,7 +1578,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1600,7 +1586,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&dst_attachment_idx)
                     .copied(),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1617,7 +1603,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         // Upgrade existing read access to read-write
         if let Some(accesses) = self
             .cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1653,7 +1639,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         }
 
         self.cmd
-            .push_node_access(image, image_access, Subresource::Image(image_range));
+            .push_node_access(image, image_access, SubresourceRange::Image(image_range));
 
         self
     }
@@ -1667,11 +1653,8 @@ impl PipelineRef<'_, GraphicPipeline> {
         depth_mode: Option<ResolveMode>,
         stencil_mode: Option<ResolveMode>,
     ) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = self.node_info(image);
-
-        // Use the plain node information as the whole view of the node
-        let image_view_info = image_info;
+        let image = image.into();
+        let image_view_info = self.resource(image).info;
 
         self.resolve_depth_stencil_as(
             dst_attachment_idx,
@@ -1695,10 +1678,10 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1733,7 +1716,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         // Upgrade existing read access to read-write
         if let Some(accesses) = self
             .cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1798,14 +1781,14 @@ impl PipelineRef<'_, GraphicPipeline> {
         }
 
         self.cmd
-            .push_node_access(image, image_access, Subresource::Image(image_range));
+            .push_node_access(image, image_access, SubresourceRange::Image(image_range));
 
         self
     }
 
     /// Sets a particular depth/stencil mode.
     pub fn set_depth_stencil(mut self, depth_stencil: DepthStencilMode) -> Self {
-        let pass = self.cmd.as_mut();
+        let pass = self.cmd.cmd_mut();
         let exec = pass.execs.last_mut().unwrap();
 
         assert!(exec.depth_stencil.is_none());
@@ -1819,7 +1802,7 @@ impl PipelineRef<'_, GraphicPipeline> {
     ///
     /// See [`VkRenderPassMultiviewCreateInfo`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkRenderPassMultiviewCreateInfo.html#_description).
     pub fn set_multiview(mut self, view_mask: u32, correlated_view_mask: u32) -> Self {
-        let pass = self.cmd.as_mut();
+        let pass = self.cmd.cmd_mut();
         let exec = pass.execs.last_mut().unwrap();
 
         exec.correlated_view_mask = correlated_view_mask;
@@ -1838,7 +1821,7 @@ impl PipelineRef<'_, GraphicPipeline> {
     /// sets the viewport and scissor to the same values, with a `0..1` depth if not specified by
     /// `set_depth_stencil`.
     pub fn set_render_area(mut self, x: i32, y: i32, width: u32, height: u32) -> Self {
-        self.cmd.as_mut().execs.last_mut().unwrap().render_area = Some(Area {
+        self.cmd.cmd_mut().execs.last_mut().unwrap().render_area = Some(Area {
             height,
             width,
             x,
@@ -1855,11 +1838,8 @@ impl PipelineRef<'_, GraphicPipeline> {
         attachment_idx: AttachmentIndex,
         image: impl Into<AnyImageNode>,
     ) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = self.node_info(image);
-
-        // Use the plain node information as the whole view of the node
-        let image_view_info = image_info;
+        let image = image.into();
+        let image_view_info = self.resource(image).info;
 
         self.store_color_as(attachment_idx, image, image_view_info)
     }
@@ -1875,10 +1855,10 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1891,7 +1871,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1899,7 +1879,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .copied(),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1912,7 +1892,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1920,7 +1900,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .map(|(attachment, _)| *attachment),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1933,7 +1913,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1941,7 +1921,7 @@ impl PipelineRef<'_, GraphicPipeline> {
                     .get(&attachment_idx)
                     .copied(),
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
@@ -1958,7 +1938,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         // Upgrade existing read access to read-write
         if let Some(accesses) = self
             .cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -1994,7 +1974,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         }
 
         self.cmd
-            .push_node_access(image, image_access, Subresource::Image(image_range));
+            .push_node_access(image, image_access, SubresourceRange::Image(image_range));
 
         self
     }
@@ -2002,11 +1982,8 @@ impl PipelineRef<'_, GraphicPipeline> {
     /// Specifies `VK_ATTACHMENT_STORE_OP_STORE` for the render pass attachment, and stores the
     /// rendered pixels into an image.
     pub fn store_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
-        let image: AnyImageNode = image.into();
-        let image_info = self.node_info(image);
-
-        // Use the plain node information as the whole view of the node
-        let image_view_info = image_info;
+        let image = image.into();
+        let image_view_info = self.resource(image).info;
 
         self.store_depth_stencil_as(image, image_view_info)
     }
@@ -2023,10 +2000,10 @@ impl PipelineRef<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let (_, sample_count) = self.image_info(node_idx);
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
 
         self.cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -2035,32 +2012,32 @@ impl PipelineRef<'_, GraphicPipeline> {
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
                     .depth_stencil_attachment,
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_store
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_store
             ),
             "depth/stencil attachment store incompatible with existing attachment"
         );
         debug_assert!(
             Attachment::are_compatible(
                 self.cmd
-                    .as_ref()
+                    .cmd()
                     .execs
                     .last()
                     .unwrap()
                     .depth_stencil_clear
                     .map(|(attachment, _)| attachment),
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_store
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_store
             ),
             "depth/stencil attachment store incompatible with existing clear"
         );
         debug_assert!(
             Attachment::are_compatible(
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_load,
-                self.cmd.as_ref().execs.last().unwrap().depth_stencil_store
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_load,
+                self.cmd.cmd().execs.last().unwrap().depth_stencil_store
             ),
             "depth/stencil attachment store incompatible with existing load"
         );
@@ -2089,7 +2066,7 @@ impl PipelineRef<'_, GraphicPipeline> {
         // Upgrade existing read access to read-write
         if let Some(accesses) = self
             .cmd
-            .as_mut()
+            .cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -2154,8 +2131,88 @@ impl PipelineRef<'_, GraphicPipeline> {
         }
 
         self.cmd
-            .push_node_access(image, image_access, Subresource::Image(image_range));
+            .push_node_access(image, image_access, SubresourceRange::Image(image_range));
 
         self
+    }
+}
+
+mod deprecated {
+    use {
+        crate::{
+            cmd_ref::{Descriptor, PipelineRef, SubresourceRange, View, ViewInfo},
+            driver::graphic::GraphicPipeline,
+            node::Node,
+        },
+        vk_sync::AccessType,
+    };
+
+    impl PipelineRef<'_, GraphicPipeline> {
+        #[deprecated = "use shader_resource_access function with AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer"]
+        #[doc(hidden)]
+        pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_resource_access(
+                descriptor,
+                node,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+        }
+
+        #[deprecated = "use shader_subresource_access function with AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer"]
+        #[doc(hidden)]
+        pub fn read_descriptor_as<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            node_view: impl Into<N::Info>,
+        ) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_subresource_access(
+                descriptor,
+                node,
+                node_view,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+        }
+
+        #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]
+        #[doc(hidden)]
+        pub fn write_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_resource_access(descriptor, node, AccessType::AnyShaderWrite)
+        }
+
+        #[deprecated = "use shader_subresource_access function with AccessType::AnyShaderWrite"]
+        #[doc(hidden)]
+        pub fn write_descriptor_as<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            node_view: impl Into<N::Info>,
+        ) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_subresource_access(descriptor, node, node_view, AccessType::AnyShaderWrite)
+        }
     }
 }

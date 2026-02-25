@@ -47,38 +47,39 @@ fn main() -> Result<(), WindowError> {
         assert!(
             frame
                 .graph
-                .node_info(frame.swapchain_image)
+                .resource(frame.swapchain_image).info
                 .usage
                 .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
         );
 
-        let image = frame.graph.bind_node(&image);
+        let image = frame.graph.bind_resource(&image);
         let swapchain_info = frame.graph.node_info(frame.swapchain_image);
         let stripe_width = swapchain_info.width / mip_level_count;
 
         let mut pass = frame
             .graph
             .begin_cmd()
-            .with_name("splat mips")
+            .debug_name("splat mips")
             .bind_pipeline(&splat);
 
         for mip_level in 0..mip_level_count {
             let stripe_x = mip_level * stripe_width;
             pass = pass
-                .read_descriptor_as(
+                .shader_subresource_access(
                     0,
                     image,
                     image_info
-                        .default_view_info()
+                        .into_image_view()
                         .to_builder()
                         .base_mip_level(mip_level)
                         .mip_level_count(1),
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
                 .load_color(0, frame.swapchain_image)
                 .store_color(0, frame.swapchain_image)
                 .set_render_area(stripe_x as _, 0, stripe_width, swapchain_info.height)
-                .record_pipeline(|pipeline, _| {
-                    pipeline.draw(6, 1, 0, 0);
+                .record_pipeline(|cmd, _| {
+                    cmd.draw(6, 1, 0, 0);
                 });
         }
     })
@@ -148,7 +149,7 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
 
     let mut graph = Graph::default();
     let image_info = image.info;
-    let image = graph.bind_node(image);
+    let image = graph.bind_resource(image);
 
     // NOTE: Each pass writes to a different mip level, and so although it's the same image they are
     // unable to be used as a single pass so we must call begin_pass for each. Without starting a
@@ -156,13 +157,13 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
     for mip_level in 0..image_info.mip_level_count {
         graph
             .begin_cmd()
-            .with_name("fill mip levels")
+            .debug_name("fill mip levels")
             .bind_pipeline(&vertical_gradient)
             .store_color_as(
                 0,
                 image,
                 image_info
-                    .default_view_info()
+                    .into_image_view()
                     .to_builder()
                     .base_mip_level(mip_level)
                     .mip_level_count(1),

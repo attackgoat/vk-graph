@@ -1,7 +1,7 @@
 use {
     super::{
-        Area, Attachment, Binding, Command, ExecutionPipeline, Graph, Node, NodeIndex,
-        cmd_ref::{Nodes, Subresource, SubresourceAccess},
+        Area, Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
+        cmd_ref::{Nodes, SubresourceAccess, SubresourceRange},
         node::SwapchainImageNode,
     },
     crate::{
@@ -91,7 +91,7 @@ impl AccessCache {
     }
 
     fn update(&mut self, graph: &Graph, end_pass_idx: usize) {
-        self.binding_count = graph.bindings.len();
+        self.binding_count = graph.resources.len();
 
         let cache_len = self.binding_count * end_pass_idx;
 
@@ -391,7 +391,7 @@ impl Resolver {
     #[profiling::function]
     fn begin_render_pass(
         cmd_buf: &CommandBuffer,
-        bindings: &[Binding],
+        bindings: &[Resource],
         pass: &Command,
         physical_pass: &mut PhysicalPass,
         render_area: Area,
@@ -1885,7 +1885,7 @@ impl Resolver {
     #[profiling::function]
     fn record_execution_barriers<'a>(
         cmd_buf: &CommandBuffer,
-        bindings: &mut [Binding],
+        bindings: &mut [Resource],
         accesses: impl Iterator<Item = (&'a NodeIndex, &'a Vec<SubresourceAccess>)>,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
@@ -1932,9 +1932,9 @@ impl Resolver {
                 let binding = &bindings[*node_idx];
 
                 match binding {
-                    Binding::AccelerationStructure(..)
-                    | Binding::AccelerationStructureLease(..) => {
-                        let Some(accel_struct) = binding.as_driver_acceleration_structure() else {
+                    Resource::AccelerationStructure(..)
+                    | Resource::AccelerationStructureLease(..) => {
+                        let Some(accel_struct) = binding.as_driver_accel_struct() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -1956,7 +1956,7 @@ impl Resolver {
                         );
                         tls.prev_accesses.push(prev_access);
                     }
-                    Binding::Buffer(..) | Binding::BufferLease(..) => {
+                    Resource::Buffer(..) | Resource::BufferLease(..) => {
                         let Some(buffer) = binding.as_driver_buffer() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -1972,7 +1972,7 @@ impl Resolver {
                             subresource,
                         } in accesses
                         {
-                            let Subresource::Buffer(range) = subresource else {
+                            let SubresourceRange::Buffer(range) = subresource else {
                                 unreachable!()
                             };
 
@@ -1989,7 +1989,9 @@ impl Resolver {
                             }
                         }
                     }
-                    Binding::Image(..) | Binding::ImageLease(..) | Binding::SwapchainImage(..) => {
+                    Resource::Image(..)
+                    | Resource::ImageLease(..)
+                    | Resource::SwapchainImage(..) => {
                         let Some(image) = binding.as_driver_image() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -2005,7 +2007,7 @@ impl Resolver {
                             subresource,
                         } in accesses
                         {
-                            let Subresource::Image(range) = subresource else {
+                            let SubresourceRange::Image(range) = subresource else {
                                 unreachable!()
                             };
 
@@ -2133,7 +2135,7 @@ impl Resolver {
     #[profiling::function]
     fn record_image_layout_transitions(
         cmd_buf: &CommandBuffer,
-        bindings: &mut [Binding],
+        bindings: &mut [Resource],
         pass: &mut Command,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
@@ -2167,14 +2169,14 @@ impl Resolver {
                 debug_assert!(bindings.get(node_idx).is_some());
 
                 let binding = unsafe {
-                    // PassRef enforces this using assert_bound_graph_node
+                    // CommandRef enforces this during push_node_access
                     bindings.get_unchecked(node_idx)
                 };
 
                 match binding {
-                    Binding::AccelerationStructure(..)
-                    | Binding::AccelerationStructureLease(..) => {
-                        let Some(accel_struct) = binding.as_driver_acceleration_structure() else {
+                    Resource::AccelerationStructure(..)
+                    | Resource::AccelerationStructureLease(..) => {
+                        let Some(accel_struct) = binding.as_driver_accel_struct() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -2186,7 +2188,7 @@ impl Resolver {
 
                         AccelerationStructure::access(accel_struct, AccessType::Nothing);
                     }
-                    Binding::Buffer(..) | Binding::BufferLease(..) => {
+                    Resource::Buffer(..) | Resource::BufferLease(..) => {
                         let Some(buffer) = binding.as_driver_buffer() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -2199,7 +2201,7 @@ impl Resolver {
 
                         for subresource_access in accesses {
                             let &SubresourceAccess {
-                                subresource: Subresource::Buffer(access_range),
+                                subresource: SubresourceRange::Buffer(access_range),
                                 ..
                             } = subresource_access
                             else {
@@ -2217,7 +2219,9 @@ impl Resolver {
                             for _ in Buffer::access(buffer, AccessType::Nothing, access_range) {}
                         }
                     }
-                    Binding::Image(..) | Binding::ImageLease(..) | Binding::SwapchainImage(..) => {
+                    Resource::Image(..)
+                    | Resource::ImageLease(..)
+                    | Resource::SwapchainImage(..) => {
                         let Some(image) = binding.as_driver_image() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -2236,7 +2240,7 @@ impl Resolver {
                         for subresource_access in accesses {
                             let &SubresourceAccess {
                                 access,
-                                subresource: Subresource::Image(access_range),
+                                subresource: SubresourceRange::Image(access_range),
                             } = subresource_access
                             else {
                                 #[cfg(debug_assertions)]
@@ -2333,7 +2337,7 @@ impl Resolver {
     {
         let node_idx = node.index();
 
-        debug_assert!(self.graph.bindings.get(node_idx).is_some());
+        debug_assert!(self.graph.resources.get(node_idx).is_some());
 
         // We record up to but not including the first pass which accesses the target node
         if let Some(end_pass_idx) = self.graph.first_node_access_pass_index(node) {
@@ -2356,7 +2360,7 @@ impl Resolver {
     {
         let node_idx = node.index();
 
-        debug_assert!(self.graph.bindings.get(node_idx).is_some());
+        debug_assert!(self.graph.resources.get(node_idx).is_some());
 
         if self.graph.cmds.is_empty() {
             return Ok(());
@@ -2432,17 +2436,17 @@ impl Resolver {
             trace!("recording pass [{}: {}]", pass_idx, pass.name());
 
             if !physical_pass.exec_descriptor_sets.is_empty() {
-                Self::write_descriptor_sets(cmd_buf, &self.graph.bindings, pass, physical_pass)?;
+                Self::write_descriptor_sets(cmd_buf, &self.graph.resources, pass, physical_pass)?;
             }
 
             let render_area = if is_graphic {
-                Self::record_image_layout_transitions(cmd_buf, &mut self.graph.bindings, pass);
+                Self::record_image_layout_transitions(cmd_buf, &mut self.graph.resources, pass);
 
-                let render_area = Self::render_area(&self.graph.bindings, pass);
+                let render_area = Self::render_area(&self.graph.resources, pass);
 
                 Self::begin_render_pass(
                     cmd_buf,
-                    &self.graph.bindings,
+                    &self.graph.resources,
                     pass,
                     physical_pass,
                     render_area,
@@ -2508,7 +2512,7 @@ impl Resolver {
                 if !is_graphic {
                     Self::record_execution_barriers(
                         cmd_buf,
-                        &mut self.graph.bindings,
+                        &mut self.graph.resources,
                         exec.accesses.iter(),
                     );
                 }
@@ -2520,10 +2524,9 @@ impl Resolver {
 
                     let exec_func = exec.func.take().unwrap().0;
                     exec_func(
-                        &cmd_buf.device,
-                        cmd_buf.handle,
+                        cmd_buf,
                         Nodes::new(
-                            &self.graph.bindings,
+                            &self.graph.resources,
                             #[cfg(debug_assertions)]
                             exec,
                         ),
@@ -2605,7 +2608,7 @@ impl Resolver {
     }
 
     #[profiling::function]
-    fn render_area(bindings: &[Binding], pass: &Command) -> Area {
+    fn render_area(bindings: &[Resource], pass: &Command) -> Area {
         // set_render_area was not specified so we're going to guess using the minimum common
         // attachment extents
         let first_exec = pass.execs.first().unwrap();
@@ -2721,9 +2724,9 @@ impl Resolver {
             unscheduled.fill(true);
             unscheduled.resize(end_pass_idx, true);
 
-            unresolved.truncate(self.graph.bindings.len());
+            unresolved.truncate(self.graph.resources.len());
             unresolved.fill(true);
-            unresolved.resize(self.graph.bindings.len(), true);
+            unresolved.resize(self.graph.resources.len(), true);
 
             debug_assert!(unchecked.is_empty());
 
@@ -2954,7 +2957,7 @@ impl Resolver {
     }
 
     pub(crate) fn swapchain_image(&mut self, node: SwapchainImageNode) -> &SwapchainImage {
-        let Some(swapchain_image) = self.graph.bindings[node.idx].as_swapchain_image() else {
+        let Some(swapchain_image) = self.graph.resources[node.idx].as_swapchain_image() else {
             panic!("invalid swapchain image node");
         };
 
@@ -2964,7 +2967,7 @@ impl Resolver {
     #[profiling::function]
     fn write_descriptor_sets(
         cmd_buf: &CommandBuffer,
-        bindings: &[Binding],
+        bindings: &[Resource],
         pass: &Command,
         physical_pass: &PhysicalPass,
     ) -> Result<(), DriverError> {
@@ -3009,7 +3012,6 @@ impl Resolver {
                 let descriptor_type = descriptor_info.descriptor_type();
                 let bound_node = &bindings[*node_idx];
                 if let Some(image) = bound_node.as_driver_image() {
-                    let view_info = view_info.as_ref().unwrap();
                     let mut image_view_info = *view_info.as_image().unwrap();
 
                     // Handle default views which did not specify a particaular aspect
@@ -3064,7 +3066,6 @@ impl Resolver {
                             .image_view(image_view),
                     );
                 } else if let Some(buffer) = bound_node.as_driver_buffer() {
-                    let view_info = view_info.as_ref().unwrap();
                     let buffer_view_info = view_info.as_buffer().unwrap();
 
                     if binding_offset == 0 {
@@ -3088,7 +3089,7 @@ impl Resolver {
                             .offset(buffer_view_info.start)
                             .range(buffer_view_info.end - buffer_view_info.start),
                     );
-                } else if let Some(accel_struct) = bound_node.as_driver_acceleration_structure() {
+                } else if let Some(accel_struct) = bound_node.as_driver_accel_struct() {
                     if binding_offset == 0 {
                         tls.accel_struct_writes.push(IndexWrite {
                             idx: tls.accel_struct_infos.len(),

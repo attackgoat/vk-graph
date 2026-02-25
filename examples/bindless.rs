@@ -24,21 +24,25 @@ fn main() -> Result<(), WindowError> {
     let draw_buf = create_indirect_buffer(&window.device)?;
 
     window.run(|frame| {
-        let draw_buf_node = frame.graph.bind_node(&draw_buf);
+        let draw_buf_node = frame.graph.bind_resource(&draw_buf);
 
-        let mut pass = frame
+        let mut cmd = frame
             .graph
             .begin_cmd()
-            .with_name("Test")
+            .debug_name("Test")
             .bind_pipeline(&pipeline)
-            .access_node(draw_buf_node, AccessType::IndirectBuffer);
+            .resource_access(draw_buf_node, AccessType::IndirectBuffer);
 
         for (idx, image) in images.iter().enumerate() {
-            let image_node = pass.bind_node(image);
-            pass = pass.read_descriptor((0, [idx as u32]), image_node);
+            let image = cmd.bind_resource(image);
+            cmd.set_shader_resource_access(
+                (0, [idx as u32]),
+                image,
+                AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+            );
         }
 
-        pass.clear_color(0, frame.swapchain_image)
+        cmd.clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
             .record_pipeline(move |pipeline, _| {
                 pipeline.draw_indirect(draw_buf_node, 0, 64, 16);
@@ -53,7 +57,7 @@ fn create_images(device: &Device) -> Result<Vec<Arc<Image>>, DriverError> {
     let mut graph = Graph::default();
     for y in 0..8 {
         for x in 0..8 {
-            let texture = Arc::new(Image::create(
+            let texture = graph.bind_resource(Image::create(
                 device,
                 ImageInfo::image_2d(
                     100,
@@ -62,11 +66,10 @@ fn create_images(device: &Device) -> Result<Vec<Arc<Image>>, DriverError> {
                     vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
                 ),
             )?);
-            let texture_node = graph.bind_node(&texture);
             let r = y as f32 / 7.0;
             let g = x as f32 / 7.0;
-            graph.clear_color_image(texture_node, [r, g, b, a]);
-            textures.push(texture);
+            graph.clear_color_image(texture, [r, g, b, a]);
+            textures.push(graph.resource(texture).clone());
         }
     }
 

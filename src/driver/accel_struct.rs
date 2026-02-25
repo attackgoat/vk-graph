@@ -339,7 +339,7 @@ impl AccelerationStructure {
     }
 
     /// Sets the debugging name assigned to this acceleration structure.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
 
         self
@@ -744,6 +744,10 @@ impl From<UninitializedFieldError> for AccelerationStructureInfoBuilderError {
         Self(err)
     }
 }
+
+/// Specifies a range of acceleration structure data.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AccelerationStructureRange;
 
 /// Holds the results of the [`AccelerationStructure::size_of`] function.
 #[derive(Clone, Copy, Debug)]

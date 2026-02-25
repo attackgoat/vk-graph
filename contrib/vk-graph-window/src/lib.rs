@@ -334,7 +334,7 @@ impl Window {
 
                 if let Some(swapchain_image) = self.display.acquire_next_image()? {
                     let mut graph = Graph::default();
-                    let swapchain_image = graph.bind_node(swapchain_image);
+                    let swapchain_image = graph.bind_resource(swapchain_image);
                     let swapchain_info = self.display.swapchain.info;
 
                     let mut will_exit = false;

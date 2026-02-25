@@ -59,9 +59,9 @@ fn main() -> Result<(), WindowError> {
     window.run(|frame| {
         let elapsed = (Instant::now() - started).as_secs_f32();
 
-        let index_buf = frame.graph.bind_node(&character.index_buf);
-        let vertex_buf = frame.graph.bind_node(&character.vertex_buf);
-        let depth_image = frame.graph.bind_node(
+        let index_buf = frame.graph.bind_resource(&character.index_buf);
+        let vertex_buf = frame.graph.bind_resource(&character.vertex_buf);
+        let depth_image = frame.graph.bind_resource(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -73,14 +73,14 @@ fn main() -> Result<(), WindowError> {
 
         let texture = frame
             .graph
-            .bind_node(match (elapsed / 2.0).rem_euclid(4.0) {
+            .bind_resource(match (elapsed / 2.0).rem_euclid(4.0) {
                 t if t < 1.0 => &human_female,
                 t if t < 2.0 => &human_male,
                 t if t < 3.0 => &zombie_female,
                 _ => &zombie_male,
             });
 
-        let camera_buf = frame.graph.bind_node({
+        let camera_buf = frame.graph.bind_resource({
             let position = Vec3::ONE * 3.0;
             let aspect_ratio = frame.render_aspect_ratio();
             let projection = Mat4::perspective_rh(45.0, aspect_ratio, 0.1, 100.0);
@@ -105,7 +105,7 @@ fn main() -> Result<(), WindowError> {
             buf
         });
 
-        let animation_buf = frame.graph.bind_node({
+        let animation_buf = frame.graph.bind_resource({
             let animation = match (elapsed / 4.0).rem_euclid(2.0) {
                 t if t < 1.0 => &mut run,
                 _ => &mut idle,
@@ -126,13 +126,13 @@ fn main() -> Result<(), WindowError> {
         frame
             .graph
             .begin_cmd()
-            .with_name("🦴")
+            .debug_name("🦴")
             .bind_pipeline(&pipeline)
             .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-            .access_node(index_buf, AccessType::IndexBuffer)
-            .access_node(vertex_buf, AccessType::VertexBuffer)
-            .access_descriptor(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
-            .access_descriptor(1, animation_buf, AccessType::VertexShaderReadOther)
+            .resource_access(index_buf, AccessType::IndexBuffer)
+            .resource_access(vertex_buf, AccessType::VertexBuffer)
+            .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
+            .shader_resource_access(1, animation_buf, AccessType::VertexShaderReadOther)
             .read_descriptor(2, texture)
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
@@ -189,8 +189,8 @@ fn load_texture(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Arc<Imag
 
     // Copy the host-accessible pixels into the device-only image
     let mut graph = Graph::default();
-    let image_node = graph.bind_node(&image);
-    let buffer_node = graph.bind_node(&buffer);
+    let image_node = graph.bind_resource(&image);
+    let buffer_node = graph.bind_resource(&buffer);
     graph.copy_buffer_to_image(buffer_node, image_node);
     graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;
 
@@ -440,10 +440,10 @@ impl Model {
 
         // Copy the host-accessible staging buffers to device-only buffers
         let mut graph = Graph::default();
-        let index_staging_buf_node = graph.bind_node(index_staging_buf);
-        let vertex_staging_buf_node = graph.bind_node(vertex_staging_buf);
-        let index_buf_node = graph.bind_node(&index_buf);
-        let vertex_buf_node = graph.bind_node(&vertex_buf);
+        let index_staging_buf_node = graph.bind_resource(index_staging_buf);
+        let vertex_staging_buf_node = graph.bind_resource(vertex_staging_buf);
+        let index_buf_node = graph.bind_resource(&index_buf);
+        let vertex_buf_node = graph.bind_resource(&vertex_buf);
         graph.copy_buffer(index_staging_buf_node, index_buf_node);
         graph.copy_buffer(vertex_staging_buf_node, vertex_buf_node);
         graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;

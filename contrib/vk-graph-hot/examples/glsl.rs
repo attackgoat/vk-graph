@@ -31,15 +31,13 @@ fn main() -> Result<(), WindowError> {
         frame
             .graph
             .begin_cmd()
-            .with_name("make some noise")
+            .debug_name("make some noise")
             .bind_pipeline(pipeline.hot())
             .write_descriptor(0, frame.swapchain_image)
-            .record_pipeline(move |compute, _| {
-                compute.push_constants(&frame_index.to_ne_bytes()).dispatch(
-                    frame.width,
-                    frame.height,
-                    1,
-                );
+            .record_pipeline(move |pipeline, _| {
+                pipeline
+                    .push_constants(&frame_index.to_ne_bytes())
+                    .dispatch(frame.width, frame.height, 1);
             });
 
         frame_index += 1;

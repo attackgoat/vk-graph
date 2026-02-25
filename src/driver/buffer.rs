@@ -452,7 +452,7 @@ impl Buffer {
     }
 
     /// Sets the debugging name assigned to this buffer.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
 
         self
@@ -890,12 +890,6 @@ impl From<Range<vk::DeviceSize>> for BufferSubresourceRange {
             start: range.start,
             end: range.end,
         }
-    }
-}
-
-impl From<Option<Range<vk::DeviceSize>>> for BufferSubresourceRange {
-    fn from(range: Option<Range<vk::DeviceSize>>) -> Self {
-        range.unwrap_or(0..vk::WHOLE_SIZE).into()
     }
 }
 

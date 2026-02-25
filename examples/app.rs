@@ -114,7 +114,7 @@ impl Context {
     fn draw(&mut self) -> Result<(), DisplayError> {
         if let Some(swapchain_image) = self.display.acquire_next_image()? {
             let mut graph = Graph::default();
-            let swapchain_image = graph.bind_node(swapchain_image);
+            let swapchain_image = graph.bind_resource(swapchain_image);
 
             // Rendering goes here!
             graph.clear_color_image(swapchain_image, [1.0, 0.0, 1.0]);

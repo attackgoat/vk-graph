@@ -102,7 +102,7 @@ fn main() -> anyhow::Result<()> {
 
                 // Clear a new image to a cycling color
                 let mut graph = Graph::default();
-                let image = graph.bind_node(
+                let image = graph.bind_resource(
                     pool.lease(ImageInfo::image_2d(
                         10,
                         10,
@@ -121,7 +121,7 @@ fn main() -> anyhow::Result<()> {
                     ],
                 );
 
-                let image = graph.node(image).clone();
+                let image = graph.resource(image).clone();
 
                 // Submit on a queue we are reserving for only this thread to use
                 graph
@@ -157,7 +157,7 @@ fn main() -> anyhow::Result<()> {
             .clear_color_image(frame.swapchain_image, [0f32; 4]);
 
         for (image_idx, image) in images.iter().enumerate() {
-            let image = frame.graph.bind_node(image);
+            let image = frame.graph.bind_resource(image);
 
             let x = (image_idx % 8) as f32;
             let y = (image_idx / 8) as f32;
@@ -169,7 +169,7 @@ fn main() -> anyhow::Result<()> {
                 image,
                 frame.swapchain_image,
                 vk::Filter::NEAREST,
-                vk::ImageBlit {
+                [vk::ImageBlit {
                     src_subresource: COLOR_SUBRESOURCE_LAYER,
                     src_offsets: [
                         vk::Offset3D { x: 0, y: 0, z: 0 },
@@ -188,7 +188,7 @@ fn main() -> anyhow::Result<()> {
                             z: 1,
                         },
                     ],
-                },
+                }],
             );
         }
 
@@ -225,7 +225,7 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
     let mut graph = Graph::default();
 
     // We happen to know this font only requires a single image, this uses the image crate
-    let temp_buf = graph.bind_node(Buffer::create_from_slice(
+    let temp_buf = graph.bind_resource(Buffer::create_from_slice(
         device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         ImageReader::new(Cursor::new(
@@ -239,7 +239,7 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
     )?);
 
     // This image will hold the font glyphs
-    let page_0 = graph.bind_node(
+    let page_0 = graph.bind_resource(
         Image::create(
             device,
             ImageInfo::image_2d(
@@ -254,7 +254,7 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
 
     graph.copy_buffer_to_image(temp_buf, page_0);
 
-    let page_0 = graph.node(page_0).clone();
+    let page_0 = graph.resource(page_0).clone();
 
     // This copy happens in queue index 0!
     graph.resolve().submit(&mut HashPool::new(device), 0, 0)?;

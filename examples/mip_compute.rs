@@ -18,7 +18,7 @@ fn main() -> Result<(), DriverError> {
 
     let mut graph = Graph::default();
 
-    let depth_pyramid = graph.bind_node(Image::create(
+    let depth_pyramid = graph.bind_resource(Image::create(
         &device,
         ImageInfo::image_2d(
             4,
@@ -36,7 +36,7 @@ fn main() -> Result<(), DriverError> {
 
     // You would normally create this buffer by copying the depth attachment image
     #[allow(clippy::inconsistent_digit_grouping)]
-    let depth_buf = graph.bind_node(Buffer::create_from_slice(
+    let depth_buf = graph.bind_resource(Buffer::create_from_slice(
         &device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         cast_slice(&[
@@ -50,7 +50,7 @@ fn main() -> Result<(), DriverError> {
 
     let mut pass = graph
         .begin_cmd()
-        .with_name("update depth pyramid")
+        .debug_name("update depth pyramid")
         .bind_pipeline(ComputePipeline::create(
             &device,
             ComputePipelineInfo::default(),
@@ -112,7 +112,7 @@ fn main() -> Result<(), DriverError> {
             });
     }
 
-    let depth_pixel = graph.bind_node(Buffer::create(
+    let depth_pixel = graph.bind_resource(Buffer::create(
         &device,
         BufferInfo::host_mem(size_of::<f32>() as _, vk::BufferUsageFlags::TRANSFER_DST),
     )?);
@@ -138,7 +138,7 @@ fn main() -> Result<(), DriverError> {
         },
     );
 
-    let depth_pixel = graph.node(depth_pixel).clone();
+    let depth_pixel = graph.resource(depth_pixel).clone();
 
     graph
         .resolve()

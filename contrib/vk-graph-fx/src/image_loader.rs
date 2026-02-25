@@ -145,7 +145,7 @@ impl ImageLoader {
         }
 
         let mut graph = Graph::default();
-        let image = graph.bind_node(self.create_image(format, width, height, is_srgb, false)?);
+        let image = graph.bind_resource(self.create_image(format, width, height, is_srgb, false)?);
 
         // Fill the image from the temporary buffer
         match format {
@@ -190,12 +190,12 @@ impl ImageLoader {
                     }
                 }
 
-                let pixel_buf = graph.bind_node(pixel_buf);
+                let pixel_buf = graph.bind_resource(pixel_buf);
 
                 // We create a temporary storage image because SRGB support isn't wide enough to
                 // have SRGB storage images directly
                 let temp_image =
-                    graph.bind_node(self.create_image(format, width, height, false, true)?);
+                    graph.bind_resource(self.create_image(format, width, height, false, true)?);
 
                 // Copy host-local data in the buffer to the temporary buffer on the GPU and then
                 // use a compute shader to decode it before copying it over the output image
@@ -204,12 +204,12 @@ impl ImageLoader {
                 let dispatch_y = height;
                 graph
                     .begin_cmd()
-                    .with_name("Decode RGB image")
+                    .debug_name("Decode RGB image")
                     .bind_pipeline(&self.decode_rgb_rgba)
-                    .read_descriptor(0, pixel_buf)
-                    .write_descriptor(1, temp_image)
-                    .record_pipeline(move |compute, _| {
-                        compute
+                    .shader_resource_access(0, pixel_buf, AccessType::ComputeShaderReadOther)
+                    .shader_resource_access(1, temp_image, AccessType::ComputeShaderWrite)
+                    .record_pipeline(move |pipeline, _| {
+                        pipeline
                             .push_constants(0, &(pixel_buf_stride >> 2).to_ne_bytes())
                             .dispatch(dispatch_x, dispatch_y, 1);
                     })
@@ -229,12 +229,12 @@ impl ImageLoader {
                     pixel_buf.copy_from_slice(pixels);
                 }
 
-                let pixel_buf = graph.bind_node(pixel_buf);
+                let pixel_buf = graph.bind_resource(pixel_buf);
                 graph.copy_buffer_to_image(pixel_buf, image);
             }
         }
 
-        let image = graph.node(image).clone();
+        let image = graph.resource(image).clone();
 
         graph
             .resolve()

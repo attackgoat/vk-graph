@@ -2,7 +2,7 @@ use {
     super::{Nodes, pipeline::PipelineRef},
     crate::{
         AnyBufferNode,
-        driver::{compute::ComputePipeline, device::Device},
+        driver::{CommandBuffer, compute::ComputePipeline},
     },
     ash::vk,
     log::trace,
@@ -32,16 +32,15 @@ use {
 /// # let shader = Shader::new_compute([0u8; 1].as_slice());
 /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
 /// # let mut my_graph = Graph::default();
-/// my_graph.begin_cmd().with_name("my compute pass")
+/// my_graph.begin_cmd()
 ///         .bind_pipeline(&my_compute_pipeline)
-///         .record_pipeline(move |compute, nodes| {
-///             // During this closure we have access to the compute methods!
+///         .record_pipeline(move |pipeline, nodes| {
+///             // During this closure we have access to the compute dispatch methods!
 ///         });
 /// # Ok(()) }
 /// ```
 pub struct ComputePipelineRef<'a> {
-    pub(super) cmd_buf: vk::CommandBuffer,
-    pub(super) device: &'a Device,
+    pub(super) cmd_buf: &'a CommandBuffer,
     pub(super) nodes: Nodes<'a>,
     pub(super) pipeline: ComputePipeline,
 }
@@ -87,8 +86,8 @@ impl ComputePipelineRef<'_> {
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
-    /// # let my_buf_node = my_graph.bind_node(my_buf);
-    /// my_graph.begin_cmd().with_name("fill my_buf_node with data")
+    /// # let my_buf_node = my_graph.bind_resource(my_buf);
+    /// my_graph.begin_cmd().debug_name("fill my_buf_node with data")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .write_descriptor(0, my_buf_node)
     ///         .record_pipeline(move |compute, nodes| {
@@ -101,8 +100,12 @@ impl ComputePipelineRef<'_> {
     #[profiling::function]
     pub fn dispatch(&self, group_count_x: u32, group_count_y: u32, group_count_z: u32) -> &Self {
         unsafe {
-            self.device
-                .cmd_dispatch(self.cmd_buf, group_count_x, group_count_y, group_count_z);
+            self.cmd_buf.device.cmd_dispatch(
+                self.cmd_buf.handle,
+                group_count_x,
+                group_count_y,
+                group_count_z,
+            );
         }
 
         self
@@ -130,8 +133,8 @@ impl ComputePipelineRef<'_> {
         group_count_z: u32,
     ) -> &Self {
         unsafe {
-            self.device.cmd_dispatch_base(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_dispatch_base(
+                self.cmd_buf.handle,
                 base_group_x,
                 base_group_y,
                 base_group_z,
@@ -172,7 +175,7 @@ impl ComputePipelineRef<'_> {
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
-    /// # let my_buf_node = my_graph.bind_node(my_buf);
+    /// # let my_buf_node = my_graph.bind_resource(my_buf);
     /// const CMD_SIZE: usize = size_of::<vk::DispatchIndirectCommand>();
     ///
     /// let cmd = vk::DispatchIndirectCommand {
@@ -186,9 +189,9 @@ impl ComputePipelineRef<'_> {
     ///
     /// let args_buf_flags = vk::BufferUsageFlags::STORAGE_BUFFER;
     /// let args_buf = Buffer::create_from_slice(&device, args_buf_flags, cmd_data)?;
-    /// let args_buf_node = my_graph.bind_node(args_buf);
+    /// let args_buf_node = my_graph.bind_resource(args_buf);
     ///
-    /// my_graph.begin_cmd().with_name("fill my_buf_node with data")
+    /// my_graph.begin_cmd().debug_name("fill my_buf_node with data")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .read_node(args_buf_node)
     ///         .write_descriptor(0, my_buf_node)
@@ -209,8 +212,8 @@ impl ComputePipelineRef<'_> {
         let args_buf = args_buf.into();
 
         unsafe {
-            self.device.cmd_dispatch_indirect(
-                self.cmd_buf,
+            self.cmd_buf.device.cmd_dispatch_indirect(
+                self.cmd_buf.handle,
                 self.nodes[args_buf].handle,
                 args_offset,
             );
@@ -269,7 +272,7 @@ impl ComputePipelineRef<'_> {
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
     /// # let mut my_graph = Graph::default();
-    /// my_graph.begin_cmd().with_name("compute the ultimate question")
+    /// my_graph.begin_cmd().debug_name("compute the ultimate question")
     ///         .bind_pipeline(&my_compute_pipeline)
     ///         .record_pipeline(move |compute, nodes| {
     ///             compute.push_constants(0, &[42])
@@ -295,8 +298,8 @@ impl ComputePipelineRef<'_> {
                 );
 
                 unsafe {
-                    self.device.cmd_push_constants(
-                        self.cmd_buf,
+                    self.cmd_buf.device.cmd_push_constants(
+                        self.cmd_buf.handle,
                         self.pipeline.inner.layout,
                         vk::ShaderStageFlags::COMPUTE,
                         push_const.offset,
@@ -319,7 +322,7 @@ impl PipelineRef<'_, ComputePipeline> {
     ) -> Self {
         let pipeline = self
             .cmd
-            .as_ref()
+            .cmd()
             .execs
             .last()
             .unwrap()
@@ -329,12 +332,11 @@ impl PipelineRef<'_, ComputePipeline> {
             .unwrap_compute()
             .clone();
 
-        self.cmd.push_execute(move |device, cmd_buf, nodes| {
+        self.cmd.push_execute(move |cmd_buf, nodes| {
             func(
                 ComputePipelineRef {
                     nodes,
                     cmd_buf,
-                    device,
                     pipeline,
                 },
                 nodes,
@@ -342,5 +344,86 @@ impl PipelineRef<'_, ComputePipeline> {
         });
 
         self
+    }
+}
+
+mod deprecated {
+    use {
+        crate::{
+            cmd_ref::{Descriptor, PipelineRef, SubresourceRange, View, ViewInfo},
+            driver::compute::ComputePipeline,
+            node::Node,
+        },
+        vk_sync::AccessType,
+    };
+
+    impl PipelineRef<'_, ComputePipeline> {
+        #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderReadOther"]
+        #[doc(hidden)]
+        pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_resource_access(descriptor, node, AccessType::ComputeShaderReadOther)
+        }
+
+        #[deprecated = "use shader_subresource_access function with AccessType::ComputeShaderReadOther"]
+        #[doc(hidden)]
+        pub fn read_descriptor_as<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            node_view: impl Into<N::Info>,
+        ) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_subresource_access(
+                descriptor,
+                node,
+                node_view,
+                AccessType::ComputeShaderReadOther,
+            )
+        }
+
+        #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderWrite"]
+        #[doc(hidden)]
+        pub fn write_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_resource_access(descriptor, node, AccessType::ComputeShaderWrite)
+        }
+
+        #[deprecated = "use shader_subresource_access function with AccessType::ComputeShaderWrite"]
+        #[doc(hidden)]
+        pub fn write_descriptor_as<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            node_view: impl Into<N::Info>,
+        ) -> Self
+        where
+            N: Node + View,
+            N::Info: Copy,
+            SubresourceRange: From<N::Info>,
+            ViewInfo: From<N::Info>,
+        {
+            self.shader_subresource_access(
+                descriptor,
+                node,
+                node_view,
+                AccessType::ComputeShaderWrite,
+            )
+        }
     }
 }

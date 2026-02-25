@@ -669,12 +669,12 @@ fn main() -> anyhow::Result<()> {
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
         let mut graph = Graph::default();
-        let index_node = graph.bind_node(&index_buf);
-        let vertex_node = graph.bind_node(&vertex_buf);
-        let blas_node = graph.bind_node(&blas);
+        let index_node = graph.bind_resource(&index_buf);
+        let vertex_node = graph.bind_resource(&vertex_buf);
+        let blas_node = graph.bind_resource(&blas);
 
         {
-            let scratch_buf = graph.bind_node(Buffer::create(
+            let scratch_buf = graph.bind_resource(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     blas_size.build_size,
@@ -684,15 +684,15 @@ fn main() -> anyhow::Result<()> {
                 .to_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = graph.node_device_address(scratch_buf);
+            let scratch_data = graph.resource(scratch_buf).device_address();
 
             graph
                 .begin_cmd()
-                .with_name("Build BLAS")
-                .access_node(index_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(vertex_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-                .access_node(blas_node, AccessType::AccelerationStructureBuildWrite)
+                .debug_name("Build BLAS")
+                .resource_access(index_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(vertex_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
                 .record_accel_struct(move |accel_struct, _| {
                     accel_struct.build(&[BuildAccelerationStructureInfo::new(
                         blas_node,
@@ -703,7 +703,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         {
-            let scratch_buf = graph.bind_node(Buffer::create(
+            let scratch_buf = graph.bind_resource(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     tlas_size.build_size,
@@ -713,21 +713,21 @@ fn main() -> anyhow::Result<()> {
                 .to_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = graph.node_device_address(scratch_buf);
-            let instance_node = graph.bind_node(&instance_buf);
-            let tlas_node = graph.bind_node(&tlas);
+            let scratch_addr = graph.resource(scratch_buf).device_address();
+            let instance_node = graph.bind_resource(&instance_buf);
+            let tlas_node = graph.bind_resource(&tlas);
 
             graph
                 .begin_cmd()
-                .with_name("Build TLAS")
-                .access_node(blas_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(instance_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-                .access_node(tlas_node, AccessType::AccelerationStructureBuildWrite)
+                .debug_name("Build TLAS")
+                .resource_access(blas_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(instance_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
                 .record_accel_struct(move |accel_struct, _| {
                     accel_struct.build(&[BuildAccelerationStructureInfo::new(
                         tlas_node,
-                        scratch_data,
+                        scratch_addr,
                         tlas_geometry_info,
                     )]);
                 });
@@ -761,7 +761,7 @@ fn main() -> anyhow::Result<()> {
                     .lease(ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        frame.graph.node_info(frame.swapchain_image).fmt,
+                        frame.graph.resource(frame.swapchain_image).info.fmt,
                         vk::ImageUsageFlags::STORAGE
                             | vk::ImageUsageFlags::TRANSFER_DST
                             | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -770,7 +770,7 @@ fn main() -> anyhow::Result<()> {
             ));
         }
 
-        let image_node = frame.graph.bind_node(image.as_ref().unwrap());
+        let image_node = frame.graph.bind_resource(image.as_ref().unwrap());
 
         {
             input.step_with_window_events(
@@ -817,7 +817,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        let camera_buf = frame.graph.bind_node({
+        let camera_buf = frame.graph.bind_resource({
             #[repr(C)]
             struct Camera {
                 position: [f32; 4],
@@ -848,39 +848,39 @@ fn main() -> anyhow::Result<()> {
 
             buf
         });
-        let blas_node = frame.graph.bind_node(&blas);
-        let tlas_node = frame.graph.bind_node(&tlas);
-        let index_buf_node = frame.graph.bind_node(&index_buf);
-        let vertex_buf_node = frame.graph.bind_node(&vertex_buf);
-        let material_id_buf_node = frame.graph.bind_node(&material_id_buf);
-        let material_buf_node = frame.graph.bind_node(&material_buf);
-        let sbt_node = frame.graph.bind_node(&sbt_buf);
+        let blas_node = frame.graph.bind_resource(&blas);
+        let tlas_node = frame.graph.bind_resource(&tlas);
+        let index_buf_node = frame.graph.bind_resource(&index_buf);
+        let vertex_buf_node = frame.graph.bind_resource(&vertex_buf);
+        let material_id_buf_node = frame.graph.bind_resource(&material_id_buf);
+        let material_buf_node = frame.graph.bind_resource(&material_buf);
+        let sbt_node = frame.graph.bind_resource(&sbt_buf);
 
         frame
             .graph
             .begin_cmd()
-            .with_name("basic ray tracer")
+            .debug_name("basic ray tracer")
             .bind_pipeline(&ray_trace_pipeline)
-            .access_node(
+            .resource_access(
                 blas_node,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .access_node(sbt_node, AccessType::RayTracingShaderReadOther)
-            .access_descriptor(
+            .resource_access(sbt_node, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(
                 0,
                 tlas_node,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .access_descriptor(1, camera_buf, AccessType::RayTracingShaderReadOther)
-            .access_descriptor(2, index_buf_node, AccessType::RayTracingShaderReadOther)
-            .access_descriptor(3, vertex_buf_node, AccessType::RayTracingShaderReadOther)
-            .write_descriptor(4, image_node)
-            .access_descriptor(
+            .shader_resource_access(1, camera_buf, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(2, index_buf_node, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(3, vertex_buf_node, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(4, image_node, AccessType::AnyShaderWrite)
+            .shader_resource_access(
                 5,
                 material_id_buf_node,
                 AccessType::RayTracingShaderReadOther,
             )
-            .access_descriptor(6, material_buf_node, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(6, material_buf_node, AccessType::RayTracingShaderReadOther)
             .record_pipeline(move |pipeline, _| {
                 pipeline.trace_rays(
                     &sbt_rgen,

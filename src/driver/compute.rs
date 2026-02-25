@@ -103,11 +103,7 @@ impl ComputePipeline {
                 .module(shader_module)
                 .stage(shader.stage)
                 .name(&entry_name);
-            let specialization_info = shader.specialization_info.as_ref().map(|info| {
-                vk::SpecializationInfo::default()
-                    .map_entries(&info.map_entries)
-                    .data(&info.data)
-            });
+            let specialization_info = shader.specialization.as_ref().map(Into::into);
 
             if let Some(specialization_info) = &specialization_info {
                 stage_create_info = stage_create_info.specialization_info(specialization_info);
@@ -201,7 +197,7 @@ impl ComputePipeline {
     ///
     /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
     /// previously set name value.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.set_name(name);
 
         self

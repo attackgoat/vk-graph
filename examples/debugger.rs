@@ -100,7 +100,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             It is left as an excerise to the reader to determine *what* might have gone wrong here.
         */
         #[allow(unused_variables)]
-        let image = frame.graph.bind_node(
+        let image = frame.graph.bind_resource(
             Image::create(
                 frame.device,
                 ImageInfo::image_2d(
@@ -112,7 +112,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             )
             .unwrap(),
         );
-        let image = frame.graph.bind_node(
+        let image = frame.graph.bind_resource(
             Image::create(
                 frame.device,
                 ImageInfo::image_2d(
@@ -176,11 +176,12 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
         */
         frame
             .graph
-            .begin_cmd().with_name("This doesn't look good...")
+            .begin_cmd()
+            .debug_name("This doesn't look good...")
             .bind_pipeline(&compute_pipeline)
-            .write_descriptor(42, image)
-            .record_pipeline(|compute, _| {
-                compute.dispatch(1024, 1024, 1);
+            .shader_resource_access(42, image, AccessType::ComputeShaderWrite)
+            .record_pipeline(|pipeline, _| {
+                pipeline.dispatch(1024, 1024, 1);
             });
 
         // Growing tired of your advenutes, you signal that it is time to close the window and exit

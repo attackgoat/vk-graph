@@ -93,16 +93,16 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn draw_triangle(frame: &mut FrameContext, pipeline: &GraphicPipeline, vertex_buf: &Arc<Buffer>) {
-    let vertex_buf = frame.graph.bind_node(vertex_buf);
+    let vertex_buf = frame.graph.bind_resource(vertex_buf);
 
     frame
         .graph
         .begin_cmd()
-        .with_name("Triangle")
+        .debug_name("Triangle")
         .bind_pipeline(pipeline)
         .load_color(0, frame.swapchain_image)
         .store_color(0, frame.swapchain_image)
-        .access_node(vertex_buf, AccessType::VertexBuffer)
+        .resource_access(vertex_buf, AccessType::VertexBuffer)
         .record_pipeline(move |pipeline, _| {
             pipeline
                 .bind_vertex_buffer(0, vertex_buf, 0)

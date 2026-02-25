@@ -78,8 +78,8 @@ fn main() -> anyhow::Result<()> {
         };
 
         // Bind images so we can graph them
-        let bart_image = frame.graph.bind_node(&bart_image);
-        let gulf_image = frame.graph.bind_node(&gulf_image);
+        let bart_image = frame.graph.bind_resource(&bart_image);
+        let gulf_image = frame.graph.bind_resource(&gulf_image);
 
         // Apply the current transition to the images and get a resultant image out; "blend_image"
         let transition = TRANSITIONS[curr_transition_idx];

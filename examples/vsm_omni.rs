@@ -177,20 +177,20 @@ fn main() -> anyhow::Result<()> {
         };
 
         // Bind resources to the render graph of the current frame
-        let cube_mesh_index_buf = frame.graph.bind_node(&cube_mesh.index_buf);
-        let cube_mesh_vertex_buf = frame.graph.bind_node(&cube_mesh.vertex_buf);
-        let cube_shadow_index_buf = frame.graph.bind_node(&cube_shadow.index_buf);
-        let cube_shadow_vertex_buf = frame.graph.bind_node(&cube_shadow.vertex_buf);
-        let model_mesh_index_buf = frame.graph.bind_node(&model_mesh.index_buf);
-        let model_mesh_vertex_buf = frame.graph.bind_node(&model_mesh.vertex_buf);
-        let model_shadow_index_buf = frame.graph.bind_node(&model_shadow.index_buf);
-        let model_shadow_vertex_buf = frame.graph.bind_node(&model_shadow.vertex_buf);
+        let cube_mesh_index_buf = frame.graph.bind_resource(&cube_mesh.index_buf);
+        let cube_mesh_vertex_buf = frame.graph.bind_resource(&cube_mesh.vertex_buf);
+        let cube_shadow_index_buf = frame.graph.bind_resource(&cube_shadow.index_buf);
+        let cube_shadow_vertex_buf = frame.graph.bind_resource(&cube_shadow.vertex_buf);
+        let model_mesh_index_buf = frame.graph.bind_resource(&model_mesh.index_buf);
+        let model_mesh_vertex_buf = frame.graph.bind_resource(&model_mesh.vertex_buf);
+        let model_shadow_index_buf = frame.graph.bind_resource(&model_shadow.index_buf);
+        let model_shadow_vertex_buf = frame.graph.bind_resource(&model_shadow.vertex_buf);
         let camera_uniform_buf = frame
             .graph
-            .bind_node(lease_uniform_buffer(&mut pool, &camera).unwrap());
+            .bind_resource(lease_uniform_buffer(&mut pool, &camera).unwrap());
         let light_uniform_buf = frame
             .graph
-            .bind_node(lease_uniform_buffer(&mut pool, &light).unwrap());
+            .bind_resource(lease_uniform_buffer(&mut pool, &light).unwrap());
 
         // Lease and bind a cube-compatible shadow 2D image array to the graph of the current frame
         let shadow_faces_image = pool
@@ -209,15 +209,15 @@ fn main() -> anyhow::Result<()> {
             )
             .unwrap();
         let shadow_faces_info = shadow_faces_image.info;
-        let shadow_faces_node = frame.graph.bind_node(shadow_faces_image);
+        let shadow_faces_node = frame.graph.bind_resource(shadow_faces_image);
 
         // Lease and bind a temporary image we'll use during blur passes
         let temp_image = frame
             .graph
-            .bind_node(pool.lease(shadow_faces_info).unwrap());
+            .bind_resource(pool.lease(shadow_faces_info).unwrap());
 
         // Lastly we lease and bind depth images needed for rendering
-        let shadow_depth_image = frame.graph.bind_node(
+        let shadow_depth_image = frame.graph.bind_resource(
             pool.lease(ImageInfo::image_2d_array(
                 frame.width,
                 frame.height,
@@ -227,7 +227,7 @@ fn main() -> anyhow::Result<()> {
             ))
             .unwrap(),
         );
-        let depth_image = frame.graph.bind_node(
+        let depth_image = frame.graph.bind_resource(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -242,19 +242,23 @@ fn main() -> anyhow::Result<()> {
             frame
                 .graph
                 .begin_cmd()
-                .with_name("DEBUG")
+                .debug_name("DEBUG")
                 .bind_pipeline(&debug_pipeline)
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-                .access_descriptor(
+                .shader_resource_access(
                     0,
                     camera_uniform_buf,
                     AccessType::AnyShaderReadUniformBuffer,
                 )
-                .access_descriptor(1, light_uniform_buf, AccessType::AnyShaderReadUniformBuffer)
-                .access_node(model_mesh_index_buf, AccessType::IndexBuffer)
-                .access_node(model_mesh_vertex_buf, AccessType::VertexBuffer)
-                .access_node(cube_mesh_index_buf, AccessType::IndexBuffer)
-                .access_node(cube_mesh_vertex_buf, AccessType::VertexBuffer)
+                .shader_resource_access(
+                    1,
+                    light_uniform_buf,
+                    AccessType::AnyShaderReadUniformBuffer,
+                )
+                .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
+                .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
+                .resource_access(cube_mesh_index_buf, AccessType::IndexBuffer)
+                .resource_access(cube_mesh_vertex_buf, AccessType::VertexBuffer)
                 .clear_color(0, frame.swapchain_image)
                 .store_color(0, frame.swapchain_image)
                 .clear_depth_stencil(depth_image)
@@ -276,14 +280,18 @@ fn main() -> anyhow::Result<()> {
                 frame
                     .graph
                     .begin_cmd()
-                    .with_name("Shadow (Using geometry shader)")
+                    .debug_name("Shadow (Using geometry shader)")
                     .bind_pipeline(&shadow_pipeline)
                     .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-                    .access_descriptor(0, light_uniform_buf, AccessType::AnyShaderReadUniformBuffer)
-                    .access_node(model_shadow_index_buf, AccessType::IndexBuffer)
-                    .access_node(model_shadow_vertex_buf, AccessType::VertexBuffer)
-                    .access_node(cube_shadow_index_buf, AccessType::IndexBuffer)
-                    .access_node(cube_shadow_vertex_buf, AccessType::VertexBuffer)
+                    .shader_resource_access(
+                        0,
+                        light_uniform_buf,
+                        AccessType::AnyShaderReadUniformBuffer,
+                    )
+                    .resource_access(model_shadow_index_buf, AccessType::IndexBuffer)
+                    .resource_access(model_shadow_vertex_buf, AccessType::VertexBuffer)
+                    .resource_access(cube_shadow_index_buf, AccessType::IndexBuffer)
+                    .resource_access(cube_shadow_vertex_buf, AccessType::VertexBuffer)
                     .clear_color_value(0, shadow_faces_node, [light.range, light.range, 0.0, 0.0])
                     .store_color(0, shadow_faces_node)
                     .clear_depth_stencil(shadow_depth_image)
@@ -300,7 +308,7 @@ fn main() -> anyhow::Result<()> {
                     });
             } else {
                 for array_layer in 0..6 {
-                    let mut shadow_faces_view_info = shadow_faces_info.default_view_info();
+                    let mut shadow_faces_view_info = shadow_faces_info.into_image_view();
                     shadow_faces_view_info.array_layer_count = 1;
                     shadow_faces_view_info.base_array_layer = array_layer;
 
@@ -316,23 +324,23 @@ fn main() -> anyhow::Result<()> {
 
                     let light_uniform_buf = frame
                         .graph
-                        .bind_node(lease_uniform_buffer(&mut pool, &light).unwrap());
+                        .bind_resource(lease_uniform_buffer(&mut pool, &light).unwrap());
 
                     frame
                         .graph
                         .begin_cmd()
-                        .with_name("Shadow")
+                        .debug_name("Shadow")
                         .bind_pipeline(&shadow_pipeline)
                         .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-                        .access_descriptor(
+                        .shader_resource_access(
                             0,
                             light_uniform_buf,
                             AccessType::AnyShaderReadUniformBuffer,
                         )
-                        .access_node(model_shadow_index_buf, AccessType::IndexBuffer)
-                        .access_node(model_shadow_vertex_buf, AccessType::VertexBuffer)
-                        .access_node(cube_shadow_index_buf, AccessType::IndexBuffer)
-                        .access_node(cube_shadow_vertex_buf, AccessType::VertexBuffer)
+                        .resource_access(model_shadow_index_buf, AccessType::IndexBuffer)
+                        .resource_access(model_shadow_vertex_buf, AccessType::VertexBuffer)
+                        .resource_access(cube_shadow_index_buf, AccessType::IndexBuffer)
+                        .resource_access(cube_shadow_vertex_buf, AccessType::VertexBuffer)
                         .clear_color_value_as(
                             0,
                             shadow_faces_node,
@@ -362,19 +370,27 @@ fn main() -> anyhow::Result<()> {
                     frame
                         .graph
                         .begin_cmd()
-                        .with_name("Blur X")
+                        .debug_name("Blur X")
                         .bind_pipeline(&blur_x_pipeline)
-                        .read_descriptor(0, shadow_faces_node)
-                        .write_descriptor(1, temp_image)
+                        .shader_resource_access(
+                            0,
+                            shadow_faces_node,
+                            AccessType::ComputeShaderReadOther,
+                        )
+                        .shader_resource_access(1, temp_image, AccessType::ComputeShaderWrite)
                         .record_pipeline(move |compute, _| {
                             compute.dispatch(1, CUBEMAP_SIZE, 6);
                         })
                         .end_cmd()
                         .begin_cmd()
-                        .with_name("Blur Y")
+                        .debug_name("Blur Y")
                         .bind_pipeline(&blur_y_pipeline)
-                        .read_descriptor(0, temp_image)
-                        .write_descriptor(1, shadow_faces_node)
+                        .shader_resource_access(0, temp_image, AccessType::ComputeShaderReadOther)
+                        .shader_resource_access(
+                            1,
+                            shadow_faces_node,
+                            AccessType::ComputeShaderWrite,
+                        )
                         .record_pipeline(move |compute, _| {
                             compute.dispatch(CUBEMAP_SIZE, 1, 6);
                         });
@@ -385,26 +401,31 @@ fn main() -> anyhow::Result<()> {
             frame
                 .graph
                 .begin_cmd()
-                .with_name("Mesh objects")
+                .debug_name("Mesh objects")
                 .bind_pipeline(&mesh_pipeline)
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-                .access_descriptor(
+                .shader_resource_access(
                     0,
                     camera_uniform_buf,
                     AccessType::AnyShaderReadUniformBuffer,
                 )
-                .access_descriptor(1, light_uniform_buf, AccessType::AnyShaderReadUniformBuffer)
-                .read_descriptor_as(
+                .shader_resource_access(
+                    1,
+                    light_uniform_buf,
+                    AccessType::AnyShaderReadUniformBuffer,
+                )
+                .shader_subresource_access(
                     2,
                     shadow_faces_node,
                     shadow_faces_info
-                        .default_view_info()
+                        .into_image_view()
                         .with_type(vk::ImageViewType::CUBE),
+                    AccessType::AnyShaderReadUniformBuffer,
                 )
-                .access_node(model_mesh_index_buf, AccessType::IndexBuffer)
-                .access_node(model_mesh_vertex_buf, AccessType::VertexBuffer)
-                .access_node(cube_mesh_index_buf, AccessType::IndexBuffer)
-                .access_node(cube_mesh_vertex_buf, AccessType::VertexBuffer)
+                .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
+                .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
+                .resource_access(cube_mesh_index_buf, AccessType::IndexBuffer)
+                .resource_access(cube_mesh_vertex_buf, AccessType::VertexBuffer)
                 .clear_color(0, frame.swapchain_image)
                 .store_color(0, frame.swapchain_image)
                 .clear_depth_stencil(depth_image)
@@ -545,24 +566,14 @@ fn create_blur_x_pipeline(device: &Device) -> Result<ComputePipeline, DriverErro
         "#
     );
 
-    let shader = Shader::new_compute(comp.as_slice()).specialization_info(SpecializationInfo::new(
-        vec![
-            vk::SpecializationMapEntry {
-                constant_id: 0,
-                offset: 0,
-                size: 4,
-            },
-            vk::SpecializationMapEntry {
-                constant_id: 1,
-                offset: 4,
-                size: 4,
-            },
-        ],
-        bytes_of(&Blur {
+    let shader = Shader::new_compute(comp.as_slice()).specialization(
+        SpecializationMap::new(bytes_of(&Blur {
             image_size: CUBEMAP_SIZE,
             radius: BLUR_RADIUS,
-        }),
-    ));
+        }))
+        .constant(0, 0, 4)
+        .constant(1, 4, 4),
+    );
 
     ComputePipeline::create(device, ComputePipelineInfo::default(), shader)
 }
@@ -664,24 +675,14 @@ fn create_blur_y_pipeline(device: &Device) -> Result<ComputePipeline, DriverErro
         "#
     );
 
-    let shader = Shader::new_compute(comp.as_slice()).specialization_info(SpecializationInfo::new(
-        vec![
-            vk::SpecializationMapEntry {
-                constant_id: 0,
-                offset: 0,
-                size: 4,
-            },
-            vk::SpecializationMapEntry {
-                constant_id: 1,
-                offset: 4,
-                size: 4,
-            },
-        ],
-        bytes_of(&Blur {
+    let shader = Shader::new_compute(comp.as_slice()).specialization(
+        SpecializationMap::new(bytes_of(&Blur {
             image_size: CUBEMAP_SIZE,
             radius: BLUR_RADIUS,
-        }),
-    ));
+        }))
+        .constant(0, 0, 4)
+        .constant(1, 4, 4),
+    );
 
     ComputePipeline::create(device, ComputePipelineInfo::default(), shader)
 }
@@ -865,14 +866,8 @@ fn create_mesh_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError>
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
-            Shader::new_fragment(frag.as_slice()).specialization_info(SpecializationInfo::new(
-                vec![vk::SpecializationMapEntry {
-                    constant_id: 0,
-                    offset: 0,
-                    size: 4,
-                }],
-                bytes_of(&SHADOW_BIAS),
-            )),
+            Shader::new_fragment(frag.as_slice())
+                .specialization(SpecializationMap::new(bytes_of(&SHADOW_BIAS)).constant(0, 0, 4)),
         ],
     )
 }

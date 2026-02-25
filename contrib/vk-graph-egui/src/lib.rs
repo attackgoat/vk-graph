@@ -114,21 +114,20 @@ impl Egui {
                         ))
                         .unwrap();
                     Buffer::copy_from_slice(&mut buf, 0, cast_slice(&pixels));
-                    graph.bind_node(buf)
+                    graph.bind_resource(buf)
                 };
 
                 if let Some(pos) = delta.pos {
-                    let image = AnyImageNode::ImageLease(
+                    let image = graph.bind_resource(
                         self.textures
                             .remove(id)
-                            .expect("Tried updating undefined texture.")
-                            .bind(graph),
+                            .expect("Tried updating undefined texture."),
                     );
 
                     graph.copy_buffer_to_image_region(
                         tmp_buf,
                         image,
-                        vk::BufferImageCopy {
+                        [vk::BufferImageCopy {
                             buffer_offset: 0,
                             buffer_row_length: delta.image.width() as u32,
                             buffer_image_height: delta.image.height() as u32,
@@ -148,11 +147,11 @@ impl Egui {
                                 base_array_layer: 0,
                                 layer_count: 1,
                             },
-                        },
+                        }],
                     );
-                    (*id, image)
+                    (*id, AnyImageNode::from(image))
                 } else {
-                    let image = AnyImageNode::ImageLease(
+                    let image = graph.bind_resource(
                         self.cache
                             .lease(ImageInfo::image_2d(
                                 delta.image.width() as u32,
@@ -160,24 +159,23 @@ impl Egui {
                                 vk::Format::R8G8B8A8_UNORM,
                                 vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
                             ))
-                            .unwrap()
-                            .bind(graph),
+                            .unwrap(),
                     );
 
                     graph.copy_buffer_to_image(tmp_buf, image);
-                    (*id, image)
+                    (*id, AnyImageNode::from(image))
                 }
             })
             .collect::<HashMap<_, _>>();
 
         // Bind the rest of the textures.
         for (id, image) in self.textures.drain() {
-            bound_tex.insert(id, AnyImageNode::ImageLease(graph.bind_node(image)));
+            bound_tex.insert(id, AnyImageNode::from(graph.bind_resource(image)));
         }
 
         // Add user textures.
         for (id, node) in self.user_textures.drain() {
-            bound_tex.insert(id, node);
+            bound_tex.insert(id, AnyImageNode::from(node));
         }
 
         bound_tex
@@ -193,7 +191,7 @@ impl Egui {
         for (id, tex) in bound_tex.iter() {
             if let AnyImageNode::ImageLease(tex) = tex {
                 if let egui::TextureId::Managed(_) = *id {
-                    self.textures.insert(*id, graph.node(*tex).clone());
+                    self.textures.insert(*id, graph.resource(*tex).clone());
                 }
             }
         }
@@ -214,7 +212,7 @@ impl Egui {
         target: impl Into<AnyImageNode>,
     ) {
         let target = target.into();
-        let target_info = graph.node_info(target);
+        let target_info = graph.resource(target).info;
         for egui::ClippedPrimitive {
             clip_rect,
             primitive,
@@ -240,7 +238,7 @@ impl Egui {
                         Buffer::copy_from_slice(&mut buf, 0, cast_slice(&mesh.indices));
                         buf
                     };
-                    let idx_buf = graph.bind_node(idx_buf);
+                    let idx_buf = graph.bind_resource(idx_buf);
 
                     let vert_buf = {
                         let mut buf = self
@@ -254,7 +252,7 @@ impl Egui {
                         Buffer::copy_from_slice(&mut buf, 0, cast_slice(&mesh.vertices));
                         buf
                     };
-                    let vert_buf = graph.bind_node(vert_buf);
+                    let vert_buf = graph.bind_resource(vert_buf);
 
                     #[repr(C)]
                     #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -281,11 +279,15 @@ impl Egui {
 
                     graph
                         .begin_cmd()
-                        .with_name("Egui pass")
+                        .debug_name("Egui pass")
                         .bind_pipeline(&self.ppl)
-                        .access_node(idx_buf, AccessType::IndexBuffer)
-                        .access_node(vert_buf, AccessType::VertexBuffer)
-                        .access_descriptor((0, 0), *texture, AccessType::FragmentShaderReadOther)
+                        .resource_access(idx_buf, AccessType::IndexBuffer)
+                        .resource_access(vert_buf, AccessType::VertexBuffer)
+                        .shader_resource_access(
+                            (0, 0),
+                            *texture,
+                            AccessType::FragmentShaderReadOther,
+                        )
                         .load_color(0, target)
                         .store_color(0, target)
                         .record_pipeline(move |pipeline, _| {

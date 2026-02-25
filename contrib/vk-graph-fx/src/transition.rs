@@ -410,8 +410,8 @@ impl TransitionPipeline {
         let a_image = a_image.into();
         let b_image = b_image.into();
 
-        let a_info = graph.node_info(a_image);
-        let b_info = graph.node_info(b_image);
+        let a_info = graph.resource(a_image).info;
+        let b_info = graph.resource(b_image).info;
 
         let dest_info = ImageInfo::image_2d(
             a_info.width.max(b_info.width),
@@ -422,7 +422,7 @@ impl TransitionPipeline {
                 | vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::TRANSFER_SRC,
         );
-        let dest_image = graph.bind_node(self.cache.lease(dest_info).unwrap());
+        let dest_image = graph.bind_resource(self.cache.lease(dest_info).unwrap());
 
         self.apply_to(graph, a_image, b_image, dest_image, transition, progress);
 
@@ -444,7 +444,7 @@ impl TransitionPipeline {
         let dest_image = dest_image.into();
         let progress = progress.clamp(0.0, 1.0);
 
-        let dest_info = graph.node_info(dest_image);
+        let dest_info = graph.resource(dest_image).info;
 
         // Lazy-initialize the compute pipeline for this transition
         let transition_ty = transition.ty();
@@ -458,14 +458,17 @@ impl TransitionPipeline {
         // TODO: Handle displacement and luma in an if case, below
         graph
             .begin_cmd()
-            .with_name(format!("transition {transition_ty:?}"))
+            .debug_name(format!("transition {transition_ty:?}"))
             .bind_pipeline(pipeline)
-            .read_descriptor(0, a_image)
-            .read_descriptor(1, b_image)
-            .write_descriptor(2, dest_image)
-            .record_pipeline(move |compute, _| {
-                compute.push_constants(0, &push_consts);
-                compute.dispatch(dest_info.width, dest_info.height, 1);
+            .shader_resource_access(0, a_image, AccessType::ComputeShaderReadOther)
+            .shader_resource_access(1, b_image, AccessType::ComputeShaderReadOther)
+            .shader_resource_access(2, dest_image, AccessType::ComputeShaderWrite)
+            .record_pipeline(move |pipeline, _| {
+                pipeline.push_constants(0, &push_consts).dispatch(
+                    dest_info.width,
+                    dest_info.height,
+                    1,
+                );
             });
     }
 

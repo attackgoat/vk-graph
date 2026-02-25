@@ -360,7 +360,7 @@ impl RenderPass {
             .inner
             .shader_stages
             .iter()
-            .map(|stage| stage.specialization_info.as_ref().map(Into::into))
+            .map(|stage| stage.specialization.as_ref().map(Into::into))
             .collect::<Box<_>>();
         let stages = pipeline
             .inner

@@ -6,7 +6,7 @@ use {
         device::Device,
         image::SampleCount,
         merge_push_constant_ranges,
-        shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader, SpecializationInfo},
+        shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader, SpecializationMap},
     },
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
@@ -515,7 +515,7 @@ impl GraphicPipeline {
                         flags: shader.stage,
                         module: shader_module,
                         name: CString::new(shader.entry_name.as_str()).unwrap(),
-                        specialization_info: shader.specialization_info,
+                        specialization: shader.specialization,
                     };
 
                     Result::<_, DriverError>::Ok(shader_stage)
@@ -600,7 +600,7 @@ impl GraphicPipeline {
     ///
     /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
     /// previously set name value.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.set_name(name);
 
         self
@@ -809,7 +809,7 @@ pub(crate) struct ShaderStage {
     pub flags: vk::ShaderStageFlags,
     pub module: vk::ShaderModule,
     pub name: CString, // TODO
-    pub specialization_info: Option<SpecializationInfo>,
+    pub specialization: Option<SpecializationMap>,
 }
 
 /// Specifies stencil mode during rasterization.

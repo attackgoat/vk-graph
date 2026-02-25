@@ -46,14 +46,14 @@ Features of the render graph:
 ```rust
 graph
     .begin_cmd()
-    .with_name("Fancy new algorithm for shading a moving character who is actively on fire")
+    .debug_name("Fancy new algorithm for shading a moving character who is actively on fire")
     .bind_pipeline(&gfx_pipeline)
-    .read_descriptor(0, some_image)
-    .read_descriptor(1, another_image)
-    .read_descriptor(3, some_buf)
+    .shader_resource_access(0, prev_image, AccessType::FragmentShaderReadColorInputAttachment)
+    .shader_resource_access(1, some_image, AccessType::FragmentShaderReadOther)
+    .shader_resource_access(3, fire_buffer, Access::FragmentShaderReadUniformBuffer)
     .clear_color(0, swapchain_image)
     .store_color(0, swapchain_image)
-    .record_pipeline(move |pipeline| {
+    .record_pipeline(move |pipeline, _| {
         pipeline
             .push_constants(some_u8_slice)
             .draw(6, 1, 0, 0);

@@ -1,11 +1,11 @@
 //! Strongly-typed rendering commands.
 
 mod accel_struct;
+mod bind;
 mod compute;
 mod graphic;
 mod pipeline;
 mod ray_trace;
-mod view;
 
 pub use self::{
     accel_struct::{
@@ -14,27 +14,24 @@ pub use self::{
         UpdateAccelerationStructureInfo,
     },
     pipeline::PipelineRef,
-    view::{View, ViewType},
 };
 
 use {
+    self::bind::BindCommand,
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
-        AnyBufferNode, AnyImageNode, Bind, Binding, BufferLeaseNode, BufferNode, Command, Edge,
-        Execution, ExecutionFunction, ExecutionPipeline, Graph, ImageLeaseNode, ImageNode, Info,
-        Node, SwapchainImageNode,
+        AnyBufferNode, AnyImageNode, BindGraph, Bound, BufferLeaseNode, BufferNode, Command,
+        Execution, ExecutionFunction, Graph, ImageLeaseNode, ImageNode, Node, Resource,
+        SwapchainImageNode,
     },
     crate::driver::{
-        accel_struct::AccelerationStructure,
+        CommandBuffer,
+        accel_struct::{AccelerationStructure, AccelerationStructureRange},
         buffer::{Buffer, BufferSubresourceRange},
-        compute::ComputePipeline,
-        device::Device,
-        graphic::GraphicPipeline,
         image::{Image, ImageViewInfo},
-        ray_trace::RayTracePipeline,
     },
     ash::vk,
-    std::{marker::PhantomData, ops::Index},
+    std::ops::{Index, Range},
     vk_sync::AccessType,
 };
 
@@ -49,94 +46,6 @@ pub type BindingOffset = u32;
 
 /// Alias for the descriptor set index of a shader descriptor.
 pub type DescriptorSetIndex = u32;
-
-/// Associated type trait which enables default values for read and write methods.
-pub trait Access {
-    /// The default `AccessType` for read operations, if not specified explicitly.
-    const DEFAULT_READ: AccessType;
-
-    /// The default `AccessType` for write operations, if not specified explicitly.
-    const DEFAULT_WRITE: AccessType;
-}
-
-impl Access for ComputePipeline {
-    const DEFAULT_READ: AccessType = AccessType::ComputeShaderReadOther;
-    const DEFAULT_WRITE: AccessType = AccessType::ComputeShaderWrite;
-}
-
-impl Access for GraphicPipeline {
-    const DEFAULT_READ: AccessType = AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer;
-    const DEFAULT_WRITE: AccessType = AccessType::AnyShaderWrite;
-}
-
-impl Access for RayTracePipeline {
-    const DEFAULT_READ: AccessType =
-        AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
-    const DEFAULT_WRITE: AccessType = AccessType::AnyShaderWrite;
-}
-
-macro_rules! bind {
-    ($name:ident) => {
-        paste::paste! {
-            impl<'a> Bind<CommandRef<'a>, PipelineRef<'a, [<$name Pipeline>]>> for &'a [<$name Pipeline>] {
-                // TODO: Allow binding as explicit secondary command buffers? like with compute/raytrace stuff
-                fn bind(self, mut cmd: CommandRef<'a>) -> PipelineRef<'a, [<$name Pipeline>]> {
-                    let cmd_ref = cmd.as_mut();
-                    if cmd_ref.execs.last().unwrap().pipeline.is_some() {
-                        // Binding from PipelinePass -> PipelinePass (changing shaders)
-                        cmd_ref.execs.push(Default::default());
-                    }
-
-                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self.clone()));
-
-                    PipelineRef {
-                        __: PhantomData,
-                        cmd,
-                    }
-                }
-            }
-
-            impl<'a> Bind<CommandRef<'a>, PipelineRef<'a, [<$name Pipeline>]>> for [<$name Pipeline>] {
-                // TODO: Allow binding as explicit secondary command buffers? like with compute/raytrace stuff
-                fn bind(self, mut cmd: CommandRef<'a>) -> PipelineRef<'a, [<$name Pipeline>]> {
-                    let cmd_ref = cmd.as_mut();
-                    if cmd_ref.execs.last().unwrap().pipeline.is_some() {
-                        // Binding from PipelinePass -> PipelinePass (changing shaders)
-                        cmd_ref.execs.push(Default::default());
-                    }
-
-                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self));
-
-                    PipelineRef {
-                        __: PhantomData,
-                        cmd,
-                    }
-                }
-            }
-
-            impl ExecutionPipeline {
-                #[allow(unused)]
-                pub(super) fn [<is_ $name:snake>](&self) -> bool {
-                    matches!(self, Self::$name(_))
-                }
-
-                #[allow(unused)]
-                pub(super) fn [<unwrap_ $name:snake>](&self) -> &[<$name Pipeline>] {
-                    if let Self::$name(binding) = self {
-                        &binding
-                    } else {
-                        panic!();
-                    }
-                }
-            }
-        }
-    };
-}
-
-// Pipelines you can bind to a pass
-bind!(Compute);
-bind!(Graphic);
-bind!(RayTrace);
 
 /// A general render pass which may contain acceleration structure commands, general commands, or
 /// have pipeline bound to then record commands specific to those pipeline types.
@@ -161,109 +70,38 @@ impl<'a> CommandRef<'a> {
         }
     }
 
-    /// Informs the pass that the next recorded command buffer will read or write the given `node`
-    /// using `access`.
-    ///
-    /// This function must be called for `node` before it is read or written within a `record`
-    /// function. For general purpose access, see [`PassRef::read_node`] or [`PassRef::write_node`].
-    pub fn access_node(mut self, node: impl Node + Info, access: AccessType) -> Self {
-        self.access_node_mut(node, access);
-
-        self
-    }
-
-    /// Informs the pass that the next recorded command buffer will read or write the given `node`
-    /// using `access`.
-    ///
-    /// This function must be called for `node` before it is read or written within a `record`
-    /// function. For general purpose access, see [`PassRef::read_node_mut`] or
-    /// [`PassRef::write_node_mut`].
-    pub fn access_node_mut(&mut self, node: impl Node + Info, access: AccessType) {
-        self.assert_bound_graph_node(node);
-
-        let idx = node.index();
-        let binding = &self.graph.bindings[idx];
-
-        let node_access_range = if let Some(buf) = binding.as_driver_buffer() {
-            Subresource::Buffer((0..buf.info.size).into())
-        } else if let Some(image) = binding.as_driver_image() {
-            Subresource::Image(image.info.default_view_info().into())
-        } else {
-            Subresource::AccelerationStructure
-        };
-
-        self.push_node_access(node, access, node_access_range);
-    }
-
-    /// Informs the pass that the next recorded command buffer will read or write the `subresource`
-    /// of `node` using `access`.
-    ///
-    /// This function must be called for `node` before it is read or written within a `record`
-    /// function. For general purpose access, see [`PassRef::read_node`] or [`PassRef::write_node`].
-    pub fn access_node_subrange<N>(
-        mut self,
-        node: N,
-        access: AccessType,
-        subresource: impl Into<N::Subresource>,
-    ) -> Self
-    where
-        N: View,
-    {
-        self.access_node_subrange_mut(node, access, subresource);
-
-        self
-    }
-
-    /// Informs the pass that the next recorded command buffer will read or write the `subresource`
-    /// of `node` using `access`.
-    ///
-    /// This function must be called for `node` before it is read or written within a `record`
-    /// function. For general purpose access, see [`PassRef::read_node`] or [`PassRef::write_node`].
-    pub fn access_node_subrange_mut<N>(
-        &mut self,
-        node: N,
-        access: AccessType,
-        subresource: impl Into<N::Subresource>,
-    ) where
-        N: View,
-    {
-        self.push_node_access(node, access, subresource.into().into());
-    }
-
-    fn as_mut(&mut self) -> &mut Command {
-        &mut self.graph.cmds[self.cmd_idx]
-    }
-
-    fn as_ref(&self) -> &Command {
+    fn cmd(&self) -> &Command {
         &self.graph.cmds[self.cmd_idx]
     }
 
-    fn assert_bound_graph_node(&self, node: impl Node) {
-        let idx = node.index();
-
-        assert!(idx < self.graph.bindings.len());
+    fn cmd_mut(&mut self) -> &mut Command {
+        &mut self.graph.cmds[self.cmd_idx]
     }
 
-    /// Binds a Vulkan acceleration structure, buffer, or image to the graph associated with this
-    /// pass.
+    /// Binds a Vulkan buffer, image, or acceleration structure resource to the graph associated
+    /// with this command.
     ///
     /// Bound nodes may be used in passes for pipeline and shader operations.
-    pub fn bind_node<'b, B>(&'b mut self, binding: B) -> <B as Edge<Graph>>::Result
+    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
-        B: Edge<Graph>,
-        B: Bind<&'b mut Graph, <B as Edge<Graph>>::Result>,
+        R: BindGraph,
     {
-        self.graph.bind_node(binding)
+        self.graph.bind_resource(resource)
     }
 
     /// Binds a [`ComputePipeline`], [`GraphicPipeline`], or [`RayTracePipeline`] to the current
     /// pass, allowing for strongly typed access to the related functions.
-    pub fn bind_pipeline<B>(self, binding: B) -> <B as Edge<Self>>::Result
+    pub fn bind_pipeline<P>(self, pipeline: P) -> P::Ref
     where
-        B: Edge<Self>,
-        B: Bind<Self, <B as Edge<Self>>::Result>,
+        P: BindCommand<'a>,
     {
-        binding.bind(self)
+        pipeline.bind_cmd(self)
+    }
+
+    /// Sets a debugging name, but only in debug builds
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.set_debug_name(name);
+        self
     }
 
     /// Finalize the recording of this command and return to the `Graph` where you may record
@@ -277,21 +115,10 @@ impl<'a> CommandRef<'a> {
         self.graph
     }
 
-    /// Returns Info used to crate a node.
-    pub fn node_info<N>(&self, node: N) -> <N as Info>::Info
-    where
-        N: Info,
-    {
-        node.info(&self.graph.bindings)
-    }
-
-    fn push_execute(
-        &mut self,
-        func: impl FnOnce(&Device, vk::CommandBuffer, Nodes<'_>) + Send + 'static,
-    ) {
-        let pass = self.as_mut();
+    fn push_execute(&mut self, func: impl FnOnce(&CommandBuffer, Nodes<'_>) + Send + 'static) {
+        let cmd = self.cmd_mut();
         let exec = {
-            let last_exec = pass.execs.last_mut().unwrap();
+            let last_exec = cmd.execs.last_mut().unwrap();
             last_exec.func = Some(ExecutionFunction(Box::new(func)));
 
             Execution {
@@ -300,19 +127,25 @@ impl<'a> CommandRef<'a> {
             }
         };
 
-        pass.execs.push(exec);
+        cmd.execs.push(exec);
         self.exec_idx += 1;
     }
 
-    fn push_node_access(&mut self, node: impl Node, access: AccessType, subresource: Subresource) {
+    fn push_node_access(
+        &mut self,
+        node: impl Node,
+        access: AccessType,
+        subresource: SubresourceRange,
+    ) {
         let node_idx = node.index();
-        self.assert_bound_graph_node(node);
+
+        assert!(self.graph.resources.get(node_idx).is_some());
 
         let access = SubresourceAccess {
             access,
             subresource,
         };
-        self.as_mut()
+        self.cmd_mut()
             .execs
             .last_mut()
             .unwrap()
@@ -322,29 +155,6 @@ impl<'a> CommandRef<'a> {
             .or_insert(vec![access]);
     }
 
-    /// Informs the pass that the next recorded command buffer will read the given `node` using
-    /// [`AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer`].
-    ///
-    /// This function must be called for `node` before it is read within a `record` function. For
-    /// more specific access, see [`PassRef::access_node`].
-    pub fn read_node(mut self, node: impl Node + Info) -> Self {
-        self.read_node_mut(node);
-
-        self
-    }
-
-    /// Informs the pass that the next recorded command buffer will read the given `node` using
-    /// [`AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer`].
-    ///
-    /// This function must be called for `node` before it is read within a `record` function. For
-    /// more specific access, see [`PassRef::access_node`].
-    pub fn read_node_mut(&mut self, node: impl Node + Info) {
-        self.access_node_mut(
-            node,
-            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
-        );
-    }
-
     /// Begin recording an acceleration structure command buffer.
     ///
     /// This is the entry point for building and updating an [`AccelerationStructure`] instance.
@@ -352,15 +162,8 @@ impl<'a> CommandRef<'a> {
         mut self,
         func: impl FnOnce(AccelerationStructureRef<'_>, Nodes<'_>) + Send + 'static,
     ) -> Self {
-        self.push_execute(move |device, cmd_buf, nodes| {
-            func(
-                AccelerationStructureRef {
-                    nodes,
-                    cmd_buf,
-                    device,
-                },
-                nodes,
-            );
+        self.push_execute(move |cmd_buf, nodes| {
+            func(AccelerationStructureRef { nodes, cmd_buf }, nodes);
         });
 
         self
@@ -372,41 +175,91 @@ impl<'a> CommandRef<'a> {
     /// code and interfaces.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(&Device, vk::CommandBuffer, Nodes<'_>) + Send + 'static,
+        func: impl FnOnce(&CommandBuffer, Nodes<'_>) + Send + 'static,
     ) -> Self {
         self.push_execute(func);
 
         self
     }
 
+    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
+    /// which the given node represents.
+    pub fn resource<N>(&self, node: N) -> &<N as Bound>::Resource
+    where
+        N: Bound,
+    {
+        self.graph.resource(node)
+    }
+
+    /// Informs the command that the next recorded command buffer will read or write `node` using
+    /// `access`.
+    ///
+    /// This function must be called for `node` before it is used within a `record_`-function.
+    pub fn resource_access<N>(mut self, node: N, access: AccessType) -> Self
+    where
+        N: Node + View,
+        SubresourceRange: From<<N as View>::Range>,
+    {
+        self.set_resource_access(node, access);
+        self
+    }
+
     /// Sets a debugging name, but only in debug builds
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn set_debug_name(&mut self, name: impl Into<String>) -> &mut Self {
         #[cfg(debug_assertions)]
         {
-            self.as_mut().name = Some(name.into());
+            self.cmd_mut().name = Some(name.into());
         }
 
         self
     }
 
-    /// Informs the pass that the next recorded command buffer will write the given `node` using
-    /// [`AccessType::AnyShaderWrite`].
+    /// Informs the command that the next recorded command buffer will read or write `node` using
+    /// `access`.
     ///
-    /// This function must be called for `node` before it is written within a `record` function. For
-    /// more specific access, see [`PassRef::access_node`].
-    pub fn write_node(mut self, node: impl Node + Info) -> Self {
-        self.write_node_mut(node);
-
-        self
+    /// This function must be called for `node` before it is used within a `record_`-function.
+    pub fn set_resource_access<N>(&mut self, node: N, access: AccessType)
+    where
+        N: Node + View,
+        SubresourceRange: From<<N as View>::Range>,
+    {
+        let subresource = node.default_range(&self.graph.resources).into();
+        self.push_node_access(node, access, subresource);
     }
 
-    /// Informs the pass that the next recorded command buffer will write the given `node` using
-    /// [`AccessType::AnyShaderWrite`].
+    /// Informs the command that the next recorded command buffer will read or write the
+    /// `subresource` of `node` using `access`.
     ///
-    /// This function must be called for `node` before it is written within a `record` function. For
-    /// more specific access, see [`PassRef::access_node`].
-    pub fn write_node_mut(&mut self, node: impl Node + Info) {
-        self.access_node_mut(node, AccessType::AnyShaderWrite);
+    /// This function must be called for `node` before it is used within a `record_`-function.
+    pub fn set_subresource_access<N>(
+        &mut self,
+        node: N,
+        subresource: impl Into<N::Range>,
+        access: AccessType,
+    ) where
+        N: Node + View,
+        SubresourceRange: From<<N as View>::Range>,
+    {
+        let subresource = subresource.into().into();
+        self.push_node_access(node, access, subresource);
+    }
+
+    /// Informs the command that the next recorded command buffer will read or write the
+    /// `subresource` of `node` using `access`.
+    ///
+    /// This function must be called for `node` before it is used within a `record_`-function.
+    pub fn subresource_access<N>(
+        mut self,
+        node: N,
+        subresource: impl Into<N::Range>,
+        access: AccessType,
+    ) -> Self
+    where
+        N: Node + View,
+        SubresourceRange: From<<N as View>::Range>,
+    {
+        self.set_subresource_access(node, subresource, access);
+        self
     }
 }
 
@@ -503,8 +356,8 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor
 /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
 /// # let image = Image::create(&device, info)?;
 /// # let mut my_graph = Graph::default();
-/// # let my_image_node = my_graph.bind_node(image);
-/// my_graph.begin_cmd().with_name("custom vulkan commands")
+/// # let my_image_node = my_graph.bind_resource(image);
+/// my_graph.begin_cmd().debug_name("custom vulkan commands")
 ///         .record_cmd_buf(move |device, cmd_buf, nodes| {
 ///             let my_image: &Image = &nodes[my_image_node];
 ///
@@ -515,25 +368,26 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Nodes<'a> {
-    bindings: &'a [Binding],
-
     #[cfg(debug_assertions)]
     exec: &'a Execution,
+
+    resources: &'a [Resource],
 }
 
 impl<'a> Nodes<'a> {
     pub(super) fn new(
-        bindings: &'a [Binding],
+        resources: &'a [Resource],
         #[cfg(debug_assertions)] exec: &'a Execution,
     ) -> Self {
         Self {
-            bindings,
+            resources,
             #[cfg(debug_assertions)]
             exec,
         }
     }
 
-    fn binding(&self, node_idx: usize) -> &Binding {
+    // TODO...
+    fn resource(&self, node_idx: usize) -> &Resource {
         // You must have called read or write for this node on this execution before indexing
         // into the bindings data!
         //
@@ -545,7 +399,7 @@ impl<'a> Nodes<'a> {
             "unexpected node access: call access, read, or write first"
         );
 
-        &self.bindings[node_idx]
+        &self.resources[node_idx]
     }
 }
 
@@ -557,7 +411,7 @@ macro_rules! index {
                 type Output = $handle;
 
                 fn index(&self, node: [<$name Node>]) -> &Self::Output {
-                    &*self.binding(node.idx).[<as_ $name:snake>]().unwrap()
+                    &*self.resource(node.idx).[<as_ $name:snake>]().unwrap()
                 }
             }
         }
@@ -578,20 +432,10 @@ impl Index<AnyAccelerationStructureNode> for Nodes<'_> {
     type Output = AccelerationStructure;
 
     fn index(&self, node: AnyAccelerationStructureNode) -> &Self::Output {
-        let node_idx = match node {
-            AnyAccelerationStructureNode::AccelerationStructure(node) => node.idx,
-            AnyAccelerationStructureNode::AccelerationStructureLease(node) => node.idx,
-        };
-        let binding = self.binding(node_idx);
+        let node_idx = node.index();
+        let resource = self.resource(node_idx);
 
-        match node {
-            AnyAccelerationStructureNode::AccelerationStructure(_) => {
-                binding.as_acceleration_structure().unwrap()
-            }
-            AnyAccelerationStructureNode::AccelerationStructureLease(_) => {
-                binding.as_acceleration_structure_lease().unwrap()
-            }
-        }
+        resource.as_driver_accel_struct().unwrap()
     }
 }
 
@@ -599,16 +443,10 @@ impl Index<AnyBufferNode> for Nodes<'_> {
     type Output = Buffer;
 
     fn index(&self, node: AnyBufferNode) -> &Self::Output {
-        let node_idx = match node {
-            AnyBufferNode::Buffer(node) => node.idx,
-            AnyBufferNode::BufferLease(node) => node.idx,
-        };
-        let binding = self.binding(node_idx);
+        let node_idx = node.index();
+        let resource = self.resource(node_idx);
 
-        match node {
-            AnyBufferNode::Buffer(_) => binding.as_buffer().unwrap(),
-            AnyBufferNode::BufferLease(_) => binding.as_buffer_lease().unwrap(),
-        }
+        resource.as_driver_buffer().unwrap()
     }
 }
 
@@ -616,26 +454,18 @@ impl Index<AnyImageNode> for Nodes<'_> {
     type Output = Image;
 
     fn index(&self, node: AnyImageNode) -> &Self::Output {
-        let node_idx = match node {
-            AnyImageNode::Image(node) => node.idx,
-            AnyImageNode::ImageLease(node) => node.idx,
-            AnyImageNode::SwapchainImage(node) => node.idx,
-        };
-        let binding = self.binding(node_idx);
+        let node_idx = node.index();
+        let resource = self.resource(node_idx);
 
-        match node {
-            AnyImageNode::Image(_) => binding.as_image().unwrap(),
-            AnyImageNode::ImageLease(_) => binding.as_image_lease().unwrap(),
-            AnyImageNode::SwapchainImage(_) => binding.as_swapchain_image().unwrap(),
-        }
+        resource.as_driver_image().unwrap()
     }
 }
 
-/// Describes a portion of a resource which is bound.
 #[derive(Clone, Copy, Debug)]
-pub enum Subresource {
+#[doc(hidden)]
+pub enum SubresourceRange {
     /// Acceleration structures are bound whole.
-    AccelerationStructure,
+    AccelerationStructure(AccelerationStructureRange),
 
     /// Images may be partially bound.
     Image(vk::ImageSubresourceRange),
@@ -644,7 +474,7 @@ pub enum Subresource {
     Buffer(BufferSubresourceRange),
 }
 
-impl Subresource {
+impl SubresourceRange {
     pub(super) fn as_image(&self) -> Option<&vk::ImageSubresourceRange> {
         if let Self::Image(subresource) = self {
             Some(subresource)
@@ -654,26 +484,237 @@ impl Subresource {
     }
 }
 
-impl From<()> for Subresource {
-    fn from(_: ()) -> Self {
-        Self::AccelerationStructure
+impl From<AccelerationStructureRange> for SubresourceRange {
+    fn from(subresource: AccelerationStructureRange) -> Self {
+        Self::AccelerationStructure(subresource)
     }
 }
 
-impl From<vk::ImageSubresourceRange> for Subresource {
-    fn from(subresource: vk::ImageSubresourceRange) -> Self {
-        Self::Image(subresource)
-    }
-}
-
-impl From<BufferSubresourceRange> for Subresource {
+impl From<BufferSubresourceRange> for SubresourceRange {
     fn from(subresource: BufferSubresourceRange) -> Self {
         Self::Buffer(subresource)
+    }
+}
+
+impl From<ImageViewInfo> for SubresourceRange {
+    fn from(subresource: ImageViewInfo) -> Self {
+        Self::Image(subresource.into())
+    }
+}
+impl From<vk::ImageSubresourceRange> for SubresourceRange {
+    fn from(subresource: vk::ImageSubresourceRange) -> Self {
+        Self::Image(subresource)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SubresourceAccess {
     pub access: AccessType,
-    pub subresource: Subresource,
+    pub subresource: SubresourceRange,
+}
+
+/// Allows for a resource to be reinterpreted as differently formatted data.
+#[doc(hidden)]
+pub trait View {
+    /// The information about the resource when bound directly to shader descriptors.
+    type Info;
+
+    /// The information about the resource when used indirectly by any part of a graph.
+    type Range;
+
+    fn default_range(&self, _: &[Resource]) -> Self::Range
+    where
+        Self: Node;
+
+    fn default_info(&self, _: &[Resource]) -> Self::Info
+    where
+        Self: Node;
+}
+
+macro_rules! view_accel_struct {
+    ($name:ident) => {
+        impl View for $name {
+            type Info = Self::Range;
+            type Range = AccelerationStructureRange;
+
+            fn default_range(&self, _: &[Resource]) -> Self::Range
+            where
+                Self: Node,
+            {
+                Self::Range::default()
+            }
+
+            fn default_info(&self, resources: &[Resource]) -> Self::Info
+            where
+                Self: Node,
+            {
+                self.default_range(resources)
+            }
+        }
+    };
+}
+
+view_accel_struct!(AnyAccelerationStructureNode);
+view_accel_struct!(AccelerationStructureLeaseNode);
+view_accel_struct!(AccelerationStructureNode);
+
+macro_rules! view_buffer {
+    ($name:ident) => {
+        impl View for $name {
+            type Info = Self::Range;
+            type Range = BufferSubresourceRange;
+
+            fn default_range(&self, resources: &[Resource]) -> Self::Range
+            where
+                Self: Node,
+            {
+                let idx = self.index();
+
+                resources[idx].as_buffer().unwrap().info.into()
+            }
+
+            fn default_info(&self, resources: &[Resource]) -> Self::Info
+            where
+                Self: Node,
+            {
+                self.default_range(resources)
+            }
+        }
+    };
+}
+
+view_buffer!(AnyBufferNode);
+view_buffer!(BufferLeaseNode);
+view_buffer!(BufferNode);
+
+macro_rules! view_image {
+    ($name:ident) => {
+        impl View for $name {
+            type Info = ImageViewInfo;
+            type Range = vk::ImageSubresourceRange;
+
+            fn default_range(&self, resources: &[Resource]) -> Self::Range
+            where
+                Self: Node,
+            {
+                self.default_info(resources).into()
+            }
+
+            fn default_info(&self, resources: &[Resource]) -> Self::Info
+            where
+                Self: Node,
+            {
+                let idx = self.index();
+
+                resources[idx].as_image().unwrap().info.into()
+            }
+        }
+    };
+}
+
+view_image!(AnyImageNode);
+view_image!(ImageLeaseNode);
+view_image!(ImageNode);
+view_image!(SwapchainImageNode);
+
+/// Describes the interpretation of a resource.
+#[derive(Debug)]
+#[doc(hidden)]
+pub enum ViewInfo {
+    /// Acceleration structures are always whole resources.
+    AccelerationStructure(AccelerationStructureRange),
+
+    /// Images may be interpreted as differently formatted images.
+    Image(ImageViewInfo),
+
+    /// Buffers may be interpreted as subregions of the same buffer.
+    Buffer(BufferSubresourceRange),
+}
+
+impl ViewInfo {
+    pub(crate) fn as_buffer(&self) -> Option<&BufferSubresourceRange> {
+        match self {
+            Self::Buffer(info) => Some(info),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_image(&self) -> Option<&ImageViewInfo> {
+        match self {
+            Self::Image(info) => Some(info),
+            _ => None,
+        }
+    }
+}
+
+impl From<AccelerationStructureRange> for ViewInfo {
+    fn from(info: AccelerationStructureRange) -> Self {
+        Self::AccelerationStructure(info)
+    }
+}
+
+impl From<BufferSubresourceRange> for ViewInfo {
+    fn from(info: BufferSubresourceRange) -> Self {
+        Self::Buffer(info)
+    }
+}
+
+impl From<ImageViewInfo> for ViewInfo {
+    fn from(info: ImageViewInfo) -> Self {
+        Self::Image(info)
+    }
+}
+
+impl From<Range<vk::DeviceSize>> for ViewInfo {
+    fn from(range: Range<vk::DeviceSize>) -> Self {
+        Self::Buffer(BufferSubresourceRange {
+            start: range.start,
+            end: range.end,
+        })
+    }
+}
+
+mod deprecated {
+    use {
+        crate::{
+            cmd_ref::{CommandRef, SubresourceRange, View},
+            deprecated::Info,
+            node::Node,
+        },
+        ash::vk,
+        vk_sync::AccessType,
+    };
+
+    impl<'a> CommandRef<'a> {
+        #[deprecated = "use set_resource_access function"]
+        #[doc(hidden)]
+        pub fn access_node_mut<N>(&mut self, node: N, access: AccessType) -> &mut Self
+        where
+            N: Node + View,
+            SubresourceRange: From<<N as View>::Range>,
+        {
+            self.set_resource_access(node, access);
+            self
+        }
+
+        #[deprecated = "use device_address function of resource function result"]
+        #[doc(hidden)]
+        pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {
+            let idx = node.index();
+
+            self.graph.resources[idx]
+                .as_driver_buffer()
+                .unwrap()
+                .device_address()
+        }
+
+        #[deprecated = "dereference info field of resource function result"]
+        #[doc(hidden)]
+        pub fn node_info<N>(&self, node: N) -> N::Type
+        where
+            N: Node + Info,
+        {
+            node.info(&self.graph.resources)
+        }
+    }
 }

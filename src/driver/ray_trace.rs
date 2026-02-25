@@ -163,13 +163,7 @@ impl RayTracePipeline {
                 })?;
             let specialization_infos: Box<[Option<vk::SpecializationInfo>]> = shaders
                 .iter()
-                .map(|shader| {
-                    shader.specialization_info.as_ref().map(|info| {
-                        vk::SpecializationInfo::default()
-                            .data(&info.data)
-                            .map_entries(&info.map_entries)
-                    })
-                })
+                .map(|shader| shader.specialization.as_ref().map(Into::into))
                 .collect();
             let mut shader_stages: Vec<vk::PipelineShaderStageCreateInfo> =
                 Vec::with_capacity(shaders.len());
@@ -379,7 +373,7 @@ impl RayTracePipeline {
     ///
     /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
     /// previously set name value.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.set_name(name);
 
         self

@@ -44,14 +44,9 @@ impl BitmapFont {
             [
                 Shader::new_vertex(include_glsl!("res/shader/graphic/font.vert").as_slice()),
                 Shader::new_fragment(include_glsl!("res/shader/graphic/font.frag").as_slice())
-                    .specialization_info(SpecializationInfo::new(
-                        [vk::SpecializationMapEntry {
-                            constant_id: 0,
-                            offset: 0,
-                            size: 4,
-                        }],
-                        num_pages.to_ne_bytes(),
-                    )),
+                    .specialization(
+                        SpecializationMap::new(num_pages.to_ne_bytes()).constant(0, 0, 4),
+                    ),
             ],
         )
         .context("Unable to create bitmap font pipeline")?;
@@ -149,7 +144,7 @@ impl BitmapFont {
         let color = color.into();
         let image = image.into();
         let text = text.as_ref();
-        let image_info = graph.node_info(image);
+        let image_info = graph.resource(image).info;
         let transform = Mat4::from_translation(vec3(-1.0, -1.0, 0.0))
             * Mat4::from_scale(vec3(2.0 * scale, 2.0 * scale, 1.0))
             * Mat4::from_translation(vec3(
@@ -196,23 +191,28 @@ impl BitmapFont {
             }
         }
 
-        let vertex_buf = graph.bind_node(vertex_buf);
+        let vertex_buf = graph.bind_resource(vertex_buf);
 
         let mut page_nodes: Vec<ImageNode> = Vec::with_capacity(self.pages.len());
         for page in self.pages.iter() {
-            page_nodes.push(graph.bind_node(page));
+            page_nodes.push(graph.bind_resource(page));
         }
 
         let mut pass = graph
             .begin_cmd()
-            .with_name("text")
+            .debug_name("text")
             .bind_pipeline(&self.pipeline)
-            .access_node(vertex_buf, AccessType::IndexBuffer)
+            .resource_access(vertex_buf, AccessType::IndexBuffer)
             .load_color(0, image)
             .store_color(0, image);
 
-        for (idx, page_node) in page_nodes.iter().enumerate() {
-            pass = pass.read_descriptor((0, [idx as _]), *page_node);
+        for (idx, page_node) in page_nodes.iter().copied().enumerate() {
+            let descriptor = (0, [idx as _]);
+            pass.set_shader_resource_access(
+                descriptor,
+                page_node,
+                AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+            );
         }
 
         pass.record_pipeline(move |pipeline, _| {

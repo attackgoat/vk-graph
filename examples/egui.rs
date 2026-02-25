@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     let mut cache = LazyPool::new(&window.device);
 
     window.run(|frame| {
-        let img = frame.graph.bind_node(
+        let img = frame.graph.bind_resource(
             cache
                 .lease(ImageInfo::image_2d(
                     100,

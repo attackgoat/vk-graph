@@ -47,12 +47,12 @@ fn main() -> anyhow::Result<()> {
 
         let scene_tlas = create_tlas(frame.device, &mut pool, frame.graph, &scene_blas).unwrap();
 
-        let ground_mesh_index_buf = frame.graph.bind_node(&ground_mesh.index_buf);
-        let ground_mesh_vertex_buf = frame.graph.bind_node(&ground_mesh.vertex_buf);
-        let model_mesh_index_buf = frame.graph.bind_node(&model_mesh.index_buf);
-        let model_mesh_vertex_buf = frame.graph.bind_node(&model_mesh.vertex_buf);
+        let ground_mesh_index_buf = frame.graph.bind_resource(&ground_mesh.index_buf);
+        let ground_mesh_vertex_buf = frame.graph.bind_resource(&ground_mesh.vertex_buf);
+        let model_mesh_index_buf = frame.graph.bind_resource(&model_mesh.index_buf);
+        let model_mesh_vertex_buf = frame.graph.bind_resource(&model_mesh.vertex_buf);
 
-        let depth_image = frame.graph.bind_node(
+        let depth_image = frame.graph.bind_resource(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -61,7 +61,7 @@ fn main() -> anyhow::Result<()> {
             ))
             .unwrap(),
         );
-        let camera_buf = frame.graph.bind_node({
+        let camera_buf = frame.graph.bind_resource({
             let mut buf = pool
                 .lease(BufferInfo::host_mem(
                     size_of::<Camera>() as _,
@@ -90,14 +90,14 @@ fn main() -> anyhow::Result<()> {
         frame
             .graph
             .begin_cmd()
-            .with_name("Mesh with ray-query shadows")
+            .debug_name("Mesh with ray-query shadows")
             .bind_pipeline(&gfx_pipeline)
-            .access_node(ground_mesh_index_buf, AccessType::IndexBuffer)
-            .access_node(ground_mesh_vertex_buf, AccessType::VertexBuffer)
-            .access_node(model_mesh_index_buf, AccessType::IndexBuffer)
-            .access_node(model_mesh_vertex_buf, AccessType::VertexBuffer)
-            .access_descriptor(0, camera_buf, AccessType::AnyShaderReadUniformBuffer)
-            .access_descriptor(
+            .resource_access(ground_mesh_index_buf, AccessType::IndexBuffer)
+            .resource_access(ground_mesh_vertex_buf, AccessType::VertexBuffer)
+            .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
+            .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
+            .shader_resource_access(0, camera_buf, AccessType::AnyShaderReadUniformBuffer)
+            .shader_resource_access(
                 1,
                 scene_tlas,
                 AccessType::RayTracingShaderReadAccelerationStructure,
@@ -177,7 +177,7 @@ fn create_blas(
     let size = AccelerationStructure::size_of(device, &info);
 
     let mut graph = Graph::default();
-    let blas = graph.bind_node(AccelerationStructure::create(
+    let blas = graph.bind_resource(AccelerationStructure::create(
         device,
         AccelerationStructureInfo::blas(size.create_size),
     )?);
@@ -189,7 +189,7 @@ fn create_blas(
         .unwrap()
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
-    let scratch_buf = graph.bind_node(Buffer::create(
+    let scratch_buf = graph.bind_resource(Buffer::create(
         device,
         BufferInfo::device_mem(
             size.build_size,
@@ -198,29 +198,29 @@ fn create_blas(
         .to_builder()
         .alignment(accel_struct_scratch_offset_alignment),
     )?);
-    let scratch_data = graph.node_device_address(scratch_buf);
+    let scratch_addr = graph.resource(scratch_buf).device_address();
 
-    let mut pass = graph.begin_cmd().with_name("Build BLAS");
+    let mut pass = graph.begin_cmd().debug_name("Build BLAS");
 
     for model in models.iter().copied() {
-        let index_buf = pass.bind_node(&model.index_buf);
-        let vertex_buf = pass.bind_node(&model.vertex_buf);
+        let index_buf = pass.bind_resource(&model.index_buf);
+        let vertex_buf = pass.bind_resource(&model.vertex_buf);
 
-        pass.access_node_mut(index_buf, AccessType::AccelerationStructureBuildRead);
-        pass.access_node_mut(vertex_buf, AccessType::AccelerationStructureBuildRead);
+        pass.set_resource_access(index_buf, AccessType::AccelerationStructureBuildRead);
+        pass.set_resource_access(vertex_buf, AccessType::AccelerationStructureBuildRead);
     }
 
-    pass.access_node(blas, AccessType::AccelerationStructureBuildWrite)
-        .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+    pass.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
+        .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
         .record_accel_struct(move |accel_struct, _| {
             accel_struct.build(&[BuildAccelerationStructureInfo::new(
                 blas,
-                scratch_data,
+                scratch_addr,
                 info,
             )]);
         });
 
-    let blas = graph.node(blas).clone();
+    let blas = graph.resource(blas).clone();
 
     graph.resolve().submit(&mut LazyPool::new(device), 0, 0)?;
 
@@ -362,7 +362,7 @@ fn create_tlas(
     )])
     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
     let size = AccelerationStructure::size_of(device, &info);
-    let tlas = graph.bind_node(pool.lease(AccelerationStructureInfo::tlas(size.create_size))?);
+    let tlas = graph.bind_resource(pool.lease(AccelerationStructureInfo::tlas(size.create_size))?);
 
     let accel_struct_scratch_offset_alignment = device
         .physical_device
@@ -371,7 +371,7 @@ fn create_tlas(
         .unwrap()
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
-    let scratch_buf = graph.bind_node(
+    let scratch_buf = graph.bind_resource(
         pool.lease(
             BufferInfo::device_mem(
                 size.build_size,
@@ -381,21 +381,21 @@ fn create_tlas(
             .alignment(accel_struct_scratch_offset_alignment),
         )?,
     );
-    let scratch_data = graph.node_device_address(scratch_buf);
-    let blas = graph.bind_node(blas);
-    let instance_buf = graph.bind_node(instance_buf);
+    let scratch_addr = graph.resource(scratch_buf).device_address();
+    let blas = graph.bind_resource(blas);
+    let instance_buf = graph.bind_resource(instance_buf);
 
     graph
         .begin_cmd()
-        .with_name("Build TLAS")
-        .access_node(blas, AccessType::AccelerationStructureBuildRead)
-        .access_node(instance_buf, AccessType::AccelerationStructureBuildRead)
-        .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-        .access_node(tlas, AccessType::AccelerationStructureBuildWrite)
+        .debug_name("Build TLAS")
+        .resource_access(blas, AccessType::AccelerationStructureBuildRead)
+        .resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
+        .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+        .resource_access(tlas, AccessType::AccelerationStructureBuildWrite)
         .record_accel_struct(move |accel_struct, _| {
             accel_struct.build(&[BuildAccelerationStructureInfo::new(
                 tlas,
-                scratch_data,
+                scratch_addr,
                 info,
             )]);
         });

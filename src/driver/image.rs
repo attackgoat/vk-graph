@@ -420,7 +420,7 @@ impl Image {
     }
 
     /// Sets the debugging name assigned to this image.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
 
         self
@@ -853,7 +853,7 @@ impl ImageInfo {
     }
 
     /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
-    pub fn default_view_info(self) -> ImageViewInfo {
+    pub fn into_image_view(self) -> ImageViewInfo {
         self.into()
     }
 
@@ -922,6 +922,14 @@ impl From<ImageInfoBuilder> for ImageInfo {
     }
 }
 
+impl From<ImageInfo> for vk::ImageSubresourceRange {
+    fn from(info: ImageInfo) -> Self {
+        let image_view_info: ImageViewInfo = info.into();
+
+        image_view_info.into()
+    }
+}
+
 impl ImageInfoBuilder {
     /// Builds a new `ImageInfo`.
     ///
@@ -941,6 +949,11 @@ impl ImageInfoBuilder {
             Ok(info) => info,
         }
     }
+
+    /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
+    pub fn into_image_view(self) -> ImageViewInfoBuilder {
+        self.build().into_image_view().to_builder()
+    }
 }
 
 #[derive(Debug)]
@@ -949,18 +962,6 @@ struct ImageInfoBuilderError(UninitializedFieldError);
 impl From<UninitializedFieldError> for ImageInfoBuilderError {
     fn from(err: UninitializedFieldError) -> Self {
         Self(err)
-    }
-}
-
-impl From<ImageViewInfo> for vk::ImageSubresourceRange {
-    fn from(info: ImageViewInfo) -> Self {
-        Self {
-            aspect_mask: info.aspect_mask,
-            base_mip_level: info.base_mip_level,
-            base_array_layer: info.base_array_layer,
-            layer_count: info.array_layer_count,
-            level_count: info.mip_level_count,
-        }
     }
 }
 
@@ -1137,6 +1138,18 @@ impl From<ImageViewInfoBuilder> for ImageViewInfo {
     }
 }
 
+impl From<ImageViewInfo> for vk::ImageSubresourceRange {
+    fn from(info: ImageViewInfo) -> Self {
+        Self {
+            aspect_mask: info.aspect_mask,
+            base_mip_level: info.base_mip_level,
+            base_array_layer: info.base_array_layer,
+            layer_count: info.array_layer_count,
+            level_count: info.mip_level_count,
+        }
+    }
+}
+
 impl ImageViewInfoBuilder {
     /// Builds a new 'ImageViewInfo'.
     ///
@@ -1218,6 +1231,18 @@ impl From<SampleCount> for vk::SampleCountFlags {
             SampleCount::Type16 => Self::TYPE_16,
             SampleCount::Type32 => Self::TYPE_32,
             SampleCount::Type64 => Self::TYPE_64,
+        }
+    }
+}
+
+mod deprecated {
+    use crate::driver::image::{ImageInfo, ImageViewInfo};
+
+    impl ImageInfo {
+        #[deprecated = "use into_image_view function"]
+        #[doc(hidden)]
+        pub fn default_view_info(self) -> ImageViewInfo {
+            self.into_image_view()
         }
     }
 }

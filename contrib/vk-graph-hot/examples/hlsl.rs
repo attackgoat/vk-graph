@@ -35,12 +35,12 @@ fn main() -> Result<(), WindowError> {
         frame
             .graph
             .begin_cmd()
-            .with_name("make some noise")
+            .debug_name("make some noise")
             .bind_pipeline(pipeline.hot())
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
-            .record_pipeline(move |graphic, _| {
-                subpass
+            .record_pipeline(move |pipeline, _| {
+                pipeline
                     .push_constants_offset(0, &frame_index.to_ne_bytes())
                     .push_constants_offset(4, &frame.width.to_ne_bytes())
                     .push_constants_offset(8, &frame.height.to_ne_bytes())

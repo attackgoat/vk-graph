@@ -3,6 +3,7 @@ use {
     crate::{
         AnyAccelerationStructureNode,
         driver::{
+            CommandBuffer,
             accel_struct::{
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
                 DeviceOrHostAddress,
@@ -43,8 +44,7 @@ use {
 /// # Ok(()) }
 /// ```
 pub struct AccelerationStructureRef<'a> {
-    pub(super) cmd_buf: vk::CommandBuffer,
-    pub(super) device: &'a Device,
+    pub(super) cmd_buf: &'a CommandBuffer,
     pub(super) nodes: Nodes<'a>,
 }
 
@@ -82,16 +82,16 @@ impl AccelerationStructureRef<'_> {
     /// # let mut my_graph = Graph::default();
     /// # let info = AccelerationStructureInfo::blas(1);
     /// # let blas_accel_struct = AccelerationStructure::create(&device, info)?;
-    /// # let blas_node = my_graph.bind_node(blas_accel_struct);
+    /// # let blas_node = my_graph.bind_resource(blas_accel_struct);
     /// # let scratch_buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
     /// # let scratch_buf = Buffer::create(&device, scratch_buf_info)?;
-    /// # let scratch_buf = my_graph.bind_node(scratch_buf);
+    /// # let scratch_buf = my_graph.bind_resource(scratch_buf);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::INDEX_BUFFER);
     /// # let my_idx_buf = Buffer::create(&device, buf_info)?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
-    /// # let index_node = my_graph.bind_node(my_idx_buf);
-    /// # let vertex_node = my_graph.bind_node(my_vtx_buf);
+    /// # let index_node = my_graph.bind_resource(my_idx_buf);
+    /// # let vertex_node = my_graph.bind_resource(my_vtx_buf);
     /// my_graph.begin_cmd()
     ///         .read_node(index_node)
     ///         .read_node(vertex_node)
@@ -191,11 +191,8 @@ impl AccelerationStructureRef<'_> {
             };
 
             unsafe {
-                Device::expect_accel_struct_ext(self.device).cmd_build_acceleration_structures(
-                    self.cmd_buf,
-                    &vk_infos,
-                    &vk_ranges,
-                );
+                Device::expect_accel_struct_ext(&self.cmd_buf.device)
+                    .cmd_build_acceleration_structures(self.cmd_buf.handle, &vk_infos, &vk_ranges);
             }
         });
 
@@ -270,9 +267,9 @@ impl AccelerationStructureRef<'_> {
             };
 
             unsafe {
-                Device::expect_accel_struct_ext(self.device)
+                Device::expect_accel_struct_ext(&self.cmd_buf.device)
                     .cmd_build_acceleration_structures_indirect(
-                        self.cmd_buf,
+                        self.cmd_buf.handle,
                         &vk_infos,
                         &tls.range_bases,
                         &tls.range_strides,
@@ -358,11 +355,8 @@ impl AccelerationStructureRef<'_> {
             };
 
             unsafe {
-                Device::expect_accel_struct_ext(self.device).cmd_build_acceleration_structures(
-                    self.cmd_buf,
-                    &vk_infos,
-                    &vk_ranges,
-                );
+                Device::expect_accel_struct_ext(&self.cmd_buf.device)
+                    .cmd_build_acceleration_structures(self.cmd_buf.handle, &vk_infos, &vk_ranges);
             }
         });
 
@@ -438,9 +432,9 @@ impl AccelerationStructureRef<'_> {
             };
 
             unsafe {
-                Device::expect_accel_struct_ext(self.device)
+                Device::expect_accel_struct_ext(&self.cmd_buf.device)
                     .cmd_build_acceleration_structures_indirect(
-                        self.cmd_buf,
+                        self.cmd_buf.handle,
                         &vk_infos,
                         &tls.range_bases,
                         &tls.range_strides,

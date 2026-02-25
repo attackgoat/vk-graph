@@ -86,24 +86,24 @@ fn main() -> anyhow::Result<()> {
             }),
         );
 
-        let cube_vertex_buf = frame.graph.bind_node(&cube_mesh.vertex_buf);
-        let scene_uniform_buf = frame.graph.bind_node(scene_uniform_buf);
+        let cube_vertex_buf = frame.graph.bind_resource(&cube_mesh.vertex_buf);
+        let scene_uniform_buf = frame.graph.bind_resource(scene_uniform_buf);
 
         let mut pass = frame
             .graph
             .begin_cmd()
-            .with_name("cube")
+            .debug_name("cube")
             .bind_pipeline(if will_render_msaa {
                 &mesh_msaa_pipeline
             } else {
                 &mesh_noaa_pipeline
             })
             .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-            .access_node(cube_vertex_buf, AccessType::VertexBuffer)
-            .access_descriptor(0, scene_uniform_buf, AccessType::AnyShaderReadUniformBuffer);
+            .resource_access(cube_vertex_buf, AccessType::VertexBuffer)
+            .shader_resource_access(0, scene_uniform_buf, AccessType::AnyShaderReadUniformBuffer);
 
         if will_render_msaa {
-            let msaa_color_image = pass.bind_node(
+            let msaa_color_image = pass.bind_resource(
                 pool.lease(
                     ImageInfo::image_2d(
                         frame.width,
@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
                 )
                 .unwrap(),
             );
-            let msaa_depth_image = pass.bind_node(
+            let msaa_depth_image = pass.bind_resource(
                 pool.lease(
                     ImageInfo::image_2d(
                         frame.width,
@@ -138,7 +138,7 @@ fn main() -> anyhow::Result<()> {
                 .clear_depth_stencil(msaa_depth_image)
                 .resolve_color(0, 1, frame.swapchain_image);
         } else {
-            let noaa_depth_image = pass.bind_node(
+            let noaa_depth_image = pass.bind_resource(
                 pool.lease(ImageInfo::image_2d(
                     frame.width,
                     frame.height,

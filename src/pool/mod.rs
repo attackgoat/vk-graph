@@ -149,7 +149,7 @@ pub struct Lease<T> {
 
 impl Lease<AccelerationStructure> {
     /// Sets the debugging name assigned to this acceleration structure.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
 
         self
@@ -158,7 +158,7 @@ impl Lease<AccelerationStructure> {
 
 impl Lease<Buffer> {
     /// Sets the debugging name assigned to this buffer.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
 
         self
@@ -167,7 +167,7 @@ impl Lease<Buffer> {
 
 impl Lease<Image> {
     /// Sets the debugging name assigned to this image.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
 
         self

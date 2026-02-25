@@ -1,14 +1,14 @@
 use {clap::Parser, std::sync::Arc, vk_graph_prelude::*};
 
 /// This example demonstrates resource aliasing. Aliasing is a memory-efficiency optimization that
-/// may be used anywhere resources are leased and used in a render graph. Aliasing allows complex
+/// may be used anywhere resources are leased and used in a graph. Aliasing allows complex
 /// graphs to require fewer individual resources.
 ///
 /// The performance overhead of aliasing is an atomic load for each actively aliased item and one
 /// check per active alias to see if it is compatible with the requested resource.
 ///
 /// Acceleration structures, buffers and images may be "aliased" by different parts of any one or
-/// more render graphs. The process involves wrapping any pool type (FifoPool, LazyPool, HashPool)
+/// more graphs. The process involves wrapping any pool type (FifoPool, LazyPool, HashPool)
 /// in an AliasPool container. AliasPool offers an alias(..) function which operates exactly the
 /// same as a regular pool lease(..) except that the result is wrapped in an Arc<>.
 ///
@@ -38,10 +38,19 @@ fn main() -> Result<(), DriverError> {
 
     let mut graph = Graph::default();
 
-    // Binding these images to any render graph will produce the same physical nodes
-    let image1 = graph.bind_node(image1);
-    let image2 = graph.bind_node(image2);
-    assert_eq!(image1, image2);
+    // Binding these images to any single graph will produce the same physical nodes
+    let image1_node = graph.bind_resource(&image1);
+    let image2_node = graph.bind_resource(&image2);
+    assert_eq!(image1_node, image2_node);
+
+    // Even if re-bound
+    assert_eq!(image2_node, graph.bind_resource(&image2));
+
+    {
+        // To be clear: other graphs will produce different nodes
+        let mut graph = Graph::default();
+        assert_ne!(image2_node, graph.bind_resource(&image2));
+    }
 
     // Let's make up some different, yet compatible, image information:
     let image_info = ImageInfo::image_2d(
@@ -52,12 +61,12 @@ fn main() -> Result<(), DriverError> {
     );
 
     // We alias the compatible information and still produce the same physical image and node
-    let image3 = graph.bind_node(pool.alias(image_info)?);
-    assert_eq!(image1, image3);
+    let image3_node = graph.bind_resource(pool.alias(image_info)?);
+    assert_eq!(image1_node, image3_node);
 
     // Using the same information for a new LEASE will generate an entirely different image!!
-    let image4 = graph.bind_node(pool.lease(image_info)?);
-    assert_ne!(image1, image4);
+    let image4_node = graph.bind_resource(pool.lease(image_info)?);
+    assert_ne!(image1_node, image4_node);
 
     Ok(())
 }

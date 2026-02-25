@@ -188,8 +188,8 @@ println!("{:?}", buffer); // Buffer
 println!("{:?}", image); // Image
 
 // Bind our resources into opaque "usize" nodes
-let buffer = graph.bind_node(buffer);
-let image = graph.bind_node(image);
+let buffer = graph.bind_resource(buffer);
+let image = graph.bind_resource(image);
 
 // The results have unique types!
 println!("{:?}", buffer); // BufferNode
@@ -232,10 +232,10 @@ Example:
 # let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
 # let image = Image::create(&device, info)?;
 let mut graph = Graph::default();
-let buffer_node = graph.bind_node(buffer);
-let image_node = graph.bind_node(image);
+let buffer_node = graph.bind_resource(buffer);
+let image_node = graph.bind_resource(image);
 graph
-    .begin_cmd().with_name("Do some raw Vulkan or interop with another Vulkan library")
+    .begin_cmd().debug_name("Do some raw Vulkan or interop with another Vulkan library")
     .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
         // I always run first!
     })
@@ -272,7 +272,7 @@ Pipeline instances may be bound to a [`PassRef`] in order to execute the associa
 # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
 # let mut graph = Graph::default();
 graph
-    .begin_cmd().with_name("My compute pass")
+    .begin_cmd().debug_name("My compute pass")
     .bind_pipeline(&my_compute_pipeline)
     .record_pipeline(|compute, _| {
         compute.push_constants(0, &42u32.to_ne_bytes())
@@ -352,21 +352,16 @@ pub mod node;
 pub mod pool;
 
 mod bind;
-mod edge;
-mod info;
 mod resolver;
 
 pub use self::{
-    bind::{Bind, Bound},
+    bind::{BindGraph, Bound, Resource},
     resolver::Resolver,
 };
 
 use {
     self::{
-        bind::Binding,
-        cmd_ref::{AttachmentIndex, CommandRef, Descriptor, Nodes, SubresourceAccess, ViewType},
-        edge::Edge,
-        info::Info,
+        cmd_ref::{AttachmentIndex, CommandRef, Descriptor, Nodes, SubresourceAccess, ViewInfo},
         node::Node,
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
@@ -375,9 +370,8 @@ use {
         },
     },
     crate::driver::{
-        DescriptorBindingMap,
+        CommandBuffer, DescriptorBindingMap,
         compute::ComputePipeline,
-        device::Device,
         format_aspect_mask, format_texel_block_extent, format_texel_block_size,
         graphic::{DepthStencilMode, GraphicPipeline},
         image::{ImageInfo, ImageViewInfo, SampleCount},
@@ -396,7 +390,7 @@ use {
     vk_sync::AccessType,
 };
 
-type ExecFn = Box<dyn FnOnce(&Device, vk::CommandBuffer, Nodes<'_>) + Send>;
+type ExecFn = Box<dyn FnOnce(&CommandBuffer, Nodes<'_>) + Send>;
 type NodeIndex = usize;
 
 #[derive(Clone, Copy, Debug)]
@@ -460,9 +454,7 @@ impl Attachment {
             .array_layer_count(self.array_layer_count)
             .mip_level_count(self.mip_level_count)
             .fmt(self.format)
-            .build()
-            .default_view_info()
-            .to_builder()
+            .into_image_view()
             .aspect_mask(self.aspect_mask)
             .base_array_layer(self.base_array_layer)
             .base_mip_level(self.base_mip_level)
@@ -507,7 +499,7 @@ impl From<[u8; 4]> for ClearColorValue {
 #[derive(Default)]
 struct Execution {
     accesses: HashMap<NodeIndex, Vec<SubresourceAccess>>,
-    bindings: BTreeMap<Descriptor, (NodeIndex, Option<ViewType>)>,
+    bindings: BTreeMap<Descriptor, (NodeIndex, ViewInfo)>,
 
     correlated_view_mask: u32,
     depth_stencil: Option<DepthStencilMode>,
@@ -647,8 +639,8 @@ impl Command {
 /// [`graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/graph.cpp).
 #[derive(Debug, Default)]
 pub struct Graph {
-    bindings: Vec<Binding>,
     cmds: Vec<Command>,
+    resources: Vec<Resource>,
 }
 
 impl Graph {
@@ -663,35 +655,35 @@ impl Graph {
         CommandRef::new(self)
     }
 
-    /// Binds a Vulkan acceleration structure, buffer, or image to this graph.
+    /// Binds a Vulkan buffer, image, or acceleration structure resource to this graph.
     ///
-    /// Bound nodes may be used in passes for pipeline and shader operations.
-    pub fn bind_node<'a, B>(&'a mut self, binding: B) -> <B as Edge<Self>>::Result
+    /// Bound resource nodes may be used in commands for shader pipeline operations and other
+    /// general functions.
+    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
-        B: Edge<Self>,
-        B: Bind<&'a mut Self, <B as Edge<Self>>::Result>,
+        R: BindGraph,
     {
-        binding.bind(self)
+        resource.bind_graph(self)
     }
 
     /// Copy an image, potentially performing format conversion.
     pub fn blit_image(
         &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyImageNode>,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
         filter: vk::Filter,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let dst_node = dst_node.into();
+        let src = src.into();
+        let src_info = self.resource(src).info;
 
-        let src_info = self.node_info(src_node);
-        let dst_info = self.node_info(dst_node);
+        let dst = dst.into();
+        let dst_info = self.resource(dst).info;
 
         self.blit_image_region(
-            src_node,
-            dst_node,
+            src,
+            dst,
             filter,
-            vk::ImageBlit {
+            [vk::ImageBlit {
                 src_subresource: vk::ImageSubresourceLayers {
                     aspect_mask: format_aspect_mask(src_info.fmt),
                     mip_level: 0,
@@ -720,56 +712,39 @@ impl Graph {
                         z: dst_info.depth as _,
                     },
                 ],
-            },
+            }],
         )
-    }
-
-    /// Copy a region of an image, potentially performing format conversion.
-    pub fn blit_image_region(
-        &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyImageNode>,
-        filter: vk::Filter,
-        region: vk::ImageBlit,
-    ) -> &mut Self {
-        self.blit_image_regions(src_node, dst_node, filter, [region])
     }
 
     /// Copy regions of an image, potentially performing format conversion.
     #[profiling::function]
-    pub fn blit_image_regions(
+    pub fn blit_image_region(
         &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyImageNode>,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
         filter: vk::Filter,
         regions: impl AsRef<[vk::ImageBlit]> + 'static + Send,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let dst_node = dst_node.into();
+        let src = src.into();
+        let dst = dst.into();
 
-        let mut pass = self.begin_cmd().with_name("blit image");
+        let mut cmd = self.begin_cmd().debug_name("blit image");
 
         for region in regions.as_ref() {
-            pass = pass
-                .access_node_subrange(
-                    src_node,
-                    AccessType::TransferRead,
-                    image_subresource_range_from_layers(region.src_subresource),
-                )
-                .access_node_subrange(
-                    dst_node,
-                    AccessType::TransferWrite,
-                    image_subresource_range_from_layers(region.dst_subresource),
-                );
+            let src_region = image_subresource_range_from_layers(region.src_subresource);
+            cmd.set_subresource_access(src, src_region, AccessType::TransferRead);
+
+            let dst_region = image_subresource_range_from_layers(region.dst_subresource);
+            cmd.set_subresource_access(dst, dst_region, AccessType::TransferWrite);
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
-            let src_image = nodes[src_node].handle;
-            let dst_image = nodes[dst_node].handle;
+        cmd.record_cmd_buf(move |cmd_buf, nodes| {
+            let src_image = nodes[src].handle;
+            let dst_image = nodes[dst].handle;
 
             unsafe {
-                device.cmd_blit_image(
-                    cmd_buf,
+                cmd_buf.device.cmd_blit_image(
+                    cmd_buf.handle,
                     src_image,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     dst_image,
@@ -786,26 +761,25 @@ impl Graph {
     #[profiling::function]
     pub fn clear_color_image(
         &mut self,
-        image_node: impl Into<AnyImageNode>,
-        color_value: impl Into<ClearColorValue>,
+        image: impl Into<AnyImageNode>,
+        color: impl Into<ClearColorValue>,
     ) -> &mut Self {
-        let color_value = color_value.into();
-        let image_node = image_node.into();
-        let image_info = self.node_info(image_node);
-        let image_view_info = image_info.default_view_info();
+        let color = vk::ClearColorValue {
+            float32: color.into().0,
+        };
+        let image = image.into();
+        let image_view = self.resource(image).info.into();
 
         self.begin_cmd()
-            .with_name("clear color")
-            .access_node_subrange(image_node, AccessType::TransferWrite, image_view_info)
-            .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
-                device.cmd_clear_color_image(
-                    cmd_buf,
-                    nodes[image_node].handle,
+            .debug_name("clear color")
+            .subresource_access(image, image_view, AccessType::TransferWrite)
+            .record_cmd_buf(move |cmd_buf, nodes| unsafe {
+                cmd_buf.device.cmd_clear_color_image(
+                    cmd_buf.handle,
+                    nodes[image].handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &vk::ClearColorValue {
-                        float32: color_value.0,
-                    },
-                    &[image_view_info.into()],
+                    &color,
+                    &[image_view],
                 );
             })
             .end_cmd()
@@ -815,24 +789,23 @@ impl Graph {
     #[profiling::function]
     pub fn clear_depth_stencil_image(
         &mut self,
-        image_node: impl Into<AnyImageNode>,
+        image: impl Into<AnyImageNode>,
         depth: f32,
         stencil: u32,
     ) -> &mut Self {
-        let image_node = image_node.into();
-        let image_info = self.node_info(image_node);
-        let image_view_info = image_info.default_view_info();
+        let image = image.into();
+        let image_view = self.resource(image).info.into();
 
         self.begin_cmd()
-            .with_name("clear depth/stencil")
-            .access_node_subrange(image_node, AccessType::TransferWrite, image_view_info)
-            .record_cmd_buf(move |device, cmd_buf, nodes| unsafe {
-                device.cmd_clear_depth_stencil_image(
-                    cmd_buf,
-                    nodes[image_node].handle,
+            .debug_name("clear depth/stencil")
+            .subresource_access(image, image_view, AccessType::TransferWrite)
+            .record_cmd_buf(move |cmd_buf, nodes| unsafe {
+                cmd_buf.device.cmd_clear_depth_stencil_image(
+                    cmd_buf.handle,
+                    nodes[image].handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &vk::ClearDepthStencilValue { depth, stencil },
-                    &[image_view_info.into()],
+                    &[image_view],
                 );
             })
             .end_cmd()
@@ -841,50 +814,43 @@ impl Graph {
     /// Copy data between buffers
     pub fn copy_buffer(
         &mut self,
-        src_node: impl Into<AnyBufferNode>,
-        dst_node: impl Into<AnyBufferNode>,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyBufferNode>,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let dst_node = dst_node.into();
-        let src_info = self.node_info(src_node);
-        let dst_info = self.node_info(dst_node);
+        let src = src.into();
+        let dst = dst.into();
+        let src_info = self.resource(src).info;
+        let dst_info = self.resource(dst).info;
 
         self.copy_buffer_region(
-            src_node,
-            dst_node,
-            vk::BufferCopy {
+            src,
+            dst,
+            [vk::BufferCopy {
                 src_offset: 0,
                 dst_offset: 0,
                 size: src_info.size.min(dst_info.size),
-            },
+            }],
         )
     }
 
     /// Copy data between buffer regions.
+    #[profiling::function]
     pub fn copy_buffer_region(
         &mut self,
-        src_node: impl Into<AnyBufferNode>,
-        dst_node: impl Into<AnyBufferNode>,
-        region: vk::BufferCopy,
-    ) -> &mut Self {
-        self.copy_buffer_regions(src_node, dst_node, [region])
-    }
-
-    /// Copy data between buffer regions.
-    #[profiling::function]
-    pub fn copy_buffer_regions(
-        &mut self,
-        src_node: impl Into<AnyBufferNode>,
-        dst_node: impl Into<AnyBufferNode>,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyBufferNode>,
         regions: impl AsRef<[vk::BufferCopy]> + 'static + Send,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let dst_node = dst_node.into();
+        let src = src.into();
+        let dst = dst.into();
 
         #[cfg(debug_assertions)]
-        let (src_size, dst_size) = (self.node_info(src_node).size, self.node_info(dst_node).size);
+        let src_size = self.resource(src).info.size;
 
-        let mut pass = self.begin_cmd().with_name("copy buffer");
+        #[cfg(debug_assertions)]
+        let dst_size = self.resource(dst).info.size;
+
+        let mut cmd = self.begin_cmd().debug_name("copy buffer");
 
         for region in regions.as_ref() {
             #[cfg(debug_assertions)]
@@ -901,25 +867,26 @@ impl Graph {
                 );
             };
 
-            pass = pass
-                .access_node_subrange(
-                    src_node,
-                    AccessType::TransferRead,
-                    region.src_offset..region.src_offset + region.size,
-                )
-                .access_node_subrange(
-                    dst_node,
-                    AccessType::TransferWrite,
-                    region.dst_offset..region.dst_offset + region.size,
-                );
+            cmd.set_subresource_access(
+                src,
+                region.src_offset..region.src_offset + region.size,
+                AccessType::TransferRead,
+            );
+            cmd.set_subresource_access(
+                dst,
+                region.dst_offset..region.dst_offset + region.size,
+                AccessType::TransferWrite,
+            );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
-            let src_buf = nodes[src_node].handle;
-            let dst_buf = nodes[dst_node].handle;
+        cmd.record_cmd_buf(move |cmd_buf, nodes| {
+            let src = nodes[src].handle;
+            let dst = nodes[dst].handle;
 
             unsafe {
-                device.cmd_copy_buffer(cmd_buf, src_buf, dst_buf, regions.as_ref());
+                cmd_buf
+                    .device
+                    .cmd_copy_buffer(cmd_buf.handle, src, dst, regions.as_ref());
             }
         })
         .end_cmd()
@@ -928,16 +895,16 @@ impl Graph {
     /// Copy data from a buffer into an image.
     pub fn copy_buffer_to_image(
         &mut self,
-        src_node: impl Into<AnyBufferNode>,
-        dst_node: impl Into<AnyImageNode>,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyImageNode>,
     ) -> &mut Self {
-        let dst_node = dst_node.into();
-        let dst_info = self.node_info(dst_node);
+        let dst = dst.into();
+        let dst_info = self.resource(dst).info;
 
         self.copy_buffer_to_image_region(
-            src_node,
-            dst_node,
-            vk::BufferImageCopy {
+            src,
+            dst,
+            [vk::BufferImageCopy {
                 buffer_offset: 0,
                 buffer_row_length: dst_info.width,
                 buffer_image_height: dst_info.height,
@@ -953,33 +920,23 @@ impl Graph {
                     height: dst_info.height,
                     width: dst_info.width,
                 },
-            },
+            }],
         )
     }
 
     /// Copy data from a buffer into an image.
+    #[profiling::function]
     pub fn copy_buffer_to_image_region(
         &mut self,
-        src_node: impl Into<AnyBufferNode>,
-        dst_node: impl Into<AnyImageNode>,
-        region: vk::BufferImageCopy,
-    ) -> &mut Self {
-        self.copy_buffer_to_image_regions(src_node, dst_node, [region])
-    }
-
-    /// Copy data from a buffer into an image.
-    #[profiling::function]
-    pub fn copy_buffer_to_image_regions(
-        &mut self,
-        src_node: impl Into<AnyBufferNode>,
-        dst_node: impl Into<AnyImageNode>,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyImageNode>,
         regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let dst_node = dst_node.into();
-        let dst_info = self.node_info(dst_node);
+        let src = src.into();
+        let dst = dst.into();
+        let dst_info = self.resource(dst).info;
 
-        let mut pass = self.begin_cmd().with_name("copy buffer to image");
+        let mut cmd = self.begin_cmd().debug_name("copy buffer to image");
 
         for region in regions.as_ref() {
             let block_bytes_size = format_texel_block_size(dst_info.fmt);
@@ -988,28 +945,27 @@ impl Graph {
                 * (region.buffer_row_length / block_width)
                 * (region.buffer_image_height / block_height);
 
-            pass = pass
-                .access_node_subrange(
-                    src_node,
-                    AccessType::TransferRead,
-                    region.buffer_offset..region.buffer_offset + data_size as vk::DeviceSize,
-                )
-                .access_node_subrange(
-                    dst_node,
-                    AccessType::TransferWrite,
-                    image_subresource_range_from_layers(region.image_subresource),
-                );
+            cmd.set_subresource_access(
+                src,
+                region.buffer_offset..region.buffer_offset + data_size as vk::DeviceSize,
+                AccessType::TransferRead,
+            );
+            cmd.set_subresource_access(
+                dst,
+                image_subresource_range_from_layers(region.image_subresource),
+                AccessType::TransferWrite,
+            );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
-            let src_buf = nodes[src_node].handle;
-            let dst_image = nodes[dst_node].handle;
+        cmd.record_cmd_buf(move |cmd_buf, nodes| {
+            let src = nodes[src].handle;
+            let dst = nodes[dst].handle;
 
             unsafe {
-                device.cmd_copy_buffer_to_image(
-                    cmd_buf,
-                    src_buf,
-                    dst_image,
+                cmd_buf.device.cmd_copy_buffer_to_image(
+                    cmd_buf.handle,
+                    src,
+                    dst,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     regions.as_ref(),
                 );
@@ -1021,19 +977,19 @@ impl Graph {
     /// Copy all layers of a source image to a destination image.
     pub fn copy_image(
         &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyImageNode>,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let src_info = self.node_info(src_node);
+        let src = src.into();
+        let src_info = self.resource(src).info;
 
-        let dst_node = dst_node.into();
-        let dst_info = self.node_info(dst_node);
+        let dst = dst.into();
+        let dst_info = self.resource(dst).info;
 
         self.copy_image_region(
-            src_node,
-            dst_node,
-            vk::ImageCopy {
+            src,
+            dst,
+            [vk::ImageCopy {
                 src_subresource: vk::ImageSubresourceLayers {
                     aspect_mask: format_aspect_mask(src_info.fmt),
                     mip_level: 0,
@@ -1053,57 +1009,46 @@ impl Graph {
                     height: src_info.height.clamp(1, dst_info.height),
                     width: src_info.width.min(dst_info.width),
                 },
-            },
+            }],
         )
     }
 
     /// Copy data between images.
+    #[profiling::function]
     pub fn copy_image_region(
         &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyImageNode>,
-        region: vk::ImageCopy,
-    ) -> &mut Self {
-        self.copy_image_regions(src_node, dst_node, [region])
-    }
-
-    /// Copy data between images.
-    #[profiling::function]
-    pub fn copy_image_regions(
-        &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyImageNode>,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
         regions: impl AsRef<[vk::ImageCopy]> + 'static + Send,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let dst_node = dst_node.into();
+        let src = src.into();
+        let dst = dst.into();
 
-        let mut pass = self.begin_cmd().with_name("copy image");
+        let mut cmd = self.begin_cmd().debug_name("copy image");
 
         for region in regions.as_ref() {
-            pass = pass
-                .access_node_subrange(
-                    src_node,
-                    AccessType::TransferRead,
-                    image_subresource_range_from_layers(region.src_subresource),
-                )
-                .access_node_subrange(
-                    dst_node,
-                    AccessType::TransferWrite,
-                    image_subresource_range_from_layers(region.dst_subresource),
-                );
+            cmd.set_subresource_access(
+                src,
+                image_subresource_range_from_layers(region.src_subresource),
+                AccessType::TransferRead,
+            );
+            cmd.set_subresource_access(
+                dst,
+                image_subresource_range_from_layers(region.dst_subresource),
+                AccessType::TransferWrite,
+            );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
-            let src_image = nodes[src_node].handle;
-            let dst_image = nodes[dst_node].handle;
+        cmd.record_cmd_buf(move |cmd_buf, nodes| {
+            let src = nodes[src].handle;
+            let dst = nodes[dst].handle;
 
             unsafe {
-                device.cmd_copy_image(
-                    cmd_buf,
-                    src_image,
+                cmd_buf.device.cmd_copy_image(
+                    cmd_buf.handle,
+                    src,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    dst_image,
+                    dst,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     regions.as_ref(),
                 );
@@ -1115,17 +1060,17 @@ impl Graph {
     /// Copy image data into a buffer.
     pub fn copy_image_to_buffer(
         &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyBufferNode>,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyBufferNode>,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let dst_node = dst_node.into();
+        let src = src.into();
+        let dst = dst.into();
 
-        let src_info = self.node_info(src_node);
+        let src_info = self.resource(src).info;
 
         self.copy_image_to_buffer_region(
-            src_node,
-            dst_node,
+            src,
+            dst,
             vk::BufferImageCopy {
                 buffer_offset: 0,
                 buffer_row_length: src_info.width,
@@ -1149,26 +1094,26 @@ impl Graph {
     /// Copy image data into a buffer.
     pub fn copy_image_to_buffer_region(
         &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyBufferNode>,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyBufferNode>,
         region: vk::BufferImageCopy,
     ) -> &mut Self {
-        self.copy_image_to_buffer_regions(src_node, dst_node, [region])
+        self.copy_image_to_buffer_regions(src, dst, [region])
     }
 
     /// Copy image data into a buffer.
     #[profiling::function]
     pub fn copy_image_to_buffer_regions(
         &mut self,
-        src_node: impl Into<AnyImageNode>,
-        dst_node: impl Into<AnyBufferNode>,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyBufferNode>,
         regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
     ) -> &mut Self {
-        let src_node = src_node.into();
-        let src_info = self.node_info(src_node);
-        let dst_node = dst_node.into();
+        let src = src.into();
+        let src_info = self.resource(src).info;
+        let dst = dst.into();
 
-        let mut pass = self.begin_cmd().with_name("copy image to buffer");
+        let mut cmd = self.begin_cmd().debug_name("copy image to buffer");
 
         for region in regions.as_ref() {
             let block_bytes_size = format_texel_block_size(src_info.fmt);
@@ -1177,29 +1122,28 @@ impl Graph {
                 * (region.buffer_row_length / block_width)
                 * (region.buffer_image_height / block_height);
 
-            pass = pass
-                .access_node_subrange(
-                    src_node,
-                    AccessType::TransferRead,
-                    image_subresource_range_from_layers(region.image_subresource),
-                )
-                .access_node_subrange(
-                    dst_node,
-                    AccessType::TransferWrite,
-                    region.buffer_offset..region.buffer_offset + data_size as vk::DeviceSize,
-                );
+            cmd.set_subresource_access(
+                src,
+                image_subresource_range_from_layers(region.image_subresource),
+                AccessType::TransferRead,
+            );
+            cmd.set_subresource_access(
+                dst,
+                region.buffer_offset..region.buffer_offset + data_size as vk::DeviceSize,
+                AccessType::TransferWrite,
+            );
         }
 
-        pass.record_cmd_buf(move |device, cmd_buf, nodes| {
-            let src_image = nodes[src_node].handle;
-            let dst_buf = nodes[dst_node].handle;
+        cmd.record_cmd_buf(move |cmd_buf, nodes| {
+            let src = nodes[src].handle;
+            let dst = nodes[dst].handle;
 
             unsafe {
-                device.cmd_copy_image_to_buffer(
-                    cmd_buf,
-                    src_image,
+                cmd_buf.device.cmd_copy_image_to_buffer(
+                    cmd_buf.handle,
+                    src,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    dst_buf,
+                    dst,
                     regions.as_ref(),
                 );
             }
@@ -1208,33 +1152,23 @@ impl Graph {
     }
 
     /// Fill a region of a buffer with a fixed value.
-    pub fn fill_buffer(&mut self, buffer_node: impl Into<AnyBufferNode>, data: u32) -> &mut Self {
-        let buffer_node = buffer_node.into();
-
-        let buffer_info = self.node_info(buffer_node);
-
-        self.fill_buffer_region(buffer_node, data, 0..buffer_info.size)
-    }
-
-    /// Fill a region of a buffer with a fixed value.
-    #[profiling::function]
-    pub fn fill_buffer_region(
+    pub fn fill_buffer(
         &mut self,
-        buffer_node: impl Into<AnyBufferNode>,
-        data: u32,
+        buffer: impl Into<AnyBufferNode>,
         region: Range<vk::DeviceSize>,
+        data: u32,
     ) -> &mut Self {
-        let buffer_node = buffer_node.into();
+        let buffer = buffer.into();
 
         self.begin_cmd()
-            .with_name("fill buffer")
-            .access_node_subrange(buffer_node, AccessType::TransferWrite, region.clone())
-            .record_cmd_buf(move |device, cmd_buf, nodes| {
-                let buffer = nodes[buffer_node].handle;
+            .debug_name("fill buffer")
+            .subresource_access(buffer, region.clone(), AccessType::TransferWrite)
+            .record_cmd_buf(move |cmd_buf, nodes| {
+                let buffer = nodes[buffer].handle;
 
                 unsafe {
-                    device.cmd_fill_buffer(
-                        cmd_buf,
+                    cmd_buf.device.cmd_fill_buffer(
+                        cmd_buf.handle,
                         buffer,
                         region.start,
                         region.end - region.start,
@@ -1263,35 +1197,11 @@ impl Graph {
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given node represents.
-    pub fn node<N>(&mut self, node: N) -> &<N as Edge<Self>>::Result
+    pub fn resource<N>(&self, node: N) -> &<N as Bound>::Resource
     where
-        N: Edge<Self>,
-        N: Bound<Self, <N as Edge<Self>>::Result>,
+        N: Bound,
     {
         node.borrow(self)
-    }
-
-    /// Returns the device address of a buffer node.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the buffer is not currently bound or was not created with the
-    /// `SHADER_DEVICE_ADDRESS` usage flag.
-    pub fn node_device_address(&self, node: impl Into<AnyBufferNode>) -> vk::DeviceAddress {
-        let node: AnyBufferNode = node.into();
-
-        self.bindings[node.index()]
-            .as_driver_buffer()
-            .unwrap()
-            .device_address()
-    }
-
-    /// Returns information used to crate a node.
-    pub fn node_info<N>(&self, node: N) -> <N as Info>::Info
-    where
-        N: Info,
-    {
-        node.info(&self.bindings)
     }
 
     /// Finalizes the graph and provides an object with functions for submitting the resulting
@@ -1310,16 +1220,16 @@ impl Graph {
     #[profiling::function]
     pub fn update_buffer(
         &mut self,
-        buffer_node: impl Into<AnyBufferNode>,
+        buffer: impl Into<AnyBufferNode>,
         offset: vk::DeviceSize,
         data: impl AsRef<[u8]> + 'static + Send,
     ) -> &mut Self {
-        let buffer_node = buffer_node.into();
+        let buffer = buffer.into();
         let data_end = offset + data.as_ref().len() as vk::DeviceSize;
 
         #[cfg(debug_assertions)]
         {
-            let buffer_info = self.node_info(buffer_node);
+            let buffer_info = self.resource(buffer).info;
 
             assert!(
                 data_end <= buffer_info.size,
@@ -1329,15 +1239,107 @@ impl Graph {
         }
 
         self.begin_cmd()
-            .with_name("update buffer")
-            .access_node_subrange(buffer_node, AccessType::TransferWrite, offset..data_end)
-            .record_cmd_buf(move |device, cmd_buf, nodes| {
-                let buffer = nodes[buffer_node].handle;
+            .debug_name("update buffer")
+            .subresource_access(buffer, offset..data_end, AccessType::TransferWrite)
+            .record_cmd_buf(move |cmd_buf, nodes| {
+                let buffer = nodes[buffer].handle;
 
                 unsafe {
-                    device.cmd_update_buffer(cmd_buf, buffer, offset, data.as_ref());
+                    cmd_buf
+                        .device
+                        .cmd_update_buffer(cmd_buf.handle, buffer, offset, data.as_ref());
                 }
             })
             .end_cmd()
     }
+}
+
+pub(crate) mod deprecated {
+    use {
+        crate::{
+            Graph,
+            bind::Resource,
+            driver::{
+                accel_struct::AccelerationStructureInfo, buffer::BufferInfo, image::ImageInfo,
+            },
+            node::{
+                AccelerationStructureLeaseNode, AccelerationStructureNode, BufferLeaseNode,
+                BufferNode, ImageLeaseNode, ImageNode, Node, SwapchainImageNode,
+            },
+        },
+        ash::vk,
+    };
+
+    impl Graph {
+        #[deprecated = "use device_address function of resource function result"]
+        #[doc(hidden)]
+        pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {
+            let idx = node.index();
+
+            self.resources[idx]
+                .as_driver_buffer()
+                .unwrap()
+                .device_address()
+        }
+
+        #[deprecated = "dereference info field of resource function result"]
+        #[doc(hidden)]
+        pub fn node_info<N>(&self, node: N) -> N::Type
+        where
+            N: Node + Info,
+        {
+            node.info(&self.resources)
+        }
+    }
+
+    pub trait Info {
+        type Type;
+
+        fn info(&self, _: &[Resource]) -> Self::Type
+        where
+            Self: Node;
+    }
+
+    impl Info for SwapchainImageNode {
+        type Type = ImageInfo;
+
+        fn info(&self, bindings: &[Resource]) -> Self::Type
+        where
+            Self: Node,
+        {
+            bindings[self.idx].as_swapchain_image().unwrap().info
+        }
+    }
+
+    macro_rules! info {
+        ($name:ident) => {
+            paste::paste! {
+                impl Info for [<$name Node>] {
+                    type Type = [<$name Info>];
+
+                    fn info(&self, bindings: &[Resource]) -> Self::Type
+                    where
+                        Self: Node,
+                    {
+                        bindings[self.idx].[<as_ $name:snake>]().unwrap().info
+                    }
+                }
+
+                impl Info for [<$name LeaseNode>] {
+                    type Type = [<$name Info>];
+
+                    fn info(&self, bindings: &[Resource]) -> Self::Type
+                    where
+                        Self: Node,
+                    {
+                        bindings[self.idx].[<as_ $name:snake _lease>]().unwrap().info
+                    }
+                }
+            }
+        };
+    }
+
+    info!(AccelerationStructure);
+    info!(Buffer);
+    info!(Image);
 }

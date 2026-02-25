@@ -97,7 +97,7 @@ impl ImGui {
         self.platform.prepare_render(ui, window);
         let draw_data = self.context.render();
 
-        let image = graph.bind_node({
+        let image = graph.bind_resource({
             let mut image = pool
                 .lease(ImageInfo::image_2d(
                     window.inner_size().width,
@@ -114,7 +114,7 @@ impl ImGui {
 
             image
         });
-        let font_atlas_image = graph.bind_node(self.font_atlas_image.as_ref().unwrap());
+        let font_atlas_image = graph.bind_resource(self.font_atlas_image.as_ref().unwrap());
         let display_pos = draw_data.display_pos;
         let framebuffer_scale = draw_data.framebuffer_scale;
 
@@ -137,7 +137,7 @@ impl ImGui {
                 Buffer::mapped_slice_mut(&mut index_buf)[0..indices.len()].copy_from_slice(indices);
             }
 
-            let index_buf = graph.bind_node(index_buf);
+            let index_buf = graph.bind_resource(index_buf);
 
             let vertices = draw_list.vtx_buffer();
             let vertex_buf_len = vertices.len() * 20;
@@ -158,7 +158,7 @@ impl ImGui {
                 }
             }
 
-            let vertex_buf = graph.bind_node(vertex_buf);
+            let vertex_buf = graph.bind_resource(vertex_buf);
 
             let draw_cmds = draw_list
                 .commands()
@@ -184,11 +184,15 @@ impl ImGui {
 
             graph
                 .begin_cmd()
-                .with_name("imgui")
+                .debug_name("imgui")
                 .bind_pipeline(&self.pipeline)
-                .access_node(index_buf, AccessType::IndexBuffer)
-                .access_node(vertex_buf, AccessType::VertexBuffer)
-                .read_descriptor(0, font_atlas_image)
+                .resource_access(index_buf, AccessType::IndexBuffer)
+                .resource_access(vertex_buf, AccessType::VertexBuffer)
+                .shader_resource_access(
+                    0,
+                    font_atlas_image,
+                    AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+                )
                 .clear_color(0, image)
                 .store_color(0, image)
                 .record_pipeline(move |pipeline, _| {
@@ -280,8 +284,8 @@ impl ImGui {
             temp_buf[0..temp_buf_len].copy_from_slice(texture.data);
         }
 
-        let temp_buf = graph.bind_node(temp_buf);
-        let image = graph.bind_node(
+        let temp_buf = graph.bind_resource(temp_buf);
+        let image = graph.bind_resource(
             pool.lease(ImageInfo::image_2d(
                 texture.width,
                 texture.height,
@@ -291,11 +295,11 @@ impl ImGui {
                     | vk::ImageUsageFlags::TRANSFER_DST,
             ))
             .unwrap()
-            .with_name("ImGui Font Atlas"),
+            .debug_name("ImGui Font Atlas"),
         );
 
         graph.copy_buffer_to_image(temp_buf, image);
 
-        self.font_atlas_image = Some(graph.node(image).clone());
+        self.font_atlas_image = Some(graph.resource(image).clone());
     }
 }

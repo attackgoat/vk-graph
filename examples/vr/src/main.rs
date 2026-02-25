@@ -271,7 +271,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         let mut graph = Graph::default();
-        let depth_image = graph.bind_node(
+        let depth_image = graph.bind_resource(
             pool.lease(ImageInfo::image_2d_array(
                 resolution.width,
                 resolution.height,
@@ -284,7 +284,7 @@ fn main() -> anyhow::Result<()> {
 
         let swapchain_image_index = swapchain.acquire_image().unwrap();
         let swapchain_image = Swapchain::image(&swapchain, swapchain_image_index as _);
-        let swapchain_image = graph.bind_node(swapchain_image);
+        let swapchain_image = graph.bind_resource(swapchain_image);
 
         // Get the XR views and copy them into a leased uniform buffer
         let (_, views) = session.locate_views(
@@ -300,7 +300,7 @@ fn main() -> anyhow::Result<()> {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
             Buffer::copy_from_slice(&mut buf, 0, data);
-            graph.bind_node(buf)
+            graph.bind_resource(buf)
         };
 
         session.sync_actions(&[(&action_set).into()]).unwrap();
@@ -339,43 +339,43 @@ fn main() -> anyhow::Result<()> {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
             Buffer::copy_from_slice(&mut buf, 0, data);
-            graph.bind_node(buf)
+            graph.bind_resource(buf)
         };
 
         graph.clear_color_image(swapchain_image, [0x00, 0x00, 0x00, 0xff]);
 
         if let Some(location) = left_hand_location {
-            let index_buf = graph.bind_node(&lincoln_hand_left.index_buf);
-            let vertex_buf = graph.bind_node(&lincoln_hand_left.vertex_buf);
-            let diffuse_texture = graph.bind_node(&lincoln_hand_left_diffuse);
-            let normal_texture = graph.bind_node(&lincoln_hand_left_normal);
-            let occlusion_texture = graph.bind_node(&lincoln_hand_left_occlusion);
+            let index_buf = graph.bind_resource(&lincoln_hand_left.index_buf);
+            let vertex_buf = graph.bind_resource(&lincoln_hand_left.vertex_buf);
+            let diffuse_texture = graph.bind_resource(&lincoln_hand_left_diffuse);
+            let normal_texture = graph.bind_resource(&lincoln_hand_left_normal);
+            let occlusion_texture = graph.bind_resource(&lincoln_hand_left_occlusion);
             let model_transform = pose_transform(location.pose);
             let push_consts = PushConstants::new(model_transform);
 
             graph
                 .begin_cmd()
-                .with_name("Left hand")
+                .debug_name("Left hand")
                 .bind_pipeline(hands_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                 .set_multiview(VIEW_MASK, VIEW_MASK)
                 .store_color(0, swapchain_image)
                 .clear_depth_stencil(depth_image)
-                .access_node(index_buf, AccessType::IndexBuffer)
-                .access_node(vertex_buf, AccessType::VertexBuffer)
-                .access_descriptor(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(
+                .resource_access(index_buf, AccessType::IndexBuffer)
+                .resource_access(vertex_buf, AccessType::VertexBuffer)
+                .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(
                     2,
                     diffuse_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     3,
                     normal_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     4,
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
@@ -390,37 +390,37 @@ fn main() -> anyhow::Result<()> {
         }
 
         if let Some(location) = right_hand_location {
-            let index_buf = graph.bind_node(&lincoln_hand_right.index_buf);
-            let vertex_buf = graph.bind_node(&lincoln_hand_right.vertex_buf);
-            let diffuse_texture = graph.bind_node(&lincoln_hand_right_diffuse);
-            let normal_texture = graph.bind_node(&lincoln_hand_right_normal);
-            let occlusion_texture = graph.bind_node(&lincoln_hand_right_occlusion);
+            let index_buf = graph.bind_resource(&lincoln_hand_right.index_buf);
+            let vertex_buf = graph.bind_resource(&lincoln_hand_right.vertex_buf);
+            let diffuse_texture = graph.bind_resource(&lincoln_hand_right_diffuse);
+            let normal_texture = graph.bind_resource(&lincoln_hand_right_normal);
+            let occlusion_texture = graph.bind_resource(&lincoln_hand_right_occlusion);
             let model_transform = pose_transform(location.pose);
             let push_consts = PushConstants::new(model_transform);
 
             graph
                 .begin_cmd()
-                .with_name("Right hand")
+                .debug_name("Right hand")
                 .bind_pipeline(hands_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                 .set_multiview(VIEW_MASK, VIEW_MASK)
                 .store_color(0, swapchain_image)
                 .clear_depth_stencil(depth_image)
-                .access_node(index_buf, AccessType::IndexBuffer)
-                .access_node(vertex_buf, AccessType::VertexBuffer)
-                .access_descriptor(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(
+                .resource_access(index_buf, AccessType::IndexBuffer)
+                .resource_access(vertex_buf, AccessType::VertexBuffer)
+                .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(
                     2,
                     diffuse_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     3,
                     normal_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     4,
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
@@ -435,30 +435,30 @@ fn main() -> anyhow::Result<()> {
         }
 
         {
-            let index_buf = graph.bind_node(&woolly_mammoth.index_buf);
-            let vertex_buf = graph.bind_node(&woolly_mammoth.vertex_buf);
-            let normal_texture = graph.bind_node(&woolly_mammoth_normal);
-            let occlusion_texture = graph.bind_node(&woolly_mammoth_occlusion);
+            let index_buf = graph.bind_resource(&woolly_mammoth.index_buf);
+            let vertex_buf = graph.bind_resource(&woolly_mammoth.vertex_buf);
+            let normal_texture = graph.bind_resource(&woolly_mammoth_normal);
+            let occlusion_texture = graph.bind_resource(&woolly_mammoth_occlusion);
             let push_consts = PushConstants::new(Mat4::IDENTITY);
 
             graph
                 .begin_cmd()
-                .with_name("Woolly Mammoth")
+                .debug_name("Woolly Mammoth")
                 .bind_pipeline(mammoth_pipeline.hot())
                 .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
                 .set_multiview(VIEW_MASK, VIEW_MASK)
                 .store_color(0, swapchain_image)
                 .clear_depth_stencil(depth_image)
-                .access_node(index_buf, AccessType::IndexBuffer)
-                .access_node(vertex_buf, AccessType::VertexBuffer)
-                .access_descriptor(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(
+                .resource_access(index_buf, AccessType::IndexBuffer)
+                .resource_access(vertex_buf, AccessType::VertexBuffer)
+                .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(
                     2,
                     normal_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     3,
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
@@ -765,8 +765,8 @@ fn load_texture(
     )?);
 
     let mut graph = Graph::default();
-    let staging_buf = graph.bind_node(staging_buf);
-    let texture_image = graph.bind_node(&texture);
+    let staging_buf = graph.bind_resource(staging_buf);
+    let texture_image = graph.bind_resource(&texture);
     graph.copy_buffer_to_image(staging_buf, texture_image);
 
     let queue_family_index = device_queue_family_index(device, vk::QueueFlags::TRANSFER).unwrap();

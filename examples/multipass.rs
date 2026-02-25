@@ -60,10 +60,10 @@ fn main() -> anyhow::Result<()> {
     window.run(|frame| {
         t += 0.016;
 
-        let index_buf = frame.graph.bind_node(&funky_shape.index_buf);
-        let vertex_buf = frame.graph.bind_node(&funky_shape.vertex_buf);
+        let index_buf = frame.graph.bind_resource(&funky_shape.index_buf);
+        let vertex_buf = frame.graph.bind_resource(&funky_shape.vertex_buf);
 
-        let depth_stencil = frame.graph.bind_node(
+        let depth_stencil = frame.graph.bind_resource(
             pool.lease(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -89,12 +89,16 @@ fn main() -> anyhow::Result<()> {
         frame
             .graph
             .begin_cmd()
-            .with_name("Depth Prepass")
+            .debug_name("Depth Prepass")
             .bind_pipeline(&prepass)
             .set_depth_stencil(write)
-            .read_descriptor(0, camera_buf)
-            .access_node(index_buf, AccessType::IndexBuffer)
-            .access_node(vertex_buf, AccessType::VertexBuffer)
+            .shader_resource_access(
+                0,
+                camera_buf,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+            .resource_access(index_buf, AccessType::IndexBuffer)
+            .resource_access(vertex_buf, AccessType::VertexBuffer)
             .clear_depth_stencil(depth_stencil)
             .store_depth_stencil(depth_stencil)
             .record_pipeline(move |pipeline, _| {
@@ -120,13 +124,21 @@ fn main() -> anyhow::Result<()> {
         frame
             .graph
             .begin_cmd()
-            .with_name("funky shape PBR")
+            .debug_name("funky shape PBR")
             .bind_pipeline(&pbr)
             .set_depth_stencil(write)
-            .read_descriptor(0, camera_buf)
-            .read_descriptor(1, light_buf)
-            .access_node(index_buf, AccessType::IndexBuffer)
-            .access_node(vertex_buf, AccessType::VertexBuffer)
+            .shader_resource_access(
+                0,
+                camera_buf,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+            .shader_resource_access(
+                1,
+                light_buf,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+            .resource_access(index_buf, AccessType::IndexBuffer)
+            .resource_access(vertex_buf, AccessType::VertexBuffer)
             .load_depth_stencil(depth_stencil)
             .store_depth_stencil(depth_stencil)
             .store_color(0, frame.swapchain_image)
@@ -149,7 +161,7 @@ fn main() -> anyhow::Result<()> {
         frame
             .graph
             .begin_cmd()
-            .with_name("fill background")
+            .debug_name("fill background")
             .bind_pipeline(&fill_background)
             .set_depth_stencil(read)
             .load_depth_stencil(depth_stencil)
@@ -200,7 +212,7 @@ fn bind_camera_buf(
         .unwrap();
     write_camera_buf(&mut buf, camera, model);
 
-    graph.bind_node(buf)
+    graph.bind_resource(buf)
 }
 
 fn bind_light_buf(graph: &mut Graph, pool: &mut LazyPool) -> BufferLeaseNode {
@@ -212,7 +224,7 @@ fn bind_light_buf(graph: &mut Graph, pool: &mut LazyPool) -> BufferLeaseNode {
         .unwrap();
     write_light_buf(&mut buf);
 
-    graph.bind_node(buf)
+    graph.bind_resource(buf)
 }
 
 fn write_push_consts(obj_pos: Vec3, material: Material) -> [u8; 32] {
@@ -282,10 +294,10 @@ fn create_funky_shape(device: &Device, pool: &mut LazyPool) -> Result<Shape, Dri
     let mut graph = Graph::default();
 
     // Bind things to the graph
-    let index_buf_host = graph.bind_node(index_buf_host);
-    let vertex_buf_host = graph.bind_node(vertex_buf_host);
-    let index_buf_gpu = graph.bind_node(&index_buf);
-    let vertex_buf_gpu = graph.bind_node(&vertex_buf);
+    let index_buf_host = graph.bind_resource(index_buf_host);
+    let vertex_buf_host = graph.bind_resource(vertex_buf_host);
+    let index_buf_gpu = graph.bind_resource(&index_buf);
+    let vertex_buf_gpu = graph.bind_resource(&vertex_buf);
 
     // Add operations to the graph which copy host-accessible data to GPU
     graph
