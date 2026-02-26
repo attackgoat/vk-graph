@@ -194,7 +194,7 @@ impl Swapchain {
         trace!("present_image");
 
         let mut queue = graph.queue();
-        let wait_dst_stage_mask = queue.resource_stages(swapchain_image);
+        let wait_dst_stage_mask = queue.node_stages(swapchain_image);
 
         // The swapchain should have been written to, otherwise it would be noise and that's a panic
         assert!(
@@ -592,7 +592,7 @@ struct Execution {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {
         super::*,
         std::mem::{offset_of, size_of},

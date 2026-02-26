@@ -439,7 +439,6 @@ impl RayTracePipelineInfo {
     }
 
     /// Converts a `RayTracePipelineInfo` into a `RayTracePipelineInfoBuilder`.
-    #[inline(always)]
     pub fn to_builder(self) -> RayTracePipelineInfoBuilder {
         RayTracePipelineInfoBuilder {
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
@@ -639,7 +638,7 @@ impl From<RayTraceShaderGroupType> for vk::RayTracingShaderGroupTypeKHR {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     type Info = RayTracePipelineInfo;

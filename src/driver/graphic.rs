@@ -697,7 +697,6 @@ pub struct GraphicPipelineInfo {
 
 impl GraphicPipelineInfo {
     /// Creates a default `GraphicPipelineInfoBuilder`.
-    #[allow(clippy::new_ret_no_self)]
     pub fn builder() -> GraphicPipelineInfoBuilder {
         Default::default()
     }
@@ -881,7 +880,7 @@ pub(crate) struct VertexInputState {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     type Info = GraphicPipelineInfo;

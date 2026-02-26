@@ -181,13 +181,13 @@ impl Drop for PhysicalPass {
     }
 }
 
-/// A structure which can read and execute render graphs. This pattern was derived from:
+/// A structure which can optimize and submit graphs. This pattern was derived from:
 ///
 /// <http://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/>
 /// <https://github.com/EmbarkStudios/kajiya>
 #[derive(Debug)]
 pub struct Queue {
-    pub(super) graph: Graph,
+    graph: Graph,
     physical_passes: Vec<PhysicalPass>,
 }
 
@@ -1857,6 +1857,41 @@ impl Queue {
         }
     }
 
+    /// Returns the stages that process the given node.
+    ///
+    /// Note that this value must be retrieved before resolving a node as there will be no
+    /// data left to inspect afterwards!
+    #[profiling::function]
+    pub fn node_stages(&self, node: impl Node) -> vk::PipelineStageFlags {
+        let node_idx = node.index();
+        let mut res = Default::default();
+
+        'pass: for pass in self.graph.cmds.iter() {
+            for exec in pass.execs.iter() {
+                if exec.accesses.contains_key(&node_idx) {
+                    res |= pass
+                        .execs
+                        .iter()
+                        .filter_map(|exec| exec.pipeline.as_ref())
+                        .map(|pipeline| pipeline.stage())
+                        .reduce(|j, k| j | k)
+                        .unwrap_or(vk::PipelineStageFlags::TRANSFER);
+
+                    // The execution pipelines of a pass are always the same type
+                    continue 'pass;
+                }
+            }
+        }
+
+        debug_assert_ne!(
+            res,
+            Default::default(),
+            "The given node was not accessed in this graph"
+        );
+
+        res
+    }
+
     #[profiling::function]
     fn record_execution_barriers<'a>(
         cmd_buf: &CommandBuffer,
@@ -2611,41 +2646,6 @@ impl Queue {
         N: Bound,
     {
         self.graph.resource(node)
-    }
-
-    /// Returns the stages that process the given node.
-    ///
-    /// Note that this value must be retrieved before resolving a node as there will be no
-    /// data left to inspect afterwards!
-    #[profiling::function]
-    pub fn resource_stages(&self, node: impl Node) -> vk::PipelineStageFlags {
-        let node_idx = node.index();
-        let mut res = Default::default();
-
-        'pass: for pass in self.graph.cmds.iter() {
-            for exec in pass.execs.iter() {
-                if exec.accesses.contains_key(&node_idx) {
-                    res |= pass
-                        .execs
-                        .iter()
-                        .filter_map(|exec| exec.pipeline.as_ref())
-                        .map(|pipeline| pipeline.stage())
-                        .reduce(|j, k| j | k)
-                        .unwrap_or(vk::PipelineStageFlags::TRANSFER);
-
-                    // The execution pipelines of a pass are always the same type
-                    continue 'pass;
-                }
-            }
-        }
-
-        debug_assert_ne!(
-            res,
-            Default::default(),
-            "The given node was not accessed in this graph"
-        );
-
-        res
     }
 
     /// Returns a vec of pass indexes that are required to be executed, in order, for the given

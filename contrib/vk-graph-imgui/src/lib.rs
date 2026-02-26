@@ -110,7 +110,7 @@ impl ImGui {
                         | vk::ImageUsageFlags::TRANSFER_SRC, // TODO: Make TRANSFER_SRC an "extra flags"
                 ))
                 .unwrap();
-            image.as_mut().name = Some("ImGui Output".to_string());
+            image.name = Some("ImGui Output".to_string());
 
             image
         });

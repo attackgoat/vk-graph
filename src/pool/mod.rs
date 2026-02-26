@@ -148,6 +148,9 @@ pub struct Lease<T> {
     item: ManuallyDrop<T>,
 }
 
+// The following debug_name functions take a self of Lease<T> and return Self.
+// This allows leased resources to have the same `.debug_name("bugs")` chaining
+
 impl Lease<AccelerationStructure> {
     /// Sets the debugging name assigned to this acceleration structure.
     pub fn debug_name(mut self, name: impl Into<String>) -> Self {
@@ -176,24 +179,11 @@ impl Lease<Image> {
 }
 
 impl<T> Lease<T> {
-    #[inline(always)]
     fn new(cache_ref: CacheRef<T>, item: T) -> Self {
         Self {
             cache_ref,
             item: ManuallyDrop::new(item),
         }
-    }
-}
-
-impl<T> AsRef<T> for Lease<T> {
-    fn as_ref(&self) -> &T {
-        &self.item
-    }
-}
-
-impl<T> AsMut<T> for Lease<T> {
-    fn as_mut(&mut self) -> &mut T {
-        &mut self.item
     }
 }
 
@@ -267,9 +257,9 @@ lease_builder!(ImageInfo => Image);
 
 /// Information used to create a [`FifoPool`](self::fifo::FifoPool),
 /// [`HashPool`](self::hash::HashPool) or [`LazyPool`](self::lazy::LazyPool) instance.
-#[derive(Builder, Clone, Copy, Debug)]
+#[derive(Builder, Clone, Copy, Debug, Eq, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "PoolInfoBuilderError"),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -313,6 +303,11 @@ impl PoolInfo {
     /// The maximum size of a single bucket of resource instances.
     pub const DEFAULT_RESOURCE_CAPACITY: usize = 16;
 
+    /// Creates a default `PoolInfoBuilder`.
+    pub fn builder() -> PoolInfoBuilder {
+        Default::default()
+    }
+
     /// Constructs a new `PoolInfo` with the given acceleration structure, buffer and image resource
     /// capacity for any single bucket.
     pub const fn with_capacity(resource_capacity: usize) -> Self {
@@ -320,6 +315,15 @@ impl PoolInfo {
             accel_struct_capacity: resource_capacity,
             buffer_capacity: resource_capacity,
             image_capacity: resource_capacity,
+        }
+    }
+
+    /// Converts a `PoolInfo` into a `PoolInfoBuilder`.
+    pub fn to_builder(self) -> PoolInfoBuilder {
+        PoolInfoBuilder {
+            accel_struct_capacity: Some(self.accel_struct_capacity),
+            buffer_capacity: Some(self.buffer_capacity),
+            image_capacity: Some(self.image_capacity),
         }
     }
 
@@ -365,11 +369,69 @@ impl PoolInfoBuilder {
     }
 }
 
-#[derive(Debug)]
-struct PoolInfoBuilderError;
+mod deprecated {
+    use {
+        crate::pool::Lease,
+        std::convert::{AsMut, AsRef},
+    };
 
-impl From<UninitializedFieldError> for PoolInfoBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
+    impl<T> Lease<T> {
+        #[allow(clippy::should_implement_trait)]
+        #[deprecated = "use Deref impl"]
+        #[doc(hidden)]
+        pub fn as_ref(&self) -> &T {
+            &self.item
+        }
+
+        #[allow(clippy::should_implement_trait)]
+        #[deprecated = "use DerefMut impl"]
+        #[doc(hidden)]
+        pub fn as_mut(&mut self) -> &mut T {
+            &mut self.item
+        }
+    }
+
+    impl<T> AsRef<T> for Lease<T> {
+        fn as_ref(&self) -> &T {
+            &self.item
+        }
+    }
+
+    impl<T> AsMut<T> for Lease<T> {
+        fn as_mut(&mut self) -> &mut T {
+            &mut self.item
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    type Info = PoolInfo;
+    type Builder = PoolInfoBuilder;
+
+    #[test]
+    pub fn pool_info() {
+        let info = Info::default();
+        let builder = info.to_builder().build();
+
+        assert_eq!(info, builder);
+    }
+
+    #[test]
+    pub fn pool_info_builder() {
+        let info = Info {
+            accel_struct_capacity: 1,
+            buffer_capacity: 2,
+            image_capacity: 3,
+        };
+        let builder = Builder::default()
+            .accel_struct_capacity(1)
+            .buffer_capacity(2)
+            .image_capacity(3)
+            .build();
+
+        assert_eq!(info, builder);
     }
 }

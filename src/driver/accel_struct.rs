@@ -684,7 +684,6 @@ impl AccelerationStructureInfo {
     }
 
     /// Creates a default `AccelerationStructureInfoBuilder`.
-    #[allow(clippy::new_ret_no_self)]
     pub fn builder() -> AccelerationStructureInfoBuilder {
         Default::default()
     }
@@ -816,7 +815,7 @@ impl From<DeviceOrHostAddress> for vk::DeviceOrHostAddressKHR {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     type Info = AccelerationStructureInfo;

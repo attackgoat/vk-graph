@@ -1,9 +1,6 @@
 use {
-    super::{Resources, pipeline::PipelineRef},
-    crate::{
-        AnyBufferNode,
-        driver::{cmd_buf::CommandBuffer, compute::ComputePipeline},
-    },
+    super::{Resources, cmd_buf::CommandBufferRef, pipeline::PipelineRef},
+    crate::{driver::compute::ComputePipeline, node::AnyBufferNode},
     ash::vk,
     log::trace,
     std::ops::Deref,
@@ -42,9 +39,8 @@ use {
 /// # Ok(()) }
 /// ```
 pub struct ComputePipelineRef<'a> {
-    pub(super) cmd_buf: &'a CommandBuffer,
+    pub(super) cmd_buf: CommandBufferRef<'a>,
     pub(super) pipeline: ComputePipeline,
-    pub(super) resources: Resources<'a>,
 }
 
 impl ComputePipelineRef<'_> {
@@ -218,7 +214,7 @@ impl ComputePipelineRef<'_> {
         unsafe {
             self.cmd_buf.device.cmd_dispatch_indirect(
                 self.cmd_buf.handle,
-                self.resources[args_buf].handle,
+                self.cmd_buf.resources[args_buf].handle,
                 args_offset,
             );
         }
@@ -321,10 +317,10 @@ impl ComputePipelineRef<'_> {
 }
 
 impl<'a> Deref for ComputePipelineRef<'a> {
-    type Target = CommandBuffer;
+    type Target = CommandBufferRef<'a>;
 
     fn deref(&self) -> &Self::Target {
-        self.cmd_buf
+        &self.cmd_buf
     }
 }
 
@@ -350,9 +346,8 @@ impl PipelineRef<'_, ComputePipeline> {
         self.cmd.push_execute(move |cmd_buf, resources| {
             func(
                 ComputePipelineRef {
-                    cmd_buf,
+                    cmd_buf: CommandBufferRef { cmd_buf, resources },
                     pipeline,
-                    resources,
                 },
                 resources,
             );

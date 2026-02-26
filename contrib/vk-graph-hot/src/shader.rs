@@ -20,7 +20,7 @@ use {
 #[allow(missing_docs)]
 #[derive(Builder, Clone, Debug)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "HotShaderBuilderError"),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Debug),
     pattern = "owned"
 )]
@@ -360,14 +360,5 @@ impl HotShaderBuilder {
             .push((key.into(), value.into()));
 
         self
-    }
-}
-
-#[derive(Debug)]
-struct HotShaderBuilderError;
-
-impl From<UninitializedFieldError> for HotShaderBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
     }
 }

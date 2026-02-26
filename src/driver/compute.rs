@@ -307,7 +307,7 @@ impl Drop for ComputePipelineInner {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     type Info = ComputePipelineInfo;

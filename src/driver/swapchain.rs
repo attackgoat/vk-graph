@@ -617,7 +617,7 @@ impl From<UninitializedFieldError> for SwapchainInfoBuilderError {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {
         super::*,
         std::mem::{offset_of, size_of},

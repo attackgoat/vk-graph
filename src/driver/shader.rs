@@ -1541,7 +1541,7 @@ impl<'a> From<&'a SpecializationMap> for vk::SpecializationInfo<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     type Info = SamplerInfo;

@@ -1142,7 +1142,7 @@ impl Display for DriverError {
 impl Error for DriverError {}
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {super::merge_push_constant_ranges, ash::vk};
 
     macro_rules! assert_pcr_eq {

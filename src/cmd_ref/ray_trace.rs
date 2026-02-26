@@ -1,6 +1,6 @@
 use {
-    super::{PipelineRef, Resources},
-    crate::driver::{cmd_buf::CommandBuffer, device::Device, ray_trace::RayTracePipeline},
+    super::{PipelineRef, Resources, cmd_buf::CommandBufferRef},
+    crate::driver::{device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
     std::ops::Deref,
@@ -31,7 +31,7 @@ impl PipelineRef<'_, RayTracePipeline> {
         self.cmd.push_execute(move |cmd_buf, resources| {
             func(
                 RayTracePipelineRef {
-                    cmd_buf,
+                    cmd_buf: CommandBufferRef { cmd_buf, resources },
 
                     #[cfg(debug_assertions)]
                     dynamic_stack_size,
@@ -82,7 +82,7 @@ impl PipelineRef<'_, RayTracePipeline> {
 /// # Ok(()) }
 /// ```
 pub struct RayTracePipelineRef<'a> {
-    cmd_buf: &'a CommandBuffer,
+    cmd_buf: CommandBufferRef<'a>,
 
     #[cfg(debug_assertions)]
     dynamic_stack_size: bool,
@@ -317,10 +317,10 @@ impl RayTracePipelineRef<'_> {
 }
 
 impl<'a> Deref for RayTracePipelineRef<'a> {
-    type Target = CommandBuffer;
+    type Target = CommandBufferRef<'a>;
 
     fn deref(&self) -> &Self::Target {
-        self.cmd_buf
+        &self.cmd_buf
     }
 }
 

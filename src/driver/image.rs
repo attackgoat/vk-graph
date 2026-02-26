@@ -1249,7 +1249,7 @@ mod deprecated {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {super::*, std::ops::Range};
 
     // ImageSubresourceRange does not implement PartialEq

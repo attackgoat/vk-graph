@@ -1,9 +1,11 @@
 use {
-    super::{AttachmentIndex, PipelineRef, Resources, SubresourceAccess, SubresourceRange},
+    super::{
+        AttachmentIndex, Resources, SubresourceAccess, SubresourceRange, cmd_buf::CommandBufferRef,
+        pipeline::PipelineRef,
+    },
     crate::{
-        AnyBufferNode, AnyImageNode, Area, Attachment, ClearColorValue, Node,
+        Area, Attachment, ClearColorValue,
         driver::{
-            cmd_buf::CommandBuffer,
             graphic::{DepthStencilMode, GraphicPipeline},
             image::{
                 ImageInfo, ImageViewInfo, image_subresource_range_contains,
@@ -11,10 +13,11 @@ use {
             },
             render_pass::ResolveMode,
         },
+        node::{AnyBufferNode, AnyImageNode, Node},
     },
     ash::vk,
     log::trace,
-    std::{cell::RefCell, slice},
+    std::{cell::RefCell, ops::Deref, slice},
     vk_sync::AccessType,
 };
 
@@ -59,9 +62,8 @@ use {
 /// # Ok(()) }
 /// ```
 pub struct GraphicPipelineRef<'a> {
-    pub(super) cmd_buf: &'a CommandBuffer,
+    pub(super) cmd_buf: CommandBufferRef<'a>,
     pub(super) pipeline: GraphicPipeline,
-    pub(super) resources: Resources<'a>,
 }
 
 impl GraphicPipelineRef<'_> {
@@ -616,6 +618,14 @@ impl GraphicPipelineRef<'_> {
         }
 
         self
+    }
+}
+
+impl<'a> Deref for GraphicPipelineRef<'a> {
+    type Target = CommandBufferRef<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cmd_buf
     }
 }
 
@@ -1489,9 +1499,8 @@ impl PipelineRef<'_, GraphicPipeline> {
         self.cmd.push_execute(move |cmd_buf, resources| {
             func(
                 GraphicPipelineRef {
-                    cmd_buf,
+                    cmd_buf: CommandBufferRef { cmd_buf, resources },
                     pipeline,
-                    resources,
                 },
                 resources,
             );

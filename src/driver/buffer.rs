@@ -900,7 +900,7 @@ impl From<BufferSubresourceRange> for Range<vk::DeviceSize> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {
         super::*,
         rand::{Rng, SeedableRng, rngs::SmallRng},
