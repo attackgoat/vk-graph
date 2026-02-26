@@ -6,7 +6,8 @@ pub use vk_graph::{
     BindGraph, Bound, ClearColorValue, Graph,
     cmd_ref::{
         BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
-        PipelineRef, UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
+        PipelineCommandRef, UpdateAccelerationStructureIndirectInfo,
+        UpdateAccelerationStructureInfo,
     },
     driver::{
         DriverError,
@@ -22,7 +23,7 @@ pub use vk_graph::{
         compute::{ComputePipeline, ComputePipelineInfo, ComputePipelineInfoBuilder},
         device::{Device, DeviceInfo, DeviceInfoBuilder},
         graphic::{
-            BlendMode, BlendModeBuilder, DepthStencilMode, DepthStencilModeBuilder,
+            BlendInfo, BlendInfoBuilder, DepthStencilInfo, DepthStencilInfoBuilder,
             GraphicPipeline, GraphicPipelineInfo, GraphicPipelineInfoBuilder, StencilMode,
         },
         image::{
@@ -59,3 +60,6 @@ pub use vk_graph::{
         lazy::LazyPool,
     },
 };
+
+#[allow(deprecated)]
+pub use vk_graph::driver::graphic::{BlendMode, DepthStencilMode};

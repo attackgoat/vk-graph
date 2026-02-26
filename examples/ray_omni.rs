@@ -102,7 +102,7 @@ fn main() -> anyhow::Result<()> {
                 scene_tlas,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
             .clear_depth_stencil(depth_image)
             .clear_color_value(0, frame.swapchain_image, [0xff, 0xff, 0xff, 0xff])
             .store_color(0, frame.swapchain_image)

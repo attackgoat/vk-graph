@@ -409,7 +409,6 @@ impl Drop for Sampler {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct SamplerInfo {
     /// Bitmask specifying additional parameters of a sampler.
     #[builder(default)]
@@ -578,8 +577,7 @@ impl SamplerInfo {
     }
 
     /// Converts a `SamplerInfo` into a `SamplerInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> SamplerInfoBuilder {
+    pub fn into_builder(self) -> SamplerInfoBuilder {
         SamplerInfoBuilder {
             flags: Some(self.flags),
             mag_filter: Some(self.mag_filter),
@@ -599,6 +597,12 @@ impl SamplerInfo {
             unnormalized_coordinates: Some(self.unnormalized_coordinates),
             reduction_mode: Some(self.reduction_mode),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> SamplerInfoBuilder {
+        self.into_builder()
     }
 }
 

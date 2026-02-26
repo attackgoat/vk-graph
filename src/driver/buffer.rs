@@ -720,7 +720,6 @@ where
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct BufferInfo {
     /// Byte alignment of the base device address of the buffer.
     ///
@@ -804,8 +803,7 @@ impl BufferInfo {
     }
 
     /// Converts a `BufferInfo` into a `BufferInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> BufferInfoBuilder {
+    pub fn into_builder(self) -> BufferInfoBuilder {
         BufferInfoBuilder {
             alignment: Some(self.alignment),
             dedicated: Some(self.dedicated),
@@ -814,6 +812,12 @@ impl BufferInfo {
             size: Some(self.size),
             usage: Some(self.usage),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> BufferInfoBuilder {
+        self.into_builder()
     }
 }
 

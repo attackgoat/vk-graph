@@ -129,7 +129,7 @@ fn main() -> Result<(), WindowError> {
             .begin_cmd()
             .debug_name("🦴")
             .bind_pipeline(&pipeline)
-            .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
+            .depth_stencil(DepthStencilMode::DEPTH_WRITE)
             .resource_access(index_buf, AccessType::IndexBuffer)
             .resource_access(vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)

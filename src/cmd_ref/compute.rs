@@ -1,5 +1,5 @@
 use {
-    super::{Resources, cmd_buf::CommandBufferRef, pipeline::PipelineRef},
+    super::{Resources, cmd_buf::CommandBufferRef, pipeline::PipelineCommandRef},
     crate::{driver::compute::ComputePipeline, node::AnyBufferNode},
     ash::vk,
     log::trace,
@@ -38,12 +38,12 @@ use {
 ///     });
 /// # Ok(()) }
 /// ```
-pub struct ComputePipelineRef<'a> {
+pub struct ComputeCommandBufferRef<'a> {
     pub(super) cmd_buf: CommandBufferRef<'a>,
     pub(super) pipeline: ComputePipeline,
 }
 
-impl ComputePipelineRef<'_> {
+impl ComputeCommandBufferRef<'_> {
     /// [Dispatch] compute work items.
     ///
     /// When the command is executed, a global workgroup consisting of
@@ -316,7 +316,7 @@ impl ComputePipelineRef<'_> {
     }
 }
 
-impl<'a> Deref for ComputePipelineRef<'a> {
+impl<'a> Deref for ComputeCommandBufferRef<'a> {
     type Target = CommandBufferRef<'a>;
 
     fn deref(&self) -> &Self::Target {
@@ -325,11 +325,11 @@ impl<'a> Deref for ComputePipelineRef<'a> {
 }
 
 // NOTE: local implementation of type from super module
-impl PipelineRef<'_, ComputePipeline> {
+impl PipelineCommandRef<'_, ComputePipeline> {
     /// Begin recording a compute pipeline command buffer.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(ComputePipelineRef<'_>, Resources<'_>) + Send + 'static,
+        func: impl FnOnce(ComputeCommandBufferRef<'_>, Resources<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -345,7 +345,7 @@ impl PipelineRef<'_, ComputePipeline> {
 
         self.cmd.push_execute(move |cmd_buf, resources| {
             func(
-                ComputePipelineRef {
+                ComputeCommandBufferRef {
                     cmd_buf: CommandBufferRef { cmd_buf, resources },
                     pipeline,
                 },
@@ -362,8 +362,8 @@ mod deprecated {
     use {
         crate::{
             cmd_ref::{
-                Descriptor, PipelineRef, Resources, SubresourceRange, View, ViewInfo,
-                compute::ComputePipelineRef,
+                Descriptor, PipelineCommandRef, Resources, SubresourceRange, View, ViewInfo,
+                compute::ComputeCommandBufferRef,
             },
             driver::compute::ComputePipeline,
             node::Node,
@@ -371,7 +371,7 @@ mod deprecated {
         vk_sync::AccessType,
     };
 
-    impl PipelineRef<'_, ComputePipeline> {
+    impl PipelineCommandRef<'_, ComputePipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderReadOther"]
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
@@ -410,7 +410,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_compute(
             self,
-            func: impl FnOnce(ComputePipelineRef<'_>, Resources<'_>) + Send + 'static,
+            func: impl FnOnce(ComputeCommandBufferRef<'_>, Resources<'_>) + Send + 'static,
         ) -> Self {
             self.record_cmd_buf(func)
         }

@@ -427,13 +427,12 @@ impl std::fmt::Display for SwapchainError {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct SwapchainInfo {
     /// The number of command buffers to use for image submissions.
     ///
     /// Generally one more than the swapchain image count is best.
     #[builder(default = "4")]
-    command_buffer_count: usize,
+    pub command_buffer_count: usize,
 
     /// The initial height of the surface.
     pub height: u32,
@@ -491,7 +490,7 @@ pub struct SwapchainInfo {
 
     /// The device queue family which will be used to submit and present images.
     #[builder(default = "0")]
-    queue_family_index: u32,
+    pub queue_family_index: u32,
 
     /// The format and color space of the surface.
     pub surface: vk::SurfaceFormatKHR,
@@ -516,8 +515,7 @@ impl SwapchainInfo {
     }
 
     /// Converts a `SwapchainInfo` into a `SwapchainInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> SwapchainInfoBuilder {
+    pub fn into_builder(self) -> SwapchainInfoBuilder {
         SwapchainInfoBuilder {
             command_buffer_count: Some(self.command_buffer_count),
             height: Some(self.height),
@@ -527,6 +525,12 @@ impl SwapchainInfo {
             surface: Some(self.surface),
             width: Some(self.width),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> SwapchainInfoBuilder {
+        self.into_builder()
     }
 }
 

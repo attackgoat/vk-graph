@@ -380,7 +380,7 @@ use {
         cmd_buf::CommandBuffer,
         compute::ComputePipeline,
         format_aspect_mask, format_texel_block_extent, format_texel_block_size,
-        graphic::{DepthStencilMode, GraphicPipeline},
+        graphic::{DepthStencilInfo, GraphicPipeline},
         image::{ImageInfo, ImageViewInfo, SampleCount},
         image_subresource_range_from_layers,
         ray_trace::RayTracePipeline,
@@ -399,14 +399,6 @@ use {
 
 type ExecFn = Box<dyn FnOnce(&CommandBuffer, Resources<'_>) + Send>;
 type NodeIndex = usize;
-
-#[derive(Clone, Copy, Debug)]
-struct Area {
-    height: u32,
-    width: u32,
-    x: i32,
-    y: i32,
-}
 
 #[derive(Clone, Copy, Debug)]
 struct Attachment {
@@ -509,8 +501,8 @@ struct Execution {
     bindings: BTreeMap<Descriptor, (NodeIndex, ViewInfo)>,
 
     correlated_view_mask: u32,
-    depth_stencil: Option<DepthStencilMode>,
-    render_area: Option<Area>,
+    depth_stencil: Option<DepthStencilInfo>,
+    render_area: Option<vk::Rect2D>,
     view_mask: u32,
 
     color_attachments: HashMap<AttachmentIndex, Attachment>,

@@ -175,7 +175,6 @@ impl Drop for CommandBuffer {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct CommandBufferInfo {
     /// Designates a queue family as described in section
     /// [Queue Family Properties](https://docs.vulkan.org/spec/latest/chapters/devsandqueues.html#devsandqueues-queueprops).
@@ -193,11 +192,16 @@ impl CommandBufferInfo {
 
 impl CommandBufferInfo {
     /// Converts a `CommandBufferInfo` into a `CommandBufferInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> CommandBufferInfoBuilder {
+    pub fn into_builder(self) -> CommandBufferInfoBuilder {
         CommandBufferInfoBuilder {
             queue_family_index: Some(self.queue_family_index),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> CommandBufferInfoBuilder {
+        self.into_builder()
     }
 }
 

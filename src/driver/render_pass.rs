@@ -1,7 +1,12 @@
 //! Render pass related types.
 
 use {
-    super::{DepthStencilMode, DriverError, GraphicPipeline, SampleCount, device::Device},
+    super::{
+        DriverError,
+        device::Device,
+        graphic::{DepthStencilInfo, GraphicPipeline},
+        image::SampleCount,
+    },
     ash::vk,
     log::{trace, warn},
     std::{
@@ -88,7 +93,7 @@ pub(crate) struct FramebufferInfo {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct GraphicPipelineKey {
-    depth_stencil: Option<DepthStencilMode>,
+    depth_stencil: Option<DepthStencilInfo>,
     layout: vk::PipelineLayout,
     subpass_idx: u32,
 }
@@ -319,7 +324,7 @@ impl RenderPass {
     pub(crate) fn pipeline_handle(
         &mut self,
         pipeline: &GraphicPipeline,
-        depth_stencil: Option<DepthStencilMode>,
+        depth_stencil: Option<DepthStencilInfo>,
         subpass_idx: u32,
     ) -> Result<vk::Pipeline, DriverError> {
         let entry = self.graphic_pipelines.entry(GraphicPipelineKey {

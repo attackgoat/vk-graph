@@ -83,7 +83,7 @@ fn main() -> anyhow::Result<()> {
         let light_buf = bind_light_buf(frame.graph, &mut pool);
         let push_const_data = write_push_consts(obj_pos, material);
 
-        let mut write = DepthStencilMode::DEPTH_WRITE;
+        let mut write = DepthStencilInfo::DEPTH_WRITE;
 
         // Depth Prepass
         frame
@@ -91,7 +91,7 @@ fn main() -> anyhow::Result<()> {
             .begin_cmd()
             .debug_name("Depth Prepass")
             .bind_pipeline(&prepass)
-            .set_depth_stencil(write)
+            .depth_stencil(write)
             .shader_resource_access(
                 0,
                 camera_buf,
@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
             .begin_cmd()
             .debug_name("funky shape PBR")
             .bind_pipeline(&pbr)
-            .set_depth_stencil(write)
+            .depth_stencil(write)
             .shader_resource_access(
                 0,
                 camera_buf,
@@ -163,7 +163,7 @@ fn main() -> anyhow::Result<()> {
             .begin_cmd()
             .debug_name("fill background")
             .bind_pipeline(&fill_background)
-            .set_depth_stencil(read)
+            .depth_stencil(read)
             .load_depth_stencil(depth_stencil)
             .load_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)

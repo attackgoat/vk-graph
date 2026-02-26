@@ -67,8 +67,7 @@ pub(crate) use self::{
 use {
     self::{
         buffer::{Buffer, BufferInfo},
-        graphic::{DepthStencilMode, GraphicPipeline, VertexInputState},
-        image::SampleCount,
+        graphic::VertexInputState,
     },
     ash::vk,
     gpu_allocator::AllocationError,

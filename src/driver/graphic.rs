@@ -20,6 +20,14 @@ use {
     },
 };
 
+#[deprecated = "use BlendInfo instead"]
+#[doc(hidden)]
+pub type BlendMode = BlendInfo;
+
+#[deprecated = "use DepthStencilInfo instead"]
+#[doc(hidden)]
+pub type DepthStencilMode = DepthStencilInfo;
+
 const RGBA_COLOR_COMPONENTS: vk::ColorComponentFlags = vk::ColorComponentFlags::from_raw(
     vk::ColorComponentFlags::R.as_raw()
         | vk::ColorComponentFlags::G.as_raw()
@@ -34,11 +42,11 @@ const RGBA_COLOR_COMPONENTS: vk::ColorComponentFlags = vk::ColorComponentFlags::
 /// [VkPipelineColorBlendAttachmentState](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipelineColorBlendAttachmentState.html).
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "BlendModeBuilderError"),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-pub struct BlendMode {
+pub struct BlendInfo {
     /// Controls whether blending is enabled for the corresponding color attachment.
     ///
     /// If blending is not enabled, the source fragment’s color for that attachment is passed
@@ -79,7 +87,7 @@ pub struct BlendMode {
     pub color_write_mask: vk::ColorComponentFlags,
 }
 
-impl BlendMode {
+impl BlendInfo {
     /// A commonly used blend mode for replacing color attachment values with new ones.
     pub const REPLACE: Self = Self {
         blend_enable: false,
@@ -118,21 +126,34 @@ impl BlendMode {
     };
 
     /// Specifies a default blend mode which is not enabled.
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new() -> BlendModeBuilder {
-        BlendModeBuilder::default()
+    pub fn builder() -> BlendInfoBuilder {
+        BlendInfoBuilder::default()
+    }
+
+    /// Converts a `BlendInfo` into a `BlendInfoBuilder`.
+    pub fn into_builder(self) -> BlendInfoBuilder {
+        BlendInfoBuilder {
+            blend_enable: Some(self.blend_enable),
+            src_color_blend_factor: Some(self.src_color_blend_factor),
+            dst_color_blend_factor: Some(self.dst_color_blend_factor),
+            color_blend_op: Some(self.color_blend_op),
+            src_alpha_blend_factor: Some(self.src_alpha_blend_factor),
+            dst_alpha_blend_factor: Some(self.dst_alpha_blend_factor),
+            alpha_blend_op: Some(self.alpha_blend_op),
+            color_write_mask: Some(self.color_write_mask),
+        }
     }
 }
 
 // the Builder derive Macro wants Default to be implemented for BlendMode
-impl Default for BlendMode {
+impl Default for BlendInfo {
     fn default() -> Self {
         Self::REPLACE
     }
 }
 
-impl From<BlendMode> for vk::PipelineColorBlendAttachmentState {
-    fn from(mode: BlendMode) -> Self {
+impl From<BlendInfo> for vk::PipelineColorBlendAttachmentState {
+    fn from(mode: BlendInfo) -> Self {
         Self {
             blend_enable: mode.blend_enable as _,
             src_color_blend_factor: mode.src_color_blend_factor,
@@ -146,20 +167,10 @@ impl From<BlendMode> for vk::PipelineColorBlendAttachmentState {
     }
 }
 
-// HACK: https://github.com/colin-kiegel/rust-derive-builder/issues/56
-impl BlendModeBuilder {
+impl BlendInfoBuilder {
     /// Builds a new `BlendMode`.
-    pub fn build(self) -> BlendMode {
+    pub fn build(self) -> BlendInfo {
         self.fallible_build().unwrap()
-    }
-}
-
-#[derive(Debug)]
-struct BlendModeBuilderError;
-
-impl From<UninitializedFieldError> for BlendModeBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
     }
 }
 
@@ -168,23 +179,21 @@ impl From<UninitializedFieldError> for BlendModeBuilderError {
 /// [depth bounds tests]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
 /// [stencil test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-stencil
 /// [depth test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth
-#[derive(Builder, Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(
-        private,
-        name = "fallible_build",
-        error = "DepthStencilModeBuilderError"
-    ),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-pub struct DepthStencilMode {
+pub struct DepthStencilInfo {
     /// Control parameters of the stencil test.
+    #[builder(default)]
     pub back: StencilMode,
 
     /// Controls whether [depth bounds testing] is enabled.
     ///
     /// [depth bounds testing]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
+    #[builder(default)]
     pub bounds_test: bool,
 
     /// A value specifying the comparison operator to use in the [depth comparison] step of the
@@ -192,11 +201,13 @@ pub struct DepthStencilMode {
     ///
     /// [depth comparison]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth-comparison
     /// [depth test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth
+    #[builder(default)]
     pub compare_op: vk::CompareOp,
 
     /// Controls whether [depth testing] is enabled.
     ///
     /// [depth testing]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth
+    #[builder(default)]
     pub depth_test: bool,
 
     /// Controls whether [depth writes] are enabled when `depth_test` is `true`.
@@ -204,32 +215,35 @@ pub struct DepthStencilMode {
     /// Depth writes are always disabled when `depth_test` is `false`.
     ///
     /// [depth writes]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth-write
+    #[builder(default)]
     pub depth_write: bool,
 
     /// Control parameters of the stencil test.
+    #[builder(default)]
     pub front: StencilMode,
 
     // Note: Using setter(into) so caller does not need our version of OrderedFloat
     /// Minimum depth bound used in the [depth bounds test].
     ///
     /// [depth bounds test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
-    #[builder(setter(into))]
+    #[builder(default, setter(into))]
     pub min: OrderedFloat<f32>,
 
     // Note: Using setter(into) so caller does not need our version of OrderedFloat
     /// Maximum depth bound used in the [depth bounds test].
     ///
     /// [depth bounds test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
-    #[builder(setter(into))]
+    #[builder(default, setter(into))]
     pub max: OrderedFloat<f32>,
 
     /// Controls whether [stencil testing] is enabled.
     ///
     /// [stencil testing]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-stencil
+    #[builder(default)]
     pub stencil_test: bool,
 }
 
-impl DepthStencilMode {
+impl DepthStencilInfo {
     /// A commonly used depth/stencil mode
     pub const DEPTH_READ: Self = Self {
         back: StencilMode::IGNORE,
@@ -269,79 +283,46 @@ impl DepthStencilMode {
         stencil_test: false,
     };
 
-    /// Specifies a default depth/stencil mode which is equal to [`DepthStencilMode::IGNORE`].
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new() -> DepthStencilModeBuilder {
-        DepthStencilModeBuilder::default()
+    /// TODO
+    pub fn build() -> DepthStencilInfoBuilder {
+        Default::default()
+    }
+
+    /// Converts a `DepthStencilInfo` into a `DepthStencilInfoBuilder`.
+    pub fn into_builder(self) -> DepthStencilInfoBuilder {
+        DepthStencilInfoBuilder {
+            back: Some(self.back),
+            bounds_test: Some(self.bounds_test),
+            compare_op: Some(self.compare_op),
+            depth_test: Some(self.depth_test),
+            depth_write: Some(self.depth_write),
+            front: Some(self.front),
+            max: Some(self.max),
+            min: Some(self.min),
+            stencil_test: Some(self.stencil_test),
+        }
     }
 }
 
-impl From<DepthStencilMode> for vk::PipelineDepthStencilStateCreateInfo<'_> {
-    fn from(mode: DepthStencilMode) -> Self {
+impl From<DepthStencilInfo> for vk::PipelineDepthStencilStateCreateInfo<'_> {
+    fn from(info: DepthStencilInfo) -> Self {
         Self::default()
-            .back(mode.back.into())
-            .depth_bounds_test_enable(mode.bounds_test as _)
-            .depth_compare_op(mode.compare_op)
-            .depth_test_enable(mode.depth_test as _)
-            .depth_write_enable(mode.depth_write as _)
-            .front(mode.front.into())
-            .max_depth_bounds(mode.max.into_inner())
-            .min_depth_bounds(mode.min.into_inner())
-            .stencil_test_enable(mode.stencil_test as _)
+            .back(info.back.into())
+            .depth_bounds_test_enable(info.bounds_test as _)
+            .depth_compare_op(info.compare_op)
+            .depth_test_enable(info.depth_test as _)
+            .depth_write_enable(info.depth_write as _)
+            .front(info.front.into())
+            .max_depth_bounds(info.max.into_inner())
+            .min_depth_bounds(info.min.into_inner())
+            .stencil_test_enable(info.stencil_test as _)
     }
 }
 
-// HACK: https://github.com/colin-kiegel/rust-derive-builder/issues/56
-impl DepthStencilModeBuilder {
-    /// Builds a new `DepthStencilMode`.
-    pub fn build(mut self) -> DepthStencilMode {
-        if self.back.is_none() {
-            self.back = Some(Default::default());
-        }
-
-        if self.bounds_test.is_none() {
-            self.bounds_test = Some(Default::default());
-        }
-
-        if self.compare_op.is_none() {
-            self.compare_op = Some(Default::default());
-        }
-
-        if self.depth_test.is_none() {
-            self.depth_test = Some(Default::default());
-        }
-
-        if self.depth_write.is_none() {
-            self.depth_write = Some(Default::default());
-        }
-
-        if self.front.is_none() {
-            self.front = Some(Default::default());
-        }
-
-        if self.min.is_none() {
-            self.min = Some(Default::default());
-        }
-
-        if self.max.is_none() {
-            self.max = Some(Default::default());
-        }
-
-        if self.stencil_test.is_none() {
-            self.stencil_test = Some(Default::default());
-        }
-
-        self.fallible_build()
-            .expect("All required fields set at initialization")
-    }
-}
-
-#[derive(Debug)]
-struct DepthStencilModeBuilderError;
-
-impl From<UninitializedFieldError> for DepthStencilModeBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
+impl DepthStencilInfoBuilder {
+    /// Builds a new `DepthStencilInfo`.
+    pub fn build(self) -> DepthStencilInfo {
+        self.fallible_build().unwrap()
     }
 }
 
@@ -614,7 +595,6 @@ impl GraphicPipeline {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct GraphicPipelineInfo {
     /// Controls whether a temporary coverage value is generated based on the alpha component of the
     /// fragment’s first color output.
@@ -654,9 +634,9 @@ pub struct GraphicPipelineInfo {
     /// Specifies color blend state used when rasterization is enabled for any color attachments
     /// accessed during rendering.
     ///
-    /// The default value is [`BlendMode::REPLACE`].
+    /// The default value is [`BlendInfo::REPLACE`].
     #[builder(default)]
-    pub blend: BlendMode,
+    pub blend: BlendInfo,
 
     /// Bitmask controlling triangle culling.
     ///
@@ -702,8 +682,7 @@ impl GraphicPipelineInfo {
     }
 
     /// Converts a `GraphicPipelineInfo` into a `GraphicPipelineInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> GraphicPipelineInfoBuilder {
+    pub fn into_builder(self) -> GraphicPipelineInfoBuilder {
         GraphicPipelineInfoBuilder {
             alpha_to_coverage: Some(self.alpha_to_coverage),
             alpha_to_one: Some(self.alpha_to_one),
@@ -717,6 +696,12 @@ impl GraphicPipelineInfo {
             samples: Some(self.samples),
         }
     }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> GraphicPipelineInfoBuilder {
+        self.into_builder()
+    }
 }
 
 impl Default for GraphicPipelineInfo {
@@ -725,7 +710,7 @@ impl Default for GraphicPipelineInfo {
             alpha_to_coverage: false,
             alpha_to_one: false,
             bindless_descriptor_count: 8192,
-            blend: BlendMode::REPLACE,
+            blend: BlendInfo::REPLACE,
             cull_mode: vk::CullModeFlags::BACK,
             front_face: vk::FrontFace::COUNTER_CLOCKWISE,
             min_sample_shading: None,
@@ -879,25 +864,76 @@ pub(crate) struct VertexInputState {
     pub vertex_attribute_descriptions: Vec<vk::VertexInputAttributeDescription>,
 }
 
+mod deprecated {
+    use crate::driver::graphic::{BlendInfo, BlendInfoBuilder, DepthStencilInfo};
+
+    impl BlendInfo {
+        #[allow(clippy::new_ret_no_self)]
+        #[deprecated = "use builder function or BlendInfoBuilder"]
+        #[doc(hidden)]
+        pub fn new() -> BlendInfoBuilder {
+            Default::default()
+        }
+    }
+
+    impl DepthStencilInfo {
+        #[allow(clippy::new_ret_no_self)]
+        #[deprecated = "use builder function or DepthStencilInfoBuilder"]
+        #[doc(hidden)]
+        pub fn new() -> BlendInfoBuilder {
+            Default::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
-    type Info = GraphicPipelineInfo;
-    type Builder = GraphicPipelineInfoBuilder;
+    #[test]
+    pub fn blend_info() {
+        let info = BlendInfo::default();
+        let builder = info.into_builder().build();
+
+        assert_eq!(info, builder);
+    }
+
+    #[test]
+    pub fn blend_info_builder() {
+        let info = BlendInfo::default();
+        let builder = BlendInfoBuilder::default().build();
+
+        assert_eq!(info, builder);
+    }
+
+    #[test]
+    pub fn depth_stencil_info() {
+        let info = DepthStencilInfo::default();
+        let builder = info.into_builder().build();
+
+        assert_eq!(info, builder);
+    }
+
+    #[test]
+    pub fn depth_stencil_info_builder() {
+        let info = DepthStencilInfo::default();
+        let builder = DepthStencilInfoBuilder::default().build();
+
+        assert_eq!(info, builder);
+    }
 
     #[test]
     pub fn graphic_pipeline_info() {
-        let info = Info::default();
-        let builder = info.to_builder().build();
+        let info = GraphicPipelineInfo::default();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
 
     #[test]
     pub fn graphic_pipeline_info_builder() {
-        let info = Info::default();
-        let builder = Builder::default().build();
+        let info = GraphicPipelineInfo::default();
+        let builder = GraphicPipelineInfoBuilder::default().build();
 
         assert_eq!(info, builder);
     }

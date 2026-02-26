@@ -403,7 +403,6 @@ impl Deref for Device {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct DeviceInfo {
     /// Enables Vulkan validation layers.
     ///
@@ -474,12 +473,17 @@ impl DeviceInfo {
     }
 
     /// Converts a `DeviceInfo` into a `DeviceInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> DeviceInfoBuilder {
+    pub fn into_builder(self) -> DeviceInfoBuilder {
         DeviceInfoBuilder {
             debug: Some(self.debug),
             physical_device_index: Some(self.physical_device_index),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> DeviceInfoBuilder {
+        self.into_builder()
     }
 }
 

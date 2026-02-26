@@ -451,7 +451,6 @@ impl Deref for Instance {
     derive(Clone, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct InstanceInfo {
     /// The Vulkan API version to target
     #[builder(default = "ApiVersion::Vulkan13")]
@@ -480,13 +479,18 @@ pub struct InstanceInfo {
 
 impl InstanceInfo {
     /// Converts a `InstanceInfo` into a `InstanceInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> InstanceInfoBuilder {
+    pub fn into_builder(self) -> InstanceInfoBuilder {
         InstanceInfoBuilder {
             api_version: Some(self.api_version),
             debug: Some(self.debug),
             extension_names: Some(self.extension_names),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> InstanceInfoBuilder {
+        self.into_builder()
     }
 }
 

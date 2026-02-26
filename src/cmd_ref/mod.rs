@@ -12,7 +12,7 @@ pub use self::{
         BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandBufferRef,
         UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
-    pipeline::PipelineRef,
+    pipeline::PipelineCommandRef,
 };
 
 use {
@@ -324,9 +324,9 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor
 ///
 /// - [`PassRef::record_accel_struct`] for building and updating acceleration structures
 /// - [`PassRef::record_cmd_buf`] for general command streams
-/// - [`PipelineRef::record_pipeline`] for dispatched compute operations
-/// - [`PipelineRef::record_pipeline`] for raster drawing operations, such as triangle streams
-/// - [`PipelineRef::record_pipeline`] for ray-traced operations
+/// - [`PipelineCommandRef::record_pipeline`] for dispatched compute operations
+/// - [`PipelineCommandRef::record_pipeline`] for raster drawing operations, such as triangle streams
+/// - [`PipelineCommandRef::record_pipeline`] for ray-traced operations
 ///
 /// # Examples
 ///

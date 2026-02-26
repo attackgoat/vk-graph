@@ -98,7 +98,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 &mesh_noaa_pipeline
             })
-            .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
             .resource_access(cube_vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, scene_uniform_buf, AccessType::AnyShaderReadUniformBuffer);
 

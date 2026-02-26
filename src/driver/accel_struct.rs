@@ -660,7 +660,6 @@ impl<G> AccelerationStructureGeometryInfo<G> {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct AccelerationStructureInfo {
     /// Type of acceleration structure.
     #[builder(default = "vk::AccelerationStructureTypeKHR::GENERIC")]
@@ -699,12 +698,17 @@ impl AccelerationStructureInfo {
     }
 
     /// Converts an `AccelerationStructureInfo` into an `AccelerationStructureInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> AccelerationStructureInfoBuilder {
+    pub fn into_builder(self) -> AccelerationStructureInfoBuilder {
         AccelerationStructureInfoBuilder {
             ty: Some(self.ty),
             size: Some(self.size),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> AccelerationStructureInfoBuilder {
+        self.into_builder()
     }
 }
 

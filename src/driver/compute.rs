@@ -211,7 +211,6 @@ impl ComputePipeline {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct ComputePipelineInfo {
     /// The number of descriptors to allocate for a given binding when using bindless (unbounded)
     /// syntax.
@@ -242,11 +241,16 @@ pub struct ComputePipelineInfo {
 
 impl ComputePipelineInfo {
     /// Converts a `ComputePipelineInfo` into a `ComputePipelineInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> ComputePipelineInfoBuilder {
+    pub fn into_builder(self) -> ComputePipelineInfoBuilder {
         ComputePipelineInfoBuilder {
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> ComputePipelineInfoBuilder {
+        self.into_builder()
     }
 }
 

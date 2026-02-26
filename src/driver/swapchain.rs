@@ -493,7 +493,6 @@ impl Deref for SwapchainImage {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct SwapchainInfo {
     /// The initial height of the surface.
     pub height: u32,
@@ -570,8 +569,7 @@ impl SwapchainInfo {
     }
 
     /// Converts a `SwapchainInfo` into a `SwapchainInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> SwapchainInfoBuilder {
+    pub fn into_builder(self) -> SwapchainInfoBuilder {
         SwapchainInfoBuilder {
             height: Some(self.height),
             min_image_count: Some(self.min_image_count),
@@ -579,6 +577,12 @@ impl SwapchainInfo {
             surface: Some(self.surface),
             width: Some(self.width),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> SwapchainInfoBuilder {
+        self.into_builder()
     }
 }
 

@@ -78,7 +78,16 @@ fn main() -> Result<(), WindowError> {
                 )
                 .load_color(0, frame.swapchain_image)
                 .store_color(0, frame.swapchain_image)
-                .set_render_area(stripe_x as _, 0, stripe_width, swapchain_info.height)
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D {
+                        x: stripe_x as _,
+                        y: 0,
+                    },
+                    extent: vk::Extent2D {
+                        width: stripe_width,
+                        height: swapchain_info.height,
+                    },
+                })
                 .record_cmd_buf(|cmd_buf, _| {
                     cmd_buf.draw(6, 1, 0, 0);
                 });

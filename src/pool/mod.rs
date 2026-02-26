@@ -263,7 +263,6 @@ lease_builder!(ImageInfo => Image);
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct PoolInfo {
     /// The maximum size of a single bucket of acceleration structure resource instances. The
     /// default value is [`PoolInfo::DEFAULT_RESOURCE_CAPACITY`].
@@ -308,25 +307,6 @@ impl PoolInfo {
         Default::default()
     }
 
-    /// Constructs a new `PoolInfo` with the given acceleration structure, buffer and image resource
-    /// capacity for any single bucket.
-    pub const fn with_capacity(resource_capacity: usize) -> Self {
-        Self {
-            accel_struct_capacity: resource_capacity,
-            buffer_capacity: resource_capacity,
-            image_capacity: resource_capacity,
-        }
-    }
-
-    /// Converts a `PoolInfo` into a `PoolInfoBuilder`.
-    pub fn to_builder(self) -> PoolInfoBuilder {
-        PoolInfoBuilder {
-            accel_struct_capacity: Some(self.accel_struct_capacity),
-            buffer_capacity: Some(self.buffer_capacity),
-            image_capacity: Some(self.image_capacity),
-        }
-    }
-
     fn default_cache<T>() -> Cache<T> {
         Cache::new(Mutex::new(Vec::with_capacity(
             Self::DEFAULT_RESOURCE_CAPACITY,
@@ -335,6 +315,31 @@ impl PoolInfo {
 
     fn explicit_cache<T>(capacity: usize) -> Cache<T> {
         Cache::new(Mutex::new(Vec::with_capacity(capacity)))
+    }
+
+    /// Converts a `PoolInfo` into a `PoolInfoBuilder`.
+    pub fn into_builder(self) -> PoolInfoBuilder {
+        PoolInfoBuilder {
+            accel_struct_capacity: Some(self.accel_struct_capacity),
+            buffer_capacity: Some(self.buffer_capacity),
+            image_capacity: Some(self.image_capacity),
+        }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> PoolInfoBuilder {
+        self.into_builder()
+    }
+
+    /// Constructs a new `PoolInfo` with the given acceleration structure, buffer and image resource
+    /// capacity for any single bucket.
+    pub const fn with_capacity(resource_capacity: usize) -> Self {
+        Self {
+            accel_struct_capacity: resource_capacity,
+            buffer_capacity: resource_capacity,
+            image_capacity: resource_capacity,
+        }
     }
 }
 

@@ -244,7 +244,7 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("DEBUG")
                 .bind_pipeline(&debug_pipeline)
-                .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
                 .shader_resource_access(
                     0,
                     camera_uniform_buf,
@@ -282,7 +282,7 @@ fn main() -> anyhow::Result<()> {
                     .begin_cmd()
                     .debug_name("Shadow (Using geometry shader)")
                     .bind_pipeline(&shadow_pipeline)
-                    .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
+                    .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
                     .shader_resource_access(
                         0,
                         light_uniform_buf,
@@ -331,7 +331,7 @@ fn main() -> anyhow::Result<()> {
                         .begin_cmd()
                         .debug_name("Shadow")
                         .bind_pipeline(&shadow_pipeline)
-                        .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
+                        .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
                         .shader_resource_access(
                             0,
                             light_uniform_buf,
@@ -403,7 +403,7 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Mesh objects")
                 .bind_pipeline(&mesh_pipeline)
-                .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
                 .shader_resource_access(
                     0,
                     camera_uniform_buf,

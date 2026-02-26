@@ -768,7 +768,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .unwrap(),
     );
 
-    let depth_stencil_mode = DepthStencilMode {
+    let depth_stencil_mode = DepthStencilInfo {
         back: StencilMode::IGNORE,
         bounds_test: true,
         compare_op: vk::CompareOp::LESS_OR_EQUAL,
@@ -793,7 +793,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .begin_cmd()
         .debug_name("msaa-depth-stencil")
         .bind_pipeline(&pipeline)
-        .set_depth_stencil(depth_stencil_mode)
+        .depth_stencil(depth_stencil_mode)
         .clear_color(0, msaa_color_image)
         .clear_depth_stencil(msaa_depth_stencil_image)
         .resolve_color(0, 1, frame.swapchain_image)

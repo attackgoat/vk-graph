@@ -387,7 +387,6 @@ impl RayTracePipeline {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct RayTracePipelineInfo {
     /// The number of descriptors to allocate for a given binding when using bindless (unbounded)
     /// syntax.
@@ -439,12 +438,18 @@ impl RayTracePipelineInfo {
     }
 
     /// Converts a `RayTracePipelineInfo` into a `RayTracePipelineInfoBuilder`.
-    pub fn to_builder(self) -> RayTracePipelineInfoBuilder {
+    pub fn into_builder(self) -> RayTracePipelineInfoBuilder {
         RayTracePipelineInfoBuilder {
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
             dynamic_stack_size: Some(self.dynamic_stack_size),
             max_ray_recursion_depth: Some(self.max_ray_recursion_depth),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> RayTracePipelineInfoBuilder {
+        self.into_builder()
     }
 }
 

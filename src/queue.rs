@@ -1,6 +1,6 @@
 use {
     super::{
-        Area, Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
+        Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
         cmd_ref::{Resources, SubresourceAccess, SubresourceRange},
     },
     crate::{
@@ -14,7 +14,7 @@ use {
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
             device::Device,
             format_aspect_mask,
-            graphic::{DepthStencilMode, GraphicPipeline},
+            graphic::{DepthStencilInfo, GraphicPipeline},
             image::{Image, ImageAccess},
             initial_image_layout_access, is_read_access, is_write_access,
             pipeline_stage_access_flags,
@@ -404,7 +404,7 @@ impl Queue {
         bindings: &[Resource],
         pass: &Command,
         physical_pass: &mut PhysicalPass,
-        render_area: Area,
+        render_area: vk::Rect2D,
     ) -> Result<(), DriverError> {
         trace!("  begin render pass");
 
@@ -573,16 +573,7 @@ impl Queue {
                     &vk::RenderPassBeginInfo::default()
                         .render_pass(render_pass.handle)
                         .framebuffer(framebuffer)
-                        .render_area(vk::Rect2D {
-                            offset: vk::Offset2D {
-                                x: render_area.x,
-                                y: render_area.y,
-                            },
-                            extent: vk::Extent2D {
-                                width: render_area.width,
-                                height: render_area.height,
-                            },
-                        })
+                        .render_area(render_area)
                         .clear_values(clear_values)
                         .push_next(
                             &mut vk::RenderPassAttachmentBeginInfoKHR::default()
@@ -642,7 +633,7 @@ impl Queue {
         physical_pass: &mut PhysicalPass,
         exec_idx: usize,
         pipeline: &mut ExecutionPipeline,
-        depth_stencil: Option<DepthStencilMode>,
+        depth_stencil: Option<DepthStencilInfo>,
     ) -> Result<(), DriverError> {
         if log_enabled!(Trace) {
             let (ty, name, vk_pipeline) = match pipeline {
@@ -2401,7 +2392,10 @@ impl Queue {
             let render_area = if is_graphic {
                 Self::record_image_layout_transitions(cmd_buf, &mut self.graph.resources, pass);
 
-                let render_area = Self::render_area(&self.graph.resources, pass);
+                let render_area = vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: Self::render_extent(&self.graph.resources, pass),
+                };
 
                 Self::begin_render_pass(
                     cmd_buf,
@@ -2444,10 +2438,10 @@ impl Queue {
                         // In this case we set the viewport and scissor for the user
                         Self::set_viewport(
                             cmd_buf,
-                            render_area.x as _,
-                            render_area.y as _,
-                            render_area.width as _,
-                            render_area.height as _,
+                            render_area.offset.x as _,
+                            render_area.offset.y as _,
+                            render_area.extent.width as _,
+                            render_area.extent.height as _,
                             exec.depth_stencil
                                 .map(|depth_stencil| {
                                     let min = depth_stencil.min.0;
@@ -2458,10 +2452,10 @@ impl Queue {
                         );
                         Self::set_scissor(
                             cmd_buf,
-                            render_area.x,
-                            render_area.y,
-                            render_area.width,
-                            render_area.height,
+                            render_area.offset.x,
+                            render_area.offset.y,
+                            render_area.extent.width,
+                            render_area.extent.height,
                         );
                     }
 
@@ -2538,7 +2532,7 @@ impl Queue {
     }
 
     #[profiling::function]
-    fn render_area(bindings: &[Resource], pass: &Command) -> Area {
+    fn render_extent(bindings: &[Resource], pass: &Command) -> vk::Extent2D {
         // set_render_area was not specified so we're going to guess using the minimum common
         // attachment extents
         let first_exec = pass.execs.first().unwrap();
@@ -2573,12 +2567,7 @@ impl Queue {
             height = height.min(attachment_height);
         }
 
-        Area {
-            height,
-            width,
-            x: 0,
-            y: 0,
-        }
+        vk::Extent2D { height, width }
     }
 
     #[profiling::function]

@@ -1,5 +1,5 @@
 use {
-    super::{CommandRef, pipeline::PipelineRef},
+    super::{CommandRef, pipeline::PipelineCommandRef},
     crate::{
         ExecutionPipeline,
         driver::{compute::ComputePipeline, graphic::GraphicPipeline, ray_trace::RayTracePipeline},
@@ -24,7 +24,7 @@ macro_rules! bind_cmd_pipeline {
     ($name:ident) => {
         paste::paste! {
             impl<'a> BindCommand<'a> for &'a [<$name Pipeline>] {
-                type Ref = PipelineRef<'a, [<$name Pipeline>]>;
+                type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
 
                 // TODO: Allow binding as explicit secondary command buffers? like with compute/raytrace stuff
                 fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
@@ -44,7 +44,7 @@ macro_rules! bind_cmd_pipeline {
             }
 
             impl<'a> BindCommand<'a> for [<$name Pipeline>] {
-                type Ref = PipelineRef<'a, [<$name Pipeline>]>;
+                type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
 
                 fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
                     let cmd_ref = cmd.cmd_mut();

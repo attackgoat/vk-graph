@@ -713,7 +713,6 @@ struct ImageAccessRange {
     derive(Copy, Clone, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct ImageInfo {
     /// The number of layers in the image.
     #[builder(default = "1", setter(strip_option))]
@@ -877,8 +876,7 @@ impl ImageInfo {
     }
 
     /// Converts an `ImageInfo` into an `ImageInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> ImageInfoBuilder {
+    pub fn into_builder(self) -> ImageInfoBuilder {
         ImageInfoBuilder {
             array_layer_count: Some(self.array_layer_count),
             depth: Some(self.depth),
@@ -892,6 +890,12 @@ impl ImageInfo {
             usage: Some(self.usage),
             width: Some(self.width),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> ImageInfoBuilder {
+        self.into_builder()
     }
 }
 
@@ -1028,7 +1032,6 @@ impl Drop for ImageView {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct ImageViewInfo {
     /// The number of layers that will be contained in the view.
     ///
@@ -1080,8 +1083,7 @@ impl ImageViewInfo {
     }
 
     /// Converts a `ImageViewInfo` into a `ImageViewInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> ImageViewInfoBuilder {
+    pub fn into_builder(self) -> ImageViewInfoBuilder {
         ImageViewInfoBuilder {
             array_layer_count: Some(self.array_layer_count),
             aspect_mask: Some(self.aspect_mask),
@@ -1091,6 +1093,12 @@ impl ImageViewInfo {
             mip_level_count: Some(self.mip_level_count),
             ty: Some(self.ty),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> ImageViewInfoBuilder {
+        self.into_builder()
     }
 
     /// Takes this instance and returns it with a newly specified `ImageViewType`.

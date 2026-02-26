@@ -7,13 +7,13 @@ use {
 };
 
 /// A render pass which has been bound to a particular compute, graphic, or ray-trace pipeline.
-pub struct PipelineRef<'a, T> {
+pub struct PipelineCommandRef<'a, T> {
     pub(super) __: PhantomData<T>,
     pub(super) cmd: CommandRef<'a>,
 }
 
 // NOTE: There are specific implementations of T in the compute, graphic, and ray trace modules
-impl<'a, T> PipelineRef<'a, T> {
+impl<'a, T> PipelineCommandRef<'a, T> {
     /// Binds a Vulkan buffer, image, or acceleration structure resource to the graph associated
     /// with this command.
     ///
@@ -209,7 +209,7 @@ impl<'a, T> PipelineRef<'a, T> {
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{PipelineRef, SubresourceRange, View},
+            cmd_ref::{PipelineCommandRef, SubresourceRange, View},
             deprecated::Info,
             node::Node,
         },
@@ -217,7 +217,7 @@ mod deprecated {
         vk_sync::AccessType,
     };
 
-    impl<'a, T> PipelineRef<'a, T> {
+    impl<'a, T> PipelineCommandRef<'a, T> {
         #[deprecated = "use resource_access function"]
         #[doc(hidden)]
         pub fn access_resource<N>(mut self, node: N, access: AccessType) -> Self
