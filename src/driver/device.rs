@@ -590,7 +590,7 @@ mod test {
 
     #[test]
     pub fn device_info() {
-        Info::default().to_builder().build();
+        Info::default().into_builder().build();
     }
 
     #[test]

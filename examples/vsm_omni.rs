@@ -13,6 +13,7 @@ use {
         sync::Arc,
     },
     tobj::{GPU_LOAD_OPTIONS, load_obj},
+    vk_graph::cmd_ref::LoadOp,
     vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
@@ -204,7 +205,7 @@ fn main() -> anyhow::Result<()> {
                         | vk::ImageUsageFlags::SAMPLED
                         | vk::ImageUsageFlags::STORAGE,
                 )
-                .to_builder()
+                .into_builder()
                 .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE),
             )
             .unwrap();
@@ -244,7 +245,7 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("DEBUG")
                 .bind_pipeline(&debug_pipeline)
-                .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                 .shader_resource_access(
                     0,
                     camera_uniform_buf,
@@ -259,11 +260,18 @@ fn main() -> anyhow::Result<()> {
                 .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
                 .resource_access(cube_mesh_index_buf, AccessType::IndexBuffer)
                 .resource_access(cube_mesh_vertex_buf, AccessType::VertexBuffer)
-                .clear_color(0, frame.swapchain_image)
-                .store_color(0, frame.swapchain_image)
-                .clear_depth_stencil(depth_image)
-                .store_depth_stencil(depth_image)
-                .record_cmd_buf(move |cmd_buf, _| {
+                .depth_stencil_attachment_image(
+                    depth_image,
+                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    StoreOp::Store,
+                )
+                .color_attachment_image(
+                    0,
+                    frame.swapchain_image,
+                    LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+                    StoreOp::Store,
+                )
+                .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
@@ -282,7 +290,7 @@ fn main() -> anyhow::Result<()> {
                     .begin_cmd()
                     .debug_name("Shadow (Using geometry shader)")
                     .bind_pipeline(&shadow_pipeline)
-                    .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
+                    .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                     .shader_resource_access(
                         0,
                         light_uniform_buf,
@@ -292,10 +300,18 @@ fn main() -> anyhow::Result<()> {
                     .resource_access(model_shadow_vertex_buf, AccessType::VertexBuffer)
                     .resource_access(cube_shadow_index_buf, AccessType::IndexBuffer)
                     .resource_access(cube_shadow_vertex_buf, AccessType::VertexBuffer)
-                    .clear_color_value(0, shadow_faces_node, [light.range, light.range, 0.0, 0.0])
-                    .store_color(0, shadow_faces_node)
-                    .clear_depth_stencil(shadow_depth_image)
-                    .record_cmd_buf(move |cmd_buf, _| {
+                    .depth_stencil_attachment_image(
+                        shadow_depth_image,
+                        LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                        StoreOp::DontCare,
+                    )
+                    .color_attachment_image(
+                        0,
+                        shadow_faces_node,
+                        LoadOp::clear_rgba(light.range, light.range, 0.0, 0.0),
+                        StoreOp::Store,
+                    )
+                    .record_cmd_buf(move |cmd_buf| {
                         cmd_buf
                             .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
                             .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
@@ -331,7 +347,7 @@ fn main() -> anyhow::Result<()> {
                         .begin_cmd()
                         .debug_name("Shadow")
                         .bind_pipeline(&shadow_pipeline)
-                        .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
+                        .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                         .shader_resource_access(
                             0,
                             light_uniform_buf,
@@ -341,15 +357,19 @@ fn main() -> anyhow::Result<()> {
                         .resource_access(model_shadow_vertex_buf, AccessType::VertexBuffer)
                         .resource_access(cube_shadow_index_buf, AccessType::IndexBuffer)
                         .resource_access(cube_shadow_vertex_buf, AccessType::VertexBuffer)
-                        .clear_color_value_as(
+                        .depth_stencil_attachment_image(
+                            shadow_depth_image,
+                            LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                            StoreOp::DontCare,
+                        )
+                        .color_attachment_image_view(
                             0,
                             shadow_faces_node,
-                            [light.range, light.range, 0.0, 0.0],
                             shadow_faces_view_info,
+                            LoadOp::clear_rgba(light.range, light.range, 0.0, 0.0),
+                            StoreOp::Store,
                         )
-                        .store_color_as(0, shadow_faces_node, shadow_faces_view_info)
-                        .clear_depth_stencil(shadow_depth_image)
-                        .record_cmd_buf(move |cmd_buf, _| {
+                        .record_cmd_buf(move |cmd_buf| {
                             cmd_buf
                                 .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
                                 .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
@@ -378,7 +398,7 @@ fn main() -> anyhow::Result<()> {
                             AccessType::ComputeShaderReadOther,
                         )
                         .shader_resource_access(1, temp_image, AccessType::ComputeShaderWrite)
-                        .record_cmd_buf(move |cmd_buf, _| {
+                        .record_cmd_buf(move |cmd_buf| {
                             cmd_buf.dispatch(1, CUBEMAP_SIZE, 6);
                         })
                         .end_cmd()
@@ -391,7 +411,7 @@ fn main() -> anyhow::Result<()> {
                             shadow_faces_node,
                             AccessType::ComputeShaderWrite,
                         )
-                        .record_cmd_buf(move |cmd_buf, _| {
+                        .record_cmd_buf(move |cmd_buf| {
                             cmd_buf.dispatch(CUBEMAP_SIZE, 1, 6);
                         });
                 }
@@ -403,7 +423,7 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Mesh objects")
                 .bind_pipeline(&mesh_pipeline)
-                .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                 .shader_resource_access(
                     0,
                     camera_uniform_buf,
@@ -426,10 +446,18 @@ fn main() -> anyhow::Result<()> {
                 .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
                 .resource_access(cube_mesh_index_buf, AccessType::IndexBuffer)
                 .resource_access(cube_mesh_vertex_buf, AccessType::VertexBuffer)
-                .clear_color(0, frame.swapchain_image)
-                .store_color(0, frame.swapchain_image)
-                .clear_depth_stencil(depth_image)
-                .record_cmd_buf(move |cmd_buf, _| {
+                .depth_stencil_attachment_image(
+                    depth_image,
+                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    StoreOp::DontCare,
+                )
+                .color_attachment_image(
+                    0,
+                    frame.swapchain_image,
+                    LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+                    StoreOp::Store,
+                )
+                .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)

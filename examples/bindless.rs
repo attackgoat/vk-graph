@@ -4,6 +4,7 @@ use {
     bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
     std::sync::Arc,
+    vk_graph::cmd_ref::LoadOp,
     vk_graph_prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
     vk_shader_macros::glsl,
@@ -42,11 +43,15 @@ fn main() -> Result<(), WindowError> {
             );
         }
 
-        cmd.clear_color(0, frame.swapchain_image)
-            .store_color(0, frame.swapchain_image)
-            .record_cmd_buf(move |cmd_buf, _| {
-                cmd_buf.draw_indirect(draw_buf_node, 0, 64, 16);
-            });
+        cmd.color_attachment_image(
+            0,
+            frame.swapchain_image,
+            LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+            StoreOp::Store,
+        )
+        .record_cmd_buf(move |cmd_buf| {
+            cmd_buf.draw_indirect(draw_buf_node, 0, 64, 16);
+        });
     })
 }
 

@@ -652,7 +652,7 @@ mod test {
     #[test]
     pub fn ray_trace_pipeline_info() {
         let info = Info::default();
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

@@ -39,6 +39,7 @@ use {
     pak::{Pak, PakBuf},
     std::time::Instant,
     vk_graph::{
+        cmd_ref::{LoadOp, StoreOp},
         driver::{
             ash::vk,
             graphic::{GraphicPipeline, GraphicPipelineInfo},
@@ -310,8 +311,8 @@ fn main() -> anyhow::Result<()> {
                     blank_image,
                     AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .store_color(0, output)
-                .record_cmd_buf(move |cmd_buf, _| {
+                .color_attachment_image(0, output, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .push_constants(0, bytes_of(&push_consts))
                         .draw(6, 1, 0, 0);
@@ -328,8 +329,8 @@ fn main() -> anyhow::Result<()> {
                     output,
                     AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .store_color(0, input)
-                .record_cmd_buf(move |cmd_buf, _| {
+                .color_attachment_image(0, input, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .push_constants(0, bytes_of(&push_consts))
                         .draw(6, 1, 0, 0);

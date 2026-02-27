@@ -6,6 +6,7 @@ use {
     glam::{Mat4, Vec3},
     log::warn,
     std::{mem::size_of, sync::Arc},
+    vk_graph::cmd_ref::LoadOp,
     vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
@@ -14,8 +15,6 @@ use {
 };
 
 type CubeVertex = [[f32; 3]; 3];
-
-const WHITE: ClearColorValue = ClearColorValue([1.0, 1.0, 1.0, 1.0]);
 
 /// Draws a spinning cube with high-contrast edges; hold any key to display the cube in non-MSAA
 /// mode.
@@ -89,7 +88,7 @@ fn main() -> anyhow::Result<()> {
         let cube_vertex_buf = frame.graph.bind_resource(&cube_mesh.vertex_buf);
         let scene_uniform_buf = frame.graph.bind_resource(scene_uniform_buf);
 
-        let mut pass = frame
+        let mut cmd = frame
             .graph
             .begin_cmd()
             .debug_name("cube")
@@ -98,26 +97,26 @@ fn main() -> anyhow::Result<()> {
             } else {
                 &mesh_noaa_pipeline
             })
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
             .resource_access(cube_vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, scene_uniform_buf, AccessType::AnyShaderReadUniformBuffer);
 
         if will_render_msaa {
-            let msaa_color_image = pass.bind_resource(
+            let msaa_color_image = cmd.bind_resource(
                 pool.lease(
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        pass.resource(frame.swapchain_image).info.fmt,
+                        cmd.resource(frame.swapchain_image).info.fmt,
                         vk::ImageUsageFlags::COLOR_ATTACHMENT
                             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     )
-                    .to_builder()
+                    .into_builder()
                     .sample_count(sample_count),
                 )
                 .unwrap(),
             );
-            let msaa_depth_image = pass.bind_resource(
+            let msaa_depth_image = cmd.bind_resource(
                 pool.lease(
                     ImageInfo::image_2d(
                         frame.width,
@@ -126,19 +125,27 @@ fn main() -> anyhow::Result<()> {
                         vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
                             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     )
-                    .to_builder()
+                    .into_builder()
                     .sample_count(sample_count),
                 )
                 .unwrap(),
             );
 
             // Attachments for multisample mode
-            pass = pass
-                .clear_color_value(0, msaa_color_image, WHITE)
-                .clear_depth_stencil(msaa_depth_image)
-                .resolve_color(0, 1, frame.swapchain_image);
+            cmd.set_color_attachment_image(
+                0,
+                msaa_color_image,
+                LoadOp::CLEAR_WHITE_ALPHA_ONE,
+                StoreOp::DontCare,
+            )
+            .set_color_attachment_image_resolve(1, frame.swapchain_image, 0)
+            .set_depth_stencil_attachment_image(
+                msaa_depth_image,
+                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                StoreOp::DontCare,
+            );
         } else {
-            let noaa_depth_image = pass.bind_resource(
+            let noaa_depth_image = cmd.bind_resource(
                 pool.lease(ImageInfo::image_2d(
                     frame.width,
                     frame.height,
@@ -150,13 +157,20 @@ fn main() -> anyhow::Result<()> {
             );
 
             // Attachments for non-multisample mode
-            pass = pass
-                .clear_color_value(0, frame.swapchain_image, WHITE)
-                .clear_depth_stencil(noaa_depth_image)
-                .store_color(0, frame.swapchain_image);
+            cmd.set_color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_WHITE_ALPHA_ONE,
+                StoreOp::Store,
+            )
+            .set_depth_stencil_attachment_image(
+                noaa_depth_image,
+                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                StoreOp::DontCare,
+            );
         }
 
-        pass.record_cmd_buf(move |cmd_buf, _| {
+        cmd.record_cmd_buf(move |cmd_buf| {
             cmd_buf
                 .bind_vertex_buffer(0, cube_vertex_buf, 0)
                 .push_constants(0, bytes_of(&world_transform))

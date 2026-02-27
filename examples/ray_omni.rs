@@ -14,6 +14,7 @@ use {
         sync::Arc,
     },
     tobj::{GPU_LOAD_OPTIONS, load_obj},
+    vk_graph::cmd_ref::LoadOp,
     vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
@@ -102,11 +103,19 @@ fn main() -> anyhow::Result<()> {
                 scene_tlas,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE)
-            .clear_depth_stencil(depth_image)
-            .clear_color_value(0, frame.swapchain_image, [0xff, 0xff, 0xff, 0xff])
-            .store_color(0, frame.swapchain_image)
-            .record_cmd_buf(move |cmd_buf, _| {
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .depth_stencil_attachment_image(
+                depth_image,
+                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                StoreOp::DontCare,
+            )
+            .color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_WHITE_ALPHA_ONE,
+                StoreOp::Store,
+            )
+            .record_cmd_buf(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                     .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
@@ -195,7 +204,7 @@ fn create_blas(
             size.build_size,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
-        .to_builder()
+        .into_builder()
         .alignment(accel_struct_scratch_offset_alignment),
     )?);
     let scratch_addr = graph.resource(scratch_buf).device_address();
@@ -212,7 +221,7 @@ fn create_blas(
 
     pass.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-        .record_cmd_buf(move |cmd_buf, _| {
+        .record_cmd_buf(move |cmd_buf| {
             cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 blas,
                 scratch_addr,
@@ -377,7 +386,7 @@ fn create_tlas(
                 size.build_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             )
-            .to_builder()
+            .into_builder()
             .alignment(accel_struct_scratch_offset_alignment),
         )?,
     );
@@ -392,7 +401,7 @@ fn create_tlas(
         .resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
         .resource_access(tlas, AccessType::AccelerationStructureBuildWrite)
-        .record_cmd_buf(move |cmd_buf, _| {
+        .record_cmd_buf(move |cmd_buf| {
             cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 tlas,
                 scratch_addr,

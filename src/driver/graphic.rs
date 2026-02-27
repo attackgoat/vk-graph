@@ -174,6 +174,7 @@ impl BlendInfoBuilder {
     }
 }
 
+// TODO: This could be simplified (bounds_test controsl min/max etc)
 /// Specifies the [depth bounds tests], [stencil test], and [depth test] pipeline state.
 ///
 /// [depth bounds tests]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
@@ -245,20 +246,7 @@ pub struct DepthStencilInfo {
 
 impl DepthStencilInfo {
     /// A commonly used depth/stencil mode
-    pub const DEPTH_READ: Self = Self {
-        back: StencilMode::IGNORE,
-        bounds_test: true,
-        compare_op: vk::CompareOp::LESS,
-        depth_test: true,
-        depth_write: false,
-        front: StencilMode::IGNORE,
-        min: OrderedFloat(0.0),
-        max: OrderedFloat(1.0),
-        stencil_test: false,
-    };
-
-    /// A commonly used depth/stencil mode
-    pub const DEPTH_WRITE: Self = Self {
+    pub const DEPTH_WRITE_LESS_IGNORE_STENCIL: Self = Self {
         back: StencilMode::IGNORE,
         bounds_test: true,
         compare_op: vk::CompareOp::LESS,
@@ -271,6 +259,8 @@ impl DepthStencilInfo {
     };
 
     /// Specifies a no-depth/no-stencil mode.
+    ///
+    /// This is the default state.
     pub const IGNORE: Self = Self {
         back: StencilMode::IGNORE,
         bounds_test: false,
@@ -865,7 +855,11 @@ pub(crate) struct VertexInputState {
 }
 
 mod deprecated {
-    use crate::driver::graphic::{BlendInfo, BlendInfoBuilder, DepthStencilInfo};
+    use {
+        crate::driver::graphic::{BlendInfo, BlendInfoBuilder, DepthStencilInfo, StencilMode},
+        ash::vk,
+        ordered_float::OrderedFloat,
+    };
 
     impl BlendInfo {
         #[allow(clippy::new_ret_no_self)]
@@ -877,6 +871,34 @@ mod deprecated {
     }
 
     impl DepthStencilInfo {
+        /// A commonly used depth/stencil mode
+        #[deprecated = "use constructor or builder function"]
+        pub const DEPTH_READ: Self = Self {
+            back: StencilMode::IGNORE,
+            bounds_test: true,
+            compare_op: vk::CompareOp::LESS,
+            depth_test: true,
+            depth_write: false,
+            front: StencilMode::IGNORE,
+            min: OrderedFloat(0.0),
+            max: OrderedFloat(1.0),
+            stencil_test: false,
+        };
+
+        /// A commonly used depth/stencil mode
+        #[deprecated = "use DEPTH_WRITE_LESS_IGNORE_STENCIL"]
+        pub const DEPTH_WRITE: Self = Self {
+            back: StencilMode::IGNORE,
+            bounds_test: true,
+            compare_op: vk::CompareOp::LESS,
+            depth_test: true,
+            depth_write: true,
+            front: StencilMode::IGNORE,
+            min: OrderedFloat(0.0),
+            max: OrderedFloat(1.0),
+            stencil_test: false,
+        };
+
         #[allow(clippy::new_ret_no_self)]
         #[deprecated = "use builder function or DepthStencilInfoBuilder"]
         #[doc(hidden)]

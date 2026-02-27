@@ -1,7 +1,6 @@
 use {
-    super::Resources,
     crate::{
-        AnyAccelerationStructureNode,
+        AnyAccelerationStructureNode, Bound, Resource,
         driver::{
             accel_struct::{
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
@@ -14,6 +13,9 @@ use {
     ash::vk,
     std::{cell::RefCell, ops::Deref},
 };
+
+#[cfg(debug_assertions)]
+use crate::Execution;
 
 /// Recording interface for acceleration structure commands.
 ///
@@ -43,12 +45,30 @@ use {
 ///         });
 /// # Ok(()) }
 /// ```
+#[derive(Clone, Copy)]
 pub struct CommandBufferRef<'a> {
-    pub(super) cmd_buf: &'a CommandBuffer,
-    pub(super) resources: Resources<'a>,
+    cmd_buf: &'a CommandBuffer,
+
+    #[cfg(debug_assertions)]
+    exec: &'a Execution,
+
+    resources: &'a [Resource],
 }
 
-impl CommandBufferRef<'_> {
+impl<'a> CommandBufferRef<'a> {
+    pub(crate) fn new(
+        cmd_buf: &'a CommandBuffer,
+        resources: &'a [Resource],
+        #[cfg(debug_assertions)] exec: &'a Execution,
+    ) -> Self {
+        Self {
+            cmd_buf,
+            #[cfg(debug_assertions)]
+            exec,
+            resources,
+        }
+    }
+
     /// Build acceleration structures.
     ///
     /// There is no ordering or synchronization implied between any of the individual acceleration
@@ -71,7 +91,7 @@ impl CommandBufferRef<'_> {
     /// ```no_run
     /// # use ash::vk;
     /// # use vk_graph::cmd_ref::BuildAccelerationStructureInfo;
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_graph::driver::{sync::AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, AccelerationStructureInfo, DeviceOrHostAddress};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
@@ -97,20 +117,20 @@ impl CommandBufferRef<'_> {
     ///         .resource_access(vertex_buf, AccessType::VertexBuffer)
     ///         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
     ///         .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
-    ///         .record_cmd_buf(move |cmd_buf, resources| {
-    ///             let scratch_addr = resources[scratch_buf].device_address();
+    ///         .record_cmd_buf(move |cmd_buf| {
+    ///             let scratch_addr = cmd_buf.resource(scratch_buf).device_address();
     ///             let geom = AccelerationStructureGeometry {
     ///                 max_primitive_count: 64,
     ///                 flags: vk::GeometryFlagsKHR::OPAQUE,
     ///                 geometry: AccelerationStructureGeometryData::Triangles {
     ///                     index_addr: DeviceOrHostAddress::DeviceAddress(
-    ///                         resources[index_buf].device_address()
+    ///                         cmd_buf.resource(index_buf).device_address()
     ///                     ),
     ///                     index_type: vk::IndexType::UINT32,
     ///                     max_vertex: 42,
     ///                     transform_addr: None,
     ///                     vertex_addr: DeviceOrHostAddress::DeviceAddress(
-    ///                         resources[vertex_buf].device_address(),
+    ///                         cmd_buf.resource(vertex_buf).device_address(),
     ///                     ),
     ///                     vertex_format: vk::Format::R32G32B32_SFLOAT,
     ///                     vertex_stride: 12,
@@ -180,7 +200,7 @@ impl CommandBufferRef<'_> {
                             .ty(info.build_data.ty)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(self.resources[info.accel_struct].handle)
+                            .dst_acceleration_structure(self.resource(info.accel_struct).handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -255,7 +275,7 @@ impl CommandBufferRef<'_> {
                             .ty(info.build_data.ty)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                            .dst_acceleration_structure(self.resources[info.accel_struct].handle)
+                            .dst_acceleration_structure(self.resource(info.accel_struct).handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_data.into()),
                     );
@@ -346,12 +366,8 @@ impl CommandBufferRef<'_> {
                             .ty(info.update_data.ty)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .dst_acceleration_structure(
-                                self.resources[info.dst_accel_struct].handle,
-                            )
-                            .src_acceleration_structure(
-                                self.resources[info.src_accel_struct].handle,
-                            )
+                            .dst_acceleration_structure(self.resource(info.dst_accel_struct).handle)
+                            .src_acceleration_structure(self.resource(info.src_accel_struct).handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -426,12 +442,8 @@ impl CommandBufferRef<'_> {
                             .ty(info.update_data.ty)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
-                            .src_acceleration_structure(
-                                self.resources[info.src_accel_struct].handle,
-                            )
-                            .dst_acceleration_structure(
-                                self.resources[info.dst_accel_struct].handle,
-                            )
+                            .src_acceleration_structure(self.resource(info.src_accel_struct).handle)
+                            .dst_acceleration_structure(self.resource(info.dst_accel_struct).handle)
                             .geometries(&tls.geometries[start..end])
                             .scratch_data(info.scratch_addr.into()),
                     );
@@ -458,6 +470,26 @@ impl CommandBufferRef<'_> {
         });
 
         self
+    }
+
+    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
+    /// which the given node represents.
+    pub fn resource<N>(&self, node: N) -> &N::Resource
+    where
+        N: Bound,
+    {
+        // You must have called an access function for this node on this execution before indexing
+        // into the bindings data!
+        //
+        // Why: Code that attempts to access this function is attempting to get access to the Vulkan
+        // resource (buffer, image, or acceleration structure). In order to access any resources the
+        // access type must first be specified so the correct barriers may be added.
+        debug_assert!(
+            self.exec.accesses.contains_key(&node.index()),
+            "unexpected node access: call access, read, or write first"
+        );
+
+        node.borrow(self.resources)
     }
 }
 

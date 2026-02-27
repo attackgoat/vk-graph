@@ -37,7 +37,7 @@ impl Egui {
         let ppl = GraphicPipeline::create(
             device,
             GraphicPipelineInfoBuilder::default()
-                .blend(BlendMode {
+                .blend(BlendInfo {
                     blend_enable: true,
                     src_color_blend_factor: vk::BlendFactor::ONE,
                     dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
@@ -283,14 +283,9 @@ impl Egui {
                         .bind_pipeline(&self.ppl)
                         .resource_access(idx_buf, AccessType::IndexBuffer)
                         .resource_access(vert_buf, AccessType::VertexBuffer)
-                        .shader_resource_access(
-                            (0, 0),
-                            *texture,
-                            AccessType::FragmentShaderReadOther,
-                        )
-                        .load_color(0, target)
-                        .store_color(0, target)
-                        .record_cmd_buf(move |cmd_buf, _| {
+                        .shader_resource_access(0, *texture, AccessType::FragmentShaderReadOther)
+                        .color_attachment_image(0, target, LoadOp::Load, StoreOp::Store)
+                        .record_cmd_buf(move |cmd_buf| {
                             cmd_buf
                                 .bind_index_buffer(idx_buf, 0, vk::IndexType::UINT32)
                                 .bind_vertex_buffer(0, vert_buf, 0)

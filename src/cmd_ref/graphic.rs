@@ -1,25 +1,84 @@
 use {
-    super::{
-        AttachmentIndex, Resources, SubresourceAccess, SubresourceRange, cmd_buf::CommandBufferRef,
-        pipeline::PipelineCommandRef,
-    },
+    super::{AttachmentIndex, cmd_buf::CommandBufferRef, pipeline::PipelineCommandRef},
     crate::{
-        Attachment, ClearColorValue,
+        ClearColorValue,
         driver::{
             graphic::{DepthStencilInfo, GraphicPipeline},
-            image::{
-                ImageInfo, ImageViewInfo, image_subresource_range_contains,
-                image_subresource_range_intersects,
-            },
+            image::ImageViewInfo,
             render_pass::ResolveMode,
         },
-        node::{AnyBufferNode, AnyImageNode, Node},
+        node::{AnyBufferNode, AnyImageNode},
     },
     ash::vk,
     log::trace,
     std::{cell::RefCell, ops::Deref, slice},
-    vk_sync::AccessType,
 };
+
+/// TODO
+#[derive(Clone, Copy, Debug)]
+pub enum LoadOp<T> {
+    /// TODO
+    Clear(T),
+
+    /// TODO
+    DontCare,
+
+    /// TODO
+    Load,
+}
+
+impl LoadOp<ClearColorValue> {
+    /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
+    pub const CLEAR_BLACK_ALPHA_ONE: Self =
+        Self::Clear(ClearColorValue::Float32([0.0, 0.0, 0.0, 1.0]));
+
+    /// A load operation which results in a color attachment filled with zeros.
+    pub const CLEAR_BLACK_ALPHA_ZERO: Self =
+        Self::Clear(ClearColorValue::Float32([0.0, 0.0, 0.0, 0.0]));
+
+    /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
+    pub const CLEAR_WHITE_ALPHA_ONE: Self =
+        Self::Clear(ClearColorValue::Float32([1.0, 1.0, 1.0, 1.0]));
+
+    /// A load operation which results in a color attachment filled with rgba ones and alpha zeros.
+    pub const CLEAR_WHITE_ALPHA_ZERO: Self =
+        Self::Clear(ClearColorValue::Float32([1.0, 1.0, 1.0, 0.0]));
+
+    /// Convenience constructor for clear color values.
+    pub fn clear_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self::Clear(ClearColorValue::Float32([r, g, b, a]))
+    }
+}
+
+impl LoadOp<vk::ClearDepthStencilValue> {
+    /// A load operation which results in a depth attachment filled with ones and stencil filled
+    /// with zeros.
+    pub const CLEAR_ONE_STENCIL_ZERO: Self = Self::Clear(vk::ClearDepthStencilValue {
+        depth: 1.0,
+        stencil: 0,
+    });
+
+    /// A load operation which results in a depth and stencil attachment filled with zeros.
+    pub const CLEAR_ZERO_STENCIL_ZERO: Self = Self::Clear(vk::ClearDepthStencilValue {
+        depth: 0.0,
+        stencil: 0,
+    });
+
+    /// Convenience constructor for clear depth and stencil values.
+    pub fn clear_depth_stencil(depth: f32, stencil: u32) -> Self {
+        Self::Clear(vk::ClearDepthStencilValue { depth, stencil })
+    }
+}
+
+/// TODO
+#[derive(Clone, Copy, Debug)]
+pub enum StoreOp {
+    /// TODO
+    DontCare,
+
+    /// TODO
+    Store,
+}
 
 /// Recording interface for drawing commands.
 ///
@@ -56,15 +115,24 @@ use {
 ///     .debug_name("my draw pass")
 ///     .bind_pipeline(&my_graphic_pipeline)
 ///     .store_color(0, swapchain_image)
-///     .record_cmd_buf(move |cmd_buf, resources| {
+///     .record_cmd_buf(move |cmd_buf| {
 ///         // During this closure we have access to the draw methods!
 ///     });
 /// # Ok(()) }
 /// ```
 pub struct GraphicCommandBufferRef<'a> {
-    pub(super) cmd_buf: CommandBufferRef<'a>,
-    pub(super) pipeline: GraphicPipeline,
+    cmd_buf: CommandBufferRef<'a>,
+    pipeline: GraphicPipeline,
 }
+
+// impl<'a> GraphicCommandBufferRef<'a> {
+//     pub(super) fn new(cmd_buf: CommandBufferRef<'a>,
+//     pipeline: GraphicPipeline,) -> Self {
+//         Self {
+//             cmd_buf,pipeline
+//         }
+//     }
+// }
 
 impl GraphicCommandBufferRef<'_> {
     /// Bind an index buffer to the current pass.
@@ -109,7 +177,7 @@ impl GraphicCommandBufferRef<'_> {
     ///     .store_color(0, swapchain_image)
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
-    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf
     ///             .bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
@@ -125,11 +193,12 @@ impl GraphicCommandBufferRef<'_> {
         index_ty: vk::IndexType,
     ) -> &Self {
         let buffer = buffer.into();
+        let buffer = self.resource(buffer);
 
         unsafe {
             self.cmd_buf.device.cmd_bind_index_buffer(
                 self.cmd_buf.handle,
-                self.resources[buffer].handle,
+                buffer.handle,
                 offset,
                 index_ty,
             );
@@ -148,7 +217,7 @@ impl GraphicCommandBufferRef<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_graph::driver::{sync::AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -175,7 +244,7 @@ impl GraphicCommandBufferRef<'_> {
     ///     .bind_pipeline(&my_graphic_pipeline)
     ///     .store_color(0, swapchain_image)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
-    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///             .draw(42, 1, 0, 0);
@@ -190,12 +259,13 @@ impl GraphicCommandBufferRef<'_> {
         offset: vk::DeviceSize,
     ) -> &Self {
         let buffer = buffer.into();
+        let buffer = self.resource(buffer);
 
         unsafe {
             self.cmd_buf.device.cmd_bind_vertex_buffers(
                 self.cmd_buf.handle,
                 binding,
-                slice::from_ref(&self.resources[buffer].handle),
+                slice::from_ref(&buffer.handle),
                 slice::from_ref(&offset),
             );
         }
@@ -229,8 +299,9 @@ impl GraphicCommandBufferRef<'_> {
 
             for (buffer, offset) in buffer_offsets {
                 let buffer = buffer.into();
+                let buffer = self.resource(buffer);
 
-                buffers.push(self.resources[buffer].handle);
+                buffers.push(buffer.handle);
                 offsets.push(offset);
             }
 
@@ -369,7 +440,7 @@ impl GraphicCommandBufferRef<'_> {
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
     ///     .resource_access(buf_node, AccessType::IndirectBuffer)
-    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf
     ///             .bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
@@ -386,11 +457,12 @@ impl GraphicCommandBufferRef<'_> {
         stride: u32,
     ) -> &Self {
         let buffer = buffer.into();
+        let buffer = self.resource(buffer);
 
         unsafe {
             self.cmd_buf.device.cmd_draw_indexed_indirect(
                 self.cmd_buf.handle,
-                self.resources[buffer].handle,
+                buffer.handle,
                 offset,
                 draw_count,
                 stride,
@@ -423,14 +495,17 @@ impl GraphicCommandBufferRef<'_> {
         stride: u32,
     ) -> &Self {
         let buffer = buffer.into();
+        let buffer = self.resource(buffer);
+
         let count_buf = count_buf.into();
+        let count_buf = self.resource(count_buf);
 
         unsafe {
             self.cmd_buf.device.cmd_draw_indexed_indirect_count(
                 self.cmd_buf.handle,
-                self.resources[buffer].handle,
+                buffer.handle,
                 offset,
-                self.resources[count_buf].handle,
+                count_buf.handle,
                 count_buf_offset,
                 max_draw_count,
                 stride,
@@ -452,11 +527,12 @@ impl GraphicCommandBufferRef<'_> {
         stride: u32,
     ) -> &Self {
         let buffer = buffer.into();
+        let buffer = self.resource(buffer);
 
         unsafe {
             self.cmd_buf.device.cmd_draw_indirect(
                 self.cmd_buf.handle,
-                self.resources[buffer].handle,
+                buffer.handle,
                 offset,
                 draw_count,
                 stride,
@@ -480,14 +556,17 @@ impl GraphicCommandBufferRef<'_> {
         stride: u32,
     ) -> &Self {
         let buffer = buffer.into();
+        let buffer = self.resource(buffer);
+
         let count_buf = count_buf.into();
+        let count_buf = self.resource(count_buf);
 
         unsafe {
             self.cmd_buf.device.cmd_draw_indirect_count(
                 self.cmd_buf.handle,
-                self.resources[buffer].handle,
+                buffer.handle,
                 offset,
-                self.resources[count_buf].handle,
+                count_buf.handle,
                 count_buf_offset,
                 max_draw_count,
                 stride,
@@ -557,7 +636,7 @@ impl GraphicCommandBufferRef<'_> {
     ///     .debug_name("draw a quad")
     ///     .bind_pipeline(&my_graphic_pipeline)
     ///     .store_color(0, swapchain_image)
-    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf
     ///             .push_constants(0, &[42])
     ///             .draw(6, 1, 0, 0);
@@ -631,10 +710,137 @@ impl<'a> Deref for GraphicCommandBufferRef<'a> {
 
 // NOTE: local implementation of type from super module
 impl PipelineCommandRef<'_, GraphicPipeline> {
+    /// TODO
+    pub fn color_attachment_image(
+        mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        load: LoadOp<ClearColorValue>,
+        store: StoreOp,
+    ) -> Self {
+        self.set_color_attachment_image(color_attachment_idx, color_image, load, store);
+        self
+    }
+
+    /// TODO
+    pub fn color_attachment_image_resolve(
+        mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        resolve_attachment_idx: AttachmentIndex,
+    ) -> Self {
+        self.set_color_attachment_image_resolve(
+            color_attachment_idx,
+            color_image,
+            resolve_attachment_idx,
+        );
+        self
+    }
+
+    /// TODO
+    pub fn color_attachment_image_view(
+        mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        color_image_view: impl Into<ImageViewInfo>,
+        load: LoadOp<ClearColorValue>,
+        store: StoreOp,
+    ) -> Self {
+        self.set_color_attachment_image_view(
+            color_attachment_idx,
+            color_image,
+            color_image_view,
+            load,
+            store,
+        );
+        self
+    }
+
+    /// TODO
+    pub fn color_attachment_image_view_resolve(
+        mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        color_image_view: impl Into<ImageViewInfo>,
+        resolve_attachment_idx: AttachmentIndex,
+    ) -> Self {
+        self.set_color_attachment_image_view_resolve(
+            color_attachment_idx,
+            color_image,
+            color_image_view,
+            resolve_attachment_idx,
+        );
+        self
+    }
+
     /// Sets the combined depth and stencil state used by any subsequent command buffer recordings
     /// of the current graph command.
     pub fn depth_stencil(mut self, depth_stencil: impl Into<DepthStencilInfo>) -> Self {
         self.set_depth_stencil(depth_stencil);
+        self
+    }
+
+    /// TODO
+    pub fn depth_stencil_attachment_image(
+        mut self,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        load: LoadOp<vk::ClearDepthStencilValue>,
+        store: StoreOp,
+    ) -> Self {
+        self.set_depth_stencil_attachment_image(depth_stencil_image, load, store);
+        self
+    }
+
+    /// TODO
+    pub fn depth_stencil_attachment_image_resolve(
+        mut self,
+        attachment_idx: AttachmentIndex,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_mode: Option<ResolveMode>,
+        stencil_mode: Option<ResolveMode>,
+    ) -> Self {
+        self.set_depth_stencil_attachment_image_resolve(
+            attachment_idx,
+            depth_stencil_image,
+            depth_mode,
+            stencil_mode,
+        );
+        self
+    }
+
+    /// TODO
+    pub fn depth_stencil_attachment_image_view(
+        mut self,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_stencil_image_view: impl Into<ImageViewInfo>,
+        load: LoadOp<vk::ClearDepthStencilValue>,
+        store: StoreOp,
+    ) -> Self {
+        self.set_depth_stencil_attachment_image_view(
+            depth_stencil_image,
+            depth_stencil_image_view,
+            load,
+            store,
+        );
+        self
+    }
+
+    /// TODO
+    pub fn depth_stencil_attachment_image_view_resolve(
+        mut self,
+        attachment_idx: AttachmentIndex,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_stencil_image_view: impl Into<ImageViewInfo>,
+        depth_mode: Option<ResolveMode>,
+        stencil_mode: Option<ResolveMode>,
+    ) -> Self {
+        self.set_depth_stencil_attachment_image_view_resolve(
+            attachment_idx,
+            depth_stencil_image,
+            depth_stencil_image_view,
+            depth_mode,
+            stencil_mode,
+        );
         self
     }
 
@@ -650,7 +856,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     /// Begin recording a graphics pipeline command buffer.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(GraphicCommandBufferRef<'_>, Resources<'_>) + Send + 'static,
+        func: impl FnOnce(GraphicCommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -664,14 +870,8 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
             .unwrap_graphic()
             .clone();
 
-        self.cmd.push_execute(move |cmd_buf, resources| {
-            func(
-                GraphicCommandBufferRef {
-                    cmd_buf: CommandBufferRef { cmd_buf, resources },
-                    pipeline,
-                },
-                resources,
-            );
+        self.cmd.push_execute(move |cmd_buf| {
+            func(GraphicCommandBufferRef { cmd_buf, pipeline });
         });
 
         self
@@ -693,6 +893,108 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         self
     }
 
+    /// See [color_attachment_image]
+    pub fn set_color_attachment_image(
+        &mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        load: LoadOp<ClearColorValue>,
+        store: StoreOp,
+    ) -> &mut Self {
+        let color_image = color_image.into();
+        let color_image_view = self.resource(color_image).info;
+
+        self.set_color_attachment_image_view(
+            color_attachment_idx,
+            color_image,
+            color_image_view,
+            load,
+            store,
+        );
+
+        self
+    }
+
+    /// See [color_attachment_image_resolve]
+    pub fn set_color_attachment_image_resolve(
+        &mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        resolve_attachment_idx: AttachmentIndex,
+    ) -> &mut Self {
+        let color_image = color_image.into();
+        let color_image_view = self.resource(color_image).info;
+
+        self.set_color_attachment_image_view_resolve(
+            color_attachment_idx,
+            color_image,
+            color_image_view,
+            resolve_attachment_idx,
+        );
+
+        self
+    }
+
+    /// See [color_attachment_image_view]
+    pub fn set_color_attachment_image_view(
+        &mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        color_image_view: impl Into<ImageViewInfo>,
+        load: LoadOp<ClearColorValue>,
+        store: StoreOp,
+    ) -> &mut Self {
+        let color_image = color_image.into();
+        let color_image_view = color_image_view.into();
+
+        #[allow(deprecated)]
+        {
+            match load {
+                LoadOp::Clear(color) => self.set_clear_color_value_as(
+                    color_attachment_idx,
+                    color_image,
+                    color,
+                    color_image_view,
+                ),
+                LoadOp::DontCare => {
+                    self.set_attach_color_as(color_attachment_idx, color_image, color_image_view)
+                }
+                LoadOp::Load => {
+                    self.set_load_color_as(color_attachment_idx, color_image, color_image_view)
+                }
+            };
+
+            if let StoreOp::Store = store {
+                self.set_store_color_as(color_attachment_idx, color_image, color_image_view);
+            }
+        }
+
+        self
+    }
+
+    /// See [color_attachment_image_view_resolve]
+    pub fn set_color_attachment_image_view_resolve(
+        &mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        color_image_view: impl Into<ImageViewInfo>,
+        resolve_attachment_idx: AttachmentIndex,
+    ) -> &mut Self {
+        let color_image = color_image.into();
+        let color_image_view = color_image_view.into();
+
+        #[allow(deprecated)]
+        self.set_attach_color_as(color_attachment_idx, color_image, color_image_view)
+            .set_resolve_color_as(
+                resolve_attachment_idx,
+                color_attachment_idx,
+                color_image,
+                color_image_view,
+            );
+
+        self
+    }
+
     /// See [depth_stencil]
     pub fn set_depth_stencil(&mut self, depth_stencil: impl Into<DepthStencilInfo>) -> &mut Self {
         let depth_stencil = depth_stencil.into();
@@ -702,6 +1004,109 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         assert!(exec.depth_stencil.is_none());
 
         exec.depth_stencil = Some(depth_stencil);
+
+        self
+    }
+
+    /// See [depth_stencil_attachment_image]
+    pub fn set_depth_stencil_attachment_image(
+        &mut self,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        load: LoadOp<vk::ClearDepthStencilValue>,
+        store: StoreOp,
+    ) -> &mut Self {
+        let depth_stencil_image = depth_stencil_image.into();
+        let depth_stencil_image_view = self.resource(depth_stencil_image).info;
+
+        self.set_depth_stencil_attachment_image_view(
+            depth_stencil_image,
+            depth_stencil_image_view,
+            load,
+            store,
+        );
+
+        self
+    }
+
+    /// See [depth_stencil_attachment_image_resolve]
+    pub fn set_depth_stencil_attachment_image_resolve(
+        &mut self,
+        attachment_idx: AttachmentIndex,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_mode: Option<ResolveMode>,
+        stencil_mode: Option<ResolveMode>,
+    ) -> &mut Self {
+        let depth_stencil_image = depth_stencil_image.into();
+        let depth_stencil_image_view = self.resource(depth_stencil_image).info;
+
+        self.set_depth_stencil_attachment_image_view_resolve(
+            attachment_idx,
+            depth_stencil_image,
+            depth_stencil_image_view,
+            depth_mode,
+            stencil_mode,
+        );
+
+        self
+    }
+
+    /// See [depth_stencil_attachment_image_view]
+    pub fn set_depth_stencil_attachment_image_view(
+        &mut self,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_stencil_image_view: impl Into<ImageViewInfo>,
+        load: LoadOp<vk::ClearDepthStencilValue>,
+        store: StoreOp,
+    ) -> &mut Self {
+        let depth_stencil_image = depth_stencil_image.into();
+        let depth_stencil_image_view = depth_stencil_image_view.into();
+
+        #[allow(deprecated)]
+        {
+            match load {
+                LoadOp::Clear(color) => self.set_clear_depth_stencil_value_as(
+                    depth_stencil_image,
+                    color.depth,
+                    color.stencil,
+                    depth_stencil_image_view,
+                ),
+                LoadOp::DontCare => {
+                    self.set_attach_depth_stencil_as(depth_stencil_image, depth_stencil_image_view)
+                }
+                LoadOp::Load => {
+                    self.set_load_depth_stencil_as(depth_stencil_image, depth_stencil_image_view)
+                }
+            };
+
+            if let StoreOp::Store = store {
+                self.set_store_depth_stencil_as(depth_stencil_image, depth_stencil_image_view);
+            }
+        }
+
+        self
+    }
+
+    /// See [depth_stencil_attachment_image_view_resolve]
+    pub fn set_depth_stencil_attachment_image_view_resolve(
+        &mut self,
+        attachment_idx: AttachmentIndex,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_stencil_image_view: impl Into<ImageViewInfo>,
+        depth_mode: Option<ResolveMode>,
+        stencil_mode: Option<ResolveMode>,
+    ) -> &mut Self {
+        let depth_stencil_image = depth_stencil_image.into();
+        let depth_stencil_image_view = depth_stencil_image_view.into();
+
+        #[allow(deprecated)]
+        self.set_attach_depth_stencil_as(depth_stencil_image, depth_stencil_image_view)
+            .set_resolve_depth_stencil_as(
+                attachment_idx,
+                depth_stencil_image,
+                depth_stencil_image_view,
+                depth_mode,
+                stencil_mode,
+            );
 
         self
     }
@@ -730,8 +1135,8 @@ mod deprecated {
         crate::{
             Attachment, ClearColorValue, SubresourceAccess,
             cmd_ref::{
-                AttachmentIndex, Descriptor, PipelineCommandRef, Resources, SubresourceRange, View,
-                ViewInfo, graphic::GraphicCommandBufferRef,
+                AttachmentIndex, Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
+                graphic::GraphicCommandBufferRef,
             },
             driver::{
                 graphic::GraphicPipeline,
@@ -747,9 +1152,9 @@ mod deprecated {
         vk_sync::AccessType,
     };
 
-    // Attachment functions
+    // Attachment functions from previous version
     impl PipelineCommandRef<'_, GraphicPipeline> {
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
         pub fn attach_color(
             self,
@@ -764,7 +1169,7 @@ mod deprecated {
             self.attach_color_as(attachment_idx, image, image_view_info)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
         pub fn attach_color_as(
             mut self,
@@ -772,6 +1177,330 @@ mod deprecated {
             image: impl Into<AnyImageNode>,
             image_view_info: impl Into<ImageViewInfo>,
         ) -> Self {
+            #[allow(deprecated)]
+            self.set_attach_color_as(attachment_idx, image, image_view_info);
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn attach_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
+            let image = image.into();
+            let image_view_info = self.resource(image).info;
+
+            #[allow(deprecated)]
+            self.attach_depth_stencil_as(image, image_view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn attach_depth_stencil_as(
+            mut self,
+            image: impl Into<AnyImageNode>,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_attach_depth_stencil_as(image, image_view_info);
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn clear_color(
+            self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.clear_color_value(attachment_idx, image, [0.0, 0.0, 0.0, 0.0])
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn clear_color_value(
+            self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+            color: impl Into<ClearColorValue>,
+        ) -> Self {
+            let image = image.into();
+            let image_info = self.resource(image).info;
+            let image_view_info: ImageViewInfo = image_info.into();
+
+            #[allow(deprecated)]
+            self.clear_color_value_as(attachment_idx, image, color, image_view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn clear_color_value_as(
+            mut self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+            color: impl Into<ClearColorValue>,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_clear_color_value_as(attachment_idx, image, color, image_view_info);
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn clear_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
+            #[allow(deprecated)]
+            self.clear_depth_stencil_value(image, 1.0, 0)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn clear_depth_stencil_value(
+            self,
+            image: impl Into<AnyImageNode>,
+            depth: f32,
+            stencil: u32,
+        ) -> Self {
+            let image = image.into();
+            let image_info = self.resource(image).info;
+            let image_view_info: ImageViewInfo = image_info.into();
+
+            #[allow(deprecated)]
+            self.clear_depth_stencil_value_as(image, depth, stencil, image_view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn clear_depth_stencil_value_as(
+            mut self,
+            image: impl Into<AnyImageNode>,
+            depth: f32,
+            stencil: u32,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_clear_depth_stencil_value_as(image, depth, stencil, image_view_info);
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn load_color(
+            self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+        ) -> Self {
+            let image = image.into();
+            let image_info = self.resource(image).info;
+
+            // Use the plain node information as the whole view of the node
+            let image_view_info = image_info;
+
+            #[allow(deprecated)]
+            self.load_color_as(attachment_idx, image, image_view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn load_color_as(
+            mut self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_load_color_as(attachment_idx, image, image_view_info);
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn load_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
+            let image = image.into();
+            let image_view_info = self.resource(image).info;
+
+            #[allow(deprecated)]
+            self.load_depth_stencil_as(image, image_view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn load_depth_stencil_as(
+            mut self,
+            image: impl Into<AnyImageNode>,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_load_depth_stencil_as(image, image_view_info);
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn store_color(
+            self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+        ) -> Self {
+            let image = image.into();
+            let image_view_info = self.resource(image).info;
+
+            #[allow(deprecated)]
+            self.store_color_as(attachment_idx, image, image_view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn store_color_as(
+            mut self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_store_color_as(attachment_idx, image, image_view_info);
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn store_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
+            let image = image.into();
+            let image_view_info = self.resource(image).info;
+
+            #[allow(deprecated)]
+            self.store_depth_stencil_as(image, image_view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn store_depth_stencil_as(
+            mut self,
+            image: impl Into<AnyImageNode>,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_store_depth_stencil_as(image, image_view_info);
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn resolve_color(
+            self,
+            src_attachment_idx: AttachmentIndex,
+            dst_attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+        ) -> Self {
+            let image = image.into();
+            let image_view_info = self.resource(image).info;
+
+            #[allow(deprecated)]
+            self.resolve_color_as(
+                src_attachment_idx,
+                dst_attachment_idx,
+                image,
+                image_view_info,
+            )
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn resolve_color_as(
+            mut self,
+            src_attachment_idx: AttachmentIndex,
+            dst_attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_resolve_color_as(
+                src_attachment_idx,
+                dst_attachment_idx,
+                image,
+                image_view_info,
+            );
+
+            self
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn resolve_depth_stencil(
+            self,
+            dst_attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+            depth_mode: Option<ResolveMode>,
+            stencil_mode: Option<ResolveMode>,
+        ) -> Self {
+            let image = image.into();
+            let image_view_info = self.resource(image).info;
+
+            #[allow(deprecated)]
+            self.resolve_depth_stencil_as(
+                dst_attachment_idx,
+                image,
+                image_view_info,
+                depth_mode,
+                stencil_mode,
+            )
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn resolve_depth_stencil_as(
+            mut self,
+            dst_attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+            image_view_info: impl Into<ImageViewInfo>,
+            depth_mode: Option<ResolveMode>,
+            stencil_mode: Option<ResolveMode>,
+        ) -> Self {
+            #[allow(deprecated)]
+            self.set_resolve_depth_stencil_as(
+                dst_attachment_idx,
+                image,
+                image_view_info,
+                depth_mode,
+                stencil_mode,
+            );
+
+            self
+        }
+    }
+
+    // Attachment functions as setters
+    impl PipelineCommandRef<'_, GraphicPipeline> {
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn set_attach_color(
+            &mut self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+        ) -> &mut Self {
+            let image = image.into();
+            let image_info = self.resource(image).info;
+            let image_view_info: ImageViewInfo = image_info.into();
+
+            #[allow(deprecated)]
+            self.set_attach_color_as(attachment_idx, image, image_view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn set_attach_color_as(
+            &mut self,
+            attachment_idx: AttachmentIndex,
+            image: impl Into<AnyImageNode>,
+            image_view_info: impl Into<ImageViewInfo>,
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -863,23 +1592,23 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn attach_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
+        pub fn set_attach_depth_stencil(&mut self, image: impl Into<AnyImageNode>) -> &mut Self {
             let image = image.into();
             let image_view_info = self.resource(image).info;
 
             #[allow(deprecated)]
-            self.attach_depth_stencil_as(image, image_view_info)
+            self.set_attach_depth_stencil_as(image, image_view_info)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn attach_depth_stencil_as(
-            mut self,
+        pub fn set_attach_depth_stencil_as(
+            &mut self,
             image: impl Into<AnyImageNode>,
             image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -966,48 +1695,50 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn clear_color(
-            self,
+        pub fn set_clear_color(
+            &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-        ) -> Self {
+        ) -> &mut Self {
             #[allow(deprecated)]
-            self.clear_color_value(attachment_idx, image, [0.0, 0.0, 0.0, 0.0])
+            self.set_clear_color_value(attachment_idx, image, [0.0, 0.0, 0.0, 0.0])
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn clear_color_value(
-            self,
+        pub fn set_clear_color_value(
+            &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
             color: impl Into<ClearColorValue>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_info = self.resource(image).info;
             let image_view_info: ImageViewInfo = image_info.into();
 
             #[allow(deprecated)]
-            self.clear_color_value_as(attachment_idx, image, color, image_view_info)
+            self.set_clear_color_value_as(attachment_idx, image, color, image_view_info)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn clear_color_value_as(
-            mut self,
+        pub fn set_clear_color_value_as(
+            &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
             color: impl Into<ClearColorValue>,
             image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
             let ImageInfo { sample_count, .. } = self.resource(image).info;
 
             let color = color.into();
+            let color: vk::ClearColorValue = color.into();
+            let color = unsafe { color.float32 };
 
             debug_assert!(
                 !self
@@ -1136,38 +1867,38 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn clear_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
+        pub fn set_clear_depth_stencil(&mut self, image: impl Into<AnyImageNode>) -> &mut Self {
             #[allow(deprecated)]
-            self.clear_depth_stencil_value(image, 1.0, 0)
+            self.set_clear_depth_stencil_value(image, 1.0, 0)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn clear_depth_stencil_value(
-            self,
+        pub fn set_clear_depth_stencil_value(
+            &mut self,
             image: impl Into<AnyImageNode>,
             depth: f32,
             stencil: u32,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_info = self.resource(image).info;
             let image_view_info: ImageViewInfo = image_info.into();
 
             #[allow(deprecated)]
-            self.clear_depth_stencil_value_as(image, depth, stencil, image_view_info)
+            self.set_clear_depth_stencil_value_as(image, depth, stencil, image_view_info)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn clear_depth_stencil_value_as(
-            mut self,
+        pub fn set_clear_depth_stencil_value_as(
+            &mut self,
             image: impl Into<AnyImageNode>,
             depth: f32,
             stencil: u32,
             image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -1331,13 +2062,13 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn load_color(
-            self,
+        pub fn set_load_color(
+            &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_info = self.resource(image).info;
 
@@ -1345,17 +2076,17 @@ mod deprecated {
             let image_view_info = image_info;
 
             #[allow(deprecated)]
-            self.load_color_as(attachment_idx, image, image_view_info)
+            self.set_load_color_as(attachment_idx, image, image_view_info)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn load_color_as(
-            mut self,
+        pub fn set_load_color_as(
+            &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
             image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -1485,23 +2216,23 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn load_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
+        pub fn set_load_depth_stencil(&mut self, image: impl Into<AnyImageNode>) -> &mut Self {
             let image = image.into();
             let image_view_info = self.resource(image).info;
 
             #[allow(deprecated)]
-            self.load_depth_stencil_as(image, image_view_info)
+            self.set_load_depth_stencil_as(image, image_view_info)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn load_depth_stencil_as(
-            mut self,
+        pub fn set_load_depth_stencil_as(
+            &mut self,
             image: impl Into<AnyImageNode>,
             image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -1612,28 +2343,28 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn store_color(
-            self,
+        pub fn set_store_color(
+            &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = self.resource(image).info;
 
             #[allow(deprecated)]
-            self.store_color_as(attachment_idx, image, image_view_info)
+            self.set_store_color_as(attachment_idx, image, image_view_info)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn store_color_as(
-            mut self,
+        pub fn set_store_color_as(
+            &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
             image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -1761,23 +2492,23 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn store_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
+        pub fn set_store_depth_stencil(&mut self, image: impl Into<AnyImageNode>) -> &mut Self {
             let image = image.into();
             let image_view_info = self.resource(image).info;
 
             #[allow(deprecated)]
-            self.store_depth_stencil_as(image, image_view_info)
+            self.set_store_depth_stencil_as(image, image_view_info)
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn store_depth_stencil_as(
-            mut self,
+        pub fn set_store_depth_stencil_as(
+            &mut self,
             image: impl Into<AnyImageNode>,
             image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -1918,19 +2649,19 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn resolve_color(
-            self,
+        pub fn set_resolve_color(
+            &mut self,
             src_attachment_idx: AttachmentIndex,
             dst_attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = self.resource(image).info;
 
             #[allow(deprecated)]
-            self.resolve_color_as(
+            self.set_resolve_color_as(
                 src_attachment_idx,
                 dst_attachment_idx,
                 image,
@@ -1938,15 +2669,15 @@ mod deprecated {
             )
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn resolve_color_as(
-            mut self,
+        pub fn set_resolve_color_as(
+            &mut self,
             src_attachment_idx: AttachmentIndex,
             dst_attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
             image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -2077,20 +2808,20 @@ mod deprecated {
             self
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn resolve_depth_stencil(
-            self,
+        pub fn set_resolve_depth_stencil(
+            &mut self,
             dst_attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
             depth_mode: Option<ResolveMode>,
             stencil_mode: Option<ResolveMode>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = self.resource(image).info;
 
             #[allow(deprecated)]
-            self.resolve_depth_stencil_as(
+            self.set_resolve_depth_stencil_as(
                 dst_attachment_idx,
                 image,
                 image_view_info,
@@ -2099,16 +2830,16 @@ mod deprecated {
             )
         }
 
-        #[deprecated]
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
-        pub fn resolve_depth_stencil_as(
-            mut self,
+        pub fn set_resolve_depth_stencil_as(
+            &mut self,
             dst_attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
             image_view_info: impl Into<ImageViewInfo>,
             depth_mode: Option<ResolveMode>,
             stencil_mode: Option<ResolveMode>,
-        ) -> Self {
+        ) -> &mut Self {
             let image = image.into();
             let image_view_info = image_view_info.into();
             let node_idx = image.index();
@@ -2265,9 +2996,11 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_subpass(
             self,
-            func: impl FnOnce(GraphicCommandBufferRef<'_>, Resources<'_>) + Send + 'static,
+            func: impl FnOnce(GraphicCommandBufferRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd_buf(func)
+            self.record_cmd_buf(|cmd_buf| {
+                func(cmd_buf, ());
+            })
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]

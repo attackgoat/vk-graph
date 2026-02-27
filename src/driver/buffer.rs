@@ -1307,7 +1307,7 @@ mod test {
     #[test]
     pub fn buffer_info() {
         let info = Info::device_mem(0, vk::BufferUsageFlags::empty());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

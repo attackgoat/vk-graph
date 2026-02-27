@@ -5,8 +5,8 @@
 pub use vk_graph::{
     BindGraph, Bound, ClearColorValue, Graph,
     cmd_ref::{
-        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
-        PipelineCommandRef, UpdateAccelerationStructureIndirectInfo,
+        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef, LoadOp,
+        PipelineCommandRef, StoreOp, UpdateAccelerationStructureIndirectInfo,
         UpdateAccelerationStructureInfo,
     },
     driver::{

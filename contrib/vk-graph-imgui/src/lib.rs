@@ -38,7 +38,7 @@ impl ImGui {
         let pipeline = GraphicPipeline::create(
             device,
             GraphicPipelineInfoBuilder::default()
-                .blend(BlendMode::PRE_MULTIPLIED_ALPHA)
+                .blend(BlendInfo::PRE_MULTIPLIED_ALPHA)
                 .cull_mode(vk::CullModeFlags::NONE),
             [
                 Shader::new_vertex(include_glsl!("res/shader/imgui.vert").as_slice()),
@@ -193,9 +193,8 @@ impl ImGui {
                     font_atlas_image,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .clear_color(0, image)
-                .store_color(0, image)
-                .record_cmd_buf(move |cmd_buf, _| {
+                .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store)
+                .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .push_constants(0, &window_width.to_ne_bytes())
                         .push_constants(4, &window_height.to_ne_bytes())

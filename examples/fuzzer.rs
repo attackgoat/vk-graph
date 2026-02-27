@@ -26,7 +26,7 @@ use {
     log::debug,
     rand::{Rng, rng, seq::IndexedRandom},
     std::mem::size_of,
-    vk_graph::cmd_ref::BuildAccelerationStructureInfo,
+    vk_graph::cmd_ref::{BuildAccelerationStructureInfo, LoadOp},
     vk_graph_prelude::*,
     vk_graph_window::{FrameContext, WindowBuilder, WindowError},
     vk_shader_macros::glsl,
@@ -225,7 +225,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
-                .to_builder()
+                .into_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )
             .unwrap(),
@@ -258,7 +258,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
                 tlas_size.build_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             )
-            .to_builder()
+            .into_builder()
             .alignment(accel_struct_scratch_offset_alignment),
         )
         .unwrap(),
@@ -286,9 +286,11 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         .map(|(blas_node, _, _)| *blas_node)
         .collect::<Vec<_>>();
 
-    let mut cmd = cmd.record_cmd_buf(move |cmd_buf, nodes| {
+    let mut cmd = cmd.record_cmd_buf(move |cmd_buf| {
         for (blas_node, scratch_buf, build_data) in blas_nodes {
-            let scratch_addr = nodes[scratch_buf].device_address();
+            let scratch_buf = cmd_buf.resource(scratch_buf);
+            let scratch_addr = scratch_buf.device_address();
+
             cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 blas_node,
                 scratch_addr,
@@ -307,8 +309,10 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             AccessType::AccelerationStructureBufferWrite,
         )
         .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
-        .record_cmd_buf(move |cmd_buf, nodes| {
-            let scratch_addr = nodes[tlas_scratch_buf].device_address();
+        .record_cmd_buf(move |cmd_buf| {
+            let scratch_buf = cmd_buf.resource(tlas_scratch_buf);
+            let scratch_addr = scratch_buf.device_address();
+
             cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 tlas_node,
                 scratch_addr,
@@ -376,7 +380,7 @@ fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderReadOther)
         .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderReadOther)
         .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderReadOther)
-        .record_cmd_buf(|cmd_buf, _| {
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf
                 .push_constants(0, &0f32.to_ne_bytes())
                 .dispatch(64, 64, 1);
@@ -442,7 +446,7 @@ fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderWrite)
         .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderWrite)
         .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderWrite)
-        .record_cmd_buf(|cmd_buf, _| {
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf
                 .push_constants(0, &5u32.to_ne_bytes())
                 .dispatch(64, 64, 1);
@@ -472,7 +476,7 @@ fn record_pipeline_no_op(frame: &mut FrameContext, _: &mut HashPool) {
         .begin_cmd()
         .debug_name("no-op")
         .bind_pipeline(&pipeline)
-        .record_cmd_buf(|cmd_buf, _| {
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.dispatch(1, 1, 1);
         });
 }
@@ -578,9 +582,8 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
             images[4],
             AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
         )
-        .clear_color(0, image)
-        .store_color(0, image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf
                 .push_constants(0, &5u32.to_ne_bytes())
                 .draw(1, 1, 0, 0);
@@ -621,9 +624,8 @@ fn record_graphic_load_store(frame: &mut FrameContext, _: &mut HashPool) {
         .begin_cmd()
         .debug_name("load-store")
         .bind_pipeline(&pipeline)
-        .load_color(0, frame.swapchain_image)
-        .store_color(0, frame.swapchain_image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }
@@ -739,7 +741,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
                 swapchain_format,
                 vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
             )
-            .to_builder()
+            .into_builder()
             .sample_count(sample_count),
         )
         .unwrap(),
@@ -753,7 +755,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
                 vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
                     | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
             )
-            .to_builder()
+            .into_builder()
             .sample_count(sample_count),
         )
         .unwrap(),
@@ -768,7 +770,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .unwrap(),
     );
 
-    let depth_stencil_mode = DepthStencilInfo {
+    let depth_stencil_info = DepthStencilInfo {
         back: StencilMode::IGNORE,
         bounds_test: true,
         compare_op: vk::CompareOp::LESS_OR_EQUAL,
@@ -793,17 +795,26 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .begin_cmd()
         .debug_name("msaa-depth-stencil")
         .bind_pipeline(&pipeline)
-        .depth_stencil(depth_stencil_mode)
-        .clear_color(0, msaa_color_image)
-        .clear_depth_stencil(msaa_depth_stencil_image)
-        .resolve_color(0, 1, frame.swapchain_image)
-        .resolve_depth_stencil(
+        .depth_stencil(depth_stencil_info)
+        .color_attachment_image(
+            0,
+            msaa_color_image,
+            LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+            StoreOp::DontCare,
+        )
+        .color_attachment_image_resolve(1, frame.swapchain_image, 0)
+        .depth_stencil_attachment_image(
+            msaa_depth_stencil_image,
+            LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+            StoreOp::DontCare,
+        )
+        .depth_stencil_attachment_image_resolve(
             2,
             depth_stencil_image,
             Some(depth_resolve_mode),
             Some(ResolveMode::SampleZero),
         )
-        .record_cmd_buf(|cmd_buf, _| {
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(3, 1, 0, 0);
         });
 }
@@ -850,8 +861,8 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .store_color(0, image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -884,9 +895,8 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .load_color(0, image)
-        .store_color(0, image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }
@@ -941,8 +951,8 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .store_color(0, image_0)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image_0, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -977,10 +987,9 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .load_color(0, image_0)
-        .store_color(0, image_0)
-        .store_color(1, image_1)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image_0, LoadOp::Load, StoreOp::Store)
+        .color_attachment_image(1, image_1, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -1013,9 +1022,8 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .clear_color(0, image_0)
-        .store_color(0, image_0)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image_0, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }
@@ -1071,9 +1079,9 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .store_color(0, color_image)
-        .store_depth_stencil(depth_image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, color_image, LoadOp::DontCare, StoreOp::Store)
+        .depth_stencil_attachment_image(depth_image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -1104,9 +1112,8 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .load_depth_stencil(depth_image)
-        .store_depth_stencil(depth_image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }
@@ -1160,8 +1167,8 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .store_depth_stencil(depth_image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .depth_stencil_attachment_image(depth_image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -1194,10 +1201,9 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .store_color(0, color_image)
-        .load_depth_stencil(depth_image)
-        .store_depth_stencil(depth_image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, color_image, LoadOp::DontCare, StoreOp::Store)
+        .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }
@@ -1241,8 +1247,8 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .store_depth_stencil(depth_image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .depth_stencil_attachment_image(depth_image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -1273,9 +1279,8 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
             )
             .as_slice(),
         ))
-        .load_depth_stencil(depth_image)
-        .store_depth_stencil(depth_image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }
@@ -1347,9 +1352,8 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
         .begin_cmd()
         .debug_name("a")
         .bind_pipeline(&pipeline_a)
-        .clear_color(0, image)
-        .store_color(0, image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -1357,8 +1361,8 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
         .begin_cmd()
         .debug_name("b")
         .bind_pipeline(&pipeline_b)
-        .store_color(0, image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }
@@ -1407,8 +1411,8 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
         .begin_cmd()
         .debug_name("c")
         .bind_pipeline(&pipeline)
-        .store_color(0, image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -1416,8 +1420,8 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
         .begin_cmd()
         .debug_name("d")
         .bind_pipeline(&pipeline)
-        .store_color(0, image)
-        .record_cmd_buf(|cmd_buf, _| {
+        .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }
@@ -1483,14 +1487,18 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
         .begin_cmd()
         .debug_name("a")
         .bind_pipeline(&pipeline)
-        .clear_color(0, frame.swapchain_image)
-        .store_color(0, frame.swapchain_image)
+        .color_attachment_image(
+            0,
+            frame.swapchain_image,
+            LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+            StoreOp::Store,
+        )
         .shader_resource_access(
             0,
             images[0],
             AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
         )
-        .record_cmd_buf(|cmd_buf, _| {
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
     frame
@@ -1498,14 +1506,13 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
         .begin_cmd()
         .debug_name("b")
         .bind_pipeline(&pipeline)
-        .load_color(0, frame.swapchain_image)
-        .store_color(0, frame.swapchain_image)
+        .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
         .shader_resource_access(
             0,
             images[1],
             AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
         )
-        .record_cmd_buf(|cmd_buf, _| {
+        .record_cmd_buf(|cmd_buf| {
             cmd_buf.draw(1, 1, 0, 0);
         });
 }

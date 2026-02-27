@@ -12,7 +12,10 @@ pub use self::{
         BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandBufferRef,
         UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
+    compute::ComputeCommandBufferRef,
+    graphic::{GraphicCommandBufferRef, LoadOp, StoreOp},
     pipeline::PipelineCommandRef,
+    ray_trace::RayTraceCommandBufferRef,
 };
 
 use {
@@ -24,13 +27,11 @@ use {
         SwapchainImageNode,
     },
     crate::driver::{
-        accel_struct::{AccelerationStructure, AccelerationStructureRange},
-        buffer::{Buffer, BufferSubresourceRange},
-        cmd_buf::CommandBuffer,
-        image::{Image, ImageViewInfo},
+        accel_struct::AccelerationStructureRange, buffer::BufferSubresourceRange,
+        image::ImageViewInfo,
     },
     ash::vk,
-    std::ops::{Index, Range},
+    std::ops::Range,
     vk_sync::AccessType,
 };
 
@@ -114,7 +115,7 @@ impl<'a> CommandRef<'a> {
         self.graph
     }
 
-    fn push_execute(&mut self, func: impl FnOnce(&CommandBuffer, Resources<'_>) + Send + 'static) {
+    fn push_execute(&mut self, func: impl FnOnce(CommandBufferRef) + Send + 'static) {
         let cmd = self.cmd_mut();
         let exec = {
             let last_exec = cmd.execs.last_mut().unwrap();
@@ -162,10 +163,10 @@ impl<'a> CommandRef<'a> {
     /// code and interfaces.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(CommandBufferRef<'_>, Resources<'_>) + Send + 'static,
+        func: impl FnOnce(CommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
-        self.push_execute(move |cmd_buf, resources| {
-            func(CommandBufferRef { cmd_buf, resources }, resources);
+        self.push_execute(move |cmd_buf| {
+            func(cmd_buf);
         });
 
         self
@@ -315,140 +316,6 @@ impl From<(BindingIndex, [BindingOffset; 1])> for Descriptor {
 impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor {
     fn from(tuple: (DescriptorSetIndex, BindingIndex, [BindingOffset; 1])) -> Self {
         Self::ArrayBinding(tuple.0, tuple.1, tuple.2[0])
-    }
-}
-
-/// An indexable structure will provides access to Vulkan resources inside a command closure.
-///
-/// This type is available while recording commands in the following closures:
-///
-/// - [`PassRef::record_accel_struct`] for building and updating acceleration structures
-/// - [`PassRef::record_cmd_buf`] for general command streams
-/// - [`PipelineCommandRef::record_pipeline`] for dispatched compute operations
-/// - [`PipelineCommandRef::record_pipeline`] for raster drawing operations, such as triangle streams
-/// - [`PipelineCommandRef::record_pipeline`] for ray-traced operations
-///
-/// # Examples
-///
-/// Basic usage:
-///
-/// ```no_run
-/// # use std::sync::Arc;
-/// # use ash::vk;
-/// # use vk_graph::driver::DriverError;
-/// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::driver::image::{Image, ImageInfo};
-/// # use vk_graph::Graph;
-/// # use vk_graph::node::ImageNode;
-/// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
-/// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
-/// # let image = Image::create(&device, info)?;
-/// # let mut my_graph = Graph::default();
-/// # let my_image_node = my_graph.bind_resource(image);
-/// my_graph
-///     .begin_cmd()
-///     .debug_name("custom vulkan commands")
-///     .record_cmd_buf(move |cmd_buf, resources| {
-///         let my_image: &Image = &resources[my_image_node];
-///
-///         assert_ne!(my_image.handle, vk::Image::null());
-///         assert_eq!(my_image.info.width, 32);
-///     });
-/// # Ok(()) }
-/// ```
-#[derive(Clone, Copy, Debug)]
-pub struct Resources<'a> {
-    #[cfg(debug_assertions)]
-    exec: &'a Execution,
-
-    resources: &'a [Resource],
-}
-
-impl<'a> Resources<'a> {
-    pub(super) fn new(
-        resources: &'a [Resource],
-        #[cfg(debug_assertions)] exec: &'a Execution,
-    ) -> Self {
-        Self {
-            #[cfg(debug_assertions)]
-            exec,
-            resources,
-        }
-    }
-
-    // TODO...
-    fn resource(&self, node_idx: usize) -> &Resource {
-        // You must have called read or write for this node on this execution before indexing
-        // into the bindings data!
-        //
-        // Why: Code that attempts to access this function is attempting to get access to the Vulkan
-        // resource (buffer, image, or acceleration structure). In order to access any resources the
-        // access type must first be specified so the correct barriers may be added.
-        debug_assert!(
-            self.exec.accesses.contains_key(&node_idx),
-            "unexpected node access: call access, read, or write first"
-        );
-
-        &self.resources[node_idx]
-    }
-}
-
-macro_rules! index {
-    ($name:ident, $handle:ident) => {
-        paste::paste! {
-            impl<'a> Index<[<$name Node>]> for Resources<'a>
-            {
-                type Output = $handle;
-
-                fn index(&self, node: [<$name Node>]) -> &Self::Output {
-                    &*self.resource(node.idx).[<as_ $name:snake>]().unwrap()
-                }
-            }
-        }
-    };
-}
-
-// Allow indexing the Nodes data during command execution:
-// (This gets you access to the driver images or other resources)
-index!(AccelerationStructure, AccelerationStructure);
-index!(AccelerationStructureLease, AccelerationStructure);
-index!(Buffer, Buffer);
-index!(BufferLease, Buffer);
-index!(Image, Image);
-index!(ImageLease, Image);
-index!(SwapchainImage, Image);
-
-impl Index<AnyAccelerationStructureNode> for Resources<'_> {
-    type Output = AccelerationStructure;
-
-    fn index(&self, node: AnyAccelerationStructureNode) -> &Self::Output {
-        let node_idx = node.index();
-        let resource = self.resource(node_idx);
-
-        resource.as_driver_accel_struct().unwrap()
-    }
-}
-
-impl Index<AnyBufferNode> for Resources<'_> {
-    type Output = Buffer;
-
-    fn index(&self, node: AnyBufferNode) -> &Self::Output {
-        let node_idx = node.index();
-        let resource = self.resource(node_idx);
-
-        resource.as_driver_buffer().unwrap()
-    }
-}
-
-impl Index<AnyImageNode> for Resources<'_> {
-    type Output = Image;
-
-    fn index(&self, node: AnyImageNode) -> &Self::Output {
-        let node_idx = node.index();
-        let resource = self.resource(node_idx);
-
-        resource.as_driver_image().unwrap()
     }
 }
 
@@ -669,7 +536,7 @@ impl From<Range<vk::DeviceSize>> for ViewInfo {
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{CommandBufferRef, CommandRef, Resources, SubresourceRange, View},
+            cmd_ref::{CommandBufferRef, CommandRef, SubresourceRange, View},
             deprecated::Info,
             node::Node,
         },
@@ -738,10 +605,10 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_accel_struct(
             mut self,
-            func: impl FnOnce(CommandBufferRef<'_>, Resources<'_>) + Send + 'static,
+            func: impl FnOnce(CommandBufferRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.push_execute(move |cmd_buf, resources| {
-                func(CommandBufferRef { cmd_buf, resources }, resources);
+            self.push_execute(|cmd_buf| {
+                func(cmd_buf, ());
             });
 
             self

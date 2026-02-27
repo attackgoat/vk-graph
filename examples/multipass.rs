@@ -5,6 +5,7 @@ use {
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3},
     std::sync::Arc,
+    vk_graph::{cmd_ref::LoadOp, driver::graphic::DepthStencilInfo},
     vk_graph_prelude::*,
     vk_graph_window::WindowBuilder,
     vk_shader_macros::glsl,
@@ -83,7 +84,7 @@ fn main() -> anyhow::Result<()> {
         let light_buf = bind_light_buf(frame.graph, &mut pool);
         let push_const_data = write_push_consts(obj_pos, material);
 
-        let mut write = DepthStencilInfo::DEPTH_WRITE;
+        let mut write = DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL;
 
         // Depth Prepass
         frame
@@ -99,9 +100,12 @@ fn main() -> anyhow::Result<()> {
             )
             .resource_access(index_buf, AccessType::IndexBuffer)
             .resource_access(vertex_buf, AccessType::VertexBuffer)
-            .clear_depth_stencil(depth_stencil)
-            .store_depth_stencil(depth_stencil)
-            .record_cmd_buf(move |cmd_buf, _| {
+            .depth_stencil_attachment_image(
+                depth_stencil,
+                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                StoreOp::Store,
+            )
+            .record_cmd_buf(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)
@@ -139,10 +143,9 @@ fn main() -> anyhow::Result<()> {
             )
             .resource_access(index_buf, AccessType::IndexBuffer)
             .resource_access(vertex_buf, AccessType::VertexBuffer)
-            .load_depth_stencil(depth_stencil)
-            .store_depth_stencil(depth_stencil)
-            .store_color(0, frame.swapchain_image)
-            .record_cmd_buf(move |cmd_buf, _| {
+            .depth_stencil_attachment_image(depth_stencil, LoadOp::Load, StoreOp::Store)
+            .color_attachment_image(0, frame.swapchain_image, LoadOp::DontCare, StoreOp::Store)
+            .record_cmd_buf(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)
@@ -164,10 +167,9 @@ fn main() -> anyhow::Result<()> {
             .debug_name("fill background")
             .bind_pipeline(&fill_background)
             .depth_stencil(read)
-            .load_depth_stencil(depth_stencil)
-            .load_color(0, frame.swapchain_image)
-            .store_color(0, frame.swapchain_image)
-            .record_cmd_buf(move |cmd_buf, _| {
+            .depth_stencil_attachment_image(depth_stencil, LoadOp::Load, StoreOp::DontCare)
+            .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
+            .record_cmd_buf(move |cmd_buf| {
                 cmd_buf.draw(6, 1, 0, 0);
             });
     })?;

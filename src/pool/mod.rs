@@ -419,7 +419,7 @@ mod test {
     #[test]
     pub fn pool_info() {
         let info = Info::default();
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

@@ -956,7 +956,7 @@ impl ImageInfoBuilder {
 
     /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
     pub fn into_image_view(self) -> ImageViewInfoBuilder {
-        self.build().into_image_view().to_builder()
+        self.build().into_image_view().into_builder()
     }
 }
 
@@ -2082,7 +2082,7 @@ mod test {
     #[test]
     pub fn image_info_cube() {
         let info = ImageInfo::cube(42, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2106,7 +2106,7 @@ mod test {
     #[test]
     pub fn image_info_image_1d() {
         let info = ImageInfo::image_1d(42, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2129,7 +2129,7 @@ mod test {
     pub fn image_info_image_2d() {
         let info =
             ImageInfo::image_2d(42, 84, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2158,7 +2158,7 @@ mod test {
             vk::Format::default(),
             vk::ImageUsageFlags::empty(),
         );
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2193,7 +2193,7 @@ mod test {
             vk::Format::R32_SFLOAT,
             vk::ImageUsageFlags::empty(),
         );
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2266,7 +2266,7 @@ mod test {
         mip_level_count: u32,
     ) -> ImageInfo {
         ImageInfo::image_2d(1, 1, fmt, vk::ImageUsageFlags::empty())
-            .to_builder()
+            .into_builder()
             .array_layer_count(array_layer_count)
             .mip_level_count(mip_level_count)
             .build()
@@ -2340,7 +2340,7 @@ mod test {
     #[test]
     pub fn image_view_info() {
         let info = ImageViewInfo::new(vk::Format::default(), vk::ImageViewType::TYPE_1D);
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

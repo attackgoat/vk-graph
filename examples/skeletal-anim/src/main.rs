@@ -17,11 +17,12 @@ use {
         time::{Duration, Instant},
     },
     vk_graph::{
+        cmd_ref::{LoadOp, StoreOp},
         driver::{
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilMode, GraphicPipeline, GraphicPipelineInfoBuilder},
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfoBuilder},
             image::{Image, ImageInfo},
             shader::Shader,
             sync::AccessType,
@@ -129,7 +130,7 @@ fn main() -> Result<(), WindowError> {
             .begin_cmd()
             .debug_name("🦴")
             .bind_pipeline(&pipeline)
-            .depth_stencil(DepthStencilMode::DEPTH_WRITE)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
             .resource_access(index_buf, AccessType::IndexBuffer)
             .resource_access(vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
@@ -139,10 +140,18 @@ fn main() -> Result<(), WindowError> {
                 texture,
                 AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
             )
-            .clear_color(0, frame.swapchain_image)
-            .store_color(0, frame.swapchain_image)
-            .clear_depth_stencil(depth_image)
-            .record_cmd_buf(move |cmd_buf, _| {
+            .color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+                StoreOp::Store,
+            )
+            .depth_stencil_attachment_image(
+                depth_image,
+                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                StoreOp::DontCare,
+            )
+            .record_cmd_buf(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)

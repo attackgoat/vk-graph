@@ -573,7 +573,7 @@ impl SamplerInfo {
     #[deprecated = "Use SamplerInfo::default()"]
     #[doc(hidden)]
     pub fn new() -> SamplerInfoBuilder {
-        Self::default().to_builder()
+        Self::default().into_builder()
     }
 
     /// Converts a `SamplerInfo` into a `SamplerInfoBuilder`.
@@ -1554,7 +1554,7 @@ mod test {
     #[test]
     pub fn sampler_info() {
         let info = Info::default();
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

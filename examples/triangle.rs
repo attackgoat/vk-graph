@@ -4,6 +4,7 @@ use {
     bytemuck::cast_slice,
     clap::Parser,
     std::sync::Arc,
+    vk_graph::cmd_ref::LoadOp,
     vk_graph_prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
     vk_shader_macros::glsl,
@@ -89,9 +90,13 @@ fn main() -> Result<(), WindowError> {
             .bind_pipeline(&triangle_pipeline)
             .resource_access(index_node, AccessType::IndexBuffer)
             .resource_access(vertex_node, AccessType::VertexBuffer)
-            .clear_color(0, frame.swapchain_image)
-            .store_color(0, frame.swapchain_image)
-            .record_cmd_buf(move |cmd_buf, _| {
+            .color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+                StoreOp::Store,
+            )
+            .record_cmd_buf(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(index_node, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_node, 0)

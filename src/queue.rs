@@ -1,10 +1,11 @@
 use {
     super::{
         Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
-        cmd_ref::{Resources, SubresourceAccess, SubresourceRange},
+        cmd_ref::{SubresourceAccess, SubresourceRange},
     },
     crate::{
         Bound,
+        cmd_ref::CommandBufferRef,
         driver::{
             AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DescriptorSet, DriverError,
             FramebufferAttachmentImageInfo, FramebufferInfo, SubpassDependency, SubpassInfo,
@@ -441,7 +442,7 @@ impl Queue {
                     {
                         clear_values[*attachment_idx as usize] = vk::ClearValue {
                             color: vk::ClearColorValue {
-                                float32: clear_value.0,
+                                float32: *clear_value,
                             },
                         };
 
@@ -2476,14 +2477,12 @@ impl Queue {
                     profiling::scope!("Execute callback");
 
                     let exec_func = exec.func.take().unwrap().0;
-                    exec_func(
+                    exec_func(CommandBufferRef::new(
                         cmd_buf,
-                        Resources::new(
-                            &self.graph.resources,
-                            #[cfg(debug_assertions)]
-                            exec,
-                        ),
-                    );
+                        &self.graph.resources,
+                        #[cfg(debug_assertions)]
+                        exec,
+                    ));
                 }
             }
 
@@ -3152,7 +3151,7 @@ impl Queue {
                             let image = image_binding.as_driver_image().unwrap();
                             let image_view_info = attachment
                                 .image_view_info(image.info)
-                                .to_builder()
+                                .into_builder()
                                 .array_layer_count(image_range.layer_count)
                                 .base_array_layer(image_range.base_array_layer)
                                 .base_mip_level(image_range.base_mip_level)

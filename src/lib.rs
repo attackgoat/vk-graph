@@ -218,7 +218,8 @@ Example:
 ```no_run
 # use std::sync::Arc;
 # use ash::vk;
-# use vk_graph::driver::{AccessType, DriverError};
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::sync::AccessType;
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
@@ -238,21 +239,21 @@ let image: ImageNode = graph.bind_resource(image);
 graph
     .begin_cmd()
     .debug_name("Do some raw Vulkan or interop with another Vulkan library")
-    .record_cmd_buf(|cmd_buf, nodes| {
+    .record_cmd_buf(|cmd_buf| {
         // I always run first!
     })
     .resource_access(buffer, AccessType::HostRead)
     .resource_access(image, AccessType::HostWrite)
-    .record_cmd_buf(move |cmd_buf, nodes| {
-        // Raw ash types are available
+    .record_cmd_buf(move |cmd_buf| {
+        // cmd_buf allows you to borrow the Vulkan resources
+        let buffer: vk::Buffer = cmd_buf.resource(buffer).handle;
+        let image: vk::Image = cmd_buf.resource(image).handle;
+
+        // Raw ash types are also available
         let device: &ash::Device = &cmd_buf.device;
         let cmd_buf: vk::CommandBuffer = cmd_buf.handle;
 
-        // nodes is a magical object you can retrieve the Vulkan resource from
-        let buffer: vk::Buffer = nodes[buffer].handle;
-        let image: vk::Image = nodes[image].handle;
-
-        // You are free to READ vk_buffer and WRITE vk_image!
+        // You are free to READ buffer and WRITE image!
     });
 # Ok(()) }
 ```
@@ -279,7 +280,7 @@ graph
     .begin_cmd()
     .debug_name("My compute pass")
     .bind_pipeline(&my_compute_pipeline)
-    .record_cmd_buf(|cmd_buf, _| {
+    .record_cmd_buf(|cmd_buf| {
         cmd_buf.push_constants(0, &42u32.to_ne_bytes())
                .dispatch(128, 1, 1);
     });
@@ -358,6 +359,8 @@ pub mod pool;
 mod bind;
 mod queue;
 
+use crate::cmd_ref::CommandBufferRef;
+
 pub use self::{
     bind::{BindGraph, Bound, Resource},
     queue::Queue,
@@ -365,9 +368,7 @@ pub use self::{
 
 use {
     self::{
-        cmd_ref::{
-            AttachmentIndex, CommandRef, Descriptor, Resources, SubresourceAccess, ViewInfo,
-        },
+        cmd_ref::{AttachmentIndex, CommandRef, Descriptor, SubresourceAccess, ViewInfo},
         node::Node,
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
@@ -377,7 +378,6 @@ use {
     },
     crate::driver::{
         DescriptorBindingMap,
-        cmd_buf::CommandBuffer,
         compute::ComputePipeline,
         format_aspect_mask, format_texel_block_extent, format_texel_block_size,
         graphic::{DepthStencilInfo, GraphicPipeline},
@@ -397,7 +397,7 @@ use {
     vk_sync::AccessType,
 };
 
-type ExecFn = Box<dyn FnOnce(&CommandBuffer, Resources<'_>) + Send>;
+type ExecFn = Box<dyn FnOnce(CommandBufferRef) + Send>;
 type NodeIndex = usize;
 
 #[derive(Clone, Copy, Debug)]
@@ -449,7 +449,7 @@ impl Attachment {
 
     fn image_view_info(self, image_info: ImageInfo) -> ImageViewInfo {
         image_info
-            .to_builder()
+            .into_builder()
             .array_layer_count(self.array_layer_count)
             .mip_level_count(self.mip_level_count)
             .fmt(self.format)
@@ -461,37 +461,67 @@ impl Attachment {
     }
 }
 
-/// Specifies a color attachment clear value which can be used to initliaze an image.
+/// TODO
 #[derive(Clone, Copy, Debug)]
-pub struct ClearColorValue(pub [f32; 4]);
+pub enum ClearColorValue {
+    /// Value as [f32].
+    Float32([f32; 4]),
 
-impl From<[f32; 3]> for ClearColorValue {
-    fn from(color: [f32; 3]) -> Self {
-        [color[0], color[1], color[2], 1.0].into()
-    }
+    /// Value as [i32].
+    Int32([i32; 4]),
+
+    /// Value as [u32].
+    Uint32([u32; 4]),
 }
 
 impl From<[f32; 4]> for ClearColorValue {
-    fn from(color: [f32; 4]) -> Self {
-        Self(color)
+    fn from(float32: [f32; 4]) -> Self {
+        Self::Float32(float32)
     }
 }
 
-impl From<[u8; 3]> for ClearColorValue {
-    fn from(color: [u8; 3]) -> Self {
-        [color[0], color[1], color[2], u8::MAX].into()
+impl From<[f32; 3]> for ClearColorValue {
+    fn from(float32: [f32; 3]) -> Self {
+        Self::from([float32[0], float32[1], float32[2], 1.0])
+    }
+}
+
+impl From<[i32; 4]> for ClearColorValue {
+    fn from(int32: [i32; 4]) -> Self {
+        Self::Int32(int32)
     }
 }
 
 impl From<[u8; 4]> for ClearColorValue {
-    fn from(color: [u8; 4]) -> Self {
-        [
-            color[0] as f32 / u8::MAX as f32,
-            color[1] as f32 / u8::MAX as f32,
-            color[2] as f32 / u8::MAX as f32,
-            color[3] as f32 / u8::MAX as f32,
-        ]
-        .into()
+    fn from(uint8: [u8; 4]) -> Self {
+        Self::from([
+            uint8[0] as f32 / u8::MAX as f32,
+            uint8[1] as f32 / u8::MAX as f32,
+            uint8[2] as f32 / u8::MAX as f32,
+            uint8[3] as f32 / u8::MAX as f32,
+        ])
+    }
+}
+
+impl From<[u8; 3]> for ClearColorValue {
+    fn from(uint8: [u8; 3]) -> Self {
+        Self::from([uint8[0], uint8[1], uint8[2], u8::MAX])
+    }
+}
+
+impl From<[u32; 4]> for ClearColorValue {
+    fn from(uint32: [u32; 4]) -> Self {
+        Self::Uint32(uint32)
+    }
+}
+
+impl From<ClearColorValue> for vk::ClearColorValue {
+    fn from(value: ClearColorValue) -> Self {
+        match value {
+            ClearColorValue::Float32(float32) => Self { float32 },
+            ClearColorValue::Int32(int32) => Self { int32 },
+            ClearColorValue::Uint32(uint32) => Self { uint32 },
+        }
     }
 }
 
@@ -506,7 +536,7 @@ struct Execution {
     view_mask: u32,
 
     color_attachments: HashMap<AttachmentIndex, Attachment>,
-    color_clears: HashMap<AttachmentIndex, (Attachment, ClearColorValue)>,
+    color_clears: HashMap<AttachmentIndex, (Attachment, [f32; 4])>,
     color_loads: HashMap<AttachmentIndex, Attachment>,
     color_resolves: HashMap<AttachmentIndex, (Attachment, AttachmentIndex)>,
     color_stores: HashMap<AttachmentIndex, Attachment>,
@@ -643,6 +673,11 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Constructs a default `Graph`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Allocates and begins writing a new command.
     pub fn begin_cmd(&mut self) -> CommandRef<'_> {
         CommandRef::new(self)
@@ -731,9 +766,9 @@ impl Graph {
             cmd.set_subresource_access(dst, dst_region, AccessType::TransferWrite);
         }
 
-        cmd.record_cmd_buf(move |cmd_buf, nodes| {
-            let src_image = nodes[src].handle;
-            let dst_image = nodes[dst].handle;
+        cmd.record_cmd_buf(move |cmd_buf| {
+            let src_image = cmd_buf.resource(src).handle;
+            let dst_image = cmd_buf.resource(dst).handle;
 
             unsafe {
                 cmd_buf.device.cmd_blit_image(
@@ -757,23 +792,25 @@ impl Graph {
         image: impl Into<AnyImageNode>,
         color: impl Into<ClearColorValue>,
     ) -> &mut Self {
-        let color = vk::ClearColorValue {
-            float32: color.into().0,
-        };
+        let color = color.into().into();
         let image = image.into();
         let image_view = self.resource(image).info.into();
 
         self.begin_cmd()
             .debug_name("clear color")
             .subresource_access(image, image_view, AccessType::TransferWrite)
-            .record_cmd_buf(move |cmd_buf, nodes| unsafe {
-                cmd_buf.device.cmd_clear_color_image(
-                    cmd_buf.handle,
-                    nodes[image].handle,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &color,
-                    &[image_view],
-                );
+            .record_cmd_buf(move |cmd_buf| {
+                let image = cmd_buf.resource(image);
+
+                unsafe {
+                    cmd_buf.device.cmd_clear_color_image(
+                        cmd_buf.handle,
+                        image.handle,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &color,
+                        &[image_view],
+                    );
+                }
             })
             .end_cmd()
     }
@@ -792,14 +829,18 @@ impl Graph {
         self.begin_cmd()
             .debug_name("clear depth/stencil")
             .subresource_access(image, image_view, AccessType::TransferWrite)
-            .record_cmd_buf(move |cmd_buf, nodes| unsafe {
-                cmd_buf.device.cmd_clear_depth_stencil_image(
-                    cmd_buf.handle,
-                    nodes[image].handle,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &vk::ClearDepthStencilValue { depth, stencil },
-                    &[image_view],
-                );
+            .record_cmd_buf(move |cmd_buf| {
+                let image = cmd_buf.resource(image);
+
+                unsafe {
+                    cmd_buf.device.cmd_clear_depth_stencil_image(
+                        cmd_buf.handle,
+                        image.handle,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &vk::ClearDepthStencilValue { depth, stencil },
+                        &[image_view],
+                    );
+                }
             })
             .end_cmd()
     }
@@ -872,14 +913,17 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf, nodes| {
-            let src = nodes[src].handle;
-            let dst = nodes[dst].handle;
+        cmd.record_cmd_buf(move |cmd_buf| {
+            let src = cmd_buf.resource(src);
+            let dst = cmd_buf.resource(dst);
 
             unsafe {
-                cmd_buf
-                    .device
-                    .cmd_copy_buffer(cmd_buf.handle, src, dst, regions.as_ref());
+                cmd_buf.device.cmd_copy_buffer(
+                    cmd_buf.handle,
+                    src.handle,
+                    dst.handle,
+                    regions.as_ref(),
+                );
             }
         })
         .end_cmd()
@@ -950,15 +994,15 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf, nodes| {
-            let src = nodes[src].handle;
-            let dst = nodes[dst].handle;
+        cmd.record_cmd_buf(move |cmd_buf| {
+            let src = cmd_buf.resource(src);
+            let dst = cmd_buf.resource(dst);
 
             unsafe {
                 cmd_buf.device.cmd_copy_buffer_to_image(
                     cmd_buf.handle,
-                    src,
-                    dst,
+                    src.handle,
+                    dst.handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     regions.as_ref(),
                 );
@@ -1032,16 +1076,16 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf, nodes| {
-            let src = nodes[src].handle;
-            let dst = nodes[dst].handle;
+        cmd.record_cmd_buf(move |cmd_buf| {
+            let src = cmd_buf.resource(src);
+            let dst = cmd_buf.resource(dst);
 
             unsafe {
                 cmd_buf.device.cmd_copy_image(
                     cmd_buf.handle,
-                    src,
+                    src.handle,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    dst,
+                    dst.handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     regions.as_ref(),
                 );
@@ -1127,16 +1171,16 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf, nodes| {
-            let src = nodes[src].handle;
-            let dst = nodes[dst].handle;
+        cmd.record_cmd_buf(move |cmd_buf| {
+            let src = cmd_buf.resource(src);
+            let dst = cmd_buf.resource(dst);
 
             unsafe {
                 cmd_buf.device.cmd_copy_image_to_buffer(
                     cmd_buf.handle,
-                    src,
+                    src.handle,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    dst,
+                    dst.handle,
                     regions.as_ref(),
                 );
             }
@@ -1156,13 +1200,13 @@ impl Graph {
         self.begin_cmd()
             .debug_name("fill buffer")
             .subresource_access(buffer, region.clone(), AccessType::TransferWrite)
-            .record_cmd_buf(move |cmd_buf, nodes| {
-                let buffer = nodes[buffer].handle;
+            .record_cmd_buf(move |cmd_buf| {
+                let buffer = cmd_buf.resource(buffer);
 
                 unsafe {
                     cmd_buf.device.cmd_fill_buffer(
                         cmd_buf.handle,
-                        buffer,
+                        buffer.handle,
                         region.start,
                         region.end - region.start,
                         data,
@@ -1194,7 +1238,7 @@ impl Graph {
     where
         N: Bound,
     {
-        node.borrow(self)
+        node.borrow(&self.resources)
     }
 
     /// Finalizes the graph and provides an object with functions for submitting the resulting
@@ -1234,13 +1278,16 @@ impl Graph {
         self.begin_cmd()
             .debug_name("update buffer")
             .subresource_access(buffer, offset..data_end, AccessType::TransferWrite)
-            .record_cmd_buf(move |cmd_buf, nodes| {
-                let buffer = nodes[buffer].handle;
+            .record_cmd_buf(move |cmd_buf| {
+                let buffer = cmd_buf.resource(buffer);
 
                 unsafe {
-                    cmd_buf
-                        .device
-                        .cmd_update_buffer(cmd_buf.handle, buffer, offset, data.as_ref());
+                    cmd_buf.device.cmd_update_buffer(
+                        cmd_buf.handle,
+                        buffer.handle,
+                        offset,
+                        data.as_ref(),
+                    );
                 }
             })
             .end_cmd()
@@ -1265,12 +1312,6 @@ pub(crate) mod deprecated {
     };
 
     impl Graph {
-        #[deprecated = "use default function instead"]
-        #[doc(hidden)]
-        pub fn new() -> Self {
-            Default::default()
-        }
-
         #[deprecated = "use device_address function of resource function result"]
         #[doc(hidden)]
         pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {

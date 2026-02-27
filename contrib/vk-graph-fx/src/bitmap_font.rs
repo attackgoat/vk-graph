@@ -40,7 +40,7 @@ impl BitmapFont {
         let num_pages = pages.len() as u32;
         let pipeline = GraphicPipeline::create(
             device,
-            GraphicPipelineInfoBuilder::default().blend(BlendMode::ALPHA),
+            GraphicPipelineInfoBuilder::default().blend(BlendInfo::ALPHA),
             [
                 Shader::new_vertex(include_glsl!("res/shader/graphic/font.vert").as_slice()),
                 Shader::new_fragment(include_glsl!("res/shader/graphic/font.frag").as_slice())
@@ -202,9 +202,8 @@ impl BitmapFont {
             .begin_cmd()
             .debug_name("text")
             .bind_pipeline(&self.pipeline)
-            .resource_access(vertex_buf, AccessType::IndexBuffer)
-            .load_color(0, image)
-            .store_color(0, image);
+            .resource_access(vertex_buf, AccessType::VertexBuffer)
+            .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store);
 
         for (idx, page_node) in page_nodes.iter().copied().enumerate() {
             let descriptor = (0, [idx as _]);
@@ -215,7 +214,7 @@ impl BitmapFont {
             );
         }
 
-        pass.record_cmd_buf(move |cmd_buf, _| {
+        pass.record_cmd_buf(move |cmd_buf| {
             if let Some((x, y, width, height)) = scissor {
                 cmd_buf.set_scissor(
                     0,

@@ -39,7 +39,7 @@ fn main() -> Result<(), WindowError> {
             .bind_pipeline(pipeline.hot())
             .clear_color(0, frame.swapchain_image)
             .store_color(0, frame.swapchain_image)
-            .record_cmd_buf(move |cmd_buf, _| {
+            .record_cmd_buf(move |cmd_buf| {
                 cmd_buf
                     .push_constants_offset(0, &frame_index.to_ne_bytes())
                     .push_constants_offset(4, &frame.width.to_ne_bytes())

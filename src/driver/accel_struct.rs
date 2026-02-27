@@ -828,7 +828,7 @@ mod test {
     #[test]
     pub fn accel_struct_info() {
         let info = Info::blas(32);
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

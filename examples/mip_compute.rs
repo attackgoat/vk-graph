@@ -29,7 +29,7 @@ fn main() -> Result<(), DriverError> {
                 | vk::ImageUsageFlags::TRANSFER_SRC
                 | vk::ImageUsageFlags::TRANSFER_DST,
         )
-        .to_builder()
+        .into_builder()
         .mip_level_count(3),
     )?);
     let depth_info = graph.resource(depth_pyramid).info;
@@ -90,7 +90,7 @@ fn main() -> Result<(), DriverError> {
                 depth_pyramid,
                 depth_info
                     .into_image_view()
-                    .to_builder()
+                    .into_builder()
                     .base_mip_level(mip_level - 1)
                     .mip_level_count(1),
                 AccessType::ComputeShaderReadOther,
@@ -100,12 +100,12 @@ fn main() -> Result<(), DriverError> {
                 depth_pyramid,
                 depth_info
                     .into_image_view()
-                    .to_builder()
+                    .into_builder()
                     .base_mip_level(mip_level)
                     .mip_level_count(1),
                 AccessType::ComputeShaderWrite,
             )
-            .record_cmd_buf(move |cmd_buf, _| {
+            .record_cmd_buf(move |cmd_buf| {
                 cmd_buf.dispatch(
                     depth_info.width >> mip_level,
                     depth_info.height >> mip_level,

@@ -51,9 +51,9 @@ graph
     .shader_resource_access(0, prev_image, AccessType::FragmentShaderReadColorInputAttachment)
     .shader_resource_access(1, some_image, AccessType::FragmentShaderReadOther)
     .shader_resource_access(3, fire_buffer, Access::FragmentShaderReadUniformBuffer)
-    .clear_color(0, swapchain_image)
-    .store_color(0, swapchain_image)
-    .record_cmd_buf(move |cmd_buf, _| {
+    .color_attachment_image(0, swapchain_image, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
+    .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::DontCare)
+    .record_cmd_buf(move |cmd_buf| {
         cmd_buf
             .push_constants(some_u8_slice)
             .draw(6, 1, 0, 0);

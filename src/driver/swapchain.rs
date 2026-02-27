@@ -651,7 +651,7 @@ mod test {
     #[test]
     pub fn swapchain_info() {
         let info = Info::new(20, 24, vk::SurfaceFormatKHR::default());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

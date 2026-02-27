@@ -76,8 +76,8 @@ fn main() -> anyhow::Result<()> {
                 gulf_image,
                 AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
             )
-            .store_color(0, frame.swapchain_image)
-            .record_cmd_buf(|cmd_buf, _| {
+            .color_attachment_image(0, frame.swapchain_image, LoadOp::DontCare, StoreOp::Store)
+            .record_cmd_buf(|cmd_buf| {
                 cmd_buf.draw(3, 1, 0, 0);
             });
     })?;

@@ -21,11 +21,12 @@ use {
     },
     tobj::{load_obj, GPU_LOAD_OPTIONS},
     vk_graph::{
+        cmd_ref::{LoadOp, StoreOp},
         driver::{
             ash::vk::{self},
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilMode, GraphicPipelineInfo},
+            graphic::{DepthStencilInfo, GraphicPipelineInfo},
             image::{Image, ImageInfo},
             sync::AccessType,
         },
@@ -357,10 +358,8 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Left hand")
                 .bind_pipeline(hands_pipeline.hot())
-                .depth_stencil(DepthStencilMode::DEPTH_WRITE)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                 .multiview(VIEW_MASK, VIEW_MASK)
-                .store_color(0, swapchain_image)
-                .clear_depth_stencil(depth_image)
                 .resource_access(index_buf, AccessType::IndexBuffer)
                 .resource_access(vertex_buf, AccessType::VertexBuffer)
                 .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
@@ -380,7 +379,13 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_cmd_buf(move |cmd_buf, _| {
+                .depth_stencil_attachment_image(
+                    depth_image,
+                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    StoreOp::DontCare,
+                )
+                .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)
@@ -402,10 +407,8 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Right hand")
                 .bind_pipeline(hands_pipeline.hot())
-                .depth_stencil(DepthStencilMode::DEPTH_WRITE)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                 .multiview(VIEW_MASK, VIEW_MASK)
-                .store_color(0, swapchain_image)
-                .clear_depth_stencil(depth_image)
                 .resource_access(index_buf, AccessType::IndexBuffer)
                 .resource_access(vertex_buf, AccessType::VertexBuffer)
                 .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
@@ -425,7 +428,13 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_cmd_buf(move |cmd_buf, _| {
+                .depth_stencil_attachment_image(
+                    depth_image,
+                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    StoreOp::DontCare,
+                )
+                .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)
@@ -445,10 +454,8 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Woolly Mammoth")
                 .bind_pipeline(mammoth_pipeline.hot())
-                .depth_stencil(DepthStencilMode::DEPTH_WRITE)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                 .multiview(VIEW_MASK, VIEW_MASK)
-                .store_color(0, swapchain_image)
-                .clear_depth_stencil(depth_image)
                 .resource_access(index_buf, AccessType::IndexBuffer)
                 .resource_access(vertex_buf, AccessType::VertexBuffer)
                 .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
@@ -463,7 +470,13 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_cmd_buf(move |cmd_buf, _| {
+                .depth_stencil_attachment_image(
+                    depth_image,
+                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    StoreOp::DontCare,
+                )
+                .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)

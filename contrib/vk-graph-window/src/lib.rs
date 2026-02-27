@@ -94,7 +94,7 @@ impl Window {
 
                 let mut swapchain_info =
                     SwapchainInfo::new(window_size.width, window_size.height, surface_format)
-                        .to_builder()
+                        .into_builder()
                         .command_buffer_count(self.data.cmd_buf_count);
 
                 if let Some(min_image_count) = self.data.min_image_count {

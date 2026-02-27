@@ -1,5 +1,5 @@
 use {
-    super::{Resources, cmd_buf::CommandBufferRef, pipeline::PipelineCommandRef},
+    super::{cmd_buf::CommandBufferRef, pipeline::PipelineCommandRef},
     crate::{driver::compute::ComputePipeline, node::AnyBufferNode},
     ash::vk,
     log::trace,
@@ -33,15 +33,24 @@ use {
 /// my_graph
 ///     .begin_cmd()
 ///     .bind_pipeline(&my_compute_pipeline)
-///     .record_cmd_buf(move |cmd_buf, resources| {
+///     .record_cmd_buf(move |cmd_buf| {
 ///         // During this closure we have access to the compute dispatch methods!
 ///     });
 /// # Ok(()) }
 /// ```
 pub struct ComputeCommandBufferRef<'a> {
-    pub(super) cmd_buf: CommandBufferRef<'a>,
-    pub(super) pipeline: ComputePipeline,
+    cmd_buf: CommandBufferRef<'a>,
+    pipeline: ComputePipeline,
 }
+
+// impl<'a> ComputeCommandBufferRef<'a> {
+//         pub(super) fn new(cmd_buf: CommandBufferRef<'a>,
+//     pipeline: ComputePipeline,) -> Self {
+//         Self {
+//             cmd_buf,pipeline
+//         }
+//     }
+// }
 
 impl ComputeCommandBufferRef<'_> {
     /// [Dispatch] compute work items.
@@ -90,7 +99,7 @@ impl ComputeCommandBufferRef<'_> {
     ///     .debug_name("fill my_buf_node with data")
     ///     .bind_pipeline(&my_compute_pipeline)
     ///     .shader_resource_access(0, my_buf_node, AccessType::ComputeShaderWrite)
-    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf.dispatch(128, 64, 32);
     ///     });
     /// # Ok(()) }
@@ -195,7 +204,7 @@ impl ComputeCommandBufferRef<'_> {
     ///     .bind_pipeline(&my_compute_pipeline)
     ///     .resource_access(args_buf, AccessType::IndirectBuffer)
     ///     .shader_resource_access(0, my_buf_node, AccessType::ComputeShaderWrite)
-    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf.dispatch_indirect(args_buf, 0);
     ///     });
     /// # Ok(()) }
@@ -210,11 +219,12 @@ impl ComputeCommandBufferRef<'_> {
         args_offset: vk::DeviceSize,
     ) -> &Self {
         let args_buf = args_buf.into();
+        let args_buf = self.resource(args_buf);
 
         unsafe {
             self.cmd_buf.device.cmd_dispatch_indirect(
                 self.cmd_buf.handle,
-                self.cmd_buf.resources[args_buf].handle,
+                args_buf.handle,
                 args_offset,
             );
         }
@@ -276,7 +286,7 @@ impl ComputeCommandBufferRef<'_> {
     ///     .begin_cmd()
     ///     .debug_name("compute the ultimate question")
     ///     .bind_pipeline(&my_compute_pipeline)
-    ///     .record_cmd_buf(move |cmd_buf, resources| {
+    ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf
     ///             .push_constants(0, &[42])
     ///             .dispatch(1, 1, 1);
@@ -329,7 +339,7 @@ impl PipelineCommandRef<'_, ComputePipeline> {
     /// Begin recording a compute pipeline command buffer.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(ComputeCommandBufferRef<'_>, Resources<'_>) + Send + 'static,
+        func: impl FnOnce(ComputeCommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -343,14 +353,8 @@ impl PipelineCommandRef<'_, ComputePipeline> {
             .unwrap_compute()
             .clone();
 
-        self.cmd.push_execute(move |cmd_buf, resources| {
-            func(
-                ComputeCommandBufferRef {
-                    cmd_buf: CommandBufferRef { cmd_buf, resources },
-                    pipeline,
-                },
-                resources,
-            );
+        self.cmd.push_execute(move |cmd_buf| {
+            func(ComputeCommandBufferRef { cmd_buf, pipeline });
         });
 
         self
@@ -362,12 +366,13 @@ mod deprecated {
     use {
         crate::{
             cmd_ref::{
-                Descriptor, PipelineCommandRef, Resources, SubresourceRange, View, ViewInfo,
+                Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
                 compute::ComputeCommandBufferRef,
             },
             driver::compute::ComputePipeline,
             node::Node,
         },
+        std::any::Any,
         vk_sync::AccessType,
     };
 
@@ -410,9 +415,9 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_compute(
             self,
-            func: impl FnOnce(ComputeCommandBufferRef<'_>, Resources<'_>) + Send + 'static,
+            func: impl FnOnce(ComputeCommandBufferRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd_buf(func)
+            self.record_cmd_buf(|cmd_buf| func(cmd_buf, ()))
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderWrite"]

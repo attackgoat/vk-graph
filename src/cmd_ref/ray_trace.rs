@@ -1,5 +1,5 @@
 use {
-    super::{PipelineCommandRef, Resources, cmd_buf::CommandBufferRef},
+    super::{PipelineCommandRef, cmd_buf::CommandBufferRef},
     crate::driver::{device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
@@ -11,7 +11,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
     /// Begin recording a ray trace pipeline command buffer.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(RayTraceCommandBufferRef<'_>, Resources<'_>) + Send + 'static,
+        func: impl FnOnce(RayTraceCommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
         let pipeline = self
             .cmd
@@ -28,18 +28,15 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
         #[cfg(debug_assertions)]
         let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
-        self.cmd.push_execute(move |cmd_buf, resources| {
-            func(
-                RayTraceCommandBufferRef {
-                    cmd_buf: CommandBufferRef { cmd_buf, resources },
+        self.cmd.push_execute(move |cmd_buf| {
+            func(RayTraceCommandBufferRef {
+                cmd_buf,
 
-                    #[cfg(debug_assertions)]
-                    dynamic_stack_size,
+                #[cfg(debug_assertions)]
+                dynamic_stack_size,
 
-                    pipeline,
-                },
-                resources,
-            );
+                pipeline,
+            });
         });
 
         self
@@ -76,7 +73,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
 /// my_graph.begin_cmd()
 ///         .debug_name("my ray trace pass")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
-///         .record_cmd_buf(move |cmd_buf, nodes| {
+///         .record_cmd_buf(move |cmd_buf| {
 ///             // During this closure we have access to the ray trace methods!
 ///         });
 /// # Ok(()) }
@@ -151,7 +148,7 @@ impl RayTraceCommandBufferRef<'_> {
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_cmd_buf(move |cmd_buf, nodes| {
+    ///         .record_cmd_buf(move |cmd_buf| {
     ///             cmd_buf.push_constants(0, &[0xcb])
     ///                     .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
@@ -244,7 +241,7 @@ impl RayTraceCommandBufferRef<'_> {
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_cmd_buf(move |cmd_buf, nodes| {
+    ///         .record_cmd_buf(move |cmd_buf| {
     ///             cmd_buf.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
@@ -329,7 +326,7 @@ mod deprecated {
     use {
         crate::{
             cmd_ref::{
-                Descriptor, PipelineCommandRef, Resources, SubresourceRange, View, ViewInfo,
+                Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
                 ray_trace::RayTraceCommandBufferRef,
             },
             driver::ray_trace::RayTracePipeline,
@@ -381,9 +378,11 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_ray_trace(
             self,
-            func: impl FnOnce(RayTraceCommandBufferRef<'_>, Resources<'_>) + Send + 'static,
+            func: impl FnOnce(RayTraceCommandBufferRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd_buf(func)
+            self.record_cmd_buf(|cmd_buf| {
+                func(cmd_buf, ());
+            })
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]

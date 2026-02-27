@@ -180,7 +180,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             .debug_name("This doesn't look good...")
             .bind_pipeline(&compute_pipeline)
             .shader_resource_access(42, image, AccessType::ComputeShaderWrite)
-            .record_cmd_buf(|cmd_buf, _| {
+            .record_cmd_buf(|cmd_buf| {
                 cmd_buf.dispatch(1024, 1024, 1);
             });
 

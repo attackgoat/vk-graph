@@ -31,7 +31,7 @@ fn main() -> Result<(), WindowError> {
         vk::Format::R8G8B8A8_UNORM,
         vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
     )
-    .to_builder()
+    .into_builder()
     .mip_level_count(mip_level_count)
     .build();
     let image = Arc::new(Image::create(&window.device, image_info)?);
@@ -71,13 +71,12 @@ fn main() -> Result<(), WindowError> {
                     image,
                     image_info
                         .into_image_view()
-                        .to_builder()
+                        .into_builder()
                         .base_mip_level(mip_level)
                         .mip_level_count(1),
                     AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .load_color(0, frame.swapchain_image)
-                .store_color(0, frame.swapchain_image)
+                .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
                 .render_area(vk::Rect2D {
                     offset: vk::Offset2D {
                         x: stripe_x as _,
@@ -88,7 +87,7 @@ fn main() -> Result<(), WindowError> {
                         height: swapchain_info.height,
                     },
                 })
-                .record_cmd_buf(|cmd_buf, _| {
+                .record_cmd_buf(|cmd_buf| {
                     cmd_buf.draw(6, 1, 0, 0);
                 });
         }
@@ -169,16 +168,18 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
             .begin_cmd()
             .debug_name("fill mip levels")
             .bind_pipeline(&vertical_gradient)
-            .store_color_as(
+            .color_attachment_image_view(
                 0,
                 image,
                 image_info
                     .into_image_view()
-                    .to_builder()
+                    .into_builder()
                     .base_mip_level(mip_level)
                     .mip_level_count(1),
+                LoadOp::DontCare,
+                StoreOp::Store,
             )
-            .record_cmd_buf(|cmd_buf, _| {
+            .record_cmd_buf(|cmd_buf| {
                 cmd_buf
                     .push_constants(
                         0,
