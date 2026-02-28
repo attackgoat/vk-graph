@@ -195,7 +195,7 @@ fn main() -> anyhow::Result<()> {
 
         // Lease and bind a cube-compatible shadow 2D image array to the graph of the current frame
         let shadow_faces_image = pool
-            .lease(
+            .lease_resource(
                 ImageInfo::image_2d_array(
                     CUBEMAP_SIZE,
                     CUBEMAP_SIZE,
@@ -215,11 +215,11 @@ fn main() -> anyhow::Result<()> {
         // Lease and bind a temporary image we'll use during blur passes
         let temp_image = frame
             .graph
-            .bind_resource(pool.lease(shadow_faces_info).unwrap());
+            .bind_resource(pool.lease_resource(shadow_faces_info).unwrap());
 
         // Lastly we lease and bind depth images needed for rendering
         let shadow_depth_image = frame.graph.bind_resource(
-            pool.lease(ImageInfo::image_2d_array(
+            pool.lease_resource(ImageInfo::image_2d_array(
                 frame.width,
                 frame.height,
                 if use_geometry_shader { 6 } else { 1 },
@@ -229,7 +229,7 @@ fn main() -> anyhow::Result<()> {
             .unwrap(),
         );
         let depth_image = frame.graph.bind_resource(
-            pool.lease(ImageInfo::image_2d(
+            pool.lease_resource(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 depth_format,
@@ -1191,7 +1191,7 @@ fn lease_uniform_buffer(
     data: &impl NoUninit,
 ) -> Result<Lease<Buffer>, DriverError> {
     let data = bytes_of(data);
-    let mut buf = pool.lease(BufferInfo::host_mem(
+    let mut buf = pool.lease_resource(BufferInfo::host_mem(
         data.len() as _,
         vk::BufferUsageFlags::UNIFORM_BUFFER,
     ))?;

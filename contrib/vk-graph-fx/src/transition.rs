@@ -422,7 +422,7 @@ impl TransitionPipeline {
                 | vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::TRANSFER_SRC,
         );
-        let dest_image = graph.bind_resource(self.cache.lease(dest_info).unwrap());
+        let dest_image = graph.bind_resource(self.cache.lease_resource(dest_info).unwrap());
 
         self.apply_to(graph, a_image, b_image, dest_image, transition, progress);
 

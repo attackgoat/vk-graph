@@ -125,15 +125,6 @@ pub struct GraphicCommandBufferRef<'a> {
     pipeline: GraphicPipeline,
 }
 
-// impl<'a> GraphicCommandBufferRef<'a> {
-//     pub(super) fn new(cmd_buf: CommandBufferRef<'a>,
-//     pipeline: GraphicPipeline,) -> Self {
-//         Self {
-//             cmd_buf,pipeline
-//         }
-//     }
-// }
-
 impl GraphicCommandBufferRef<'_> {
     /// Bind an index buffer to the current pass.
     ///
@@ -723,13 +714,32 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     }
 
     /// TODO
-    pub fn color_attachment_image_resolve(
+    pub fn color_attachment_image_view(
+        mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        color_image_view_info: impl Into<ImageViewInfo>,
+        load: LoadOp<ClearColorValue>,
+        store: StoreOp,
+    ) -> Self {
+        self.set_color_attachment_image_view(
+            color_attachment_idx,
+            color_image,
+            color_image_view_info,
+            load,
+            store,
+        );
+        self
+    }
+
+    /// TODO
+    pub fn color_attachment_resolve_image(
         mut self,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
         resolve_attachment_idx: AttachmentIndex,
     ) -> Self {
-        self.set_color_attachment_image_resolve(
+        self.set_color_attachment_resolve_image(
             color_attachment_idx,
             color_image,
             resolve_attachment_idx,
@@ -738,36 +748,17 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     }
 
     /// TODO
-    pub fn color_attachment_image_view(
+    pub fn color_attachment_resolve_image_view(
         mut self,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
-        color_image_view: impl Into<ImageViewInfo>,
-        load: LoadOp<ClearColorValue>,
-        store: StoreOp,
-    ) -> Self {
-        self.set_color_attachment_image_view(
-            color_attachment_idx,
-            color_image,
-            color_image_view,
-            load,
-            store,
-        );
-        self
-    }
-
-    /// TODO
-    pub fn color_attachment_image_view_resolve(
-        mut self,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
-        color_image_view: impl Into<ImageViewInfo>,
+        color_image_view_info: impl Into<ImageViewInfo>,
         resolve_attachment_idx: AttachmentIndex,
     ) -> Self {
-        self.set_color_attachment_image_view_resolve(
+        self.set_color_attachment_resolve_image_view(
             color_attachment_idx,
             color_image,
-            color_image_view,
+            color_image_view_info,
             resolve_attachment_idx,
         );
         self
@@ -792,14 +783,31 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     }
 
     /// TODO
-    pub fn depth_stencil_attachment_image_resolve(
+    pub fn depth_stencil_attachment_image_view(
+        mut self,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_stencil_image_view_info: impl Into<ImageViewInfo>,
+        load: LoadOp<vk::ClearDepthStencilValue>,
+        store: StoreOp,
+    ) -> Self {
+        self.set_depth_stencil_attachment_image_view(
+            depth_stencil_image,
+            depth_stencil_image_view_info,
+            load,
+            store,
+        );
+        self
+    }
+
+    /// TODO
+    pub fn depth_stencil_attachment_resolve_image(
         mut self,
         attachment_idx: AttachmentIndex,
         depth_stencil_image: impl Into<AnyImageNode>,
         depth_mode: Option<ResolveMode>,
         stencil_mode: Option<ResolveMode>,
     ) -> Self {
-        self.set_depth_stencil_attachment_image_resolve(
+        self.set_depth_stencil_attachment_resolve_image(
             attachment_idx,
             depth_stencil_image,
             depth_mode,
@@ -809,35 +817,18 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     }
 
     /// TODO
-    pub fn depth_stencil_attachment_image_view(
-        mut self,
-        depth_stencil_image: impl Into<AnyImageNode>,
-        depth_stencil_image_view: impl Into<ImageViewInfo>,
-        load: LoadOp<vk::ClearDepthStencilValue>,
-        store: StoreOp,
-    ) -> Self {
-        self.set_depth_stencil_attachment_image_view(
-            depth_stencil_image,
-            depth_stencil_image_view,
-            load,
-            store,
-        );
-        self
-    }
-
-    /// TODO
-    pub fn depth_stencil_attachment_image_view_resolve(
+    pub fn depth_stencil_attachment_resolve_image_view(
         mut self,
         attachment_idx: AttachmentIndex,
         depth_stencil_image: impl Into<AnyImageNode>,
-        depth_stencil_image_view: impl Into<ImageViewInfo>,
+        depth_stencil_image_view_info: impl Into<ImageViewInfo>,
         depth_mode: Option<ResolveMode>,
         stencil_mode: Option<ResolveMode>,
     ) -> Self {
-        self.set_depth_stencil_attachment_image_view_resolve(
+        self.set_depth_stencil_attachment_resolve_image_view(
             attachment_idx,
             depth_stencil_image,
-            depth_stencil_image_view,
+            depth_stencil_image_view_info,
             depth_mode,
             stencil_mode,
         );
@@ -870,7 +861,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
             .unwrap_graphic()
             .clone();
 
-        self.cmd.push_execute(move |cmd_buf| {
+        self.cmd.push_exec(move |cmd_buf| {
             func(GraphicCommandBufferRef { cmd_buf, pipeline });
         });
 
@@ -915,8 +906,47 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         self
     }
 
-    /// See [color_attachment_image_resolve]
-    pub fn set_color_attachment_image_resolve(
+    /// See [color_attachment_image_view]
+    pub fn set_color_attachment_image_view(
+        &mut self,
+        color_attachment_idx: AttachmentIndex,
+        color_image: impl Into<AnyImageNode>,
+        color_image_view_info: impl Into<ImageViewInfo>,
+        load: LoadOp<ClearColorValue>,
+        store: StoreOp,
+    ) -> &mut Self {
+        let color_image = color_image.into();
+        let color_image_view_info = color_image_view_info.into();
+
+        #[allow(deprecated)]
+        {
+            match load {
+                LoadOp::Clear(color) => self.set_clear_color_value_as(
+                    color_attachment_idx,
+                    color_image,
+                    color,
+                    color_image_view_info,
+                ),
+                LoadOp::DontCare => self.set_attach_color_as(
+                    color_attachment_idx,
+                    color_image,
+                    color_image_view_info,
+                ),
+                LoadOp::Load => {
+                    self.set_load_color_as(color_attachment_idx, color_image, color_image_view_info)
+                }
+            };
+
+            if let StoreOp::Store = store {
+                self.set_store_color_as(color_attachment_idx, color_image, color_image_view_info);
+            }
+        }
+
+        self
+    }
+
+    /// See [color_attachment_resolve_image]
+    pub fn set_color_attachment_resolve_image(
         &mut self,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
@@ -925,7 +955,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         let color_image = color_image.into();
         let color_image_view = self.resource(color_image).info;
 
-        self.set_color_attachment_image_view_resolve(
+        self.set_color_attachment_resolve_image_view(
             color_attachment_idx,
             color_image,
             color_image_view,
@@ -935,61 +965,24 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         self
     }
 
-    /// See [color_attachment_image_view]
-    pub fn set_color_attachment_image_view(
+    /// See [color_attachment_resolve_image_view]
+    pub fn set_color_attachment_resolve_image_view(
         &mut self,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
-        color_image_view: impl Into<ImageViewInfo>,
-        load: LoadOp<ClearColorValue>,
-        store: StoreOp,
-    ) -> &mut Self {
-        let color_image = color_image.into();
-        let color_image_view = color_image_view.into();
-
-        #[allow(deprecated)]
-        {
-            match load {
-                LoadOp::Clear(color) => self.set_clear_color_value_as(
-                    color_attachment_idx,
-                    color_image,
-                    color,
-                    color_image_view,
-                ),
-                LoadOp::DontCare => {
-                    self.set_attach_color_as(color_attachment_idx, color_image, color_image_view)
-                }
-                LoadOp::Load => {
-                    self.set_load_color_as(color_attachment_idx, color_image, color_image_view)
-                }
-            };
-
-            if let StoreOp::Store = store {
-                self.set_store_color_as(color_attachment_idx, color_image, color_image_view);
-            }
-        }
-
-        self
-    }
-
-    /// See [color_attachment_image_view_resolve]
-    pub fn set_color_attachment_image_view_resolve(
-        &mut self,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
-        color_image_view: impl Into<ImageViewInfo>,
+        color_image_view_info: impl Into<ImageViewInfo>,
         resolve_attachment_idx: AttachmentIndex,
     ) -> &mut Self {
         let color_image = color_image.into();
-        let color_image_view = color_image_view.into();
+        let color_image_view_info = color_image_view_info.into();
 
         #[allow(deprecated)]
-        self.set_attach_color_as(color_attachment_idx, color_image, color_image_view)
+        self.set_attach_color_as(color_attachment_idx, color_image, color_image_view_info)
             .set_resolve_color_as(
                 resolve_attachment_idx,
                 color_attachment_idx,
                 color_image,
-                color_image_view,
+                color_image_view_info,
             );
 
         self
@@ -1016,11 +1009,11 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         store: StoreOp,
     ) -> &mut Self {
         let depth_stencil_image = depth_stencil_image.into();
-        let depth_stencil_image_view = self.resource(depth_stencil_image).info;
+        let depth_stencil_image_view_info = self.resource(depth_stencil_image).info;
 
         self.set_depth_stencil_attachment_image_view(
             depth_stencil_image,
-            depth_stencil_image_view,
+            depth_stencil_image_view_info,
             load,
             store,
         );
@@ -1028,8 +1021,44 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         self
     }
 
-    /// See [depth_stencil_attachment_image_resolve]
-    pub fn set_depth_stencil_attachment_image_resolve(
+    /// See [depth_stencil_attachment_image_view]
+    pub fn set_depth_stencil_attachment_image_view(
+        &mut self,
+        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_stencil_image_view_info: impl Into<ImageViewInfo>,
+        load: LoadOp<vk::ClearDepthStencilValue>,
+        store: StoreOp,
+    ) -> &mut Self {
+        let depth_stencil_image = depth_stencil_image.into();
+        let depth_stencil_image_view_info = depth_stencil_image_view_info.into();
+
+        #[allow(deprecated)]
+        {
+            match load {
+                LoadOp::Clear(color) => self.set_clear_depth_stencil_value_as(
+                    depth_stencil_image,
+                    color.depth,
+                    color.stencil,
+                    depth_stencil_image_view_info,
+                ),
+                LoadOp::DontCare => self.set_attach_depth_stencil_as(
+                    depth_stencil_image,
+                    depth_stencil_image_view_info,
+                ),
+                LoadOp::Load => self
+                    .set_load_depth_stencil_as(depth_stencil_image, depth_stencil_image_view_info),
+            };
+
+            if let StoreOp::Store = store {
+                self.set_store_depth_stencil_as(depth_stencil_image, depth_stencil_image_view_info);
+            }
+        }
+
+        self
+    }
+
+    /// See [depth_stencil_attachment_resolve_image]
+    pub fn set_depth_stencil_attachment_resolve_image(
         &mut self,
         attachment_idx: AttachmentIndex,
         depth_stencil_image: impl Into<AnyImageNode>,
@@ -1039,7 +1068,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         let depth_stencil_image = depth_stencil_image.into();
         let depth_stencil_image_view = self.resource(depth_stencil_image).info;
 
-        self.set_depth_stencil_attachment_image_view_resolve(
+        self.set_depth_stencil_attachment_resolve_image_view(
             attachment_idx,
             depth_stencil_image,
             depth_stencil_image_view,
@@ -1050,60 +1079,24 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         self
     }
 
-    /// See [depth_stencil_attachment_image_view]
-    pub fn set_depth_stencil_attachment_image_view(
-        &mut self,
-        depth_stencil_image: impl Into<AnyImageNode>,
-        depth_stencil_image_view: impl Into<ImageViewInfo>,
-        load: LoadOp<vk::ClearDepthStencilValue>,
-        store: StoreOp,
-    ) -> &mut Self {
-        let depth_stencil_image = depth_stencil_image.into();
-        let depth_stencil_image_view = depth_stencil_image_view.into();
-
-        #[allow(deprecated)]
-        {
-            match load {
-                LoadOp::Clear(color) => self.set_clear_depth_stencil_value_as(
-                    depth_stencil_image,
-                    color.depth,
-                    color.stencil,
-                    depth_stencil_image_view,
-                ),
-                LoadOp::DontCare => {
-                    self.set_attach_depth_stencil_as(depth_stencil_image, depth_stencil_image_view)
-                }
-                LoadOp::Load => {
-                    self.set_load_depth_stencil_as(depth_stencil_image, depth_stencil_image_view)
-                }
-            };
-
-            if let StoreOp::Store = store {
-                self.set_store_depth_stencil_as(depth_stencil_image, depth_stencil_image_view);
-            }
-        }
-
-        self
-    }
-
-    /// See [depth_stencil_attachment_image_view_resolve]
-    pub fn set_depth_stencil_attachment_image_view_resolve(
+    /// See [depth_stencil_attachment_resolve_image_view]
+    pub fn set_depth_stencil_attachment_resolve_image_view(
         &mut self,
         attachment_idx: AttachmentIndex,
         depth_stencil_image: impl Into<AnyImageNode>,
-        depth_stencil_image_view: impl Into<ImageViewInfo>,
+        depth_stencil_image_view_info: impl Into<ImageViewInfo>,
         depth_mode: Option<ResolveMode>,
         stencil_mode: Option<ResolveMode>,
     ) -> &mut Self {
         let depth_stencil_image = depth_stencil_image.into();
-        let depth_stencil_image_view = depth_stencil_image_view.into();
+        let depth_stencil_image_view_info = depth_stencil_image_view_info.into();
 
         #[allow(deprecated)]
-        self.set_attach_depth_stencil_as(depth_stencil_image, depth_stencil_image_view)
+        self.set_attach_depth_stencil_as(depth_stencil_image, depth_stencil_image_view_info)
             .set_resolve_depth_stencil_as(
                 attachment_idx,
                 depth_stencil_image,
-                depth_stencil_image_view,
+                depth_stencil_image_view_info,
                 depth_mode,
                 stencil_mode,
             );
@@ -1583,10 +1576,10 @@ mod deprecated {
                 "color attachment {attachment_idx} incompatible with existing store"
             );
 
-            self.cmd.push_node_access(
+            self.cmd.push_subresource_access(
                 image,
-                AccessType::ColorAttachmentWrite,
                 SubresourceRange::Image(image_view_info.into()),
+                AccessType::ColorAttachmentWrite,
             );
 
             self
@@ -1674,8 +1667,9 @@ mod deprecated {
                 "depth/stencil attachment incompatible with existing store"
             );
 
-            self.cmd.push_node_access(
+            self.cmd.push_subresource_access(
                 image,
+                SubresourceRange::Image(image_view_info.into()),
                 if image_view_info
                     .aspect_mask
                     .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
@@ -1689,7 +1683,6 @@ mod deprecated {
                 } else {
                     AccessType::StencilAttachmentWriteDepthReadOnly
                 },
-                SubresourceRange::Image(image_view_info.into()),
             );
 
             self
@@ -1861,8 +1854,11 @@ mod deprecated {
                 }
             }
 
-            self.cmd
-                .push_node_access(image, image_access, SubresourceRange::Image(image_range));
+            self.cmd.push_subresource_access(
+                image,
+                SubresourceRange::Image(image_range),
+                image_access,
+            );
 
             self
         }
@@ -2056,8 +2052,11 @@ mod deprecated {
                 }
             }
 
-            self.cmd
-                .push_node_access(image, image_access, SubresourceRange::Image(image_range));
+            self.cmd.push_subresource_access(
+                image,
+                SubresourceRange::Image(image_range),
+                image_access,
+            );
 
             self
         }
@@ -2210,8 +2209,11 @@ mod deprecated {
                 }
             }
 
-            self.cmd
-                .push_node_access(image, image_access, SubresourceRange::Image(image_range));
+            self.cmd.push_subresource_access(
+                image,
+                SubresourceRange::Image(image_range),
+                image_access,
+            );
 
             self
         }
@@ -2337,8 +2339,11 @@ mod deprecated {
                 }
             }
 
-            self.cmd
-                .push_node_access(image, image_access, SubresourceRange::Image(image_range));
+            self.cmd.push_subresource_access(
+                image,
+                SubresourceRange::Image(image_range),
+                image_access,
+            );
 
             self
         }
@@ -2486,8 +2491,11 @@ mod deprecated {
                 }
             }
 
-            self.cmd
-                .push_node_access(image, image_access, SubresourceRange::Image(image_range));
+            self.cmd.push_subresource_access(
+                image,
+                SubresourceRange::Image(image_range),
+                image_access,
+            );
 
             self
         }
@@ -2643,8 +2651,11 @@ mod deprecated {
                 }
             }
 
-            self.cmd
-                .push_node_access(image, image_access, SubresourceRange::Image(image_range));
+            self.cmd.push_subresource_access(
+                image,
+                SubresourceRange::Image(image_range),
+                image_access,
+            );
 
             self
         }
@@ -2802,8 +2813,11 @@ mod deprecated {
                 }
             }
 
-            self.cmd
-                .push_node_access(image, image_access, SubresourceRange::Image(image_range));
+            self.cmd.push_subresource_access(
+                image,
+                SubresourceRange::Image(image_range),
+                image_access,
+            );
 
             self
         }
@@ -2945,8 +2959,11 @@ mod deprecated {
                 }
             }
 
-            self.cmd
-                .push_node_access(image, image_access, SubresourceRange::Image(image_range));
+            self.cmd.push_subresource_access(
+                image,
+                SubresourceRange::Image(image_range),
+                image_access,
+            );
 
             self
         }

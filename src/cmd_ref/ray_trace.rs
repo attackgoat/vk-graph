@@ -28,7 +28,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
         #[cfg(debug_assertions)]
         let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
-        self.cmd.push_execute(move |cmd_buf| {
+        self.cmd.push_exec(move |cmd_buf| {
             func(RayTraceCommandBufferRef {
                 cmd_buf,
 
@@ -181,6 +181,7 @@ impl RayTraceCommandBufferRef<'_> {
                 }
             }
         }
+
         self
     }
 

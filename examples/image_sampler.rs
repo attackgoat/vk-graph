@@ -251,7 +251,7 @@ fn read_image(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Arc<Ima
         let image_buf = graph.bind_resource(Buffer::create_from_slice(
             device,
             vk::BufferUsageFlags::TRANSFER_SRC,
-            gulf_jpg.into_rgba8().into_vec(),
+            gulf_jpg.into_rgba8().into_vec().as_slice(),
         )?);
         graph.copy_buffer_to_image(image_buf, image);
         graph.queue().submit(&mut HashPool::new(device), 0, 0)?;

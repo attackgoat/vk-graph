@@ -31,7 +31,7 @@ fn main() -> Result<(), WindowError> {
     window.run(|frame| {
         // Lease and clear an image as a stand-in for some real game or program output
         let app_image = frame.graph.bind_resource(
-            pool.lease(ImageInfo::image_2d(
+            pool.lease_resource(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 vk::Format::R8G8B8A8_UNORM,

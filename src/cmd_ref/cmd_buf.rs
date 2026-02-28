@@ -473,8 +473,8 @@ impl<'a> CommandBufferRef<'a> {
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given node represents.
-    pub fn resource<N>(&self, node: N) -> &N::Resource
+    /// which the given bound resource represents.
+    pub fn resource<N>(&self, resource: N) -> &N::Resource
     where
         N: Bound,
     {
@@ -485,11 +485,11 @@ impl<'a> CommandBufferRef<'a> {
         // resource (buffer, image, or acceleration structure). In order to access any resources the
         // access type must first be specified so the correct barriers may be added.
         debug_assert!(
-            self.exec.accesses.contains_key(&node.index()),
+            self.exec.accesses.contains_key(&resource.index()),
             "unexpected node access: call access, read, or write first"
         );
 
-        node.borrow(self.resources)
+        resource.borrow(self.resources)
     }
 }
 

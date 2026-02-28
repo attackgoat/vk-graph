@@ -99,7 +99,7 @@ impl ImGui {
 
         let image = graph.bind_resource({
             let mut image = pool
-                .lease(ImageInfo::image_2d(
+                .lease_resource(ImageInfo::image_2d(
                     window.inner_size().width,
                     window.inner_size().height,
                     vk::Format::R8G8B8A8_UNORM,
@@ -127,7 +127,7 @@ impl ImGui {
         for draw_list in draw_data.draw_lists() {
             let indices = cast_slice(draw_list.idx_buffer());
             let mut index_buf = pool
-                .lease(BufferInfo::host_mem(
+                .lease_resource(BufferInfo::host_mem(
                     indices.len() as _,
                     vk::BufferUsageFlags::INDEX_BUFFER,
                 ))
@@ -142,7 +142,7 @@ impl ImGui {
             let vertices = draw_list.vtx_buffer();
             let vertex_buf_len = vertices.len() * 20;
             let mut vertex_buf = pool
-                .lease(BufferInfo::host_mem(
+                .lease_resource(BufferInfo::host_mem(
                     vertex_buf_len as _,
                     vk::BufferUsageFlags::VERTEX_BUFFER,
                 ))
@@ -272,7 +272,7 @@ impl ImGui {
         let texture = fonts.build_rgba32_texture(); // TODO: Fix fb channel writes and use alpha8!
         let temp_buf_len = texture.data.len();
         let mut temp_buf = pool
-            .lease(BufferInfo::host_mem(
+            .lease_resource(BufferInfo::host_mem(
                 temp_buf_len as _,
                 vk::BufferUsageFlags::TRANSFER_SRC,
             ))
@@ -285,7 +285,7 @@ impl ImGui {
 
         let temp_buf = graph.bind_resource(temp_buf);
         let image = graph.bind_resource(
-            pool.lease(ImageInfo::image_2d(
+            pool.lease_resource(ImageInfo::image_2d(
                 texture.width,
                 texture.height,
                 vk::Format::R8G8B8A8_UNORM,

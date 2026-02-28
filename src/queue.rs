@@ -793,7 +793,7 @@ impl Queue {
 
         // debug!("{:#?}", info);
 
-        Ok(Some(pool.lease(info)?))
+        Ok(Some(pool.lease_resource(info)?))
     }
 
     #[profiling::function]
@@ -1653,7 +1653,7 @@ impl Queue {
 
         // trace!("{:#?}", info);
 
-        pool.lease(RenderPassInfo {
+        pool.lease_resource(RenderPassInfo {
             attachments,
             dependencies,
             subpasses,
@@ -2171,7 +2171,7 @@ impl Queue {
                 debug_assert!(bindings.get(node_idx).is_some());
 
                 let binding = unsafe {
-                    // CommandRef enforces this during push_node_access
+                    // CommandRef enforces this during push_resource_access
                     bindings.get_unchecked(node_idx)
                 };
 
@@ -2830,7 +2830,7 @@ impl Queue {
     {
         trace!("submit");
 
-        let mut cmd_buf = pool.lease(CommandBufferInfo::new(queue_family_index as _))?;
+        let mut cmd_buf = pool.lease_resource(CommandBufferInfo::new(queue_family_index as _))?;
 
         cmd_buf.wait_until_executed()?;
 

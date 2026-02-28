@@ -108,7 +108,7 @@ impl Egui {
                 let tmp_buf = {
                     let mut buf = self
                         .cache
-                        .lease(BufferInfo::host_mem(
+                        .lease_resource(BufferInfo::host_mem(
                             (pixels.len() * delta.image.bytes_per_pixel()) as u64,
                             vk::BufferUsageFlags::TRANSFER_SRC,
                         ))
@@ -153,7 +153,7 @@ impl Egui {
                 } else {
                     let image = graph.bind_resource(
                         self.cache
-                            .lease(ImageInfo::image_2d(
+                            .lease_resource(ImageInfo::image_2d(
                                 delta.image.width() as u32,
                                 delta.image.height() as u32,
                                 vk::Format::R8G8B8A8_UNORM,
@@ -230,7 +230,7 @@ impl Egui {
                     let idx_buf = {
                         let mut buf = self
                             .cache
-                            .lease(BufferInfo::host_mem(
+                            .lease_resource(BufferInfo::host_mem(
                                 (mesh.indices.len() * 4) as u64,
                                 vk::BufferUsageFlags::INDEX_BUFFER,
                             ))
@@ -243,7 +243,7 @@ impl Egui {
                     let vert_buf = {
                         let mut buf = self
                             .cache
-                            .lease(BufferInfo::host_mem(
+                            .lease_resource(BufferInfo::host_mem(
                                 (mesh.vertices.len() * std::mem::size_of::<egui::epaint::Vertex>())
                                     as u64,
                                 vk::BufferUsageFlags::VERTEX_BUFFER,

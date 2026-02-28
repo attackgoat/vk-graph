@@ -43,15 +43,6 @@ pub struct ComputeCommandBufferRef<'a> {
     pipeline: ComputePipeline,
 }
 
-// impl<'a> ComputeCommandBufferRef<'a> {
-//         pub(super) fn new(cmd_buf: CommandBufferRef<'a>,
-//     pipeline: ComputePipeline,) -> Self {
-//         Self {
-//             cmd_buf,pipeline
-//         }
-//     }
-// }
-
 impl ComputeCommandBufferRef<'_> {
     /// [Dispatch] compute work items.
     ///
@@ -353,7 +344,7 @@ impl PipelineCommandRef<'_, ComputePipeline> {
             .unwrap_compute()
             .clone();
 
-        self.cmd.push_execute(move |cmd_buf| {
+        self.cmd.push_exec(move |cmd_buf| {
             func(ComputeCommandBufferRef { cmd_buf, pipeline });
         });
 

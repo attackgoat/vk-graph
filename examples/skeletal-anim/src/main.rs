@@ -64,7 +64,7 @@ fn main() -> Result<(), WindowError> {
         let index_buf = frame.graph.bind_resource(&character.index_buf);
         let vertex_buf = frame.graph.bind_resource(&character.vertex_buf);
         let depth_image = frame.graph.bind_resource(
-            pool.lease(ImageInfo::image_2d(
+            pool.lease_resource(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 vk::Format::D32_SFLOAT,
@@ -88,7 +88,7 @@ fn main() -> Result<(), WindowError> {
             let projection = Mat4::perspective_rh(45.0, aspect_ratio, 0.1, 100.0);
             let view = Mat4::look_at_rh(position, Vec3::Y * 2.0, -Vec3::Y);
             let mut buf = pool
-                .lease(BufferInfo::host_mem(
+                .lease_resource(BufferInfo::host_mem(
                     size_of::<CameraUniform>() as _,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 ))
@@ -114,7 +114,7 @@ fn main() -> Result<(), WindowError> {
             };
             let joints = animation.update(0.016);
             let mut buf = pool
-                .lease(BufferInfo::host_mem(
+                .lease_resource(BufferInfo::host_mem(
                     size_of_val(joints) as _,
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                 ))

@@ -160,7 +160,7 @@ impl LazyPool {
 
 impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
     #[profiling::function]
-    fn lease(
+    fn lease_resource(
         &mut self,
         info: AccelerationStructureInfo,
     ) -> Result<Lease<AccelerationStructure>, DriverError> {
@@ -200,7 +200,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
 
 impl Pool<BufferInfo, Buffer> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
+    fn lease_resource(&mut self, info: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
         let cache = self
             .buffer_cache
             .entry((info.host_read | info.host_write, info.alignment))
@@ -243,7 +243,10 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
 
 impl Pool<CommandBufferInfo, CommandBuffer> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: CommandBufferInfo) -> Result<Lease<CommandBuffer>, DriverError> {
+    fn lease_resource(
+        &mut self,
+        info: CommandBufferInfo,
+    ) -> Result<Lease<CommandBuffer>, DriverError> {
         let cache_ref = self
             .command_buffer_cache
             .entry(info.queue_family_index)
@@ -273,7 +276,10 @@ impl Pool<CommandBufferInfo, CommandBuffer> for LazyPool {
 
 impl Pool<DescriptorPoolInfo, DescriptorPool> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: DescriptorPoolInfo) -> Result<Lease<DescriptorPool>, DriverError> {
+    fn lease_resource(
+        &mut self,
+        info: DescriptorPoolInfo,
+    ) -> Result<Lease<DescriptorPool>, DriverError> {
         let cache_ref = Arc::downgrade(&self.descriptor_pool_cache);
 
         {
@@ -319,7 +325,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for LazyPool {
 
 impl Pool<ImageInfo, Image> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: ImageInfo) -> Result<Lease<Image>, DriverError> {
+    fn lease_resource(&mut self, info: ImageInfo) -> Result<Lease<Image>, DriverError> {
         let cache = self
             .image_cache
             .entry(info.into())
@@ -356,7 +362,7 @@ impl Pool<ImageInfo, Image> for LazyPool {
 
 impl Pool<RenderPassInfo, RenderPass> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
+    fn lease_resource(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
         let cache_ref = if let Some(cache) = self.render_pass_cache.get(&info) {
             cache
         } else {

@@ -105,7 +105,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     // Vertex buffer for a triangle
     let vertex_buf = {
         let mut buf = pool
-            .lease(BufferInfo::host_mem(
+            .lease_resource(BufferInfo::host_mem(
                 36,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -114,19 +114,19 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             .unwrap();
 
         // Vertex 1
-        Buffer::copy_from_slice(&mut buf, 0, 0f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 4, 0f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 8, 0f32.to_ne_bytes());
+        Buffer::copy_from_slice(&mut buf, 0, 0f32.to_ne_bytes().as_slice());
+        Buffer::copy_from_slice(&mut buf, 4, 0f32.to_ne_bytes().as_slice());
+        Buffer::copy_from_slice(&mut buf, 8, 0f32.to_ne_bytes().as_slice());
 
         // Vertex 2
-        Buffer::copy_from_slice(&mut buf, 12, 1f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 16, 1f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 20, 0f32.to_ne_bytes());
+        Buffer::copy_from_slice(&mut buf, 12, 1f32.to_ne_bytes().as_slice());
+        Buffer::copy_from_slice(&mut buf, 16, 1f32.to_ne_bytes().as_slice());
+        Buffer::copy_from_slice(&mut buf, 20, 0f32.to_ne_bytes().as_slice());
 
         // Vertex 3
-        Buffer::copy_from_slice(&mut buf, 24, 2f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 28, 0f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 32, 0f32.to_ne_bytes());
+        Buffer::copy_from_slice(&mut buf, 24, 2f32.to_ne_bytes().as_slice());
+        Buffer::copy_from_slice(&mut buf, 28, 0f32.to_ne_bytes().as_slice());
+        Buffer::copy_from_slice(&mut buf, 32, 0f32.to_ne_bytes().as_slice());
 
         buf
     };
@@ -134,7 +134,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     // Index buffer for a single triangle
     let index_buf = {
         let mut buf = pool
-            .lease(BufferInfo::host_mem(
+            .lease_resource(BufferInfo::host_mem(
                 6,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -142,9 +142,9 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             ))
             .unwrap();
 
-        Buffer::copy_from_slice(&mut buf, 0, 0u16.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 2, 1u16.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 4, 2u16.to_ne_bytes());
+        Buffer::copy_from_slice(&mut buf, 0, 0u16.to_ne_bytes().as_slice());
+        Buffer::copy_from_slice(&mut buf, 2, 1u16.to_ne_bytes().as_slice());
+        Buffer::copy_from_slice(&mut buf, 4, 2u16.to_ne_bytes().as_slice());
 
         buf
     };
@@ -193,7 +193,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     // Lease and bind a bunch of bottom-level acceleration structures and add to instance buffer
     let mut blas_nodes = Vec::with_capacity(BLAS_COUNT as _);
     for idx in 0..BLAS_COUNT {
-        let blas = pool.lease(blas_info).unwrap();
+        let blas = pool.lease_resource(blas_info).unwrap();
 
         Buffer::copy_from_slice(
             &mut instance_buf,
@@ -219,7 +219,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
 
         let blas_node = frame.graph.bind_resource(blas);
         let scratch_buf = frame.graph.bind_resource(
-            pool.lease(
+            pool.lease_resource(
                 BufferInfo::device_mem(
                     blas_size.build_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -249,11 +249,11 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     let instance_buf = frame.graph.bind_resource(instance_buf);
     let tlas_size = AccelerationStructure::size_of(frame.device, &tlas_geometry_info);
     let tlas = pool
-        .lease(AccelerationStructureInfo::tlas(tlas_size.create_size))
+        .lease_resource(AccelerationStructureInfo::tlas(tlas_size.create_size))
         .unwrap();
     let tlas_node = frame.graph.bind_resource(tlas);
     let tlas_scratch_buf = frame.graph.bind_resource(
-        pool.lease(
+        pool.lease_resource(
             BufferInfo::device_mem(
                 tlas_size.build_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -358,11 +358,21 @@ fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
     );
     let images = [
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
     ];
 
     frame
@@ -429,11 +439,21 @@ fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
     );
     let images = [
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
     ];
 
     frame
@@ -523,7 +543,7 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
     );
 
     let image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -540,11 +560,21 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
             | vk::ImageUsageFlags::TRANSFER_DST,
     );
     let images = [
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
-        frame.graph.bind_resource(pool.lease(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.lease_resource(image_info).unwrap()),
     ];
 
     frame
@@ -734,7 +764,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
 
     let swapchain_format = frame.graph.resource(frame.swapchain_image).info.fmt;
     let msaa_color_image = frame.graph.bind_resource(
-        pool.lease(
+        pool.lease_resource(
             ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -747,7 +777,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .unwrap(),
     );
     let msaa_depth_stencil_image = frame.graph.bind_resource(
-        pool.lease(
+        pool.lease_resource(
             ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -761,7 +791,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .unwrap(),
     );
     let depth_stencil_image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             frame.width,
             frame.height,
             depth_stencil_format,
@@ -802,13 +832,13 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             LoadOp::CLEAR_BLACK_ALPHA_ZERO,
             StoreOp::DontCare,
         )
-        .color_attachment_image_resolve(1, frame.swapchain_image, 0)
+        .color_attachment_resolve_image(1, frame.swapchain_image, 0)
         .depth_stencil_attachment_image(
             msaa_depth_stencil_image,
             LoadOp::CLEAR_ZERO_STENCIL_ZERO,
             StoreOp::DontCare,
         )
-        .depth_stencil_attachment_image_resolve(
+        .depth_stencil_attachment_resolve_image(
             2,
             depth_stencil_image,
             Some(depth_resolve_mode),
@@ -821,7 +851,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
 
 fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut HashPool) {
     let image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -903,7 +933,7 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
 
 fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut HashPool) {
     let image_0 = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -912,7 +942,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .unwrap(),
     );
     let image_1 = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1030,7 +1060,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
 
 fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut HashPool) {
     let color_image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1039,7 +1069,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         .unwrap(),
     );
     let depth_image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::D32_SFLOAT,
@@ -1120,7 +1150,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
 
 fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut HashPool) {
     let color_image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1129,7 +1159,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         .unwrap(),
     );
     let depth_image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::D32_SFLOAT,
@@ -1210,7 +1240,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
 
 fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut HashPool) {
     let depth_image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::D32_SFLOAT,
@@ -1335,7 +1365,7 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
         .as_slice(),
     );
     let image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1396,7 +1426,7 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
     );
 
     let image = frame.graph.bind_resource(
-        pool.lease(ImageInfo::image_2d(
+        pool.lease_resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1458,7 +1488,7 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
     );
     let images = [
         frame.graph.bind_resource(
-            pool.lease(ImageInfo::image_2d(
+            pool.lease_resource(ImageInfo::image_2d(
                 256,
                 256,
                 vk::Format::R8G8B8A8_UNORM,
@@ -1467,7 +1497,7 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
             .unwrap(),
         ),
         frame.graph.bind_resource(
-            pool.lease(ImageInfo::image_2d(
+            pool.lease_resource(ImageInfo::image_2d(
                 256,
                 256,
                 vk::Format::R8G8B8A8_UNORM,

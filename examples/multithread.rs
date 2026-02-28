@@ -103,7 +103,7 @@ fn main() -> anyhow::Result<()> {
                 // Clear a new image to a cycling color
                 let mut graph = Graph::default();
                 let image = graph.bind_resource(
-                    pool.lease(ImageInfo::image_2d(
+                    pool.lease_resource(ImageInfo::image_2d(
                         10,
                         10,
                         vk::Format::R8G8B8A8_UNORM,

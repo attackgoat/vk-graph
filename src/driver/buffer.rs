@@ -224,13 +224,12 @@ impl Buffer {
     pub fn create_from_slice(
         device: &Device,
         usage: vk::BufferUsageFlags,
-        slice: impl AsRef<[u8]>,
+        data: &[u8],
     ) -> Result<Self, DriverError> {
-        let slice = slice.as_ref();
-        let info = BufferInfo::host_mem(slice.len() as _, usage);
+        let info = BufferInfo::host_mem(data.len() as _, usage);
         let mut buffer = Self::create(device, info)?;
 
-        Self::copy_from_slice(&mut buffer, 0, slice);
+        Self::copy_from_slice(&mut buffer, 0, data);
 
         Ok(buffer)
     }
@@ -331,9 +330,11 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn copy_from_slice(&mut self, offset: vk::DeviceSize, slice: impl AsRef<[u8]>) {
-        let slice = slice.as_ref();
-        self.mapped_slice_mut()[offset as _..offset as usize + slice.len()].copy_from_slice(slice);
+    pub fn copy_from_slice(&mut self, offset: vk::DeviceSize, data: &[u8]) {
+        let range = offset as _..offset as usize + data.len();
+        let mapped_data = self.mapped_slice_mut();
+
+        mapped_data[range].copy_from_slice(data);
     }
 
     /// Returns the device address of this object.

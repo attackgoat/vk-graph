@@ -6,8 +6,9 @@ use {
     derive_builder::{Builder, UninitializedFieldError},
     log::{debug, error, trace, warn},
     std::{
+        error::Error,
         ffi::CStr,
-        fmt::{Debug, Formatter},
+        fmt::{Debug, Display, Formatter},
         ops::Deref,
         os::raw::c_char,
         sync::Arc,
@@ -126,7 +127,77 @@ pub enum ApiVersion {
 
 impl ApiVersion {
     /// The most recent supported version of Vulkan
-    pub const MAX: Self = Self::Vulkan13;
+    pub const MAX_SUPPORTED: Self = Self::Vulkan13;
+
+    /// Returns a version parsed from a native Vulkan value.
+    pub fn try_parse_vk_api_version(version: u32) -> Result<Self, ParseApiVersionError> {
+        Self::try_from(version)
+    }
+
+    /// Vulkan API major version number component. Ex: vX.0.0-0
+    ///
+    /// Always one.
+    pub fn major(self) -> u32 {
+        1
+    }
+
+    /// Vulkan API minor version number component. Ex: v0.X.0-0
+    pub fn minor(self) -> u32 {
+        match self {
+            Self::Vulkan12 => 2,
+            Self::Vulkan13 => 3,
+        }
+    }
+
+    /// Vulkan API minor version number component. Ex: v0.0.X-0
+    ///
+    /// Always zero.
+    pub fn patch(self) -> u32 {
+        0
+    }
+
+    /// Returns a native Vulkan value.
+    pub fn to_vk_api_version(self) -> u32 {
+        self.into()
+    }
+
+    /// Vulkan API variant version number component. Ex: v0.0.0-X
+    ///
+    /// Always zero.
+    pub fn variant(self) -> u32 {
+        0
+    }
+}
+
+impl From<ApiVersion> for u32 {
+    fn from(val: ApiVersion) -> Self {
+        vk::make_api_version(val.variant(), val.major(), val.minor(), val.patch())
+    }
+}
+
+impl TryFrom<u32> for ApiVersion {
+    type Error = ParseApiVersionError;
+
+    fn try_from(val: u32) -> Result<Self, Self::Error> {
+        let major = vk::api_version_major(val);
+        let minor = vk::api_version_minor(val);
+        let patch = vk::api_version_patch(val);
+        let variant = vk::api_version_variant(val);
+
+        if variant != 0 || major != 1 || minor < 2 {
+            return Err(ParseApiVersionError {
+                major,
+                minor,
+                patch,
+                variant,
+            });
+        }
+
+        Ok(match minor {
+            2 => ApiVersion::Vulkan12,
+            _ => ApiVersion::Vulkan13,
+        })
+    }
 }
 
 /// There is no global state in Vulkan and all per-application state is stored in a VkInstance
@@ -291,27 +362,21 @@ impl Instance {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
                 vk::Result::ERROR_VALIDATION_FAILED_EXT => DriverError::InvalidData,
                 err => {
-                    warn!("unable to enumerate instance version: {err}");
+                    error!("unable to enumerate instance version: {err}");
 
                     DriverError::Unsupported
                 }
             })?
-            .map(|version| {
-                match (
-                    vk::api_version_major(version),
-                    vk::api_version_minor(version),
-                ) {
-                    (1, x) if x >= 3 => Some(ApiVersion::Vulkan13),
-                    (1, 2) => Some(ApiVersion::Vulkan12),
-                    (major, minor) => {
-                        warn!("unsupported Vulkan version: {major}.{minor}");
-
-                        None
-                    }
-                }
+            .unwrap_or_else(|| {
+                // The implementation *should* provide a version. If it does not we just send it.
+                ApiVersion::MAX_SUPPORTED.to_vk_api_version()
             })
-            .ok_or(DriverError::Unsupported)?
-            .unwrap_or(ApiVersion::MAX);
+            .try_into()
+            .map_err(|err| {
+                warn!("unsupported instance: {err}");
+
+                DriverError::Unsupported
+            })?;
 
         let instance = unsafe { ash::Instance::load(entry.static_fn(), instance) };
 
@@ -367,13 +432,11 @@ impl Instance {
         physical_device: vk::PhysicalDevice,
     ) -> Result<PhysicalDevice, DriverError> {
         let physical_device = PhysicalDevice::new(this.clone(), physical_device)?;
-        let major = vk::api_version_major(physical_device.properties_v1_0.api_version);
-        let minor = vk::api_version_minor(physical_device.properties_v1_0.api_version);
-        let supports_vulkan_1_2 = major == 1 && minor >= 2;
-
-        if !supports_vulkan_1_2 {
+        if let Err(err) =
+            ApiVersion::try_parse_vk_api_version(physical_device.properties_v1_0.api_version)
+        {
             warn!(
-                "physical device `{}` does not support Vulkan v1.2",
+                "unsupported physical device `{}`: {err}",
                 physical_device.properties_v1_0.device_name
             );
 
@@ -408,22 +471,20 @@ impl Instance {
                 let res = PhysicalDevice::new(this.clone(), physical_device);
 
                 if let Err(err) = &res {
-                    warn!("unable to create physical device at index {idx}: {err}");
+                    warn!("unsupported physical device #{idx}: {err}");
                 }
 
                 res.ok().filter(|physical_device| {
-                    let major = vk::api_version_major(physical_device.properties_v1_0.api_version);
-                    let minor = vk::api_version_minor(physical_device.properties_v1_0.api_version);
-                    let supports_vulkan_1_2 = major == 1 && minor >= 2;
-
-                    if !supports_vulkan_1_2 {
-                        warn!(
-                            "physical device `{}` does not support Vulkan v1.2",
+                    ApiVersion::try_parse_vk_api_version(
+                        physical_device.properties_v1_0.api_version,
+                    )
+                    .inspect_err(|err| {
+                        debug!(
+                            "unsupported physical device `{}`: {err}",
                             physical_device.properties_v1_0.device_name
                         );
-                    }
-
-                    supports_vulkan_1_2
+                    })
+                    .is_ok()
                 })
             }))
     }
@@ -538,6 +599,37 @@ impl Drop for InstanceInner {
         }
     }
 }
+
+/// Data returned when attempting to parse a Vulkan API version number.
+#[derive(Clone, Copy, Debug)]
+pub struct ParseApiVersionError {
+    /// The _major_ version indicates a significant change in the API, which will encompass a wholly
+    /// new version of the specification.
+    pub major: u32,
+
+    /// The _minor_ version indicates the incorporation of new functionality into the core
+    /// specification.
+    pub minor: u32,
+
+    /// The _patch_ version indicates bug fixes, clarifications, and language improvements have been
+    /// incorporated into the specification.
+    pub patch: u32,
+
+    /// The _variant_ indicates the variant of the Vulkan API supported by the implementation. This
+    /// is always 0 for the Vulkan API.
+    pub variant: u32,
+}
+
+impl Display for ParseApiVersionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "v{}.{}.{}-{}",
+            self.major, self.minor, self.patch, self.variant
+        ))
+    }
+}
+
+impl Error for ParseApiVersionError {}
 
 #[doc(hidden)]
 #[repr(C)]

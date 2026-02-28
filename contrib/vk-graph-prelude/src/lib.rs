@@ -54,7 +54,7 @@ pub use vk_graph::{
     },
     pool::{
         Lease, Pool, PoolInfo, PoolInfoBuilder,
-        alias::{Alias, AliasPool},
+        alias::{Alias, AliasWrapper},
         fifo::FifoPool,
         hash::HashPool,
         lazy::LazyPool,
@@ -62,4 +62,7 @@ pub use vk_graph::{
 };
 
 #[allow(deprecated)]
-pub use vk_graph::driver::graphic::{BlendMode, DepthStencilMode};
+pub use vk_graph::{
+    driver::graphic::{BlendMode, DepthStencilMode},
+    pool::alias::AliasPool,
+};

@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     window.run(|frame| {
         let img = frame.graph.bind_resource(
             cache
-                .lease(ImageInfo::image_2d(
+                .lease_resource(ImageInfo::image_2d(
                     100,
                     100,
                     vk::Format::R8G8B8A8_UNORM,

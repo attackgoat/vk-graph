@@ -26,11 +26,10 @@ macro_rules! bind_cmd_pipeline {
             impl<'a> BindCommand<'a> for &'a [<$name Pipeline>] {
                 type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
 
-                // TODO: Allow binding as explicit secondary command buffers? like with compute/raytrace stuff
                 fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
                     let cmd_ref = cmd.cmd_mut();
                     if cmd_ref.execs.last().unwrap().pipeline.is_some() {
-                        // Binding from PipelinePass -> PipelinePass (changing shaders)
+                        // Binding from PipelineCommandRef -> PipelineCommandRef (changing shaders)
                         cmd_ref.execs.push(Default::default());
                     }
 
@@ -49,7 +48,7 @@ macro_rules! bind_cmd_pipeline {
                 fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
                     let cmd_ref = cmd.cmd_mut();
                     if cmd_ref.execs.last().unwrap().pipeline.is_some() {
-                        // Binding from PipelinePass -> PipelinePass (changing shaders)
+                        // Binding from PipelineCommandRef -> PipelineCommandRef (changing shaders)
                         cmd_ref.execs.push(Default::default());
                     }
 

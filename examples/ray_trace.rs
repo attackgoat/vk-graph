@@ -758,7 +758,7 @@ fn main() -> anyhow::Result<()> {
         if image.is_none() {
             image = Some(Arc::new(
                 cache
-                    .lease(ImageInfo::image_2d(
+                    .lease_resource(ImageInfo::image_2d(
                         frame.width,
                         frame.height,
                         frame.graph.resource(frame.swapchain_image).info.fmt,
@@ -828,7 +828,7 @@ fn main() -> anyhow::Result<()> {
             }
 
             let mut buf = cache
-                .lease(BufferInfo::host_mem(
+                .lease_resource(BufferInfo::host_mem(
                     size_of::<Camera>() as _,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 ))

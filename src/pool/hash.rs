@@ -130,7 +130,10 @@ resource_mgmt_fns!("images", "image", ImageInfo, image_cache);
 
 impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
     #[profiling::function]
-    fn lease(&mut self, info: CommandBufferInfo) -> Result<Lease<CommandBuffer>, DriverError> {
+    fn lease_resource(
+        &mut self,
+        info: CommandBufferInfo,
+    ) -> Result<Lease<CommandBuffer>, DriverError> {
         let cache_ref = self
             .command_buffer_cache
             .entry(info.queue_family_index)
@@ -160,7 +163,10 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
 
 impl Pool<DescriptorPoolInfo, DescriptorPool> for HashPool {
     #[profiling::function]
-    fn lease(&mut self, info: DescriptorPoolInfo) -> Result<Lease<DescriptorPool>, DriverError> {
+    fn lease_resource(
+        &mut self,
+        info: DescriptorPoolInfo,
+    ) -> Result<Lease<DescriptorPool>, DriverError> {
         let cache_ref = self
             .descriptor_pool_cache
             .entry(info.clone())
@@ -187,7 +193,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for HashPool {
 
 impl Pool<RenderPassInfo, RenderPass> for HashPool {
     #[profiling::function]
-    fn lease(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
+    fn lease_resource(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
         let cache_ref = if let Some(cache) = self.render_pass_cache.get(&info) {
             cache
         } else {
@@ -222,7 +228,7 @@ macro_rules! lease {
         paste::paste! {
             impl Pool<$info, $item> for HashPool {
                 #[profiling::function]
-                fn lease(&mut self, info: $info) -> Result<Lease<$item>, DriverError> {
+                fn lease_resource(&mut self, info: $info) -> Result<Lease<$item>, DriverError> {
                     let cache_ref = self.[<$item:snake _cache>].entry(info)
                         .or_insert_with(|| {
                             Cache::new(Mutex::new(Vec::with_capacity(self.info.$capacity)))

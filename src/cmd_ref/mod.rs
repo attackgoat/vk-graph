@@ -115,7 +115,7 @@ impl<'a> CommandRef<'a> {
         self.graph
     }
 
-    fn push_execute(&mut self, func: impl FnOnce(CommandBufferRef) + Send + 'static) {
+    fn push_exec(&mut self, func: impl FnOnce(CommandBufferRef) + Send + 'static) {
         let cmd = self.cmd_mut();
         let exec = {
             let last_exec = cmd.execs.last_mut().unwrap();
@@ -131,15 +131,15 @@ impl<'a> CommandRef<'a> {
         self.exec_idx += 1;
     }
 
-    fn push_node_access(
+    fn push_subresource_access(
         &mut self,
-        node: impl Node,
-        access: AccessType,
+        resource: impl Node,
         subresource: SubresourceRange,
+        access: AccessType,
     ) {
-        let node_idx = node.index();
+        let node_idx = resource.index();
 
-        assert!(self.graph.resources.get(node_idx).is_some());
+        debug_assert!(self.graph.resources.get(node_idx).is_some());
 
         let access = SubresourceAccess {
             access,
@@ -165,7 +165,7 @@ impl<'a> CommandRef<'a> {
         mut self,
         func: impl FnOnce(CommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
-        self.push_execute(move |cmd_buf| {
+        self.push_exec(move |cmd_buf| {
             func(cmd_buf);
         });
 
@@ -173,28 +173,28 @@ impl<'a> CommandRef<'a> {
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given node represents.
-    pub fn resource<N>(&self, node: N) -> &N::Resource
+    /// which the given bound resource represents.
+    pub fn resource<N>(&self, resource: N) -> &N::Resource
     where
         N: Bound,
     {
-        self.graph.resource(node)
+        self.graph.resource(resource)
     }
 
     /// Informs the command that the next recorded command buffer will read or write `node` using
     /// `access`.
     ///
     /// This function must be called for `node` before it is used within a `record_`-function.
-    pub fn resource_access<N>(mut self, node: N, access: AccessType) -> Self
+    pub fn resource_access<N>(mut self, resource: N, access: AccessType) -> Self
     where
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        self.set_resource_access(node, access);
+        self.set_resource_access(resource, access);
         self
     }
 
-    /// Sets a debugging name, but only in debug builds
+    /// Sets a debugging name, but only in debug builds.
     pub fn set_debug_name(&mut self, name: impl Into<String>) -> &mut Self {
         #[cfg(debug_assertions)]
         {
@@ -208,13 +208,15 @@ impl<'a> CommandRef<'a> {
     /// `access`.
     ///
     /// This function must be called for `node` before it is used within a `record_`-function.
-    pub fn set_resource_access<N>(&mut self, node: N, access: AccessType)
+    pub fn set_resource_access<N>(&mut self, resource: N, access: AccessType)
     where
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        let subresource = node.default_range(&self.graph.resources).into();
-        self.push_node_access(node, access, subresource);
+        let whole_resource = resource.range(&self.graph.resources);
+        let subresource = SubresourceRange::from(whole_resource);
+
+        self.push_subresource_access(resource, subresource, access);
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
@@ -223,15 +225,17 @@ impl<'a> CommandRef<'a> {
     /// This function must be called for `node` before it is used within a `record_`-function.
     pub fn set_subresource_access<N>(
         &mut self,
-        node: N,
+        resource: N,
         subresource: impl Into<N::Range>,
         access: AccessType,
     ) where
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        let subresource = subresource.into().into();
-        self.push_node_access(node, access, subresource);
+        let subresource = subresource.into();
+        let subresource = SubresourceRange::from(subresource);
+
+        self.push_subresource_access(resource, subresource, access);
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
@@ -240,7 +244,7 @@ impl<'a> CommandRef<'a> {
     /// This function must be called for `node` before it is used within a `record_`-function.
     pub fn subresource_access<N>(
         mut self,
-        node: N,
+        resource: N,
         subresource: impl Into<N::Range>,
         access: AccessType,
     ) -> Self
@@ -248,7 +252,7 @@ impl<'a> CommandRef<'a> {
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        self.set_subresource_access(node, subresource, access);
+        self.set_subresource_access(resource, subresource, access);
         self
     }
 }
@@ -343,8 +347,8 @@ impl SubresourceRange {
 }
 
 impl From<AccelerationStructureRange> for SubresourceRange {
-    fn from(subresource: AccelerationStructureRange) -> Self {
-        Self::AccelerationStructure(subresource)
+    fn from(_: AccelerationStructureRange) -> Self {
+        Self::AccelerationStructure(AccelerationStructureRange)
     }
 }
 
@@ -380,11 +384,11 @@ pub trait View {
     /// The information about the resource when used indirectly by any part of a graph.
     type Range;
 
-    fn default_range(&self, _: &[Resource]) -> Self::Range
+    fn info(&self, _: &[Resource]) -> Self::Info
     where
         Self: Node;
 
-    fn default_info(&self, _: &[Resource]) -> Self::Info
+    fn range(&self, _: &[Resource]) -> Self::Range
     where
         Self: Node;
 }
@@ -395,18 +399,18 @@ macro_rules! view_accel_struct {
             type Info = Self::Range;
             type Range = AccelerationStructureRange;
 
-            fn default_range(&self, _: &[Resource]) -> Self::Range
+            fn info(&self, resources: &[Resource]) -> Self::Info
+            where
+                Self: Node,
+            {
+                self.range(resources)
+            }
+
+            fn range(&self, _: &[Resource]) -> Self::Range
             where
                 Self: Node,
             {
                 Self::Range::default()
-            }
-
-            fn default_info(&self, resources: &[Resource]) -> Self::Info
-            where
-                Self: Node,
-            {
-                self.default_range(resources)
             }
         }
     };
@@ -422,20 +426,20 @@ macro_rules! view_buffer {
             type Info = Self::Range;
             type Range = BufferSubresourceRange;
 
-            fn default_range(&self, resources: &[Resource]) -> Self::Range
+            fn info(&self, resources: &[Resource]) -> Self::Info
+            where
+                Self: Node,
+            {
+                self.range(resources)
+            }
+
+            fn range(&self, resources: &[Resource]) -> Self::Range
             where
                 Self: Node,
             {
                 let idx = self.index();
 
                 resources[idx].as_buffer().unwrap().info.into()
-            }
-
-            fn default_info(&self, resources: &[Resource]) -> Self::Info
-            where
-                Self: Node,
-            {
-                self.default_range(resources)
             }
         }
     };
@@ -451,20 +455,20 @@ macro_rules! view_image {
             type Info = ImageViewInfo;
             type Range = vk::ImageSubresourceRange;
 
-            fn default_range(&self, resources: &[Resource]) -> Self::Range
-            where
-                Self: Node,
-            {
-                self.default_info(resources).into()
-            }
-
-            fn default_info(&self, resources: &[Resource]) -> Self::Info
+            fn info(&self, resources: &[Resource]) -> Self::Info
             where
                 Self: Node,
             {
                 let idx = self.index();
 
                 resources[idx].as_image().unwrap().info.into()
+            }
+
+            fn range(&self, resources: &[Resource]) -> Self::Range
+            where
+                Self: Node,
+            {
+                self.info(resources).into()
             }
         }
     };
@@ -607,7 +611,7 @@ mod deprecated {
             mut self,
             func: impl FnOnce(CommandBufferRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.push_execute(|cmd_buf| {
+            self.push_exec(|cmd_buf| {
                 func(cmd_buf, ());
             });
 

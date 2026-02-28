@@ -21,7 +21,7 @@ fn main() -> Result<(), DriverError> {
     let device = Device::new(device_info)?;
 
     // We wrap HashPool in an AliasPool container to enable resource aliasing
-    let mut pool = AliasPool::new(HashPool::new(&device));
+    let mut pool = AliasWrapper::new(HashPool::new(&device));
 
     // This is the information we will use to alias image1 and image2
     let image_info = ImageInfo::image_2d(
@@ -32,8 +32,8 @@ fn main() -> Result<(), DriverError> {
     );
 
     // Any two compatible images aliased from the same pool will be the same physical image
-    let image1 = pool.alias(image_info)?;
-    let image2 = pool.alias(image_info)?;
+    let image1 = pool.alias_resource(image_info)?;
+    let image2 = pool.alias_resource(image_info)?;
     assert!(Arc::ptr_eq(&image1, &image2));
 
     let mut graph = Graph::default();
@@ -61,11 +61,11 @@ fn main() -> Result<(), DriverError> {
     );
 
     // We alias the compatible information and still produce the same physical image and node
-    let image3_node = graph.bind_resource(pool.alias(image_info)?);
+    let image3_node = graph.bind_resource(pool.alias_resource(image_info)?);
     assert_eq!(image1_node, image3_node);
 
     // Using the same information for a new LEASE will generate an entirely different image!!
-    let image4_node = graph.bind_resource(pool.lease(image_info)?);
+    let image4_node = graph.bind_resource(pool.lease_resource(image_info)?);
     assert_ne!(image1_node, image4_node);
 
     Ok(())

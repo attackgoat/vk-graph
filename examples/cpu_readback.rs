@@ -15,12 +15,12 @@ fn main() -> Result<(), DriverError> {
     let src_buf = graph.bind_resource(Buffer::create_from_slice(
         &device,
         vk::BufferUsageFlags::TRANSFER_SRC,
-        [1, 2, 3, 4],
+        &[1, 2, 3, 4],
     )?);
     let dst_buf = graph.bind_resource(Buffer::create_from_slice(
         &device,
         vk::BufferUsageFlags::TRANSFER_DST,
-        [0, 0, 0, 0],
+        &[0, 0, 0, 0],
     )?);
 
     // We are using the GPU to copy data, but the same thing works if you're executing a pipeline

@@ -22,10 +22,10 @@ fn color_to_unorm(color: Color) -> [u8; 16] {
 /// Holds a decoded bitmap Font.
 #[derive(Debug)]
 pub struct BitmapFont {
-    cache: HashPool,
     font: BMFont,
     pages: Vec<Arc<Image>>,
     pipeline: GraphicPipeline,
+    pool: LazyPool,
 }
 
 impl BitmapFont {
@@ -35,7 +35,7 @@ impl BitmapFont {
         font: BMFont,
         pages: impl Into<Vec<Arc<Image>>>,
     ) -> anyhow::Result<Self> {
-        let cache = HashPool::new(device);
+        let pool = LazyPool::new(device);
         let pages = pages.into();
         let num_pages = pages.len() as u32;
         let pipeline = GraphicPipeline::create(
@@ -52,10 +52,10 @@ impl BitmapFont {
         .context("Unable to create bitmap font pipeline")?;
 
         Ok(Self {
-            cache,
             font,
             pages,
             pipeline,
+            pool,
         })
     }
 
@@ -155,8 +155,8 @@ impl BitmapFont {
 
         let vertex_buf_len = 120 * text.chars().count() as vk::DeviceSize;
         let mut vertex_buf = self
-            .cache
-            .lease(BufferInfo::host_mem(
+            .pool
+            .lease_resource(BufferInfo::host_mem(
                 vertex_buf_len,
                 vk::BufferUsageFlags::VERTEX_BUFFER,
             ))

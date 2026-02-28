@@ -64,7 +64,7 @@ fn main() -> anyhow::Result<()> {
             * Mat4::from_rotation_z(angle * 0.22);
 
         let mut scene_uniform_buf = pool
-            .lease(BufferInfo::host_mem(
+            .lease_resource(BufferInfo::host_mem(
                 size_of::<SceneUniformBuffer>() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))
@@ -103,7 +103,7 @@ fn main() -> anyhow::Result<()> {
 
         if will_render_msaa {
             let msaa_color_image = cmd.bind_resource(
-                pool.lease(
+                pool.lease_resource(
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
                 .unwrap(),
             );
             let msaa_depth_image = cmd.bind_resource(
-                pool.lease(
+                pool.lease_resource(
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
@@ -138,7 +138,7 @@ fn main() -> anyhow::Result<()> {
                 LoadOp::CLEAR_WHITE_ALPHA_ONE,
                 StoreOp::DontCare,
             )
-            .set_color_attachment_image_resolve(1, frame.swapchain_image, 0)
+            .set_color_attachment_resolve_image(1, frame.swapchain_image, 0)
             .set_depth_stencil_attachment_image(
                 msaa_depth_image,
                 LoadOp::CLEAR_ZERO_STENCIL_ZERO,
@@ -146,7 +146,7 @@ fn main() -> anyhow::Result<()> {
             );
         } else {
             let noaa_depth_image = cmd.bind_resource(
-                pool.lease(ImageInfo::image_2d(
+                pool.lease_resource(ImageInfo::image_2d(
                     frame.width,
                     frame.height,
                     depth_format,

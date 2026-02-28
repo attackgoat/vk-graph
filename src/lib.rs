@@ -142,7 +142,7 @@ For example, leasing an image:
 let mut pool = LazyPool::new(&device);
 
 let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
-let my_image = pool.lease(info)?;
+let my_image = pool.lease_resource(info)?;
 # Ok(()) }
 ```
 
@@ -654,7 +654,7 @@ impl Command {
     }
 
     fn name(&self) -> &str {
-        self.name.as_deref().unwrap_or("pass")
+        self.name.as_deref().unwrap_or("command")
     }
 }
 
@@ -1246,8 +1246,8 @@ impl Graph {
     #[profiling::function]
     pub fn queue(mut self) -> Queue {
         // The final execution of each pass has no function
-        for pass in &mut self.cmds {
-            pass.execs.pop();
+        for cmd in &mut self.cmds {
+            cmd.execs.pop();
         }
 
         Queue::new(self)
