@@ -1344,11 +1344,11 @@ pub(crate) mod deprecated {
     impl Info for SwapchainImageNode {
         type Type = ImageInfo;
 
-        fn info(&self, bindings: &[Resource]) -> Self::Type
+        fn info(&self, resources: &[Resource]) -> Self::Type
         where
             Self: Node,
         {
-            bindings[self.idx].as_swapchain_image().unwrap().info
+            resources[self.idx].as_swapchain_image().unwrap().info
         }
     }
 
@@ -1358,22 +1358,22 @@ pub(crate) mod deprecated {
                 impl Info for [<$name Node>] {
                     type Type = [<$name Info>];
 
-                    fn info(&self, bindings: &[Resource]) -> Self::Type
+                    fn info(&self, resources: &[Resource]) -> Self::Type
                     where
                         Self: Node,
                     {
-                        bindings[self.idx].[<as_ $name:snake>]().unwrap().info
+                        resources[self.idx].[<as_ $name:snake>]().unwrap().info
                     }
                 }
 
                 impl Info for [<$name LeaseNode>] {
                     type Type = [<$name Info>];
 
-                    fn info(&self, bindings: &[Resource]) -> Self::Type
+                    fn info(&self, resources: &[Resource]) -> Self::Type
                     where
                         Self: Node,
                     {
-                        bindings[self.idx].[<as_ $name:snake _lease>]().unwrap().info
+                        resources[self.idx].[<as_ $name:snake _lease>]().unwrap().info
                     }
                 }
             }

@@ -1,6 +1,7 @@
 use {
     super::{
         Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
+        bind::ResourceInner,
         cmd_ref::{SubresourceAccess, SubresourceRange},
     },
     crate::{
@@ -1933,9 +1934,9 @@ impl Queue {
             for (node_idx, accesses) in accesses {
                 let binding = &bindings[*node_idx];
 
-                match binding {
-                    Resource::AccelerationStructure(..)
-                    | Resource::AccelerationStructureLease(..) => {
+                match &binding.inner {
+                    ResourceInner::AccelerationStructure(..)
+                    | ResourceInner::AccelerationStructureLease(..) => {
                         let Some(accel_struct) = binding.as_driver_accel_struct() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -1958,7 +1959,7 @@ impl Queue {
                         );
                         tls.prev_accesses.push(prev_access);
                     }
-                    Resource::Buffer(..) | Resource::BufferLease(..) => {
+                    ResourceInner::Buffer(..) | ResourceInner::BufferLease(..) => {
                         let Some(buffer) = binding.as_driver_buffer() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -1991,9 +1992,9 @@ impl Queue {
                             }
                         }
                     }
-                    Resource::Image(..)
-                    | Resource::ImageLease(..)
-                    | Resource::SwapchainImage(..) => {
+                    ResourceInner::Image(..)
+                    | ResourceInner::ImageLease(..)
+                    | ResourceInner::SwapchainImage(..) => {
                         let Some(image) = binding.as_driver_image() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -2175,9 +2176,9 @@ impl Queue {
                     bindings.get_unchecked(node_idx)
                 };
 
-                match binding {
-                    Resource::AccelerationStructure(..)
-                    | Resource::AccelerationStructureLease(..) => {
+                match &binding.inner {
+                    ResourceInner::AccelerationStructure(..)
+                    | ResourceInner::AccelerationStructureLease(..) => {
                         let Some(accel_struct) = binding.as_driver_accel_struct() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -2190,7 +2191,7 @@ impl Queue {
 
                         AccelerationStructure::access(accel_struct, AccessType::Nothing);
                     }
-                    Resource::Buffer(..) | Resource::BufferLease(..) => {
+                    ResourceInner::Buffer(..) | ResourceInner::BufferLease(..) => {
                         let Some(buffer) = binding.as_driver_buffer() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
@@ -2221,9 +2222,9 @@ impl Queue {
                             for _ in Buffer::access(buffer, AccessType::Nothing, access_range) {}
                         }
                     }
-                    Resource::Image(..)
-                    | Resource::ImageLease(..)
-                    | Resource::SwapchainImage(..) => {
+                    ResourceInner::Image(..)
+                    | ResourceInner::ImageLease(..)
+                    | ResourceInner::SwapchainImage(..) => {
                         let Some(image) = binding.as_driver_image() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
