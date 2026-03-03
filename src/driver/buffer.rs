@@ -798,6 +798,11 @@ impl BufferInfo {
         }
     }
 
+    /// Creates a default `BufferInfoBuilder`.
+    pub fn builder() -> BufferInfoBuilder {
+        Default::default()
+    }
+
     /// Returns `true` if this information specifies host-accessible memory.
     pub fn is_host_mem(&self) -> bool {
         self.host_read | self.host_write

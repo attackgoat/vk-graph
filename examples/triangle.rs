@@ -4,7 +4,7 @@ use {
     bytemuck::cast_slice,
     clap::Parser,
     std::sync::Arc,
-    vk_graph::cmd_ref::LoadOp,
+    vk_graph::cmd::LoadOp,
     vk_graph_prelude::*,
     vk_graph_window::{WindowBuilder, WindowError},
     vk_shader_macros::glsl,

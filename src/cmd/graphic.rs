@@ -29,24 +29,20 @@ pub enum LoadOp<T> {
 
 impl LoadOp<ClearColorValue> {
     /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
-    pub const CLEAR_BLACK_ALPHA_ONE: Self =
-        Self::Clear(ClearColorValue::Float32([0.0, 0.0, 0.0, 1.0]));
+    pub const CLEAR_BLACK_ALPHA_ONE: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ONE);
 
     /// A load operation which results in a color attachment filled with zeros.
-    pub const CLEAR_BLACK_ALPHA_ZERO: Self =
-        Self::Clear(ClearColorValue::Float32([0.0, 0.0, 0.0, 0.0]));
+    pub const CLEAR_BLACK_ALPHA_ZERO: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ZERO);
 
     /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
-    pub const CLEAR_WHITE_ALPHA_ONE: Self =
-        Self::Clear(ClearColorValue::Float32([1.0, 1.0, 1.0, 1.0]));
+    pub const CLEAR_WHITE_ALPHA_ONE: Self = Self::Clear(ClearColorValue::WHITE_ALPHA_ONE);
 
-    /// A load operation which results in a color attachment filled with rgba ones and alpha zeros.
-    pub const CLEAR_WHITE_ALPHA_ZERO: Self =
-        Self::Clear(ClearColorValue::Float32([1.0, 1.0, 1.0, 0.0]));
+    /// A load operation which results in a color attachment filled with rgb ones and alpha zeros.
+    pub const CLEAR_WHITE_ALPHA_ZERO: Self = Self::Clear(ClearColorValue::WHITE_ALPHA_ZERO);
 
     /// Convenience constructor for clear color values.
     pub fn clear_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self::Clear(ClearColorValue::Float32([r, g, b, a]))
+        Self::Clear(ClearColorValue::rgba(r, g, b, a))
     }
 }
 
@@ -280,28 +276,34 @@ impl GraphicCommandBufferRef<'_> {
     where
         N: Into<AnyBufferNode>,
     {
-        thread_local! {
-            static BUFFERS_OFFSETS: RefCell<(Vec<vk::Buffer>, Vec<vk::DeviceSize>)> = Default::default();
+        #[derive(Default)]
+        struct Tls {
+            buffers: Vec<vk::Buffer>,
+            offsets: Vec<vk::DeviceSize>,
         }
 
-        BUFFERS_OFFSETS.with_borrow_mut(|(buffers, offsets)| {
-            buffers.clear();
-            offsets.clear();
+        thread_local! {
+            static TLS: RefCell<Tls> = Default::default();
+        }
+
+        TLS.with_borrow_mut(|tls| {
+            tls.buffers.clear();
+            tls.offsets.clear();
 
             for (buffer, offset) in buffer_offsets {
                 let buffer = buffer.into();
                 let buffer = self.resource(buffer);
 
-                buffers.push(buffer.handle);
-                offsets.push(offset);
+                tls.buffers.push(buffer.handle);
+                tls.offsets.push(offset);
             }
 
             unsafe {
                 self.cmd_buf.device.cmd_bind_vertex_buffers(
                     self.cmd_buf.handle,
                     first_binding,
-                    buffers.as_slice(),
-                    offsets.as_slice(),
+                    tls.buffers.as_slice(),
+                    tls.offsets.as_slice(),
                 );
             }
         });
@@ -1127,7 +1129,7 @@ mod deprecated {
     use {
         crate::{
             Attachment, ClearColorValue, SubresourceAccess,
-            cmd_ref::{
+            cmd::{
                 AttachmentIndex, Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
                 graphic::GraphicCommandBufferRef,
             },
@@ -1144,6 +1146,14 @@ mod deprecated {
         ash::vk,
         vk_sync::AccessType,
     };
+
+    impl GraphicCommandBufferRef<'_> {
+        #[deprecated = "use push_constants function"]
+        #[doc(hidden)]
+        pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
+            self.push_constants(offset, data)
+        }
+    }
 
     // Attachment functions from previous version
     impl PipelineCommandRef<'_, GraphicPipeline> {

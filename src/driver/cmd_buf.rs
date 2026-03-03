@@ -191,6 +191,11 @@ impl CommandBufferInfo {
 }
 
 impl CommandBufferInfo {
+    /// Creates a default `CommandBufferInfoBuilder`.
+    pub fn builder() -> CommandBufferInfoBuilder {
+        Default::default()
+    }
+
     /// Converts a `CommandBufferInfo` into a `CommandBufferInfoBuilder`.
     pub fn into_builder(self) -> CommandBufferInfoBuilder {
         CommandBufferInfoBuilder {

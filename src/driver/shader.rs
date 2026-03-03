@@ -22,6 +22,10 @@ use {
     },
 };
 
+#[allow(deprecated)]
+#[doc(hidden)]
+pub type SpecializationInfo = self::deprecated::SpecializationInfo;
+
 pub(crate) type DescriptorBindingMap = HashMap<Descriptor, (DescriptorInfo, vk::ShaderStageFlags)>;
 
 #[profiling::function]
@@ -576,6 +580,11 @@ impl SamplerInfo {
         Self::default().into_builder()
     }
 
+    /// Creates a default `SamplerInfoBuilder`.
+    pub fn builder() -> SamplerInfoBuilder {
+        Default::default()
+    }
+
     /// Converts a `SamplerInfo` into a `SamplerInfoBuilder`.
     pub fn into_builder(self) -> SamplerInfoBuilder {
         SamplerInfoBuilder {
@@ -894,6 +903,11 @@ impl Shader {
                 _ => None,
             }),
         )
+    }
+
+    /// Creates a default `ShaderBuilder`.
+    pub fn builder() -> ShaderBuilder {
+        Default::default()
     }
 
     #[profiling::function]
@@ -1541,6 +1555,45 @@ impl<'a> From<&'a SpecializationMap> for vk::SpecializationInfo<'a> {
         vk::SpecializationInfo::default()
             .map_entries(&value.entries)
             .data(&value.data)
+    }
+}
+
+mod deprecated {
+    use {
+        crate::driver::shader::{ShaderBuilder, SpecializationMap},
+        ash::vk,
+    };
+
+    #[derive(Clone, Debug)]
+    pub struct SpecializationInfo {
+        pub data: Vec<u8>,
+        pub map_entries: Vec<vk::SpecializationMapEntry>,
+    }
+
+    impl SpecializationInfo {
+        pub fn new(
+            map_entries: impl Into<Vec<vk::SpecializationMapEntry>>,
+            data: impl Into<Vec<u8>>,
+        ) -> Self {
+            Self {
+                data: data.into(),
+                map_entries: map_entries.into(),
+            }
+        }
+    }
+
+    impl ShaderBuilder {
+        #[deprecated = "use specialization function"]
+        #[doc(hidden)]
+        pub fn specialization_info(self, info: SpecializationInfo) -> Self {
+            let mut specialization = SpecializationMap::new(info.data);
+
+            for entry in &info.map_entries {
+                specialization.set_constant(entry.constant_id, entry.offset, entry.size);
+            }
+
+            self.specialization(specialization)
+        }
     }
 }
 

@@ -207,12 +207,15 @@ impl<'a, T> PipelineCommandRef<'a, T> {
     }
 }
 
+#[allow(deprecated)]
 #[allow(unused)]
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{PipelineCommandRef, SubresourceRange, View},
+            BindGraph, Bound, Graph,
+            cmd::{Descriptor, PipelineCommandRef, SubresourceRange, View},
             deprecated::Info,
+            graph::pass_ref::ViewType,
             node::Node,
         },
         ash::vk,
@@ -220,9 +223,65 @@ mod deprecated {
     };
 
     impl<'a, T> PipelineCommandRef<'a, T> {
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn access_descriptor<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            access: AccessType,
+        ) -> Self
+        where
+            N: Node + Info + View,
+            ViewType: From<<N as View>::Info>,
+            <N as View>::Info: Copy + From<<N as Info>::Type>,
+            <N as View>::Range: From<<N as View>::Info>,
+        {
+            let view_info = View::info(&node, &self.cmd.graph.resources);
+
+            self.access_descriptor_as(descriptor, node, access, view_info)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn access_descriptor_as<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            access: AccessType,
+            view_info: impl Into<N::Info>,
+        ) -> Self
+        where
+            N: View,
+            <N as View>::Info: Copy + Into<ViewType>,
+            <N as View>::Range: From<<N as View>::Info>,
+        {
+            let view_info = view_info.into();
+            let subresource = <N as View>::Range::from(view_info);
+
+            self.access_descriptor_subrange(descriptor, node, access, view_info, subresource)
+        }
+
+        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[doc(hidden)]
+        pub fn access_descriptor_subrange<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+            access: AccessType,
+            view_info: impl Into<N::Info>,
+            subresource: impl Into<N::Range>,
+        ) -> Self
+        where
+            N: View,
+            <N as View>::Info: Into<ViewType>,
+        {
+            unimplemented!()
+        }
+
         #[deprecated = "use resource_access function"]
         #[doc(hidden)]
-        pub fn access_resource<N>(mut self, node: N, access: AccessType) -> Self
+        pub fn access_node<N>(mut self, node: N, access: AccessType) -> Self
         where
             N: Node + View,
             SubresourceRange: From<N::Range>,
@@ -232,17 +291,42 @@ mod deprecated {
 
         #[deprecated = "use subresource_access function"]
         #[doc(hidden)]
-        pub fn access_subresource<N>(
+        pub fn access_node_subrange<N>(
             mut self,
             node: N,
-            subresource: impl Into<N::Range>,
             access: AccessType,
+            subresource: impl Into<N::Range>,
         ) -> Self
         where
             N: Node + View,
             SubresourceRange: From<N::Range>,
         {
-            self.subresource_access(node, subresource, access)
+            self.access_node_subrange_mut(node, access, subresource);
+            self
+        }
+
+        #[deprecated = "use set_subresource_access function"]
+        #[doc(hidden)]
+        pub fn access_node_subrange_mut<N>(
+            &mut self,
+            node: N,
+            access: AccessType,
+            subresource: impl Into<N::Range>,
+        ) -> &mut Self
+        where
+            N: Node + View,
+            SubresourceRange: From<N::Range>,
+        {
+            self.set_subresource_access(node, subresource, access)
+        }
+
+        #[deprecated = "use bind_resource function"]
+        #[doc(hidden)]
+        pub fn bind_node<R>(&mut self, resource: R) -> R::Node
+        where
+            R: BindGraph,
+        {
+            self.bind_resource(resource)
         }
 
         #[deprecated = "use device_address function of resource function result"]
@@ -263,6 +347,12 @@ mod deprecated {
             N: Node + Info,
         {
             node.info(&self.cmd.graph.resources)
+        }
+
+        #[deprecated = "use end_cmd function"]
+        #[doc(hidden)]
+        pub fn submit_pass(self) -> &'a mut Graph {
+            self.end_cmd()
         }
     }
 }

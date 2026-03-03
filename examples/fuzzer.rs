@@ -26,7 +26,7 @@ use {
     log::debug,
     rand::{Rng, rng, seq::IndexedRandom},
     std::mem::size_of,
-    vk_graph::cmd_ref::{BuildAccelerationStructureInfo, LoadOp},
+    vk_graph::cmd::{BuildAccelerationStructureInfo, LoadOp},
     vk_graph_prelude::*,
     vk_graph_window::{FrameContext, WindowBuilder, WindowError},
     vk_shader_macros::glsl,

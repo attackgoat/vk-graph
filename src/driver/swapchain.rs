@@ -553,6 +553,13 @@ pub struct SwapchainInfo {
 
     /// The initial width of the surface.
     pub width: u32,
+
+    /// NOTE: This field does not do anything, use the new one
+    #[builder(default)]
+    #[builder_field_attr(deprecated = "use min_image_count field")]
+    #[builder_setter_attr(deprecated = "use min_image_count field")]
+    #[deprecated = "use min_image_count field"]
+    pub desired_image_count: u32,
 }
 
 impl SwapchainInfo {
@@ -560,6 +567,8 @@ impl SwapchainInfo {
     #[inline(always)]
     pub fn new(width: u32, height: u32, surface: vk::SurfaceFormatKHR) -> SwapchainInfo {
         Self {
+            #[allow(deprecated)]
+            desired_image_count: 0,
             height,
             min_image_count: 2,
             present_mode: vk::PresentModeKHR::MAILBOX,
@@ -568,9 +577,16 @@ impl SwapchainInfo {
         }
     }
 
+    /// Creates a default `SwapchainInfoBuilder`.
+    pub fn builder() -> SwapchainInfoBuilder {
+        Default::default()
+    }
+
     /// Converts a `SwapchainInfo` into a `SwapchainInfoBuilder`.
     pub fn into_builder(self) -> SwapchainInfoBuilder {
         SwapchainInfoBuilder {
+            #[allow(deprecated)]
+            desired_image_count: Some(self.desired_image_count),
             height: Some(self.height),
             min_image_count: Some(self.min_image_count),
             present_mode: Some(self.present_mode),
@@ -617,6 +633,20 @@ struct SwapchainInfoBuilderError(UninitializedFieldError);
 impl From<UninitializedFieldError> for SwapchainInfoBuilderError {
     fn from(err: UninitializedFieldError) -> Self {
         Self(err)
+    }
+}
+
+mod deprecated {
+    use ash::vk;
+
+    use crate::driver::swapchain::SwapchainInfoBuilder;
+
+    impl SwapchainInfoBuilder {
+        #[deprecated = "use present_mode function"]
+        #[doc(hidden)]
+        pub fn present_modes(self, modes: impl Into<Vec<vk::PresentModeKHR>>) -> Self {
+            self.present_mode(modes.into()[0])
+        }
     }
 }
 

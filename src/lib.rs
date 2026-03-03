@@ -351,7 +351,7 @@ layout.
 
 #![warn(missing_docs)]
 
-pub mod cmd_ref;
+pub mod cmd;
 pub mod driver;
 pub mod node;
 pub mod pool;
@@ -359,16 +359,19 @@ pub mod pool;
 mod bind;
 mod queue;
 
-use crate::cmd_ref::CommandBufferRef;
+use crate::cmd::CommandBufferRef;
 
 pub use self::{
     bind::{BindGraph, Bound, Resource},
     queue::Queue,
 };
 
+#[allow(deprecated)]
+pub use self::deprecated::{Display, DisplayInfo, DisplayInfoBuilder};
+
 use {
     self::{
-        cmd_ref::{AttachmentIndex, CommandRef, Descriptor, SubresourceAccess, ViewInfo},
+        cmd::{AttachmentIndex, CommandRef, Descriptor, SubresourceAccess, ViewInfo},
         node::Node,
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
@@ -472,6 +475,25 @@ pub enum ClearColorValue {
 
     /// Value as [u32].
     Uint32([u32; 4]),
+}
+
+impl ClearColorValue {
+    /// rgb zeros and alpha ones.
+    pub const BLACK_ALPHA_ONE: Self = Self::Float32([0.0, 0.0, 0.0, 1.0]);
+
+    /// zeros.
+    pub const BLACK_ALPHA_ZERO: Self = Self::Float32([0.0, 0.0, 0.0, 0.0]);
+
+    /// rgb zeros and alpha ones.
+    pub const WHITE_ALPHA_ONE: Self = Self::Float32([1.0, 1.0, 1.0, 1.0]);
+
+    /// rgb ones and alpha zeros.
+    pub const WHITE_ALPHA_ZERO: Self = Self::Float32([1.0, 1.0, 1.0, 0.0]);
+
+    /// Convenience constructor for clear color values.
+    pub fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self::Float32([r, g, b, a])
+    }
 }
 
 impl From<[f32; 4]> for ClearColorValue {
@@ -1108,7 +1130,7 @@ impl Graph {
         self.copy_image_to_buffer_region(
             src,
             dst,
-            vk::BufferImageCopy {
+            [vk::BufferImageCopy {
                 buffer_offset: 0,
                 buffer_row_length: src_info.width,
                 buffer_image_height: src_info.height,
@@ -1124,23 +1146,13 @@ impl Graph {
                     height: src_info.height,
                     width: src_info.width,
                 },
-            },
+            }],
         )
     }
 
     /// Copy image data into a buffer.
-    pub fn copy_image_to_buffer_region(
-        &mut self,
-        src: impl Into<AnyImageNode>,
-        dst: impl Into<AnyBufferNode>,
-        region: vk::BufferImageCopy,
-    ) -> &mut Self {
-        self.copy_image_to_buffer_regions(src, dst, [region])
-    }
-
-    /// Copy image data into a buffer.
     #[profiling::function]
-    pub fn copy_image_to_buffer_regions(
+    pub fn copy_image_to_buffer_region(
         &mut self,
         src: impl Into<AnyImageNode>,
         dst: impl Into<AnyBufferNode>,
@@ -1294,24 +1306,313 @@ impl Graph {
     }
 }
 
+#[deprecated]
+#[doc(hidden)]
+pub mod graph {
+    #[deprecated = "use vk_graph::node module"]
+    pub mod node {
+        #[deprecated = "use vk_graph::node::AccelerationStructureLeaseNode"]
+        pub type AccelerationStructureLeaseNode = crate::node::AccelerationStructureLeaseNode;
+
+        #[deprecated = "use vk_graph::node::AccelerationStructureNode"]
+        pub type AccelerationStructureNode = crate::node::AccelerationStructureNode;
+
+        #[deprecated = "use vk_graph::node::AnyAccelerationStructureNode"]
+        pub type AnyAccelerationStructureNode = crate::node::AnyAccelerationStructureNode;
+
+        #[deprecated = "use vk_graph::node::AnyBufferNode"]
+        pub type AnyBufferNode = crate::node::AnyBufferNode;
+
+        #[deprecated = "use vk_graph::node::AnyImageNode"]
+        pub type AnyImageNode = crate::node::AnyImageNode;
+
+        #[deprecated = "use vk_graph::node::BufferLeaseNode"]
+        pub type BufferLeaseNode = crate::node::BufferLeaseNode;
+
+        #[deprecated = "use vk_graph::node::BufferNode"]
+        pub type BufferNode = crate::node::BufferNode;
+
+        #[deprecated = "use vk_graph::node::ImageLeaseNode"]
+        pub type ImageLeaseNode = crate::node::ImageLeaseNode;
+
+        #[deprecated = "use vk_graph::node::ImageNode"]
+        pub type ImageNode = crate::node::ImageNode;
+
+        #[deprecated = "use vk_graph::node::Node"]
+        pub type Node = dyn crate::node::Node;
+
+        #[deprecated = "use vk_graph::node::SwapchainImageNode"]
+        pub type SwapchainImageNode = crate::node::SwapchainImageNode;
+    }
+
+    #[deprecated]
+    #[doc(hidden)]
+    pub mod pass_ref {
+        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        pub type Acceleration<'a> = crate::cmd::CommandBufferRef<'a>;
+
+        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        pub type AccelerationStructureBuildInfo = crate::cmd::BuildAccelerationStructureInfo;
+
+        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        pub type AccelerationStructureIndirectBuildInfo =
+            crate::cmd::BuildAccelerationStructureIndirectInfo;
+
+        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        pub type AccelerationStructureIndirectUpdateInfo =
+            crate::cmd::UpdateAccelerationStructureIndirectInfo;
+
+        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        pub type AccelerationStructureUpdateInfo = crate::cmd::UpdateAccelerationStructureInfo;
+
+        #[deprecated = "use vk_graph::Descriptor"]
+        pub type Descriptor = crate::Descriptor;
+
+        #[deprecated = "use vk_graph::cmd::GraphicCommandBufferRef"]
+        pub type Draw<'a> = crate::cmd::GraphicCommandBufferRef<'a>;
+
+        #[deprecated = "use vk_graph::cmd::CommandRef"]
+        pub type PassRef<'a> = crate::cmd::CommandRef<'a>;
+
+        #[deprecated = "use vk_graph::cmd::PipelineCommandRef"]
+        pub type PipelinePassRef<'a, T> = crate::cmd::PipelineCommandRef<'a, T>;
+
+        #[deprecated = "use vk_graph::cmd::RayTraceCommandBufferRef"]
+        pub type RayTrace<'a> = crate::cmd::RayTraceCommandBufferRef<'a>;
+
+        #[deprecated = "use vk_graph::ViewInfo"]
+        pub type ViewType = crate::cmd::ViewInfo;
+
+        #[deprecated = "remove"]
+        pub trait View {
+            type Information;
+        }
+    }
+
+    #[deprecated = "use vk_graph::Graph"]
+    pub type RenderGraph = crate::Graph;
+
+    #[deprecated = "use vk_graph::Queue"]
+    pub type Resolver = crate::Queue;
+}
+
+#[allow(deprecated)]
 #[allow(unused)]
+#[doc(hidden)]
 pub(crate) mod deprecated {
     use {
         crate::{
-            Graph,
+            BindGraph, Graph,
             bind::Resource,
             driver::{
-                accel_struct::AccelerationStructureInfo, buffer::BufferInfo, image::ImageInfo,
+                DriverError,
+                accel_struct::{AccelerationStructure, AccelerationStructureInfo},
+                buffer::{Buffer, BufferInfo},
+                cmd_buf::{CommandBuffer, CommandBufferInfo},
+                descriptor_set::{DescriptorPool, DescriptorPoolInfo},
+                device::Device,
+                image::{Image, ImageInfo},
+                render_pass::{RenderPass, RenderPassInfo},
+                swapchain::{Swapchain, SwapchainImage, SwapchainInfo},
             },
             node::{
-                AccelerationStructureLeaseNode, AccelerationStructureNode, BufferLeaseNode,
+                AccelerationStructureLeaseNode, AccelerationStructureNode,
+                AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode,
                 BufferNode, ImageLeaseNode, ImageNode, Node, SwapchainImageNode,
             },
+            pool::{Lease, Pool},
         },
         ash::vk,
+        std::{ops::Range, sync::Arc},
     };
 
+    /// Specifies a color attachment clear value which can be used to initliaze an image.
+    #[derive(Clone, Copy, Debug)]
+    pub struct ClearColorValue(pub [f32; 4]);
+
+    impl From<[f32; 3]> for ClearColorValue {
+        fn from(color: [f32; 3]) -> Self {
+            [color[0], color[1], color[2], 1.0].into()
+        }
+    }
+
+    impl From<[f32; 4]> for ClearColorValue {
+        fn from(color: [f32; 4]) -> Self {
+            Self(color)
+        }
+    }
+
+    impl From<[u8; 3]> for ClearColorValue {
+        fn from(color: [u8; 3]) -> Self {
+            [color[0], color[1], color[2], u8::MAX].into()
+        }
+    }
+
+    impl From<[u8; 4]> for ClearColorValue {
+        fn from(color: [u8; 4]) -> Self {
+            [
+                color[0] as f32 / u8::MAX as f32,
+                color[1] as f32 / u8::MAX as f32,
+                color[2] as f32 / u8::MAX as f32,
+                color[3] as f32 / u8::MAX as f32,
+            ]
+            .into()
+        }
+    }
+
+    #[deprecated = "use Swapchain from vk_graph_window crate"]
+    #[derive(Debug)]
+    pub struct Display;
+
+    impl Display {
+        pub fn new(
+            device: &Arc<Device>,
+            swapchain: Swapchain,
+            info: impl Into<DisplayInfo>,
+        ) -> Result<Self, DriverError> {
+            todo!()
+        }
+
+        pub fn acquire_next_image(&mut self) -> Result<Option<SwapchainImage>, DisplayError> {
+            todo!()
+        }
+
+        pub fn present_image(
+            &mut self,
+            pool: &mut impl ResolverPool,
+            render_graph: crate::graph::RenderGraph,
+            swapchain_image: SwapchainImageNode,
+            queue_index: u32,
+        ) -> Result<(), DisplayError> {
+            todo!()
+        }
+
+        pub fn set_swapchain_info(&mut self, info: impl Into<SwapchainInfo>) {
+            todo!()
+        }
+
+        pub fn swapchain_info(&self) -> SwapchainInfo {
+            todo!()
+        }
+    }
+
+    #[deprecated = "use vk_graph_window::SwapchainError"]
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct DisplayError;
+
+    #[deprecated = "use vk_graph_window::SwapchainInfo"]
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct DisplayInfo;
+
+    #[deprecated = "use vk_graph_window::SwapchainInfoBuilder"]
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct DisplayInfoBuilder;
+
+    // General stuff
     impl Graph {
+        #[deprecated = "use begin_cmd function"]
+        #[doc(hidden)]
+        pub fn begin_pass(&mut self, name: impl AsRef<str>) -> crate::graph::pass_ref::PassRef<'_> {
+            self.begin_cmd().debug_name(name.as_ref().to_owned())
+        }
+
+        #[deprecated = "use bind_resource function"]
+        #[doc(hidden)]
+        pub fn bind_node<R>(&mut self, resource: R) -> R::Node
+        where
+            R: BindGraph,
+        {
+            self.bind_resource(resource)
+        }
+
+        #[deprecated = "use blit_image_region function"]
+        #[doc(hidden)]
+        pub fn blit_image_regions(
+            &mut self,
+            src_node: impl Into<AnyImageNode>,
+            dst_node: impl Into<AnyImageNode>,
+            filter: vk::Filter,
+            regions: impl AsRef<[vk::ImageBlit]> + 'static + Send,
+        ) -> &mut Self {
+            self.blit_image_region(src_node, dst_node, filter, regions)
+        }
+
+        #[deprecated = "use clear_color_image function"]
+        #[doc(hidden)]
+        pub fn clear_color_image_value(
+            &mut self,
+            image_node: impl Into<AnyImageNode>,
+            color_value: impl Into<ClearColorValue>,
+        ) -> &mut Self {
+            self.clear_color_image(image_node, color_value.into().0)
+        }
+
+        #[deprecated = "use clear_depth_stencil_image function"]
+        #[doc(hidden)]
+        pub fn clear_depth_stencil_image_value(
+            &mut self,
+            image_node: impl Into<AnyImageNode>,
+            depth: f32,
+            stencil: u32,
+        ) -> &mut Self {
+            self.clear_depth_stencil_image(image_node, depth, stencil)
+        }
+
+        #[deprecated = "use copy_buffer_region function"]
+        #[doc(hidden)]
+        pub fn copy_buffer_regions(
+            &mut self,
+            src_node: impl Into<AnyBufferNode>,
+            dst_node: impl Into<AnyBufferNode>,
+            regions: impl AsRef<[vk::BufferCopy]> + 'static + Send,
+        ) -> &mut Self {
+            self.copy_buffer_region(src_node, dst_node, regions)
+        }
+
+        #[deprecated = "use copy_buffer_to_image_region function"]
+        #[doc(hidden)]
+        pub fn copy_buffer_to_image_regions(
+            &mut self,
+            src_node: impl Into<AnyBufferNode>,
+            dst_node: impl Into<AnyImageNode>,
+            regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
+        ) -> &mut Self {
+            self.copy_buffer_to_image_region(src_node, dst_node, regions)
+        }
+
+        #[deprecated = "use copy_image_region function"]
+        #[doc(hidden)]
+        pub fn copy_image_regions(
+            &mut self,
+            src_node: impl Into<AnyImageNode>,
+            dst_node: impl Into<AnyImageNode>,
+            regions: impl AsRef<[vk::ImageCopy]> + 'static + Send,
+        ) -> &mut Self {
+            self.copy_image_region(src_node, dst_node, regions)
+        }
+
+        #[deprecated = "use copy_image_to_buffer_region function"]
+        #[doc(hidden)]
+        pub fn copy_image_to_buffer_regions(
+            &mut self,
+            src_node: impl Into<AnyImageNode>,
+            dst_node: impl Into<AnyBufferNode>,
+            regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
+        ) -> &mut Self {
+            self.copy_image_to_buffer_region(src_node, dst_node, regions)
+        }
+
+        #[deprecated = "use fill_buffer function"]
+        #[doc(hidden)]
+        pub fn fill_buffer_region(
+            &mut self,
+            buffer_node: impl Into<AnyBufferNode>,
+            data: u32,
+            region: Range<vk::DeviceSize>,
+        ) -> &mut Self {
+            self.fill_buffer(buffer_node, region, data)
+        }
+
         #[deprecated = "use device_address function of resource function result"]
         #[doc(hidden)]
         pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {
@@ -1330,6 +1631,32 @@ pub(crate) mod deprecated {
             N: Node + Info,
         {
             node.info(&self.resources)
+        }
+
+        #[deprecated = "use queue function"]
+        #[doc(hidden)]
+        pub fn resolve(self) -> crate::graph::Resolver {
+            self.queue()
+        }
+
+        #[deprecated = "use resource and clone functions"]
+        #[doc(hidden)]
+        pub fn unbind_node<N>(&mut self, node: N) -> N::Result
+        where
+            N: Unbind,
+        {
+            node.unbind(&self.resources)
+        }
+
+        #[deprecated = "use update_buffer function"]
+        #[doc(hidden)]
+        pub fn update_buffer_offset(
+            &mut self,
+            buffer_node: impl Into<AnyBufferNode>,
+            offset: vk::DeviceSize,
+            data: impl AsRef<[u8]> + 'static + Send,
+        ) -> &mut Self {
+            self.update_buffer(buffer_node, offset, data)
         }
     }
 
@@ -1366,6 +1693,17 @@ pub(crate) mod deprecated {
                     }
                 }
 
+                impl Info for [<Any $name Node>] {
+                    type Type = [<$name Info>];
+
+                    fn info(&self, resources: &[Resource]) -> Self::Type
+                    where
+                        Self: Node,
+                    {
+                        resources[self.index()].[<as_ $name:snake>]().unwrap().info
+                    }
+                }
+
                 impl Info for [<$name LeaseNode>] {
                     type Type = [<$name Info>];
 
@@ -1376,6 +1714,22 @@ pub(crate) mod deprecated {
                         resources[self.idx].[<as_ $name:snake _lease>]().unwrap().info
                     }
                 }
+
+                impl Unbind for [<$name Node>] {
+                    type Result = Arc<$name>;
+
+                    fn unbind(&self, resources: &[Resource]) -> Self::Result {
+                        resources[self.index()].[<as_ $name:snake>]().unwrap().clone()
+                    }
+                }
+
+                impl Unbind for [<$name LeaseNode>] {
+                    type Result = Arc<Lease<$name>>;
+
+                    fn unbind(&self, resources: &[Resource]) -> Self::Result {
+                        resources[self.index()].[<as_ $name:snake _lease>]().unwrap().clone()
+                    }
+                }
             }
         };
     }
@@ -1383,4 +1737,19 @@ pub(crate) mod deprecated {
     info!(AccelerationStructure);
     info!(Buffer);
     info!(Image);
+
+    #[deprecated = "remove"]
+    pub trait ResolverPool:
+        Pool<DescriptorPoolInfo, DescriptorPool>
+        + Pool<RenderPassInfo, RenderPass>
+        + Pool<CommandBufferInfo, CommandBuffer>
+        + Send
+    {
+    }
+
+    pub trait Unbind: Node {
+        type Result;
+
+        fn unbind(&self, _: &[Resource]) -> Self::Result;
+    }
 }

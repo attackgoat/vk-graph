@@ -40,7 +40,7 @@ use crate::Execution;
 /// # let mut my_graph = Graph::default();
 /// # let info = AccelerationStructureInfo::blas(1);
 /// my_graph.begin_cmd()
-///         .record_accel_struct(move |accel_struct, nodes| {
+///         .record_cmd_buf(move |cmd_buf| {
 ///             // During this closure we have access to the build and update methods
 ///         });
 /// # Ok(()) }
@@ -90,7 +90,7 @@ impl<'a> CommandBufferRef<'a> {
     ///
     /// ```no_run
     /// # use ash::vk;
-    /// # use vk_graph::cmd_ref::BuildAccelerationStructureInfo;
+    /// # use vk_graph::cmd::BuildAccelerationStructureInfo;
     /// # use vk_graph::driver::{sync::AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, AccelerationStructureInfo, DeviceOrHostAddress};
@@ -691,6 +691,172 @@ impl UpdateAccelerationStructureInfo {
             scratch_addr,
             src_accel_struct,
             update_data,
+        }
+    }
+}
+
+#[allow(missing_docs)]
+#[allow(deprecated)]
+mod deprecated {
+    use ash::vk;
+
+    use crate::{
+        cmd::{
+            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo,
+            CommandBufferRef, UpdateAccelerationStructureIndirectInfo,
+            UpdateAccelerationStructureInfo,
+        },
+        driver::accel_struct::{
+            AccelerationStructureGeometry, AccelerationStructureGeometryInfo, DeviceOrHostAddress,
+        },
+        graph::pass_ref::{
+            AccelerationStructureBuildInfo, AccelerationStructureIndirectBuildInfo,
+            AccelerationStructureIndirectUpdateInfo, AccelerationStructureUpdateInfo,
+        },
+        node::AnyAccelerationStructureNode,
+    };
+
+    impl<'a> CommandBufferRef<'a> {
+        #[deprecated = "use build_accel_struct function"]
+        #[doc(hidden)]
+        pub fn build_structure(
+            &self,
+            info: &AccelerationStructureGeometryInfo<(
+                AccelerationStructureGeometry,
+                vk::AccelerationStructureBuildRangeInfoKHR,
+            )>,
+            accel_struct: impl Into<AnyAccelerationStructureNode>,
+            scratch_addr: impl Into<DeviceOrHostAddress>,
+        ) -> &Self {
+            self.build_accel_struct(&[BuildAccelerationStructureInfo {
+                accel_struct: accel_struct.into(),
+                build_data: info.clone(),
+                scratch_addr: scratch_addr.into(),
+            }])
+        }
+
+        #[deprecated = "use build_accel_struct_indirect function"]
+        #[doc(hidden)]
+        pub fn build_structure_indirect(
+            &self,
+            info: &AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
+            accel_struct: impl Into<AnyAccelerationStructureNode>,
+            scratch_addr: impl Into<DeviceOrHostAddress>,
+            range_base: vk::DeviceAddress,
+            range_stride: u32,
+        ) -> &Self {
+            self.build_accel_struct_indirect(&[BuildAccelerationStructureIndirectInfo {
+                accel_struct: accel_struct.into(),
+                build_data: info.clone(),
+                range_base,
+                range_stride,
+                scratch_data: scratch_addr.into(),
+            }])
+        }
+
+        #[deprecated = "use build_accel_struct function"]
+        #[doc(hidden)]
+        pub fn build_structures(&self, infos: &[AccelerationStructureBuildInfo]) -> &Self {
+            for info in infos {
+                self.build_structure(&info.build_data, info.accel_struct, info.scratch_addr);
+            }
+
+            self
+        }
+
+        #[deprecated = "use build_accel_struct_indirect function"]
+        #[doc(hidden)]
+        pub fn build_structures_indirect(
+            &self,
+            infos: &[AccelerationStructureIndirectBuildInfo],
+        ) -> &Self {
+            for info in infos {
+                self.build_structure_indirect(
+                    &info.build_data,
+                    info.accel_struct,
+                    info.scratch_data,
+                    info.range_base,
+                    info.range_stride,
+                );
+            }
+
+            self
+        }
+
+        #[deprecated = "use update_accel_struct function"]
+        #[doc(hidden)]
+        pub fn update_structure(
+            &self,
+            info: &AccelerationStructureGeometryInfo<(
+                AccelerationStructureGeometry,
+                vk::AccelerationStructureBuildRangeInfoKHR,
+            )>,
+            src_accel_struct: impl Into<AnyAccelerationStructureNode>,
+            dst_accel_struct: impl Into<AnyAccelerationStructureNode>,
+            scratch_addr: impl Into<DeviceOrHostAddress>,
+        ) -> &Self {
+            self.update_accel_struct(&[UpdateAccelerationStructureInfo {
+                src_accel_struct: src_accel_struct.into(),
+                dst_accel_struct: dst_accel_struct.into(),
+                update_data: info.clone(),
+                scratch_addr: scratch_addr.into(),
+            }])
+        }
+
+        #[deprecated = "use update_accel_struct_indirect function"]
+        #[doc(hidden)]
+        pub fn update_structure_indirect(
+            &self,
+            info: &AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
+            src_accel_struct: impl Into<AnyAccelerationStructureNode>,
+            dst_accel_struct: impl Into<AnyAccelerationStructureNode>,
+            scratch_addr: impl Into<DeviceOrHostAddress>,
+            range_base: vk::DeviceAddress,
+            range_stride: u32,
+        ) -> &Self {
+            self.update_accel_struct_indirect(&[UpdateAccelerationStructureIndirectInfo {
+                src_accel_struct: src_accel_struct.into(),
+                dst_accel_struct: dst_accel_struct.into(),
+                update_data: info.clone(),
+                range_base,
+                range_stride,
+                scratch_addr: scratch_addr.into(),
+            }])
+        }
+
+        #[deprecated = "use update_accel_struct function"]
+        #[doc(hidden)]
+        pub fn update_structures(&self, infos: &[AccelerationStructureUpdateInfo]) -> &Self {
+            for info in infos {
+                self.update_structure(
+                    &info.update_data,
+                    info.src_accel_struct,
+                    info.dst_accel_struct,
+                    info.scratch_addr,
+                );
+            }
+
+            self
+        }
+
+        #[deprecated = "use update_accel_struct_indirect function"]
+        #[doc(hidden)]
+        pub fn update_structures_indirect(
+            &self,
+            infos: &[AccelerationStructureIndirectUpdateInfo],
+        ) -> &Self {
+            for info in infos {
+                self.update_structure_indirect(
+                    &info.update_data,
+                    info.src_accel_struct,
+                    info.dst_accel_struct,
+                    info.scratch_addr,
+                    info.range_base,
+                    info.range_stride,
+                );
+            }
+
+            self
         }
     }
 }

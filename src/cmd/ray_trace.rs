@@ -326,7 +326,7 @@ impl<'a> Deref for RayTraceCommandBufferRef<'a> {
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{
+            cmd::{
                 Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
                 ray_trace::RayTraceCommandBufferRef,
             },
@@ -335,6 +335,14 @@ mod deprecated {
         },
         vk_sync::AccessType,
     };
+
+    impl RayTraceCommandBufferRef<'_> {
+        #[deprecated = "use push_constants function"]
+        #[doc(hidden)]
+        pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
+            self.push_constants(offset, data)
+        }
+    }
 
     impl PipelineCommandRef<'_, RayTracePipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer"]

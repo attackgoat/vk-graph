@@ -18,7 +18,7 @@ use {
 /// A trait for resources which may be bound to a `Graph`.
 ///
 /// See [`Graph::bind_resource`] and
-/// [`CommandRef::bind_resource`](super::cmd_ref::CommandRef::bind_resource) for details.
+/// [`CommandRef::bind_resource`](super::cmd::CommandRef::bind_resource) for details.
 pub trait BindGraph {
     /// The resource handle type.
     type Node;

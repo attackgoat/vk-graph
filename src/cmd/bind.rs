@@ -9,7 +9,7 @@ use {
 
 /// A trait for pipelines which may be bound to a `CommandRef`.
 ///
-/// See [`CommandRef::bind_pipeline`](super::cmd_ref::CommandRef::bind_pipeline) for details.
+/// See [`CommandRef::bind_pipeline`](super::cmd::CommandRef::bind_pipeline) for details.
 pub trait BindCommand<'a> {
     /// The resource reference type.
     type Ref;
@@ -27,32 +27,37 @@ macro_rules! bind_cmd_pipeline {
                 type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
 
                 fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
-                    let cmd_ref = cmd.cmd_mut();
-                    if cmd_ref.execs.last().unwrap().pipeline.is_some() {
-                        // Binding from PipelineCommandRef -> PipelineCommandRef (changing shaders)
-                        cmd_ref.execs.push(Default::default());
-                    }
+                    {
+                        let cmd = cmd.cmd_mut();
+                        if cmd.execs.last().unwrap().pipeline.is_some() {
+                            cmd.execs.push(Default::default());
+                        }
 
-                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self.clone()));
+                        cmd.execs.last_mut().unwrap().pipeline
+                            = Some(ExecutionPipeline::$name(self.clone()));
+                    }
 
                     Self::Ref {
                         __: PhantomData,
                         cmd,
                     }
                 }
+
             }
 
             impl<'a> BindCommand<'a> for [<$name Pipeline>] {
                 type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
 
                 fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
-                    let cmd_ref = cmd.cmd_mut();
-                    if cmd_ref.execs.last().unwrap().pipeline.is_some() {
-                        // Binding from PipelineCommandRef -> PipelineCommandRef (changing shaders)
-                        cmd_ref.execs.push(Default::default());
-                    }
+                    {
+                        let cmd = cmd.cmd_mut();
+                        if cmd.execs.last().unwrap().pipeline.is_some() {
+                            cmd.execs.push(Default::default());
+                        }
 
-                    cmd_ref.execs.last_mut().unwrap().pipeline = Some(ExecutionPipeline::$name(self));
+                        cmd.execs.last_mut().unwrap().pipeline
+                            = Some(ExecutionPipeline::$name(self));
+                    }
 
                     Self::Ref {
                         __: PhantomData,

@@ -224,11 +224,11 @@ impl Device {
             queues.push(queue_family.into_boxed_slice());
         }
 
-        let surface_ext = physical_device.display.then(|| {
+        let surface_ext = physical_device.surface_ext.then(|| {
             khr::surface::Instance::new(&physical_device.instance.entry, &physical_device.instance)
         });
         let swapchain_ext = physical_device
-            .display
+            .swapchain_ext
             .then(|| khr::swapchain::Device::new(&physical_device.instance, &device));
         let accel_struct_ext = physical_device
             .accel_struct_properties
@@ -427,49 +427,9 @@ pub struct DeviceInfo {
 }
 
 impl DeviceInfo {
-    /// A helper function which prioritizes selection of lower-power integrated GPU devices.
-    #[profiling::function]
-    pub fn integrated_gpu_index(physical_devices: &[PhysicalDevice]) -> usize {
-        Self::pick_best_gpu(
-            physical_devices,
-            &[
-                vk::PhysicalDeviceType::INTEGRATED_GPU,
-                vk::PhysicalDeviceType::DISCRETE_GPU,
-                vk::PhysicalDeviceType::VIRTUAL_GPU,
-                vk::PhysicalDeviceType::CPU,
-                vk::PhysicalDeviceType::OTHER,
-            ],
-        )
-    }
-
-    /// A helper function which prioritizes selection of higher-performance discrete GPU devices.
-    #[profiling::function]
-    pub fn discrete_gpu_index(physical_devices: &[PhysicalDevice]) -> usize {
-        Self::pick_best_gpu(
-            physical_devices,
-            &[
-                vk::PhysicalDeviceType::DISCRETE_GPU,
-                vk::PhysicalDeviceType::VIRTUAL_GPU,
-                vk::PhysicalDeviceType::INTEGRATED_GPU,
-                vk::PhysicalDeviceType::CPU,
-                vk::PhysicalDeviceType::OTHER,
-            ],
-        )
-    }
-
-    fn pick_best_gpu(
-        physical_devices: &[PhysicalDevice],
-        best: &[vk::PhysicalDeviceType],
-    ) -> usize {
-        for best in best.iter().copied() {
-            for (idx, physical_device) in physical_devices.iter().enumerate() {
-                if physical_device.properties_v1_0.device_type == best {
-                    return idx;
-                }
-            }
-        }
-
-        0
+    /// Creates a default `DeviceInfoBuilder`.
+    pub fn builder() -> DeviceInfoBuilder {
+        Default::default()
     }
 
     /// Converts a `DeviceInfo` into a `DeviceInfoBuilder`.
@@ -563,6 +523,74 @@ impl Deref for ReadOnlyDevice {
 
     fn deref(&self) -> &Self::Target {
         &self.inner.device
+    }
+}
+
+#[allow(deprecated)]
+#[allow(unused)]
+pub(crate) mod deprecated {
+    use {
+        crate::driver::{
+            DriverError,
+            device::{Device, DeviceInfo, DeviceInfoBuilder},
+        },
+        ash::vk,
+        raw_window_handle::HasDisplayHandle,
+        std::any::Any,
+    };
+
+    impl Device {
+        #[deprecated = "use from_display function"]
+        #[doc(hidden)]
+        pub fn create_display(
+            info: impl Into<DeviceInfo>,
+            display_handle: &impl HasDisplayHandle,
+        ) -> Result<Self, DriverError> {
+            Self::from_display(display_handle, info)
+        }
+
+        #[deprecated = "use new function"]
+        #[doc(hidden)]
+        pub fn create_headless(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
+            Self::new(info)
+        }
+        #[deprecated = "use format_properties function of physical_device field"]
+        #[doc(hidden)]
+        pub fn format_properties(this: &Self, format: vk::Format) -> vk::FormatProperties {
+            this.physical_device.format_properties(format)
+        }
+
+        #[deprecated = "use image_format_properties function of physical_device field"]
+        #[doc(hidden)]
+        pub fn image_format_properties(
+            this: &Self,
+            format: vk::Format,
+            ty: vk::ImageType,
+            tiling: vk::ImageTiling,
+            usage: vk::ImageUsageFlags,
+            flags: vk::ImageCreateFlags,
+        ) -> Result<Option<vk::ImageFormatProperties>, DriverError> {
+            this.physical_device
+                .image_format_properties(format, ty, tiling, usage, flags)
+        }
+    }
+
+    impl DeviceInfo {
+        #[deprecated = "use vk_graph::driver::instance::Instance::physical_devices function"]
+        #[doc(hidden)]
+        pub fn integrated_gpu() {}
+
+        #[deprecated = "use vk_graph::driver::instance::Instance::physical_devices function"]
+        #[doc(hidden)]
+        pub fn discrete_gpu() {}
+    }
+
+    impl DeviceInfoBuilder {
+        #[deprecated = "use vk_graph::driver::instance::Instance::physical_devices function"]
+        #[doc(hidden)]
+        pub fn select_physical_device(self, _: Box<dyn Fn()>) -> Self {
+            self
+        }
     }
 }
 

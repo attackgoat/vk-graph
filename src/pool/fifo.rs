@@ -43,14 +43,27 @@ use {
 /// of stored resources, however you may call [`FifoPool::clear`] or the other memory management
 /// functions at any time to discard stored resources.
 #[derive(Debug)]
+#[readonly::make]
 pub struct FifoPool {
     accel_struct_cache: Cache<AccelerationStructure>,
     buffer_cache: Cache<Buffer>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: Cache<DescriptorPool>,
-    device: Device,
+
+    /// The device which owns this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
     image_cache: Cache<Image>,
-    info: PoolInfo,
+
+    /// Information used to create this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub info: PoolInfo,
+
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
 

@@ -21,7 +21,7 @@ use {
     },
     tobj::{load_obj, GPU_LOAD_OPTIONS},
     vk_graph::{
-        cmd_ref::{LoadOp, StoreOp},
+        cmd::{LoadOp, StoreOp},
         driver::{
             ash::vk::{self},
             buffer::{Buffer, BufferInfo},

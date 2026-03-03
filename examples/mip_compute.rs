@@ -121,7 +121,7 @@ fn main() -> Result<(), DriverError> {
     graph.copy_image_to_buffer_region(
         depth_pyramid,
         depth_pixel,
-        vk::BufferImageCopy {
+        [vk::BufferImageCopy {
             buffer_offset: 0,
             buffer_row_length: 1,
             buffer_image_height: 1,
@@ -137,7 +137,7 @@ fn main() -> Result<(), DriverError> {
                 height: 1,
                 depth: 1,
             },
-        },
+        }],
     );
 
     let depth_pixel = graph.resource(depth_pixel).clone();

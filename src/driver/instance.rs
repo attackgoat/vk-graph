@@ -509,7 +509,7 @@ impl Deref for Instance {
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
-    derive(Clone, Debug),
+    derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
 pub struct InstanceInfo {
@@ -539,6 +539,11 @@ pub struct InstanceInfo {
 }
 
 impl InstanceInfo {
+    /// Creates a default `InstanceInfoBuilder`.
+    pub fn builder() -> InstanceInfoBuilder {
+        Default::default()
+    }
+
     /// Converts a `InstanceInfo` into a `InstanceInfoBuilder`.
     pub fn into_builder(self) -> InstanceInfoBuilder {
         InstanceInfoBuilder {

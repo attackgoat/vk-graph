@@ -851,6 +851,11 @@ impl ImageInfo {
         }
     }
 
+    /// Creates a default `ImageInfoBuilder`.
+    pub fn builder() -> ImageInfoBuilder {
+        Default::default()
+    }
+
     /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
     pub fn into_image_view(self) -> ImageViewInfo {
         self.into()

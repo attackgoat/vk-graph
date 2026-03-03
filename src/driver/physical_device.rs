@@ -153,11 +153,6 @@ pub struct PhysicalDevice {
     /// _Note:_ This field is read-only.
     pub depth_stencil_resolve_properties: DepthStencilResolveProperties,
 
-    /// True if the device may be used for windowed or full-screen display.
-    ///
-    /// _Note:_ This field is read-only.
-    pub display: bool,
-
     /// Describes the features of the physical device which are part of the Vulkan 1.0 base feature set.
     ///
     /// _Note:_ This field is read-only.
@@ -236,6 +231,16 @@ pub struct PhysicalDevice {
     ///
     /// _Note:_ This field is read-only.
     pub sampler_filter_minmax_properties: SamplerFilterMinmaxProperties,
+
+    /// True if the device may be used for windowed or full-screen display.
+    ///
+    /// _Note:_ This field is read-only.
+    pub surface_ext: bool,
+
+    /// True if the device may be used for windowed or full-screen display.
+    ///
+    /// _Note:_ This field is read-only.
+    pub swapchain_ext: bool,
 }
 
 impl PhysicalDevice {
@@ -351,8 +356,8 @@ impl PhysicalDevice {
         let supports_index_type_uint8 = extensions.contains(ext::index_type_uint8::NAME);
         let supports_ray_query = extensions.contains(khr::ray_query::NAME);
         let supports_ray_trace = extensions.contains(khr::ray_tracing_pipeline::NAME);
-        let supports_surface = extensions.contains(khr::surface::NAME);
-        let supports_swapchain = extensions.contains(khr::swapchain::NAME);
+        let surface_ext = extensions.contains(khr::surface::NAME);
+        let swapchain_ext = extensions.contains(khr::swapchain::NAME);
 
         // Gather optional features and properties of the physical device
         let index_type_uint8_features = if supports_index_type_uint8 {
@@ -372,12 +377,10 @@ impl PhysicalDevice {
         };
         let accel_struct_properties = supports_accel_struct.then(|| accel_struct_properties.into());
         let ray_trace_properties = supports_ray_trace.then(|| ray_trace_properties.into());
-        let display = supports_surface && supports_swapchain;
 
         Ok(Self {
             accel_struct_properties,
             depth_stencil_resolve_properties,
-            display,
             features_v1_0,
             features_v1_1,
             features_v1_2,
@@ -394,6 +397,8 @@ impl PhysicalDevice {
             ray_trace_features,
             ray_trace_properties,
             sampler_filter_minmax_properties,
+            surface_ext,
+            swapchain_ext,
         })
     }
 
@@ -415,7 +420,7 @@ impl PhysicalDevice {
     {
         let mut enabled_ext_names = Vec::with_capacity(6);
 
-        if self.display {
+        if self.swapchain_ext {
             enabled_ext_names.push(khr::swapchain::NAME.as_ptr());
         }
 

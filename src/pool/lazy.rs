@@ -73,14 +73,27 @@ impl From<ImageInfo> for ImageKey {
 /// If requests for varying resources is common [`LazyPool::clear_images_by_info`] and other memory
 /// management functions are nessecery in order to avoid using all available device memory.
 #[derive(Debug)]
+#[readonly::make]
 pub struct LazyPool {
     accel_struct_cache: HashMap<vk::AccelerationStructureTypeKHR, Cache<AccelerationStructure>>,
     buffer_cache: HashMap<(bool, vk::DeviceSize), Cache<Buffer>>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: Cache<DescriptorPool>,
-    device: Device,
+
+    /// The device which owns this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
     image_cache: HashMap<ImageKey, Cache<Image>>,
-    info: PoolInfo,
+
+    /// Information used to create this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub info: PoolInfo,
+
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
 

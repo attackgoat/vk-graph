@@ -2,11 +2,11 @@ use {
     super::{
         Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
         bind::ResourceInner,
-        cmd_ref::{SubresourceAccess, SubresourceRange},
+        cmd::{SubresourceAccess, SubresourceRange},
     },
     crate::{
         Bound,
-        cmd_ref::CommandBufferRef,
+        cmd::CommandBufferRef,
         driver::{
             AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DescriptorSet, DriverError,
             FramebufferAttachmentImageInfo, FramebufferInfo, SubpassDependency, SubpassInfo,
@@ -640,13 +640,13 @@ impl Queue {
         if log_enabled!(Trace) {
             let (ty, name, vk_pipeline) = match pipeline {
                 ExecutionPipeline::Compute(pipeline) => {
-                    ("compute", pipeline.name(), pipeline.handle())
+                    ("compute", pipeline.debug_name(), pipeline.handle())
                 }
                 ExecutionPipeline::Graphic(pipeline) => {
-                    ("graphic", pipeline.name(), vk::Pipeline::null())
+                    ("graphic", pipeline.debug_name(), vk::Pipeline::null())
                 }
                 ExecutionPipeline::RayTrace(pipeline) => {
-                    ("ray trace", pipeline.name(), pipeline.handle())
+                    ("ray trace", pipeline.debug_name(), pipeline.handle())
                 }
             };
             if let Some(name) = name {

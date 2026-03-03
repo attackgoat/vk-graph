@@ -39,14 +39,27 @@ use std::sync::Mutex;
 /// If requests for varying resources is common [`HashPool::clear_images_by_info`] and other memory
 /// management functions are nessecery in order to avoid using all available device memory.
 #[derive(Debug)]
+#[readonly::make]
 pub struct HashPool {
     acceleration_structure_cache: HashMap<AccelerationStructureInfo, Cache<AccelerationStructure>>,
     buffer_cache: HashMap<BufferInfo, Cache<Buffer>>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: HashMap<DescriptorPoolInfo, Cache<DescriptorPool>>,
-    device: Device,
+
+    /// The device which owns this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
     image_cache: HashMap<ImageInfo, Cache<Image>>,
-    info: PoolInfo,
+
+    /// Information used to create this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub info: PoolInfo,
+
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
 

@@ -4,7 +4,7 @@
 
 pub use vk_graph::{
     BindGraph, Bound, ClearColorValue, Graph,
-    cmd_ref::{
+    cmd::{
         BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef, LoadOp,
         PipelineCommandRef, StoreOp, UpdateAccelerationStructureIndirectInfo,
         UpdateAccelerationStructureInfo,

@@ -17,7 +17,7 @@ use {
         time::{Duration, Instant},
     },
     vk_graph::{
-        cmd_ref::{LoadOp, StoreOp},
+        cmd::{LoadOp, StoreOp},
         driver::{
             ash::vk,
             buffer::{Buffer, BufferInfo},

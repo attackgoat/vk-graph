@@ -356,7 +356,7 @@ impl PipelineCommandRef<'_, ComputePipeline> {
 mod deprecated {
     use {
         crate::{
-            cmd_ref::{
+            cmd::{
                 Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
                 compute::ComputeCommandBufferRef,
             },
@@ -366,6 +366,14 @@ mod deprecated {
         std::any::Any,
         vk_sync::AccessType,
     };
+
+    impl ComputeCommandBufferRef<'_> {
+        #[deprecated = "use push_constants function"]
+        #[doc(hidden)]
+        pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
+            self.push_constants(offset, data)
+        }
+    }
 
     impl PipelineCommandRef<'_, ComputePipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderReadOther"]

@@ -15,6 +15,7 @@ use {
     std::{
         collections::HashSet,
         ffi::CString,
+        hash::{Hash, Hasher},
         sync::{Arc, OnceLock},
         thread::panicking,
     },
@@ -539,7 +540,12 @@ impl GraphicPipeline {
         }
     }
 
-    /// The device which owns this compute pipeline.
+    /// Gets the debugging name assigned to this pipeline, if one has been set.
+    pub fn debug_name(&self) -> Option<&str> {
+        self.inner.name.get().map(String::as_str)
+    }
+
+    /// The device which owns this graphic pipeline.
     pub fn device(&self) -> &Device {
         &self.inner.device
     }
@@ -549,16 +555,11 @@ impl GraphicPipeline {
         self.inner.info
     }
 
-    /// Gets the debugging name assigned to this pipeline, if one has been set.
-    pub fn name(&self) -> Option<&str> {
-        self.inner.name.get().map(String::as_str)
-    }
-
     /// Sets the debugging name assigned to this pipeline.
     ///
     /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
     /// previously set name value.
-    pub fn set_name(&mut self, name: impl Into<String>) {
+    pub fn set_debug_name(&mut self, name: impl Into<String>) {
         if !self.inner.device.physical_device.instance.info.debug {
             return;
         }
@@ -571,10 +572,24 @@ impl GraphicPipeline {
     ///
     /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
     /// previously set name value.
-    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
-        self.set_name(name);
+    pub fn with_debug_name(mut self, name: impl Into<String>) -> Self {
+        self.set_debug_name(name);
 
         self
+    }
+}
+
+impl Eq for GraphicPipeline {}
+
+impl Hash for GraphicPipeline {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.inner).hash(state);
+    }
+}
+
+impl PartialEq for GraphicPipeline {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
@@ -856,7 +871,9 @@ pub(crate) struct VertexInputState {
 
 mod deprecated {
     use {
-        crate::driver::graphic::{BlendInfo, BlendInfoBuilder, DepthStencilInfo, StencilMode},
+        crate::driver::graphic::{
+            BlendInfo, BlendInfoBuilder, DepthStencilInfo, GraphicPipeline, StencilMode,
+        },
         ash::vk,
         ordered_float::OrderedFloat,
     };
@@ -904,6 +921,14 @@ mod deprecated {
         #[doc(hidden)]
         pub fn new() -> BlendInfoBuilder {
             Default::default()
+        }
+    }
+
+    impl GraphicPipeline {
+        #[deprecated = "use with_debug_name function"]
+        #[doc(hidden)]
+        pub fn with_name(this: Self, name: impl Into<String>) -> Self {
+            this.with_debug_name(name)
         }
     }
 }
