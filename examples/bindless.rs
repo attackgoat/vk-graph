@@ -80,7 +80,7 @@ fn create_images(device: &Device) -> Result<Vec<Arc<Image>>, DriverError> {
 
     let mut pool = LazyPool::new(device);
 
-    graph.queue().submit(&mut pool, 0, 0)?;
+    graph.into_queue().submit(&mut pool, 0, 0)?;
 
     Ok(textures)
 }

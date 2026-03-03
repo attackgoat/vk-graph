@@ -114,7 +114,7 @@ impl Context {
             let swapchain_image = graph.bind_resource(swapchain_image);
 
             // Rendering goes here!
-            graph.clear_color_image(swapchain_image, [1.0, 0.0, 1.0]);
+            graph.clear_color_image(swapchain_image, [1.0, 0.0, 1.0, 1.0]);
 
             self.window.pre_present_notify();
             self.swapchain

@@ -398,7 +398,7 @@ fn load_scene_buffers(
                     | vk::BufferUsageFlags::STORAGE_BUFFER,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, data);
+        buf.copy_from_slice(0, data);
         buf
     };
 
@@ -413,7 +413,7 @@ fn load_scene_buffers(
                     | vk::BufferUsageFlags::STORAGE_BUFFER,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, data);
+        buf.copy_from_slice(0, data);
         buf
     };
 
@@ -429,7 +429,7 @@ fn load_scene_buffers(
             device,
             BufferInfo::host_mem(data.len() as _, vk::BufferUsageFlags::STORAGE_BUFFER),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, data);
+        buf.copy_from_slice(0, data);
         buf
     };
 
@@ -466,7 +466,7 @@ fn load_scene_buffers(
             device,
             BufferInfo::host_mem(buf_len as _, vk::BufferUsageFlags::STORAGE_BUFFER),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, unsafe {
+        buf.copy_from_slice(0, unsafe {
             from_raw_parts(materials.as_ptr() as *const _, buf_len)
         });
         buf
@@ -551,7 +551,7 @@ fn main() -> anyhow::Result<()> {
 
         buf
     });
-    let sbt_address = Buffer::device_address(&sbt_buf);
+    let sbt_address = sbt_buf.device_address();
     let sbt_rgen = vk::StridedDeviceAddressRegionKHR {
         device_address: sbt_address,
         stride: shader_group_handle_size as _,
@@ -584,11 +584,11 @@ fn main() -> anyhow::Result<()> {
         AccelerationStructureGeometry::opaque(
             triangle_count,
             AccelerationStructureGeometryData::triangles(
-                Buffer::device_address(&index_buf),
+                index_buf.device_address(),
                 vk::IndexType::UINT32,
                 vertex_count,
                 None,
-                Buffer::device_address(&vertex_buf),
+                vertex_buf.device_address(),
                 vk::Format::R32G32B32_SFLOAT,
                 12,
             ),
@@ -633,7 +633,7 @@ fn main() -> anyhow::Result<()> {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buffer, 0, instance_data);
+        buffer.copy_from_slice(0, instance_data);
 
         buffer
     });
@@ -645,7 +645,7 @@ fn main() -> anyhow::Result<()> {
     let tlas_geometry_info = AccelerationStructureGeometryInfo::tlas([(
         AccelerationStructureGeometry::opaque(
             1,
-            AccelerationStructureGeometryData::instances(Buffer::device_address(&instance_buf)),
+            AccelerationStructureGeometryData::instances(instance_buf.device_address()),
         ),
         vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
     )]);
@@ -733,7 +733,7 @@ fn main() -> anyhow::Result<()> {
                 });
         }
 
-        graph.queue().submit(&mut cache, 0, 0)?;
+        graph.into_queue().submit(&mut cache, 0, 0)?;
     }
 
     // ------------------------------------------------------------------------------------------ //
@@ -833,7 +833,7 @@ fn main() -> anyhow::Result<()> {
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 ))
                 .unwrap();
-            Buffer::copy_from_slice(&mut buf, 0, unsafe {
+            buf.copy_from_slice(0, unsafe {
                 std::slice::from_raw_parts(
                     &Camera {
                         position,

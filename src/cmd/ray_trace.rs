@@ -13,6 +13,15 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
         mut self,
         func: impl FnOnce(RayTraceCommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
+        self.record_cmd_buf_mut(func);
+        self
+    }
+
+    /// Begin recording a ray trace pipeline command buffer.
+    pub fn record_cmd_buf_mut(
+        &mut self,
+        func: impl FnOnce(RayTraceCommandBufferRef<'_>) + Send + 'static,
+    ) {
         let pipeline = self
             .cmd
             .cmd()
@@ -38,8 +47,6 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
                 pipeline,
             });
         });
-
-        self
     }
 }
 

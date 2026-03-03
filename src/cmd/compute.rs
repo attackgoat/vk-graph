@@ -332,6 +332,15 @@ impl PipelineCommandRef<'_, ComputePipeline> {
         mut self,
         func: impl FnOnce(ComputeCommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
+        self.record_cmd_buf_mut(func);
+        self
+    }
+
+    /// Begin recording a compute pipeline command buffer.
+    pub fn record_cmd_buf_mut(
+        &mut self,
+        func: impl FnOnce(ComputeCommandBufferRef<'_>) + Send + 'static,
+    ) {
         let pipeline = self
             .cmd
             .cmd()
@@ -347,8 +356,6 @@ impl PipelineCommandRef<'_, ComputePipeline> {
         self.cmd.push_exec(move |cmd_buf| {
             func(ComputeCommandBufferRef { cmd_buf, pipeline });
         });
-
-        self
     }
 }
 

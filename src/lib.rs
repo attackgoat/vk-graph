@@ -491,20 +491,35 @@ impl ClearColorValue {
     pub const WHITE_ALPHA_ZERO: Self = Self::Float32([1.0, 1.0, 1.0, 0.0]);
 
     /// Convenience constructor for clear color values.
-    pub fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
+    pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self::Float32([r, g, b, a])
+    }
+
+    /// Convert RGB+A values into a ClearColorValue.
+    pub const fn from_f32(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self::rgba(r, g, b, a)
+    }
+
+    /// Convert RGB+A values into a ClearColorValue.
+    pub const fn from_u8(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self::from_f32(
+            r as f32 / u8::MAX as f32,
+            g as f32 / u8::MAX as f32,
+            b as f32 / u8::MAX as f32,
+            a as f32 / u8::MAX as f32,
+        )
+    }
+}
+
+impl Default for ClearColorValue {
+    fn default() -> Self {
+        Self::from_f32(0.0, 0.0, 0.0, 0.0)
     }
 }
 
 impl From<[f32; 4]> for ClearColorValue {
     fn from(float32: [f32; 4]) -> Self {
         Self::Float32(float32)
-    }
-}
-
-impl From<[f32; 3]> for ClearColorValue {
-    fn from(float32: [f32; 3]) -> Self {
-        Self::from([float32[0], float32[1], float32[2], 1.0])
     }
 }
 
@@ -516,18 +531,7 @@ impl From<[i32; 4]> for ClearColorValue {
 
 impl From<[u8; 4]> for ClearColorValue {
     fn from(uint8: [u8; 4]) -> Self {
-        Self::from([
-            uint8[0] as f32 / u8::MAX as f32,
-            uint8[1] as f32 / u8::MAX as f32,
-            uint8[2] as f32 / u8::MAX as f32,
-            uint8[3] as f32 / u8::MAX as f32,
-        ])
-    }
-}
-
-impl From<[u8; 3]> for ClearColorValue {
-    fn from(uint8: [u8; 3]) -> Self {
-        Self::from([uint8[0], uint8[1], uint8[2], u8::MAX])
+        Self::from_u8(uint8[0], uint8[1], uint8[2], uint8[3])
     }
 }
 
@@ -1244,6 +1248,18 @@ impl Graph {
         None
     }
 
+    /// Finalizes the graph and provides an object with functions for submitting the resulting
+    /// commands.
+    #[profiling::function]
+    pub fn into_queue(mut self) -> Queue {
+        // The final execution of each pass has no function
+        for cmd in &mut self.cmds {
+            cmd.execs.pop();
+        }
+
+        Queue::new(self)
+    }
+
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given node represents.
     pub fn resource<N>(&self, node: N) -> &N::Resource
@@ -1251,18 +1267,6 @@ impl Graph {
         N: Bound,
     {
         node.borrow(&self.resources)
-    }
-
-    /// Finalizes the graph and provides an object with functions for submitting the resulting
-    /// commands.
-    #[profiling::function]
-    pub fn queue(mut self) -> Queue {
-        // The final execution of each pass has no function
-        for cmd in &mut self.cmds {
-            cmd.execs.pop();
-        }
-
-        Queue::new(self)
     }
 
     /// Note: `data` must not exceed 65536 bytes.
@@ -1365,8 +1369,8 @@ pub mod graph {
         #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
         pub type AccelerationStructureUpdateInfo = crate::cmd::UpdateAccelerationStructureInfo;
 
-        #[deprecated = "use vk_graph::Descriptor"]
-        pub type Descriptor = crate::Descriptor;
+        #[deprecated = "use vk_graph::cmd::Descriptor"]
+        pub type Descriptor = crate::cmd::Descriptor;
 
         #[deprecated = "use vk_graph::cmd::GraphicCommandBufferRef"]
         pub type Draw<'a> = crate::cmd::GraphicCommandBufferRef<'a>;
@@ -1633,10 +1637,10 @@ pub(crate) mod deprecated {
             node.info(&self.resources)
         }
 
-        #[deprecated = "use queue function"]
+        #[deprecated = "use into_queue function"]
         #[doc(hidden)]
         pub fn resolve(self) -> crate::graph::Resolver {
-            self.queue()
+            self.into_queue()
         }
 
         #[deprecated = "use resource and clone functions"]

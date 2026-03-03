@@ -1195,7 +1195,7 @@ fn lease_uniform_buffer(
         data.len() as _,
         vk::BufferUsageFlags::UNIFORM_BUFFER,
     ))?;
-    Buffer::copy_from_slice(&mut buf, 0, data);
+    buf.copy_from_slice(0, data);
 
     Ok(buf)
 }

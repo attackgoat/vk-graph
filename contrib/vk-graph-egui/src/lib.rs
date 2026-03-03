@@ -113,7 +113,7 @@ impl Egui {
                             vk::BufferUsageFlags::TRANSFER_SRC,
                         ))
                         .unwrap();
-                    Buffer::copy_from_slice(&mut buf, 0, cast_slice(&pixels));
+                    buf.copy_from_slice(0, cast_slice(&pixels));
                     graph.bind_resource(buf)
                 };
 
@@ -235,7 +235,7 @@ impl Egui {
                                 vk::BufferUsageFlags::INDEX_BUFFER,
                             ))
                             .unwrap();
-                        Buffer::copy_from_slice(&mut buf, 0, cast_slice(&mesh.indices));
+                        buf.copy_from_slice(0, cast_slice(&mesh.indices));
                         buf
                     };
                     let idx_buf = graph.bind_resource(idx_buf);
@@ -249,7 +249,7 @@ impl Egui {
                                 vk::BufferUsageFlags::VERTEX_BUFFER,
                             ))
                             .unwrap();
-                        Buffer::copy_from_slice(&mut buf, 0, cast_slice(&mesh.vertices));
+                        buf.copy_from_slice(0, cast_slice(&mesh.vertices));
                         buf
                     };
                     let vert_buf = graph.bind_resource(vert_buf);

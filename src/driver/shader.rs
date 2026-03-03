@@ -23,6 +23,7 @@ use {
 };
 
 #[allow(deprecated)]
+#[deprecated = "use SpecializationMap struct"]
 #[doc(hidden)]
 pub type SpecializationInfo = self::deprecated::SpecializationInfo;
 

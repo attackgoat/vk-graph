@@ -46,7 +46,7 @@ use std::sync::Mutex;
 /// # let device = Device::new(DeviceInfo::default())?;
 /// # let info = BufferInfo::device_mem(8, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
 /// # let my_buf = Buffer::create(&device, info)?;
-/// let addr = Buffer::device_address(&my_buf);
+/// let addr = my_buf.device_address();
 /// # Ok(()) }
 /// ```
 ///
@@ -357,7 +357,7 @@ impl Buffer {
     /// # let device = Device::new(DeviceInfo::default())?;
     /// # let info = BufferInfo::host_mem(4, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
     /// # let my_buf = Buffer::create(&device, info)?;
-    /// let addr = Buffer::device_address(&my_buf);
+    /// let addr = my_buf.device_address();
     ///
     /// assert_ne!(addr, 0);
     /// # Ok(()) }

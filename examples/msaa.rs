@@ -69,8 +69,7 @@ fn main() -> anyhow::Result<()> {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))
             .unwrap();
-        Buffer::copy_from_slice(
-            &mut scene_uniform_buf,
+        scene_uniform_buf.copy_from_slice(
             0,
             bytes_of(&SceneUniformBuffer {
                 view: Mat4::look_at_lh(Vec3::Z * 4.0, Vec3::ZERO, Vec3::NEG_Y),
@@ -138,7 +137,7 @@ fn main() -> anyhow::Result<()> {
                 LoadOp::CLEAR_WHITE_ALPHA_ONE,
                 StoreOp::DontCare,
             )
-            .set_color_attachment_resolve_image(1, frame.swapchain_image, 0)
+            .set_color_attachment_resolve_image(0, 1, frame.swapchain_image)
             .set_depth_stencil_attachment_image(
                 msaa_depth_image,
                 LoadOp::CLEAR_ZERO_STENCIL_ZERO,

@@ -35,7 +35,9 @@ fn main() -> Result<(), DriverError> {
 
     // Resolve and wait (or you can check has_executed without blocking) - alternatively you might
     // use device.queue_wait_idle(0) or device.device_wait_idle() - but those block on larger scopes
-    let mut cmd_buf = graph.queue().submit(&mut HashPool::new(&device), 0, 0)?;
+    let mut cmd_buf = graph
+        .into_queue()
+        .submit(&mut HashPool::new(&device), 0, 0)?;
 
     println!("Has executed? {}", cmd_buf.has_executed()?);
     let started = Instant::now();

@@ -69,8 +69,7 @@ fn main() -> anyhow::Result<()> {
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 ))
                 .unwrap();
-            Buffer::copy_from_slice(
-                &mut buf,
+            buf.copy_from_slice(
                 0,
                 bytes_of(&Camera {
                     projection: Mat4::perspective_rh(
@@ -167,11 +166,11 @@ fn create_blas(
                         max_primitive_count: model.index_count / 3,
                         flags: vk::GeometryFlagsKHR::OPAQUE,
                         geometry: AccelerationStructureGeometryData::triangles(
-                            Buffer::device_address(&model.index_buf),
+                            model.index_buf.device_address(),
                             vk::IndexType::UINT32,
                             model.vertex_count,
                             None,
-                            Buffer::device_address(&model.vertex_buf),
+                            model.vertex_buf.device_address(),
                             vk::Format::R32G32B32_SFLOAT,
                             24,
                         ),
@@ -231,7 +230,9 @@ fn create_blas(
 
     let blas = graph.resource(blas).clone();
 
-    graph.queue().submit(&mut LazyPool::new(device), 0, 0)?;
+    graph
+        .into_queue()
+        .submit(&mut LazyPool::new(device), 0, 0)?;
 
     Ok(blas)
 }
@@ -357,7 +358,7 @@ fn create_tlas(
                     | vk::BufferUsageFlags::STORAGE_BUFFER,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buffer, 0, instance_data);
+        buffer.copy_from_slice(0, instance_data);
 
         buffer
     });
@@ -365,7 +366,7 @@ fn create_tlas(
     let info = AccelerationStructureGeometryInfo::tlas([(
         AccelerationStructureGeometry::opaque(
             2,
-            AccelerationStructureGeometryData::instances(Buffer::device_address(&instance_buf)),
+            AccelerationStructureGeometryData::instances(instance_buf.device_address()),
         ),
         vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
     )])

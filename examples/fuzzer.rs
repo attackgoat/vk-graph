@@ -114,19 +114,19 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             .unwrap();
 
         // Vertex 1
-        Buffer::copy_from_slice(&mut buf, 0, 0f32.to_ne_bytes().as_slice());
-        Buffer::copy_from_slice(&mut buf, 4, 0f32.to_ne_bytes().as_slice());
-        Buffer::copy_from_slice(&mut buf, 8, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(0, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(4, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(8, 0f32.to_ne_bytes().as_slice());
 
         // Vertex 2
-        Buffer::copy_from_slice(&mut buf, 12, 1f32.to_ne_bytes().as_slice());
-        Buffer::copy_from_slice(&mut buf, 16, 1f32.to_ne_bytes().as_slice());
-        Buffer::copy_from_slice(&mut buf, 20, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(12, 1f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(16, 1f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(20, 0f32.to_ne_bytes().as_slice());
 
         // Vertex 3
-        Buffer::copy_from_slice(&mut buf, 24, 2f32.to_ne_bytes().as_slice());
-        Buffer::copy_from_slice(&mut buf, 28, 0f32.to_ne_bytes().as_slice());
-        Buffer::copy_from_slice(&mut buf, 32, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(24, 2f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(28, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(32, 0f32.to_ne_bytes().as_slice());
 
         buf
     };
@@ -142,9 +142,9 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             ))
             .unwrap();
 
-        Buffer::copy_from_slice(&mut buf, 0, 0u16.to_ne_bytes().as_slice());
-        Buffer::copy_from_slice(&mut buf, 2, 1u16.to_ne_bytes().as_slice());
-        Buffer::copy_from_slice(&mut buf, 4, 2u16.to_ne_bytes().as_slice());
+        buf.copy_from_slice(0, 0u16.to_ne_bytes().as_slice());
+        buf.copy_from_slice(2, 1u16.to_ne_bytes().as_slice());
+        buf.copy_from_slice(4, 2u16.to_ne_bytes().as_slice());
 
         buf
     };
@@ -154,13 +154,11 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             max_primitive_count: 1,
             flags: vk::GeometryFlagsKHR::OPAQUE,
             geometry: AccelerationStructureGeometryData::Triangles {
-                index_addr: DeviceOrHostAddress::DeviceAddress(Buffer::device_address(&index_buf)),
+                index_addr: DeviceOrHostAddress::DeviceAddress(index_buf.device_address()),
                 index_type: vk::IndexType::UINT16,
                 max_vertex: 3,
                 transform_addr: None,
-                vertex_addr: DeviceOrHostAddress::DeviceAddress(Buffer::device_address(
-                    &vertex_buf,
-                )),
+                vertex_addr: DeviceOrHostAddress::DeviceAddress(vertex_buf.device_address()),
                 vertex_format: vk::Format::R32G32B32_SFLOAT,
                 vertex_stride: 12,
             },
@@ -195,8 +193,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     for idx in 0..BLAS_COUNT {
         let blas = pool.lease_resource(blas_info).unwrap();
 
-        Buffer::copy_from_slice(
-            &mut instance_buf,
+        instance_buf.copy_from_slice(
             idx * instance_len,
             AccelerationStructure::instance_slice(&[vk::AccelerationStructureInstanceKHR {
                 transform: vk::TransformMatrixKHR {
@@ -241,7 +238,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             flags: vk::GeometryFlagsKHR::OPAQUE,
             geometry: AccelerationStructureGeometryData::Instances {
                 array_of_pointers: false,
-                addr: DeviceOrHostAddress::DeviceAddress(Buffer::device_address(&instance_buf)),
+                addr: DeviceOrHostAddress::DeviceAddress(instance_buf.device_address()),
             },
         },
         vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
@@ -832,7 +829,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             LoadOp::CLEAR_BLACK_ALPHA_ZERO,
             StoreOp::DontCare,
         )
-        .color_attachment_resolve_image(1, frame.swapchain_image, 0)
+        .color_attachment_resolve_image(0, 1, frame.swapchain_image)
         .depth_stencil_attachment_image(
             msaa_depth_stencil_image,
             LoadOp::CLEAR_ZERO_STENCIL_ZERO,

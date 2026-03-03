@@ -51,7 +51,7 @@ fn main() -> Result<(), DriverError> {
     let max_result_buf = copy_image_to_buffer(&device, &mut graph, max_reduced_image)?;
 
     graph
-        .queue()
+        .into_queue()
         .submit(&mut HashPool::new(&device), 0, 0)?
         .wait_until_executed()?;
 

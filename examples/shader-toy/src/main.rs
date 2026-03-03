@@ -173,7 +173,7 @@ fn main() -> anyhow::Result<()> {
     let mut blank_image_binding = Some(graph.resource(blank_image).clone());
     let mut temp_image_binding = Some(graph.resource(temp_image).clone());
 
-    graph.queue().submit(&mut cache, 0, 0)?;
+    graph.into_queue().submit(&mut cache, 0, 0)?;
 
     let started_at = Instant::now();
     let mut count = 0i32;

@@ -254,7 +254,9 @@ fn read_image(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Arc<Ima
             gulf_jpg.into_rgba8().into_vec().as_slice(),
         )?);
         graph.copy_buffer_to_image(image_buf, image);
-        graph.queue().submit(&mut HashPool::new(device), 0, 0)?;
+        graph
+            .into_queue()
+            .submit(&mut HashPool::new(device), 0, 0)?;
 
         // Note: There is no need to call wait_until_executed() here
     }

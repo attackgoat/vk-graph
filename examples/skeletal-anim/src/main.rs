@@ -94,8 +94,7 @@ fn main() -> Result<(), WindowError> {
                 ))
                 .unwrap();
 
-            Buffer::copy_from_slice(
-                &mut buf,
+            buf.copy_from_slice(
                 0,
                 bytes_of(&CameraUniform {
                     projection,
@@ -120,7 +119,7 @@ fn main() -> Result<(), WindowError> {
                 ))
                 .unwrap();
 
-            Buffer::copy_from_slice(&mut buf, 0, cast_slice(joints));
+            buf.copy_from_slice(0, cast_slice(joints));
 
             buf
         });
@@ -202,11 +201,15 @@ fn load_texture(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Arc<Imag
     )?);
 
     // Copy the host-accessible pixels into the device-only image
-    let mut graph = Graph::default();
-    let image_node = graph.bind_resource(&image);
-    let buffer_node = graph.bind_resource(&buffer);
-    graph.copy_buffer_to_image(buffer_node, image_node);
-    graph.queue().submit(&mut HashPool::new(device), 0, 0)?;
+    {
+        let mut graph = Graph::default();
+        let image = graph.bind_resource(&image);
+        let buffer = graph.bind_resource(&buffer);
+        graph.copy_buffer_to_image(buffer, image);
+        graph
+            .into_queue()
+            .submit(&mut HashPool::new(device), 0, 0)?;
+    }
 
     Ok(image)
 }
@@ -425,16 +428,10 @@ impl Model {
         let vertex_data = part.vertex_data();
 
         // Host-accessible staging buffers
-        let index_staging_buf = Arc::new(Buffer::create_from_slice(
-            device,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            index_data,
-        )?);
-        let vertex_staging_buf = Arc::new(Buffer::create_from_slice(
-            device,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vertex_data,
-        )?);
+        let index_staging_buf =
+            Buffer::create_from_slice(device, vk::BufferUsageFlags::TRANSFER_SRC, index_data)?;
+        let vertex_staging_buf =
+            Buffer::create_from_slice(device, vk::BufferUsageFlags::TRANSFER_SRC, vertex_data)?;
 
         // Device-only buffers
         let index_buf = Arc::new(Buffer::create(
@@ -454,13 +451,18 @@ impl Model {
 
         // Copy the host-accessible staging buffers to device-only buffers
         let mut graph = Graph::default();
-        let index_staging_buf_node = graph.bind_resource(index_staging_buf);
-        let vertex_staging_buf_node = graph.bind_resource(vertex_staging_buf);
-        let index_buf_node = graph.bind_resource(&index_buf);
-        let vertex_buf_node = graph.bind_resource(&vertex_buf);
-        graph.copy_buffer(index_staging_buf_node, index_buf_node);
-        graph.copy_buffer(vertex_staging_buf_node, vertex_buf_node);
-        graph.queue().submit(&mut HashPool::new(device), 0, 0)?;
+        {
+            let index_staging_buf = graph.bind_resource(index_staging_buf);
+            let vertex_staging_buf = graph.bind_resource(vertex_staging_buf);
+            let index_buf = graph.bind_resource(&index_buf);
+            let vertex_buf = graph.bind_resource(&vertex_buf);
+            graph
+                .copy_buffer(index_staging_buf, index_buf)
+                .copy_buffer(vertex_staging_buf, vertex_buf);
+            graph
+                .into_queue()
+                .submit(&mut HashPool::new(device), 0, 0)?;
+        }
 
         Ok(Model {
             index_buf,

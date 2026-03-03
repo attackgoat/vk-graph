@@ -10,6 +10,7 @@ use {
     std::{
         fs::{metadata, File},
         io::BufReader,
+        iter::repeat_with,
         path::{Path, PathBuf},
         ptr::copy_nonoverlapping,
         sync::{
@@ -116,10 +117,10 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut pool = LazyPool::new(device);
-    let mut graphs = Vec::with_capacity(Swapchain::images(&swapchain).len());
-    for _ in 0..graphs.capacity() {
-        graphs.push(None);
-    }
+    let swapchain_image_count = Swapchain::images(&swapchain).len();
+    let mut swapchain_queues = repeat_with(|| None)
+        .take(swapchain_image_count)
+        .collect::<Box<[_]>>();
 
     let res_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("res");
 
@@ -300,7 +301,7 @@ fn main() -> anyhow::Result<()> {
                 data.len() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
-            Buffer::copy_from_slice(&mut buf, 0, data);
+            buf.copy_from_slice(0, data);
             graph.bind_resource(buf)
         };
 
@@ -339,7 +340,7 @@ fn main() -> anyhow::Result<()> {
                 data.len() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
-            Buffer::copy_from_slice(&mut buf, 0, data);
+            buf.copy_from_slice(0, data);
             graph.bind_resource(buf)
         };
 
@@ -454,8 +455,6 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Woolly Mammoth")
                 .bind_pipeline(mammoth_pipeline.hot())
-                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
-                .multiview(VIEW_MASK, VIEW_MASK)
                 .resource_access(index_buf, AccessType::IndexBuffer)
                 .resource_access(vertex_buf, AccessType::VertexBuffer)
                 .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
@@ -470,12 +469,14 @@ fn main() -> anyhow::Result<()> {
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
+                .multiview(VIEW_MASK, VIEW_MASK)
+                .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                 .depth_stencil_attachment_image(
                     depth_image,
                     LoadOp::CLEAR_ZERO_STENCIL_ZERO,
                     StoreOp::DontCare,
                 )
-                .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
                 .record_cmd_buf(move |cmd_buf| {
                     cmd_buf
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
@@ -489,12 +490,12 @@ fn main() -> anyhow::Result<()> {
         // the image - afterwards we keep the submitted command buffer around (including all
         // in-flight resources) so that nothing is dropped until that image is actually done.
         swapchain.wait_image(xr::Duration::INFINITE).unwrap();
-        let cmd_buf = graph
-            .queue()
+        let swapchain_queue = graph
+            .into_queue()
             .submit(&mut pool, queue_family_index as _, 0)
             .unwrap();
         swapchain.release_image().unwrap();
-        graphs[swapchain_image_index as usize] = Some(cmd_buf);
+        swapchain_queues[swapchain_image_index as usize] = Some(swapchain_queue);
 
         frame_stream.end(
             xr_frame_state.predicted_display_time,
@@ -784,7 +785,7 @@ fn load_texture(
 
     let queue_family_index = device_queue_family_index(device, vk::QueueFlags::TRANSFER).unwrap();
     graph
-        .queue()
+        .into_queue()
         .submit(&mut LazyPool::new(device), queue_family_index as _, 0)?
         .wait_until_executed()?;
 

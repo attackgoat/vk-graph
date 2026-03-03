@@ -213,7 +213,7 @@ mod deprecated {
     use {
         crate::{
             BindGraph, Bound, Graph,
-            cmd::{Descriptor, PipelineCommandRef, SubresourceRange, View},
+            cmd::{Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo},
             deprecated::Info,
             graph::pass_ref::ViewType,
             node::Node,
@@ -223,7 +223,7 @@ mod deprecated {
     };
 
     impl<'a, T> PipelineCommandRef<'a, T> {
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[deprecated = "use shader_resource_access function"]
         #[doc(hidden)]
         pub fn access_descriptor<N>(
             self,
@@ -242,7 +242,7 @@ mod deprecated {
             self.access_descriptor_as(descriptor, node, access, view_info)
         }
 
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[deprecated = "use shader_subresource_access function"]
         #[doc(hidden)]
         pub fn access_descriptor_as<N>(
             self,
@@ -262,7 +262,7 @@ mod deprecated {
             self.access_descriptor_subrange(descriptor, node, access, view_info, subresource)
         }
 
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
+        #[deprecated = "use shader_subresource_access function"]
         #[doc(hidden)]
         pub fn access_descriptor_subrange<N>(
             self,

@@ -165,11 +165,20 @@ impl<'a> CommandRef<'a> {
         mut self,
         func: impl FnOnce(CommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
+        self.record_cmd_buf_mut(func);
+        self
+    }
+
+    /// Begin recording an acceleration structure command buffer.
+    ///
+    /// This is the entry point for building and updating an [`AccelerationStructure`] instance.
+    ///
+    /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
+    /// code and interfaces.
+    pub fn record_cmd_buf_mut(&mut self, func: impl FnOnce(CommandBufferRef<'_>) + Send + 'static) {
         self.push_exec(move |cmd_buf| {
             func(cmd_buf);
         });
-
-        self
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)

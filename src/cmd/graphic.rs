@@ -737,14 +737,14 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     /// TODO
     pub fn color_attachment_resolve_image(
         mut self,
+        msaa_attachment_idx: AttachmentIndex,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
-        resolve_attachment_idx: AttachmentIndex,
     ) -> Self {
         self.set_color_attachment_resolve_image(
+            msaa_attachment_idx,
             color_attachment_idx,
             color_image,
-            resolve_attachment_idx,
         );
         self
     }
@@ -752,16 +752,16 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     /// TODO
     pub fn color_attachment_resolve_image_view(
         mut self,
+        msaa_attachment_idx: AttachmentIndex,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
         color_image_view_info: impl Into<ImageViewInfo>,
-        resolve_attachment_idx: AttachmentIndex,
     ) -> Self {
         self.set_color_attachment_resolve_image_view(
+            msaa_attachment_idx,
             color_attachment_idx,
             color_image,
             color_image_view_info,
-            resolve_attachment_idx,
         );
         self
     }
@@ -851,6 +851,15 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         mut self,
         func: impl FnOnce(GraphicCommandBufferRef<'_>) + Send + 'static,
     ) -> Self {
+        self.record_cmd_buf_mut(func);
+        self
+    }
+
+    /// Begin recording a graphics pipeline command buffer.
+    pub fn record_cmd_buf_mut(
+        &mut self,
+        func: impl FnOnce(GraphicCommandBufferRef<'_>) + Send + 'static,
+    ) {
         let pipeline = self
             .cmd
             .cmd()
@@ -866,8 +875,6 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         self.cmd.push_exec(move |cmd_buf| {
             func(GraphicCommandBufferRef { cmd_buf, pipeline });
         });
-
-        self
     }
 
     /// Sets the [`renderArea`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkRenderPassBeginInfo.html#_c_specification)
@@ -950,18 +957,18 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     /// See [color_attachment_resolve_image]
     pub fn set_color_attachment_resolve_image(
         &mut self,
+        msaa_attachment_idx: AttachmentIndex,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
-        resolve_attachment_idx: AttachmentIndex,
     ) -> &mut Self {
         let color_image = color_image.into();
         let color_image_view = self.resource(color_image).info;
 
         self.set_color_attachment_resolve_image_view(
+            msaa_attachment_idx,
             color_attachment_idx,
             color_image,
             color_image_view,
-            resolve_attachment_idx,
         );
 
         self
@@ -970,10 +977,10 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     /// See [color_attachment_resolve_image_view]
     pub fn set_color_attachment_resolve_image_view(
         &mut self,
+        msaa_attachment_idx: AttachmentIndex,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
         color_image_view_info: impl Into<ImageViewInfo>,
-        resolve_attachment_idx: AttachmentIndex,
     ) -> &mut Self {
         let color_image = color_image.into();
         let color_image_view_info = color_image_view_info.into();
@@ -981,7 +988,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         #[allow(deprecated)]
         self.set_attach_color_as(color_attachment_idx, color_image, color_image_view_info)
             .set_resolve_color_as(
-                resolve_attachment_idx,
+                msaa_attachment_idx,
                 color_attachment_idx,
                 color_image,
                 color_image_view_info,

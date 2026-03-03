@@ -193,7 +193,7 @@ impl Swapchain {
     {
         trace!("present_image");
 
-        let mut queue = graph.queue();
+        let mut queue = graph.into_queue();
         let wait_dst_stage_mask = queue.node_stages(swapchain_image);
 
         // The swapchain should have been written to, otherwise it would be noise and that's a panic

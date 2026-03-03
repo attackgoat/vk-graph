@@ -3227,6 +3227,12 @@ impl Queue {
     }
 }
 
+impl From<Graph> for Queue {
+    fn from(val: Graph) -> Self {
+        val.into_queue()
+    }
+}
+
 #[derive(Default)]
 struct Schedule {
     access_cache: AccessCache,

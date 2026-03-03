@@ -10,7 +10,7 @@ use {clap::Parser, std::sync::Arc, vk_graph_prelude::*};
 /// Acceleration structures, buffers and images may be "aliased" by different parts of any one or
 /// more graphs. The process involves wrapping any pool type (FifoPool, LazyPool, HashPool)
 /// in an AliasPool container. AliasPool offers an alias(..) function which operates exactly the
-/// same as a regular pool lease(..) except that the result is wrapped in an Arc<>.
+/// same as a regular pool lease_resource(..) except that the result is wrapped in an Arc<>.
 ///
 /// AliasPool derefs to the base pool type and so leasing may be used normally too.
 fn main() -> Result<(), DriverError> {
