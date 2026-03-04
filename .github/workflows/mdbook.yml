@@ -1,0 +1,35 @@
+name: GH Pages Deploy
+
+on:
+  push:
+    branches: [main, vk-graph]
+    paths-ignore:
+      - "contrib/**"
+      - "examples/**"
+
+  pull_request:
+    branches: [main, vk-graph]
+    paths-ignore:
+      - "contrib/**"
+      - "examples/**"
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout 🛎
+        uses: actions/checkout@v2
+
+      - name: Install dependencies 🔧
+        run: cargo install mdbook
+
+      - name: Build 🏗️
+        run: cd book && mdbook build
+
+      - name: Deploy to GitHub Pages 🚀
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: book/book
