@@ -15,25 +15,102 @@ use {
     std::{fmt::Debug, sync::Arc},
 };
 
+/// A trait for resources which may be borrowed from a `Graph`.
+///
+/// See [`Graph::node`] for details.
+pub trait GraphNode {
+    /// The Vulkan buffer, image, or acceleration struction type.
+    type Resource;
+
+    #[doc(hidden)]
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource;
+}
+
+impl GraphNode for AnyAccelerationStructureNode {
+    type Resource = AccelerationStructure;
+
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+        resources[self.index()].as_driver_accel_struct().unwrap()
+    }
+}
+
+impl GraphNode for AnyBufferNode {
+    type Resource = Buffer;
+
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+        resources[self.index()].as_driver_buffer().unwrap()
+    }
+}
+
+impl GraphNode for AnyImageNode {
+    type Resource = Image;
+
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+        resources[self.index()].as_driver_image().unwrap()
+    }
+}
+
+impl GraphNode for SwapchainImageNode {
+    type Resource = SwapchainImage;
+
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+        resources[self.idx].as_swapchain_image().unwrap()
+    }
+}
+
+macro_rules! graph_node {
+    ($name:ident) => {
+        paste::paste! {
+            impl GraphNode for [<$name Node>] {
+                type Resource = Arc<$name>;
+
+                fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+
+                        resources[self.idx]
+                        .[<as_ $name:snake>]()
+                        .unwrap()
+                }
+            }
+
+            impl GraphNode for [<$name LeaseNode>] {
+                type Resource = Arc<Lease<$name>>;
+
+                fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+                   resources[self.idx]
+                        .[<as_ $name:snake _lease>]()
+                        .unwrap()
+                }
+            }
+        }
+    };
+}
+
+graph_node!(AccelerationStructure);
+graph_node!(Buffer);
+graph_node!(Image);
+
 /// A trait for resources which may be bound to a `Graph`.
 ///
 /// See [`Graph::bind_resource`] and
 /// [`CommandRef::bind_resource`](super::cmd::CommandRef::bind_resource) for details.
-pub trait BindGraph {
+pub trait GraphResource {
     /// The resource handle type.
     type Node;
 
-    /// Binds the resource to a graph.
-    ///
-    /// Returns a resource node handle.
-    fn bind_graph(self, graph: &mut Graph) -> Self::Node;
+    #[doc(hidden)]
+    fn bind_graph(self, _: &mut Graph) -> Self::Node;
 
     #[deprecated = "use bind_graph function"]
     #[doc(hidden)]
-    fn bind(self, graph: &mut Graph) -> Self::Node;
+    fn bind(self, graph: &mut Graph) -> Self::Node
+    where
+        Self: Sized,
+    {
+        self.bind_graph(graph)
+    }
 }
 
-impl BindGraph for SwapchainImage {
+impl GraphResource for SwapchainImage {
     type Node = SwapchainImageNode;
 
     fn bind_graph(self, graph: &mut Graph) -> Self::Node {
@@ -48,16 +125,12 @@ impl BindGraph for SwapchainImage {
 
         res
     }
-
-    fn bind(self, graph: &mut Graph) -> Self::Node {
-        self.bind_graph(graph)
-    }
 }
 
-macro_rules! bind_graph_resource {
+macro_rules! graph_resource {
     ($name:ident) => {
         paste::paste! {
-            impl BindGraph for $name {
+            impl GraphResource for $name {
                 type Node = [<$name Node>];
 
                 #[profiling::function]
@@ -73,13 +146,9 @@ macro_rules! bind_graph_resource {
 
                     res
                 }
-
-                fn bind(self, graph: &mut Graph) -> Self::Node {
-                    self.bind_graph(graph)
-                }
             }
 
-            impl BindGraph for Arc<$name> {
+            impl GraphResource for Arc<$name> {
                 type Node = [<$name Node>];
 
                 #[profiling::function]
@@ -106,13 +175,9 @@ macro_rules! bind_graph_resource {
 
                     res
                 }
-
-                fn bind(self, graph: &mut Graph) -> Self::Node {
-                    self.bind_graph(graph)
-                }
             }
 
-            impl<'a> BindGraph for &'a Arc<$name> {
+            impl<'a> GraphResource for &'a Arc<$name> {
                 type Node = [<$name Node>];
 
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
@@ -121,13 +186,9 @@ macro_rules! bind_graph_resource {
 
                     Arc::clone(self).bind_graph(graph)
                 }
-
-                fn bind(self, graph: &mut Graph) -> Self::Node {
-                    self.bind_graph(graph)
-                }
             }
 
-            impl BindGraph for Lease<$name> {
+            impl GraphResource for Lease<$name> {
                 type Node = [<$name LeaseNode>];
 
                 #[profiling::function]
@@ -144,13 +205,9 @@ macro_rules! bind_graph_resource {
 
                     res
                 }
-
-                fn bind(self, graph: &mut Graph) -> Self::Node {
-                    self.bind_graph(graph)
-                }
             }
 
-            impl BindGraph for Arc<Lease<$name>> {
+            impl GraphResource  for Arc<Lease<$name>> {
                 type Node = [<$name LeaseNode>];
 
                 #[profiling::function]
@@ -177,13 +234,9 @@ macro_rules! bind_graph_resource {
 
                     res
                 }
-
-                fn bind(self, graph: &mut Graph) -> Self::Node {
-                    self.bind_graph(graph)
-                }
             }
 
-            impl<'a> BindGraph for &'a Arc<Lease<$name>> {
+            impl<'a> GraphResource for &'a Arc<Lease<$name>> {
                 type Node = [<$name LeaseNode>];
 
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
@@ -191,10 +244,6 @@ macro_rules! bind_graph_resource {
                     // &Arc<Lease<Buffer>> or etc)
 
                     Arc::clone(self).bind_graph(graph)
-                }
-
-                fn bind(self, graph: &mut Graph) -> Self::Node {
-                    self.bind_graph(graph)
                 }
             }
 
@@ -235,85 +284,11 @@ macro_rules! bind_graph_resource {
     };
 }
 
-bind_graph_resource!(AccelerationStructure);
-bind_graph_resource!(Image);
-bind_graph_resource!(Buffer);
+graph_resource!(AccelerationStructure);
+graph_resource!(Image);
+graph_resource!(Buffer);
 
-/// A trait for resources which may be borrowed from a `Graph`.
-///
-/// See [`Graph::node`] for details.
-pub trait Bound<G = Graph>: Node {
-    /// The Vulkan buffer, image, or acceleration struction type.
-    type Resource;
-
-    /// Borrows the resource from a graph.
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource;
-}
-
-impl Bound for AnyAccelerationStructureNode {
-    type Resource = AccelerationStructure;
-
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
-        resources[self.index()].as_driver_accel_struct().unwrap()
-    }
-}
-
-impl Bound for AnyBufferNode {
-    type Resource = Buffer;
-
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
-        resources[self.index()].as_driver_buffer().unwrap()
-    }
-}
-
-impl Bound for AnyImageNode {
-    type Resource = Image;
-
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
-        resources[self.index()].as_driver_image().unwrap()
-    }
-}
-
-impl Bound for SwapchainImageNode {
-    type Resource = SwapchainImage;
-
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
-        resources[self.idx].as_swapchain_image().unwrap()
-    }
-}
-
-macro_rules! bound {
-    ($name:ident) => {
-        paste::paste! {
-            impl Bound for [<$name Node>] {
-                type Resource = Arc<$name>;
-
-                fn borrow(self, resources: &[Resource]) -> &Self::Resource {
-
-                        resources[self.idx]
-                        .[<as_ $name:snake>]()
-                        .unwrap()
-                }
-            }
-
-            impl Bound for [<$name LeaseNode>] {
-                type Resource = Arc<Lease<$name>>;
-
-                fn borrow(self, resources: &[Resource]) -> &Self::Resource {
-                   resources[self.idx]
-                        .[<as_ $name:snake _lease>]()
-                        .unwrap()
-                }
-            }
-        }
-    };
-}
-
-bound!(AccelerationStructure);
-bound!(Buffer);
-bound!(Image);
-
-/// TODO
+/// Opaque wrapper for Vulkan resource types.
 #[derive(Debug)]
 pub struct Resource {
     pub(crate) inner: ResourceInner,

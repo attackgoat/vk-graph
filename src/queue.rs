@@ -1,11 +1,11 @@
 use {
     super::{
         Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
-        bind::ResourceInner,
         cmd::{SubresourceAccess, SubresourceRange},
+        resource::ResourceInner,
     },
     crate::{
-        Bound,
+        GraphNode,
         cmd::CommandBufferRef,
         driver::{
             AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DescriptorSet, DriverError,
@@ -2380,7 +2380,7 @@ impl Queue {
         for pass_idx in schedule.passes.iter().copied() {
             let pass = &mut self.graph.cmds[pass_idx];
 
-            profiling::scope!("Pass", &pass.name);
+            profiling::scope!("Pass", pass.name());
 
             let physical_pass = &mut self.physical_passes[pass_idx];
             let is_graphic = physical_pass.render_pass.is_some();
@@ -2632,7 +2632,7 @@ impl Queue {
     /// which the given node represents.
     pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: Bound,
+        N: GraphNode,
     {
         self.graph.resource(node)
     }

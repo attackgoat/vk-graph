@@ -3,7 +3,7 @@
 #![warn(missing_docs)]
 
 pub use vk_graph::{
-    BindGraph, Bound, ClearColorValue, Graph,
+    ClearColorValue, Graph, GraphNode, GraphResource,
     cmd::{
         BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef, LoadOp,
         PipelineCommandRef, StoreOp, UpdateAccelerationStructureIndirectInfo,

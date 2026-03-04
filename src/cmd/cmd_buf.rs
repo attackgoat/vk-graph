@@ -1,6 +1,6 @@
 use {
     crate::{
-        AnyAccelerationStructureNode, Bound, Resource,
+        AnyAccelerationStructureNode, GraphNode, Resource,
         driver::{
             accel_struct::{
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
@@ -9,6 +9,7 @@ use {
             cmd_buf::CommandBuffer,
             device::Device,
         },
+        node::Node,
     },
     ash::vk,
     std::{cell::RefCell, ops::Deref},
@@ -474,9 +475,9 @@ impl<'a> CommandBufferRef<'a> {
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given bound resource represents.
-    pub fn resource<N>(&self, resource: N) -> &N::Resource
+    pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: Bound,
+        N: GraphNode + Node,
     {
         // You must have called an access function for this node on this execution before indexing
         // into the bindings data!
@@ -485,11 +486,11 @@ impl<'a> CommandBufferRef<'a> {
         // resource (buffer, image, or acceleration structure). In order to access any resources the
         // access type must first be specified so the correct barriers may be added.
         debug_assert!(
-            self.exec.accesses.contains_key(&resource.index()),
+            self.exec.accesses.contains_key(&node.index()),
             "unexpected node access: call access, read, or write first"
         );
 
-        resource.borrow(self.resources)
+        node.borrow(self.resources)
     }
 }
 

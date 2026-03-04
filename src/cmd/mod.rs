@@ -1,6 +1,5 @@
 //! Strongly-typed rendering commands.
 
-mod bind;
 mod cmd_buf;
 mod compute;
 mod graphic;
@@ -14,21 +13,23 @@ pub use self::{
     },
     compute::ComputeCommandBufferRef,
     graphic::{GraphicCommandBufferRef, LoadOp, StoreOp},
-    pipeline::PipelineCommandRef,
+    pipeline::{CommandPipeline, PipelineCommandRef},
     ray_trace::RayTraceCommandBufferRef,
 };
 
 use {
-    self::bind::BindCommand,
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
-        AnyBufferNode, AnyImageNode, BindGraph, Bound, BufferLeaseNode, BufferNode, Command,
-        Execution, ExecutionFunction, Graph, ImageLeaseNode, ImageNode, Node, Resource,
+        AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode, Command, Execution,
+        ExecutionFunction, Graph, GraphResource, ImageLeaseNode, ImageNode, Node, Resource,
         SwapchainImageNode,
     },
-    crate::driver::{
-        accel_struct::AccelerationStructureSubresourceRange, buffer::BufferSubresourceRange,
-        image::ImageViewInfo,
+    crate::{
+        driver::{
+            accel_struct::AccelerationStructureSubresourceRange, buffer::BufferSubresourceRange,
+            image::ImageViewInfo,
+        },
+        resource::GraphNode,
     },
     ash::vk,
     std::ops::Range,
@@ -84,7 +85,7 @@ impl<'a> CommandRef<'a> {
     /// Bound nodes may be used in passes for pipeline and shader operations.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
-        R: BindGraph,
+        R: GraphResource,
     {
         self.graph.bind_resource(resource)
     }
@@ -93,7 +94,7 @@ impl<'a> CommandRef<'a> {
     /// pass, allowing for strongly typed access to the related functions.
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Ref
     where
-        P: BindCommand<'a>,
+        P: CommandPipeline<'a>,
     {
         pipeline.bind_cmd(self)
     }
@@ -183,11 +184,11 @@ impl<'a> CommandRef<'a> {
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given bound resource represents.
-    pub fn resource<N>(&self, resource: N) -> &N::Resource
+    pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: Bound,
+        N: GraphNode,
     {
-        self.graph.resource(resource)
+        self.graph.resource(node)
     }
 
     /// Informs the command that the next recorded command buffer will read or write `node` using
@@ -385,7 +386,6 @@ pub(super) struct SubresourceAccess {
 }
 
 /// Allows for a resource to be reinterpreted as differently formatted data.
-#[doc(hidden)]
 pub trait View {
     /// The information about the resource when bound directly to shader descriptors.
     type Info;
@@ -393,10 +393,12 @@ pub trait View {
     /// The information about the resource when used indirectly by any part of a graph.
     type Range;
 
+    #[doc(hidden)]
     fn info(&self, _: &[Resource]) -> Self::Info
     where
         Self: Node;
 
+    #[doc(hidden)]
     fn range(&self, _: &[Resource]) -> Self::Range
     where
         Self: Node;
@@ -550,7 +552,7 @@ impl From<Range<vk::DeviceSize>> for ViewInfo {
 mod deprecated {
     use {
         crate::{
-            BindGraph, Graph,
+            Graph, GraphResource,
             cmd::{CommandBufferRef, CommandRef, SubresourceRange, View},
             deprecated::Info,
             node::Node,
@@ -642,7 +644,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn bind_node<R>(&mut self, resource: R) -> R::Node
         where
-            R: BindGraph,
+            R: GraphResource,
         {
             self.bind_resource(resource)
         }

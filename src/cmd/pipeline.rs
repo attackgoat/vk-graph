@@ -1,42 +1,129 @@
 use {
     super::{
-        AccessType, BindGraph, Bound, CommandRef, Descriptor, Graph, Node, SubresourceRange, View,
-        ViewInfo,
+        AccessType, CommandRef, Descriptor, Graph, GraphNode, GraphResource, Node,
+        SubresourceRange, View, ViewInfo,
+    },
+    crate::{
+        ExecutionPipeline,
+        driver::{compute::ComputePipeline, graphic::GraphicPipeline, ray_trace::RayTracePipeline},
     },
     std::marker::PhantomData,
 };
 
+/// A trait for pipelines which may be bound to a `CommandRef`.
+///
+/// See [`CommandRef::bind_pipeline`](super::cmd::CommandRef::bind_pipeline) for details.
+pub trait CommandPipeline<'a> {
+    /// The resource reference type.
+    type Ref;
+
+    /// Binds the resource to a command.
+    ///
+    /// Returns a reference type.
+    fn bind_cmd(self, _: CommandRef<'a>) -> Self::Ref;
+}
+
+macro_rules! pipeline {
+    ($name:ident) => {
+        paste::paste! {
+            impl<'a> CommandPipeline<'a> for [<$name Pipeline>] {
+                type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
+
+                fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
+                    {
+                        let cmd = cmd.cmd_mut();
+                        if cmd.execs.last().unwrap().pipeline.is_some() {
+                            cmd.execs.push(Default::default());
+                        }
+
+                        cmd.execs.last_mut().unwrap().pipeline
+                            = Some(ExecutionPipeline::$name(self));
+                    }
+
+                    Self::Ref {
+                        __: PhantomData,
+                        cmd,
+                    }
+                }
+            }
+
+            impl<'a> CommandPipeline<'a> for &'a [<$name Pipeline>] {
+                type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
+
+                fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
+                    {
+                        let cmd = cmd.cmd_mut();
+                        if cmd.execs.last().unwrap().pipeline.is_some() {
+                            cmd.execs.push(Default::default());
+                        }
+
+                        cmd.execs.last_mut().unwrap().pipeline
+                            = Some(ExecutionPipeline::$name(self.clone()));
+                    }
+
+                    Self::Ref {
+                        __: PhantomData,
+                        cmd,
+                    }
+                }
+
+            }
+
+            impl ExecutionPipeline {
+                #[allow(unused)]
+                pub(crate) fn [<is_ $name:snake>](&self) -> bool {
+                    matches!(self, Self::$name(_))
+                }
+
+                #[allow(unused)]
+                pub(crate) fn [<unwrap_ $name:snake>](&self) -> &[<$name Pipeline>] {
+                    if let Self::$name(binding) = self {
+                        &binding
+                    } else {
+                        panic!();
+                    }
+                }
+            }
+        }
+    };
+}
+
+// Pipelines you can bind to a command ref
+pipeline!(Compute);
+pipeline!(Graphic);
+pipeline!(RayTrace);
+
 /// A render pass which has been bound to a particular compute, graphic, or ray-trace pipeline.
-pub struct PipelineCommandRef<'a, T> {
+pub struct PipelineCommandRef<'c, T> {
     pub(super) __: PhantomData<T>,
-    pub(super) cmd: CommandRef<'a>,
+    pub(super) cmd: CommandRef<'c>,
 }
 
 // NOTE: There are specific implementations of T in the compute, graphic, and ray trace modules
-impl<'a, T> PipelineCommandRef<'a, T> {
+impl<'c, T> PipelineCommandRef<'c, T> {
     /// Binds a Vulkan buffer, image, or acceleration structure resource to the graph associated
     /// with this command.
     ///
     /// Bound nodes may be used in passes for pipeline and shader operations.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
-        R: BindGraph,
+        R: GraphResource,
     {
         self.cmd.bind_resource(resource)
     }
 
     /// Finalizes a command and returns the graph so that additional commands may be added.
-    pub fn end_cmd(self) -> &'a mut Graph {
+    pub fn end_cmd(self) -> &'c mut Graph {
         self.cmd.end_cmd()
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given node represents.
-    pub fn resource<N>(&self, resource: N) -> &N::Resource
+    pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: Bound,
+        N: GraphNode,
     {
-        self.cmd.resource(resource)
+        self.cmd.resource(node)
     }
 
     /// Informs the command that the next recorded command buffer will read or write `node` using
@@ -212,7 +299,7 @@ impl<'a, T> PipelineCommandRef<'a, T> {
 mod deprecated {
     use {
         crate::{
-            BindGraph, Bound, Graph,
+            Graph, GraphResource,
             cmd::{Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo},
             deprecated::Info,
             graph::pass_ref::ViewType,
@@ -324,7 +411,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn bind_node<R>(&mut self, resource: R) -> R::Node
         where
-            R: BindGraph,
+            R: GraphResource,
         {
             self.bind_resource(resource)
         }

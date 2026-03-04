@@ -110,7 +110,7 @@ impl Node for AnyImageNode {
 
 /// A Vulkan resource which has been bound to a [`Graph`] using [`Graph::bind_node`].
 pub trait Node {
-    /// The internal node index of this bound resource.
+    #[doc(hidden)]
     fn index(&self) -> NodeIndex;
 }
 

@@ -356,14 +356,14 @@ pub mod driver;
 pub mod node;
 pub mod pool;
 
-mod bind;
 mod queue;
+mod resource;
 
 use crate::cmd::CommandBufferRef;
 
 pub use self::{
-    bind::{BindGraph, Bound, Resource},
     queue::Queue,
+    resource::{GraphNode, GraphResource, Resource},
 };
 
 #[allow(deprecated)]
@@ -715,7 +715,7 @@ impl Graph {
     /// general functions.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
-        R: BindGraph,
+        R: GraphResource,
     {
         resource.bind_graph(self)
     }
@@ -1264,7 +1264,7 @@ impl Graph {
     /// which the given node represents.
     pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: Bound,
+        N: GraphNode,
     {
         node.borrow(&self.resources)
     }
@@ -1406,8 +1406,7 @@ pub mod graph {
 pub(crate) mod deprecated {
     use {
         crate::{
-            BindGraph, Graph,
-            bind::Resource,
+            Graph, GraphResource,
             driver::{
                 DriverError,
                 accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -1425,6 +1424,7 @@ pub(crate) mod deprecated {
                 BufferNode, ImageLeaseNode, ImageNode, Node, SwapchainImageNode,
             },
             pool::{Lease, Pool},
+            resource::Resource,
         },
         ash::vk,
         std::{ops::Range, sync::Arc},
@@ -1466,6 +1466,7 @@ pub(crate) mod deprecated {
 
     #[deprecated = "use Swapchain from vk_graph_window crate"]
     #[derive(Debug)]
+    #[doc(hidden)]
     pub struct Display;
 
     impl Display {
@@ -1502,14 +1503,17 @@ pub(crate) mod deprecated {
 
     #[deprecated = "use vk_graph_window::SwapchainError"]
     #[derive(Clone, Copy, Debug, Default)]
+    #[doc(hidden)]
     pub struct DisplayError;
 
     #[deprecated = "use vk_graph_window::SwapchainInfo"]
     #[derive(Clone, Copy, Debug, Default)]
+    #[doc(hidden)]
     pub struct DisplayInfo;
 
     #[deprecated = "use vk_graph_window::SwapchainInfoBuilder"]
     #[derive(Clone, Copy, Debug, Default)]
+    #[doc(hidden)]
     pub struct DisplayInfoBuilder;
 
     // General stuff
@@ -1524,7 +1528,7 @@ pub(crate) mod deprecated {
         #[doc(hidden)]
         pub fn bind_node<R>(&mut self, resource: R) -> R::Node
         where
-            R: BindGraph,
+            R: GraphResource,
         {
             self.bind_resource(resource)
         }
