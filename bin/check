@@ -1,0 +1,78 @@
+#!/bin/sh
+
+set -e
+
+fail() {
+    printf '%s\n' "$1" >&2  ## Send message to stderr. Exclude >&2 if you don't want it that way.
+    exit "${2-1}"  ## Return a code specified by $2 or 1 by default.
+}
+
+diff() {
+    git diff --no-ext-diff --quiet
+}
+
+# Uncommitted changes
+diff || fail "Uncommitted changes"
+
+# Unformatted rust code
+cargo fmt && diff || fail "Unformatted rust code"
+cargo fmt --manifest-path crates/vk-graph-egui/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-egui)"
+cargo fmt --manifest-path crates/vk-graph-fx/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-fx)"
+cargo fmt --manifest-path crates/vk-graph-hot/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-hot)"
+cargo fmt --manifest-path crates/vk-graph-imgui/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-imgui)"
+cargo fmt --manifest-path crates/vk-graph-prelude/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-prelude)"
+cargo fmt --manifest-path crates/vk-graph-window/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-window)"
+cargo fmt --manifest-path examples/shader-toy/Cargo.toml && diff || fail "Unformatted rust code (shader-toy)"
+cargo fmt --manifest-path examples/skeletal-anim/Cargo.toml && diff || fail "Unformatted rust code (skeletal-anim)"
+cargo fmt --manifest-path examples/vr/Cargo.toml && diff || fail "Unformatted rust code (vr)"
+
+echo "Checking vk-graph" \
+    && cargo check --all-targets || fail \
+    && cargo clippy --all-targets || fail \
+    && echo "Checking vk-graph (w/ parking_lot)" \
+    && cargo check --all-targets --features parking_lot || fail \
+    && cargo clippy --all-targets --features parking_lot || fail
+
+echo "Checking crates/vk-graph-egui" \
+    && cargo check --manifest-path crates/vk-graph-egui/Cargo.toml || fail \
+    && cargo clippy --manifest-path crates/vk-graph-egui/Cargo.toml || fail
+
+echo "Checking crates/vk-graph-fx" \
+    && cargo check --manifest-path crates/vk-graph-fx/Cargo.toml || fail \
+    && cargo clippy --manifest-path crates/vk-graph-fx/Cargo.toml || fail
+
+echo "Checking crates/vk-graph-hot" \
+    && cargo check --manifest-path crates/vk-graph-hot/Cargo.toml || fail \
+    && cargo clippy --manifest-path crates/vk-graph-hot/Cargo.toml || fail
+
+# echo "Checking crates/vk-graph-imgui" \
+#     && cargo check --manifest-path crates/vk-graph-imgui/Cargo.toml || fail \
+#     && cargo clippy --manifest-path crates/vk-graph-imgui/Cargo.toml || fail
+
+echo "Checking crates/vk-graph-prelude" \
+    && cargo check --manifest-path crates/vk-graph-prelude/Cargo.toml || fail \
+    && cargo clippy --manifest-path crates/vk-graph-prelude/Cargo.toml || fail
+
+echo "Checking crates/vk-graph-window" \
+    && cargo check --manifest-path crates/vk-graph-window/Cargo.toml || fail \
+    && cargo clippy --manifest-path crates/vk-graph-window/Cargo.toml || fail
+
+echo "Checking examples/shader-toy" \
+    && cargo check --manifest-path examples/shader-toy/Cargo.toml || fail \
+    && cargo clippy --manifest-path examples/shader-toy/Cargo.toml || fail
+
+echo "Checking examples/skeletal-anim" \
+    && cargo check --manifest-path examples/skeletal-anim/Cargo.toml || fail \
+    && cargo clippy --manifest-path examples/skeletal-anim/Cargo.toml || fail
+
+echo "Checking examples/vr" \
+    && cargo check --manifest-path examples/vr/Cargo.toml || fail \
+    && cargo clippy --manifest-path examples/vr/Cargo.toml || fail
+
+# Rust code tests
+cargo test || fail
+
+# Check for semver breaking changes: if this fails you must update the crate version or fix the code
+cargo semver-checks check-release --default-features
+
+echo "OK"

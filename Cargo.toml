@@ -54,11 +54,11 @@ puffin = "0.19"
 puffin_http = "0.16"
 rand = "0.9"
 reqwest = { version = "0.12", features = ["blocking"] }
-vk-graph-fx = { path = "contrib/vk-graph-fx" }
-vk-graph-imgui = { path = "contrib/vk-graph-imgui" }
-vk-graph-egui = { path = "contrib/vk-graph-egui" }
-vk-graph-prelude = { path = "contrib/vk-graph-prelude" }
-vk-graph-window = { path = "contrib/vk-graph-window" }
+vk-graph-fx = { path = "crates/vk-graph-fx" }
+vk-graph-imgui = { path = "crates/vk-graph-imgui" }
+vk-graph-egui = { path = "crates/vk-graph-egui" }
+vk-graph-prelude = { path = "crates/vk-graph-prelude" }
+vk-graph-window = { path = "crates/vk-graph-window" }
 vk-shader-macros = "0.2"
 tobj = "4.0"
 winit = "0.30"

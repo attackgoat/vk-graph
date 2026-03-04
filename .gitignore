@@ -1,7 +1,6 @@
 Cargo.lock
 **/target/
 **/.vscode/
-!contrib/.vscode/
 imgui.ini
 **/*.pak
 **/*.profraw

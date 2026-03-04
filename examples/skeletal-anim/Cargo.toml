@@ -13,7 +13,7 @@ glam = { version = "0.27", features = ["bytemuck"] }
 pak = "=0.5.0"
 pretty_env_logger = "0.5"
 vk-graph = { path = "../.." }
-vk-graph-window = { path = "../../contrib/vk-graph-window" }
+vk-graph-window = { path = "../../crates/vk-graph-window" }
 
 [build-dependencies]
 anyhow = "1.0"

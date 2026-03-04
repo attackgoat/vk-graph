@@ -18,8 +18,8 @@ clap = { version = "4.5", features = ["derive"] }
 pak = "0.5"
 pretty_env_logger = "0.5"
 vk-graph = { path = "../.." }
-vk-graph-fx = { path = "../../contrib/vk-graph-fx" }
-vk-graph-window = { path = "../../contrib/vk-graph-window" }
+vk-graph-fx = { path = "../../crates/vk-graph-fx" }
+vk-graph-window = { path = "../../crates/vk-graph-window" }
 winit = "0.30"
 
 [build-dependencies]

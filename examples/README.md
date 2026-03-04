@@ -17,7 +17,7 @@ Example | Instructions | Preview
 [min_max.rs](min_max.rs) | <pre>cargo run --example min_max</pre> | _See console output_
 [mip_compute.rs](mip_compute.rs) | <pre>cargo run --example mip_compute</pre> | _See console output_
 [subgroup_ops.rs](subgroup_ops.rs) | <pre>cargo run --example subgroup_ops</pre> | _See console output_
-[hello_world.rs](../contrib/vk-graph-window/examples/hello_world.rs) | _See [vk-graph-window](../contrib/vk-graph-window/README.md)_ | <image alt="hello_world.rs" src="../.github/img/hello_world.png" width="176" height="150">
+[hello_world.rs](../crates/vk-graph-window/examples/hello_world.rs) | _See [vk-graph-window](../crates/vk-graph-window/README.md)_ | <image alt="hello_world.rs" src="../.github/img/hello_world.png" width="176" height="150">
 [app.rs](app.rs) | <pre>cargo run --example app</pre> | <image alt="app.rs" src="../.github/img/app.png" width="176" height="150">
 [triangle.rs](triangle.rs) | <pre>cargo run --example triangle</pre> | <image alt="triangle.rs" src="../.github/img/triangle.png" width="176" height="150">
 [vertex_layout.rs](vertex_layout.rs) | <pre>cargo run --example vertex_layout</pre> | <image alt="vertex_layout.rs" src="../.github/img/vertex_layout.png" width="176" height="150">
@@ -43,7 +43,7 @@ Example | Instructions | Preview
 
 The following packages offer examples for specific cases not listed here:
 
-- [contrib/vk-graph-hot](../contrib/vk-graph-hot/examples/README.md): Shader pipeline hot-reload
+- [crates/vk-graph-hot](../crates/vk-graph-hot/examples/README.md): Shader pipeline hot-reload
 - [attackgoat/mood](https://github.com/attackgoat/mood): FPS game prototype with level loading and
   multiple rendering backends
 - [attackgoat/jw-basic](https://github.com/attackgoat/jw-basic): BASIC interpreter with graphics

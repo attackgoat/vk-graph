@@ -428,7 +428,11 @@ mod deprecated {
 
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderWrite"]
         #[doc(hidden)]
-        pub fn shader_resource_accesswrite_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        pub fn shader_resource_accesswrite_descriptor<N>(
+            self,
+            descriptor: impl Into<Descriptor>,
+            node: N,
+        ) -> Self
         where
             N: Node + View,
             N::Info: Copy,

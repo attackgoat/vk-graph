@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/vk-graph.svg)](https://crates.io/crates/vk-graph)
 [![Docs.rs](https://docs.rs/vk-graph/badge.svg)](https://docs.rs/vk-graph)
-[![LoC](https://tokei.rs/b1/github/attackgoat/vk-graph?category=code)](https://github.com/attackgoat/vk-graph)
+[![Guide Book](https://tokei.rs/b1/github/attackgoat/vk-graph?category=code)](http://attackgoat.github.io/vk-graph)
 
 _vk-graph_ is a high-performance Vulkan graphics driver with automatic resource management and
 execution.
@@ -41,7 +41,7 @@ Features of the render graph:
  - Automatic Vulkan management (render passes, subpasses, descriptors, pools, _etc._)
  - Automatic render pass scheduling, re-ordering, merging, with resource aliasing
  - Interoperable with existing Vulkan code
- - Optional [shader hot-reload](contrib/vk-graph-hot/README.md) from disk
+ - Optional [shader hot-reload](crates/vk-graph-hot/README.md) from disk
 
 ```rust
 graph
@@ -102,7 +102,7 @@ cargo run --features profile-with-puffin --release --example vsm_omni
 
 Included are some examples you might find helpful:
 
-- [`hello_world.rs`](contrib/vk-graph-window/examples/hello_world.rs) — Displays a window on the screen. Please start here.
+- [`hello_world.rs`](crates/vk-graph-window/examples/hello_world.rs) — Displays a window on the screen. Please start here.
 - [`triangle.rs`](examples/triangle.rs) — Shaders and full setup of index/vertex buffers; < 100 LOC.
 - [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass shader toy using the original
   shader code.
