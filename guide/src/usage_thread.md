@@ -19,6 +19,14 @@ Resource state is updated during the following function calls:
 > Do not call any `Queue` submission function accessing buffers, images, or acceleration structures
 > currently being submitted on other threads.
 
+## Execution
+
+The provided `Queue` submission functions are designed to this workflow:
+- Submit all commands the swapchain depends on
+- Acquire swapchain
+- Submit swapchain commands
+- Submit any final unrelated commands
+
 ## Safe Patterns
 
 Resources (buffers, images, or acceleration structures) are the only mutable types which require any
@@ -42,8 +50,8 @@ These patterns are safe:
 Host-mappable buffers require extra understanding to use properly.
 
 The contents of a buffer are undefined from the time of submission until that `Queue` has been
-fully submitted, as indicated by `Queue::is_submitted`. This means that you should not call
-`Buffer::mapped_slice` during any execution accessing that memory.
+fully executed, as indicated by `CommandBuffer::has_executed`. This means that you should not call
+`Buffer::mapped_slice` during any submission or execution accessing that memory.
 
 _See:
 [`examples/cpu_readback.rs`](https://github.com/attackgoat/vk-graph/blob/main/examples/cpu_readback.rs)_
