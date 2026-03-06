@@ -2,7 +2,8 @@
 
 [![Crates.io](https://img.shields.io/crates/v/vk-graph.svg)](https://crates.io/crates/vk-graph)
 [![Docs.rs](https://docs.rs/vk-graph/badge.svg)](https://docs.rs/vk-graph)
-[![Guide Book](https://tokei.rs/b1/github/attackgoat/vk-graph?category=code)](http://attackgoat.github.io/vk-graph)
+![Guide Book](https://img.shields.io/badge/vk--graph-Guide--Book-green?link=https%3A%2F%2Fattackgoat.github.io%2Fvk-graph%2F)
+
 
 _vk-graph_ is a high-performance Vulkan graphics driver with automatic resource management and
 execution.

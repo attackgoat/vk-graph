@@ -72,6 +72,9 @@ echo "Checking examples/vr" \
 # Rust code tests
 cargo test || fail
 
+# Build guide book
+mdbook build guide/ || fail "Unable to build guide book"
+
 # Check for semver breaking changes: if this fails you must update the crate version or fix the code
 cargo semver-checks check-release --default-features
 

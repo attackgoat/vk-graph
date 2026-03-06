@@ -201,11 +201,12 @@ impl XrInstance {
 
                     InstanceCreateError::VulkanUnsupported
                 })?;
-            let device = Device::from_ash_device(ash_device, physical_device).map_err(|err| {
-                error!("Vulkan device: {err}");
+            let device =
+                Device::try_from_ash_device(ash_device, physical_device).map_err(|err| {
+                    error!("Vulkan device: {err}");
 
-                InstanceCreateError::VulkanUnsupported
-            })?;
+                    InstanceCreateError::VulkanUnsupported
+                })?;
             let event_buf = xr::EventDataBuffer::new();
 
             Ok(Self {

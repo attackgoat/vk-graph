@@ -1,0 +1,13 @@
+[package]
+name = "guide-helper"
+version = "0.1.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+mdbook-preprocessor = { version = "0.5.2" }
+semver = "1.0.27"
+serde_json = "1.0.149"
+toml = "1.0.3"

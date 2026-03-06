@@ -117,7 +117,7 @@ impl Device {
         let instance = Instance::new(instance_info)?;
         let physical_device = select_physical_device(&instance, physical_device_index)?;
 
-        Self::from_physical_device(physical_device)
+        Self::try_from_physical_device(physical_device)
     }
 
     pub(crate) fn allocator(this: &Self) -> &Mutex<Allocator> {
@@ -185,9 +185,30 @@ impl Device {
         this.inner.swapchain_ext.as_ref().expect("VK_KHR_swapchain")
     }
 
+    pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
+        this.inner.pipeline_cache
+    }
+
+    /// TODO
+    ///
+    /// Panics if the indicies are invalid.
+    pub fn queue(this: &Self, queue_family_index: u32, queue_index: u32) -> vk::Queue {
+        debug_assert!(
+            (queue_family_index as usize) < this.physical_device.queue_families.len(),
+            "Queue family index must be within the range of the available queues created by the device."
+        );
+        debug_assert!(
+            queue_index
+                < this.physical_device.queue_families[queue_family_index as usize].queue_count,
+            "Queue index must be within the range of the available queues created by the device."
+        );
+
+        this.inner.queues[queue_family_index as usize][queue_index as usize]
+    }
+
     /// Loads and existing `ash` Vulkan device that may have been created by other means.
     #[profiling::function]
-    pub fn from_ash_device(
+    pub fn try_from_ash_device(
         device: ash::Device,
         physical_device: PhysicalDevice,
     ) -> Result<Self, DriverError> {
@@ -264,7 +285,7 @@ impl Device {
 
     /// Constructs a new device using the given configuration.
     #[profiling::function]
-    pub fn from_display(
+    pub fn try_from_display(
         display_handle: impl HasDisplayHandle,
         info: impl Into<DeviceInfo>,
     ) -> Result<Self, DriverError> {
@@ -289,12 +310,12 @@ impl Device {
         let instance = Instance::new(instance_info)?;
         let physical_device = select_physical_device(&instance, physical_device_index)?;
 
-        Self::from_physical_device(physical_device)
+        Self::try_from_physical_device(physical_device)
     }
 
     /// Constructs a new device using the given physical device.
     #[profiling::function]
-    pub fn from_physical_device(physical_device: PhysicalDevice) -> Result<Self, DriverError> {
+    pub fn try_from_physical_device(physical_device: PhysicalDevice) -> Result<Self, DriverError> {
         let device = unsafe {
             physical_device.create_ash_device(|device_create_info| {
                 physical_device.instance.create_device(
@@ -312,28 +333,7 @@ impl Device {
 
         info!("created {}", physical_device.properties_v1_0.device_name);
 
-        Self::from_ash_device(device, physical_device)
-    }
-
-    pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
-        this.inner.pipeline_cache
-    }
-
-    /// TODO
-    ///
-    /// Panics if the indicies are invalid.
-    pub fn queue(this: &Self, queue_family_index: u32, queue_index: u32) -> vk::Queue {
-        debug_assert!(
-            (queue_family_index as usize) < this.physical_device.queue_families.len(),
-            "Queue family index must be within the range of the available queues created by the device."
-        );
-        debug_assert!(
-            queue_index
-                < this.physical_device.queue_families[queue_family_index as usize].queue_count,
-            "Queue index must be within the range of the available queues created by the device."
-        );
-
-        this.inner.queues[queue_family_index as usize][queue_index as usize]
+        Self::try_from_ash_device(device, physical_device)
     }
 
     #[profiling::function]
@@ -546,7 +546,7 @@ pub(crate) mod deprecated {
             info: impl Into<DeviceInfo>,
             display_handle: &impl HasDisplayHandle,
         ) -> Result<Self, DriverError> {
-            Self::from_display(display_handle, info)
+            Self::try_from_display(display_handle, info)
         }
 
         #[deprecated = "use new function"]

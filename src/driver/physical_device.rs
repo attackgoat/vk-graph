@@ -2,6 +2,7 @@
 
 use {
     super::{DriverError, instance::Instance},
+    crate::driver::device::Device,
     ash::{ext, khr, vk},
     log::{debug, error},
     std::{
@@ -547,6 +548,11 @@ impl PhysicalDevice {
                 _ => Err(DriverError::OutOfMemory),
             }
         }
+    }
+
+    /// TODO
+    pub fn try_into_device(self) -> Result<Device, DriverError> {
+        Device::try_from_physical_device(self)
     }
 }
 

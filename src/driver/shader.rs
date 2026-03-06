@@ -10,6 +10,7 @@ use {
         ReflectConfig,
         entry_point::EntryPoint,
         parse::SpirvBinary,
+        spirv::ExecutionModel,
         ty::{DescriptorType, ScalarType, Type, VectorType},
         var::Variable,
     },
@@ -751,7 +752,7 @@ pub struct Shader {
 }
 
 impl Shader {
-    /// Specifies a shader with the given `stage` and shader code values.
+    /// Specifies a shader with the given `stage` and shader code.
     #[allow(clippy::new_ret_no_self)]
     pub fn new(stage: vk::ShaderStageFlags, spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         ShaderBuilder::default().spirv(spirv).stage(stage)
@@ -986,6 +987,11 @@ impl Shader {
         }
 
         res
+    }
+
+    /// Specifies a shader with the given shader code.
+    pub fn from_spirv(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+        ShaderBuilder::default().spirv(spirv)
     }
 
     fn image_sampler(&self, descriptor: Descriptor, name: &str) -> (SamplerInfo, bool) {
@@ -1413,6 +1419,15 @@ impl From<ShaderBuilder> for Shader {
     }
 }
 
+impl<T> From<T> for Shader
+where
+    T: Into<SpirvBinary>,
+{
+    fn from(spirv: T) -> Self {
+        Shader::from_spirv(spirv).build()
+    }
+}
+
 // HACK: https://github.com/colin-kiegel/rust-derive-builder/issues/56
 impl ShaderBuilder {
     /// Specifies a shader with the given `stage` and shader code values.
@@ -1423,20 +1438,44 @@ impl ShaderBuilder {
     /// Builds a new `Shader`.
     pub fn build(mut self) -> Shader {
         let entry_name = self.entry_name.as_deref().unwrap_or("main");
-        self.entry_point = Some(
-            Shader::reflect_entry_point(
-                entry_name,
-                self.spirv
-                    .as_ref()
-                    .map(|spirv| spirv.words())
-                    .expect("spirv code must be set at initialization"),
-                self.specialization
-                    .as_ref()
-                    .map(|opt| opt.as_ref())
-                    .unwrap_or_default(),
-            )
-            .unwrap_or_else(|_| panic!("invalid shader code for entry name \'{entry_name}\'")),
-        );
+        let entry_point = Shader::reflect_entry_point(
+            entry_name,
+            self.spirv
+                .as_ref()
+                .map(|spirv| spirv.words())
+                .expect("spirv code must be set at initialization"),
+            self.specialization
+                .as_ref()
+                .map(|opt| opt.as_ref())
+                .unwrap_or_default(),
+        )
+        .unwrap_or_else(|_| panic!("invalid shader code for entry name \'{entry_name}\'"));
+
+        if self.stage.unwrap_or_default().is_empty() {
+            self.stage = Some(match entry_point.exec_model {
+                ExecutionModel::Vertex => vk::ShaderStageFlags::VERTEX,
+                ExecutionModel::TessellationControl => vk::ShaderStageFlags::TESSELLATION_CONTROL,
+                ExecutionModel::TessellationEvaluation => {
+                    vk::ShaderStageFlags::TESSELLATION_EVALUATION
+                }
+                ExecutionModel::Geometry => vk::ShaderStageFlags::GEOMETRY,
+                ExecutionModel::Fragment => vk::ShaderStageFlags::FRAGMENT,
+                ExecutionModel::GLCompute => vk::ShaderStageFlags::COMPUTE,
+                ExecutionModel::Kernel => unimplemented!("unknown stage"),
+                ExecutionModel::TaskNV => vk::ShaderStageFlags::TASK_EXT,
+                ExecutionModel::MeshNV => vk::ShaderStageFlags::MESH_EXT,
+                ExecutionModel::RayGenerationNV => vk::ShaderStageFlags::RAYGEN_KHR,
+                ExecutionModel::IntersectionNV => vk::ShaderStageFlags::INTERSECTION_KHR,
+                ExecutionModel::AnyHitNV => vk::ShaderStageFlags::ANY_HIT_KHR,
+                ExecutionModel::ClosestHitNV => vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                ExecutionModel::MissNV => vk::ShaderStageFlags::MISS_KHR,
+                ExecutionModel::CallableNV => vk::ShaderStageFlags::CALLABLE_KHR,
+                ExecutionModel::TaskEXT => vk::ShaderStageFlags::TASK_EXT,
+                ExecutionModel::MeshEXT => vk::ShaderStageFlags::MESH_EXT,
+            })
+        }
+
+        self.entry_point = Some(entry_point);
 
         self.fallible_build()
             .expect("All required fields set at initialization")

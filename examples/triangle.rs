@@ -21,9 +21,8 @@ fn main() -> Result<(), WindowError> {
         &window.device,
         GraphicPipelineInfo::default(),
         [
-            Shader::new_vertex(
-                glsl!(
-                    r#"
+            glsl!(
+                r#"
                     #version 460 core
                     #pragma shader_stage(vertex)
 
@@ -37,12 +36,10 @@ fn main() -> Result<(), WindowError> {
                         vk_Color = color;
                     }
                     "#
-                )
-                .as_slice(),
-            ),
-            Shader::new_fragment(
-                glsl!(
-                    r#"
+            )
+            .as_slice(),
+            glsl!(
+                r#"
                     #version 460 core
                     #pragma shader_stage(fragment)
 
@@ -54,9 +51,8 @@ fn main() -> Result<(), WindowError> {
                         vk_Color = vec4(color, 1);
                     }
                     "#
-                )
-                .as_slice(),
-            ),
+            )
+            .as_slice(),
         ],
     )?;
 

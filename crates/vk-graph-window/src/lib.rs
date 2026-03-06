@@ -422,7 +422,7 @@ impl WindowBuilder {
     /// TODO
     pub fn build(self) -> Result<Window, WindowError> {
         let event_loop = EventLoop::new()?;
-        let device = Device::from_display(&event_loop, self.device_info)?;
+        let device = Device::try_from_display(&event_loop, self.device_info)?;
 
         Ok(Window {
             data: WindowData {
