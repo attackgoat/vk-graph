@@ -13,14 +13,18 @@ categories = ["game-development", "multimedia::images", "rendering::engine"]
 description = "An easy-to-use Vulkan rendering engine in the spirit of QBasic."
 
 [features]
-default = []
+default = ["loaded"]
+ash-molten=["loaded", "dep:ash-molten"]
+linked=["ash/linked"]
+loaded=["ash/loaded"]
+
 profile-with-puffin = ["profiling/profile-with-puffin"]
 profile-with-optick = ["profiling/profile-with-optick"]
 profile-with-superluminal = ["profiling/profile-with-superluminal"]
 profile-with-tracy = ["profiling/profile-with-tracy"]
 
 [dependencies]
-ash = "0.38"
+ash = { version = "0.38", default-features = false, features = ["debug", "std"] }
 ash-window = "0.13"
 derive_builder = "0.20"
 gpu-allocator = "0.28"
@@ -34,7 +38,7 @@ spirq = "1.2"
 vk-sync = { version = "0.5", package = "vk-sync-fork" }  # // SEE: https://github.com/gwihlidal/vk-sync-rs/pull/4 -> https://github.com/expenses/vk-sync-rs
 
 [target.'cfg(target_os = "macos")'.dependencies]
-ash-molten = "0.20"
+ash-molten = { version = "0.20", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
