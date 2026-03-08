@@ -1,10 +1,11 @@
-//! Preprocessor for the mdBook guide.
+//! Preprocessor for the vk-graph guide.
 
-use mdbook_preprocessor::book::Book;
-use mdbook_preprocessor::errors::Result;
-use mdbook_preprocessor::{Preprocessor, PreprocessorContext};
-use semver::{Version, VersionReq};
-use std::io;
+use {
+    cargo_toml::Manifest,
+    mdbook_preprocessor::{Preprocessor, PreprocessorContext, book::Book, errors::Result},
+    semver::{Version, VersionReq},
+    std::{env::current_dir, io},
+};
 
 /// Preprocessing entry point.
 pub fn handle_preprocessing() -> Result<()> {
@@ -38,24 +39,43 @@ impl Preprocessor for GuideHelper {
     }
 
     fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
-        insert_version(&mut book);
+        insert_crate_version(&mut book);
+        insert_vulkan_sdk_version(&mut book);
+
         Ok(book)
     }
 }
 
-fn insert_version(book: &mut Book) {
-    let path = std::env::current_dir()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("Cargo.toml");
-    let manifest_contents = std::fs::read_to_string(&path).unwrap();
-    let manifest: toml::Value = toml::from_str(&manifest_contents).unwrap();
-    let version = manifest["package"]["version"].as_str().unwrap();
-    const MARKER: &str = "{{ vk-graph.version }}";
+fn manifest() -> Manifest {
+    let path = current_dir().unwrap().parent().unwrap().join("Cargo.toml");
+
+    Manifest::from_path(path).unwrap()
+}
+
+fn insert_crate_version(book: &mut Book) {
+    let Version { major, minor, .. } =
+        Version::parse(manifest().package.unwrap().version()).unwrap();
+    let version = format!("{major}.{minor}");
+
+    const MARKER: &str = "{{ crate.version }}";
+
     book.for_each_chapter_mut(|ch| {
         if ch.content.contains(MARKER) {
-            ch.content = ch.content.replace(MARKER, version);
+            ch.content = ch.content.replace(MARKER, &version);
+        }
+    });
+}
+
+fn insert_vulkan_sdk_version(book: &mut Book) {
+    // Technically this is a VersionReq but we're not using it that way and want the build metadata
+    let Version { build, .. } =
+        Version::parse(manifest().dependencies.get("ash").unwrap().req()).unwrap();
+
+    const MARKER: &str = "{{ vulkan_sdk.version }}";
+
+    book.for_each_chapter_mut(|ch| {
+        if ch.content.contains(MARKER) {
+            ch.content = ch.content.replace(MARKER, build.as_str());
         }
     });
 }

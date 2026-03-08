@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
+cargo_toml = "0.22"
 mdbook-preprocessor = { version = "0.5.2" }
 semver = "1.0.27"
 serde_json = "1.0.149"
-toml = "1.0.3"

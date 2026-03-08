@@ -32,7 +32,7 @@ window creation:
 # Cargo.toml
 
 [dependencies]
-vk-graph-window = "{{ vk-graph.version }}"
+vk-graph-window = "{{ crate.version }}"
 ```
 
 ```rust

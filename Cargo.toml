@@ -20,7 +20,7 @@ profile-with-superluminal = ["profiling/profile-with-superluminal"]
 profile-with-tracy = ["profiling/profile-with-tracy"]
 
 [dependencies]
-ash = "0.38"
+ash = "0.38.0+1.3.281"
 ash-window = "0.13"
 derive_builder = "0.20"
 gpu-allocator = "0.28"

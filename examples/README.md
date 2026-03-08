@@ -2,7 +2,7 @@
 
 ## Getting Started
 
-A helpful [getting started](getting-started.md) guide is available which describes basic _vk-graph_
+A helpful [guide](https://attackgoat.github.io/vk-graph) is available which describes _vk-graph_
 types and functions.
 
 See the [README](../README.md) for more information.

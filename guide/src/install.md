@@ -6,9 +6,36 @@ To get started with `vk-graph`, add it as a project dependency to your `Cargo.to
 # Cargo.toml
 
 [dependencies]
-vk-graph = "{{ vk-graph.version }}"
+vk-graph = "{{ crate.version }}"
 ```
 
 ## Features
 
-TODO
+- `loaded` (_default_): Support searching for the Vulkan loader manually at runtime.
+- `linked`: Link the Vulkan loader at compile time.
+- `profile_with_`: Use the specified profiling backend
+    - ...`puffin`
+    - ...`optick`
+    - ...`superluminal`
+    - ...`tracy`
+
+## Vulkan SDK
+
+Debug mode (setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`) is only supported
+when a compatible [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) is installed.
+
+> [!IMPORTANT]
+> The installed Vulkan SDK version must be at least v{{ vulkan_sdk.version }}.
+
+## Required Packages
+
+_Linux (Debian-like)_:
+- `sudo apt install cmake uuid-dev libfontconfig-dev libssl-dev`
+
+_Mac OS (10.15 or later)_:
+- Xcode 12
+- Python 2.7
+- `brew install cmake ossp-uuid`
+
+_Windows_:
+- TODO

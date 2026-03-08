@@ -97,7 +97,7 @@ _Example code uses [puffin](https://crates.io/crates/puffin):_
 cargo run --features profile-with-puffin --release --example vsm_omni
 ```
 
-<img src=".github/img/profile.png" alt="Flamegraph of performance data" width=30%>
+<img src="guide/src/profile.png" alt="Flamegraph of performance data" width=30%>
 
 ## Quick Start
 

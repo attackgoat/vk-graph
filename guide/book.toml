@@ -3,8 +3,11 @@ title = "vk-graph"
 authors = ["John Wells"]
 language = "en"
 
-[preprocessor.guide-helper]
-command = "cargo run --quiet --manifest-path guide-helper/Cargo.toml"
-
 [build]
 extra-watch-dirs = ["guide-helper/src"]
+
+[output.html]
+smart-punctuation = true
+
+[preprocessor.guide-helper]
+command = "cargo run --quiet --manifest-path guide-helper/Cargo.toml"
