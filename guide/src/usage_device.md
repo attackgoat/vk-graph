@@ -6,8 +6,8 @@ Most Vulkan operations occur within the context of a logical device, provided by
 > [!WARNING]
 > Vulkan has no global state and does not share resources between devices by default.
 >
-> Do not combine resources from multiple devices! The steps required to share resources accross
-> devices is not currently documented but could be inferred from the Vulkan specification.
+> Do not combine resources from multiple devices! The steps required to share resources across
+> devices are not currently documented.
 
 ## Headless Operation
 

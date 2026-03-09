@@ -17,7 +17,8 @@
 
 # Reference Guide
 
-1. [Pipelines]()
+1. [Resources](./resource.md)
+1. [Pipelines](./pipeline.md)
     1. [Hot Reload](./pipeline_hot_reload.md)
     1. [Push Constants](./pipeline_push_const.md)
     1. [Specialization](./pipeline_spec.md)
@@ -28,3 +29,4 @@
    1. [Computing](./cmd_compute.md)
    1. [Graphics](./cmd_graphic.md)
    1. [Ray Tracing](./cmd_ray_trace.md)
+1. [Queue](./queue.md)

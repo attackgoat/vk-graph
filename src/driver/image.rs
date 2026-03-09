@@ -171,6 +171,11 @@ impl Image {
             })?
         };
         let requirements = unsafe { device.get_image_memory_requirements(handle) };
+        let allocation_scheme = if info.dedicated {
+            AllocationScheme::DedicatedImage(handle)
+        } else {
+            AllocationScheme::GpuAllocatorManaged
+        };
         let allocation = {
             profiling::scope!("allocate");
 
@@ -186,7 +191,7 @@ impl Image {
                     requirements,
                     location: MemoryLocation::GpuOnly,
                     linear: false,
-                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                    allocation_scheme,
                 })
                 .map_err(|err| {
                     warn!("unable to allocate image memory: {err}");
@@ -718,6 +723,13 @@ pub struct ImageInfo {
     #[builder(default = "1", setter(strip_option))]
     pub array_layer_count: u32,
 
+    /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the internal
+    /// memory allocation pool transient resources share.
+    ///
+    /// The driver may optimize access to dedicated buffers.
+    #[builder(default)]
+    pub dedicated: bool,
+
     /// Image extent of the Z axis, when describing a three dimensional image.
     #[builder(setter(strip_option))]
     pub depth: u32,
@@ -837,6 +849,7 @@ impl ImageInfo {
         usage: vk::ImageUsageFlags,
     ) -> Self {
         Self {
+            dedicated: false,
             ty,
             width,
             height,
@@ -884,6 +897,7 @@ impl ImageInfo {
     pub fn into_builder(self) -> ImageInfoBuilder {
         ImageInfoBuilder {
             array_layer_count: Some(self.array_layer_count),
+            dedicated: Some(self.dedicated),
             depth: Some(self.depth),
             flags: Some(self.flags),
             fmt: Some(self.fmt),

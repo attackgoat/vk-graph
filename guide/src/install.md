@@ -21,7 +21,7 @@ vk-graph = "{{ crate.version }}"
 
 ## Vulkan SDK
 
-Debug mode (setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`) is only supported
+Debug mode (setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`) is supported only
 when a compatible [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) is installed.
 
 > [!IMPORTANT]

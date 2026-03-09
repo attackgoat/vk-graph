@@ -40,12 +40,9 @@ The driver is based off the popular `ash` crate and `vk-sync`; reasoned as follo
 
 ## History
 
-
-
-
-- 2026 --- v0.15 released and renamed `vk-graph`
-- 2022 --- v0.2 released with `RenderGraph` type based on
-[`Kajiya`](https://github.com/EmbarkStudios/kajiya)
-- 2020 --- Project migrated to Github and named `Screen-13`
 - 2018 --- Project started privately as a game engine using
 [`Corange`](https://github.com/orangeduck/Corange)
+- 2020 --- Project migrated to Github and named `screen-13`
+- 2022 --- v0.2 released with `RenderGraph` type based on
+[`Kajiya`](https://github.com/EmbarkStudios/kajiya)
+- 2026 --- Project renamed `vk-graph` (v0.14)

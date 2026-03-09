@@ -1,5 +1,17 @@
 # Debugging
 
+Debug mode (setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`) is supported only
+when a compatible [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) is installed.
+
+> [!IMPORTANT]
+> The installed Vulkan SDK version must be at least v{{ vulkan_sdk.version }}.
+
+While in debug mode `vk-graph` watches for errors, warnings, and certain performance warnings
+emitted from any currently enabled Vulkan debug application layers. Emitted events will cause the
+active thread to be parked and log a message indicating how to attach a debugger.
+
+## Logging
+
 `vk-graph` uses [`log`](https://crates.io/crates/log) for low-overhead logging.
 
 To enable logging, set the `RUST_LOG` environment variable to `trace`, `debug`, `info`, `warn` or
