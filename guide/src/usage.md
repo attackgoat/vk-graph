@@ -9,18 +9,48 @@ Typical usage contains:
 let device: &Device = &self.device;
 ```
 
+
+
+
+
 ## Resources
 
 Resources, such as buffers and images, may be created from "`Info`" structs:
 
 ```rust
 let usage = vk::BufferUsageFlags::TRANSFER_SRC;
-let info = BufferInfo::device_mem(320 * 200 * 4, usage);
-let buffer: Buffer = Buffer::create(device, info)?;
+let buffer_info = BufferInfo::device_mem(320 * 200 * 4, usage);
+let buffer: Buffer = Buffer::create(device, buffer_info)?;
 
 let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
-let info = ImageInfo::image_2d(320, 200, vk::Format::R8G8B8A8_UNORM, usage)?;
-let image: Image = Image::create(device, info)?;
+let image_info = ImageInfo::image_2d(320, 200, vk::Format::R8G8B8A8_UNORM, usage)?;
+let image: Image = Image::create(device, image_info)?;
+```
+
+### Memory Allocation
+
+`vk-graph` uses a single memory allocator instance (currently `gpu-allocator`) for all allocations.
+
+The memory allocation strategy provides a large section of memory which is then sub-allocated for
+the resources which use it. This may lead to fragmentation and memory exhaustion in some scenarios.
+
+Individual buffers or images may use dedicated memory allocations by setting their `dedicated`
+field:
+
+```rust
+// The info fields may be used or set directly
+let uber_mesh_buf = Buffer::create(
+    device,
+    BufferInfo {
+        dedicated: true,
+        ..buffer_info
+    }
+)?;
+
+// Builder functions are also availble
+// (builder and the info types are interchangable)
+let dedicated_info = image_info.into_builder().dedicated(true);
+let important_image = Image::create(device, dedicated_info)?;
 ```
 
 Resources may be bound to a graph as `usize` handles referred to as _"nodes"_:
@@ -145,3 +175,8 @@ graph
     .submit(LazyPool::new(device), 0, 0)?
     .wait_until_executed()?;
 ```
+
+### Device Usage
+
+Buffers, images, and acceleration structures resources are created and used by a single `Device`.
+All commands which use a resource must execute on the same `Device` which created the resource.

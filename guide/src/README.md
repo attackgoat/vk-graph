@@ -11,14 +11,14 @@ This guide book will walk you through the mental model of this crate and help ex
 
 This guide provides a tour of the main public types:
 
-Resources
+[Driver]()
   : [Buffer](), [Image](), [Shader](), _etc.._
 
 [Graph]()
   : _Builder-pattern for Vulkan commands_
 
 [Queue]()
-  : _Automated graph submission_
+  : _Automated graph execution_
 
 A `Graph` is data built dynamically by your program every frame. Once complete, the graph is optimized into a `Queue` which may be used to submit commands to the Vulkan implementation.
 

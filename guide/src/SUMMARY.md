@@ -18,13 +18,14 @@
 # Reference Guide
 
 1. [Resources](./resource.md)
+    1. [Buffers](./resource_buffer.md)
+    1. [Images](./resource_image.md)
+    1. [Acceleration Structures](./resource_accel_struct.md)
 1. [Pipelines](./pipeline.md)
     1. [Hot Reload](./pipeline_hot_reload.md)
     1. [Push Constants](./pipeline_push_const.md)
     1. [Specialization](./pipeline_spec.md)
     1. [Synchronization](./pipeline_sync.md)
-        1. [Shaders](./pipeline_sync_shader.md)
-        1. [Subresources](./pipeline_sync_subresource.md)
 1. [Commands](./cmd.md)
    1. [Computing](./cmd_compute.md)
    1. [Graphics](./cmd_graphic.md)
