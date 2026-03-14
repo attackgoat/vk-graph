@@ -1,5 +1,5 @@
 use {
-    vk_graph::{driver::device::Device, node::SwapchainImageNode, Graph},
+    vk_graph::{Graph, driver::device::Device, node::SwapchainImageNode},
     winit::{dpi::PhysicalPosition, event::Event, window::Window},
 };
 

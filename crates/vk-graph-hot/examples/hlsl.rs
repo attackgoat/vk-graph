@@ -1,7 +1,7 @@
 use {
     clap::Parser,
     std::path::PathBuf,
-    vk_graph_hot::prelude::*,
+    vk_graph_hot::{HotGraphicPipeline, HotShader},
     vk_graph_prelude::*,
     vk_graph_window::{Window, WindowError},
 };
@@ -20,12 +20,12 @@ fn main() -> Result<(), WindowError> {
     // shader source code path instead of the shader source code bytes
     let cargo_manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fill_image_path = cargo_manifest_dir.join("examples/res/fill_image.hlsl");
-    let mut pipeline = HotGraphicPipeline::create(
+    let pipeline = HotGraphicPipeline::create(
         &window.device,
         GraphicPipelineInfo::default(),
         [
-            HotShader::new_vertex(&fill_image_path).entry_name("vertex_main".to_string()),
-            HotShader::new_fragment(&fill_image_path).entry_name("fragment_main".to_string()),
+            HotShader::new_vertex(&fill_image_path).entry_name("vertex_main"),
+            HotShader::new_fragment(&fill_image_path).entry_name("fragment_main"),
         ],
     )?;
 
@@ -36,14 +36,18 @@ fn main() -> Result<(), WindowError> {
             .graph
             .begin_cmd()
             .debug_name("make some noise")
-            .bind_pipeline(pipeline.hot())
-            .clear_color(0, frame.swapchain_image)
-            .store_color(0, frame.swapchain_image)
+            .bind_pipeline(&pipeline)
+            .color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+                StoreOp::Store,
+            )
             .record_cmd_buf(move |cmd_buf| {
                 cmd_buf
-                    .push_constants_offset(0, &frame_index.to_ne_bytes())
-                    .push_constants_offset(4, &frame.width.to_ne_bytes())
-                    .push_constants_offset(8, &frame.height.to_ne_bytes())
+                    .push_constants(0, &frame_index.to_ne_bytes())
+                    .push_constants(4, &frame.width.to_ne_bytes())
+                    .push_constants(8, &frame.height.to_ne_bytes())
                     .draw(3, 1, 0, 0);
             });
 

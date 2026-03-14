@@ -1,6 +1,6 @@
 use {
     bytemuck::cast_slice,
-    glam::{vec3, Mat4},
+    glam::{Mat4, vec3},
     vk_graph_prelude::*,
     vk_shader_macros::include_glsl,
 };

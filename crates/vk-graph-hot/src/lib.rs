@@ -2,28 +2,24 @@
 
 #![warn(missing_docs)]
 
-pub mod compute;
-pub mod graphic;
-pub mod ray_trace;
-pub mod shader;
+mod compute;
+mod graphic;
+mod ray_trace;
+mod shader;
 
-/// TODO
-pub mod prelude {
-    pub use super::{
-        compute::HotComputePipeline,
-        graphic::HotGraphicPipeline,
-        ray_trace::HotRayTracePipeline,
-        shader::{HotShader, HotShaderBuilder, OptimizationLevel, SourceLanguage, SpirvVersion},
-    };
-}
+pub use self::{
+    compute::HotComputePipeline,
+    graphic::HotGraphicPipeline,
+    ray_trace::HotRayTracePipeline,
+    shader::{HotShader, HotShaderBuilder},
+};
 
 use {
-    self::shader::HotShader,
     log::{error, info},
-    notify::{recommended_watcher, Event, EventKind, RecommendedWatcher},
+    notify::{Event, EventKind, RecommendedWatcher, recommended_watcher},
     shader_prepper::{
-        process_file, BoxedIncludeProviderError, IncludeProvider, ResolvedInclude,
-        ResolvedIncludePath,
+        BoxedIncludeProviderError, IncludeProvider, ResolvedInclude, ResolvedIncludePath,
+        process_file,
     },
     shaderc::{CompileOptions, Compiler, ShaderKind, SourceLanguage},
     std::{
@@ -32,13 +28,13 @@ use {
         io::{Error, ErrorKind},
         path::{Path, PathBuf},
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc, OnceLock,
+            atomic::{AtomicBool, Ordering},
         },
     },
     vk_graph::driver::{
-        shader::{Shader, ShaderBuilder},
         DriverError,
+        shader::{Shader, ShaderBuilder},
     },
 };
 
@@ -148,21 +144,29 @@ fn compile_shader_and_watch(
     Ok(base_shader)
 }
 
-fn create_watcher() -> (RecommendedWatcher, Arc<AtomicBool>) {
-    let has_changes = Arc::new(AtomicBool::new(false));
-    let has_changes_clone = Arc::clone(&has_changes);
-    let watcher = recommended_watcher(move |event: notify::Result<Event>| {
+fn compile_shaders_and_watch(
+    shaders: &[HotShader],
+    watcher: &mut RecommendedWatcher,
+) -> Result<Box<[ShaderBuilder]>, DriverError> {
+    shaders
+        .iter()
+        .map(|shader| compile_shader_and_watch(shader, watcher))
+        .collect()
+}
+
+fn create_watcher(has_changes: &Arc<AtomicBool>) -> RecommendedWatcher {
+    let has_changes = Arc::clone(has_changes);
+
+    recommended_watcher(move |event: notify::Result<Event>| {
         let event = event.unwrap_or_else(|_| Event::new(EventKind::Any));
         if matches!(
             event.kind,
             EventKind::Any | EventKind::Modify(_) | EventKind::Other
         ) {
-            has_changes_clone.store(true, Ordering::Relaxed);
+            has_changes.store(true, Ordering::Relaxed);
         }
     })
-    .unwrap();
-
-    (watcher, has_changes)
+    .unwrap()
 }
 
 fn guess_shader_kind(path: impl AsRef<Path>) -> ShaderKind {
@@ -204,4 +208,111 @@ fn guess_shader_source_language(path: impl AsRef<Path>) -> Option<SourceLanguage
         "hlsl" => Some(SourceLanguage::HLSL),
         _ => None,
     }
+}
+
+macro_rules! pipeline {
+    ($name:ident) => {
+        ::paste::paste! {
+            impl [<Hot $name Pipeline>] {
+                fn cache(&self) -> ::std::sync::RwLockReadGuard<'_, HotPipeline<[<$name Pipeline>]>> {
+                    self.cache
+                        .read()
+                        .unwrap()
+                }
+
+                fn cache_mut(&self) -> ::std::sync::RwLockWriteGuard<'_, HotPipeline<[<$name Pipeline>]>> {
+                    self.cache
+                        .write()
+                        .unwrap()
+                }
+            }
+
+            impl [<Hot $name Pipeline>] {
+                /// Gets the debugging name assigned to this pipeline, if one has been set.
+                pub fn debug_name(&self) -> Option<String> {
+                    self.cache()
+                        .pipeline
+                        .debug_name()
+                        .map(ToOwned::to_owned)
+                }
+
+                /// The device which owns this pipeline.
+                pub fn device(&self) -> &Device {
+                    &self.device
+                }
+
+                /// Gets the information used to create this object.
+                pub fn info(&self) -> [<$name PipelineInfo>] {
+                    self.cache()
+                        .pipeline
+                        .info()
+                }
+
+                /// Sets the debugging name assigned to this pipeline.
+                ///
+                /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
+                /// previously set name value.
+                pub fn set_debug_name(&mut self, name: impl Into<String>) {
+                    self.cache_mut()
+                        .pipeline
+                        .set_debug_name(name);
+                }
+
+                /// Sets the debugging name assigned to this pipeline.
+                ///
+                /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
+                /// previously set name value.
+                pub fn with_debug_name(mut self, name: impl Into<String>) -> Self {
+                    self.set_debug_name(name);
+
+                    self
+                }
+            }
+
+            impl<'a> CommandPipeline<'a> for [<Hot $name Pipeline>] {
+                type Ref = <[<$name Pipeline>] as CommandPipeline<'a>>::Ref;
+
+                fn bind_cmd(self, cmd: CommandRef<'a>) -> Self::Ref {
+                    self.compile_shader_and_bind_cmd(cmd)
+                }
+            }
+
+            impl<'a> CommandPipeline<'a> for &'a [<Hot $name Pipeline>] {
+                type Ref = <[<$name Pipeline>] as CommandPipeline<'a>>::Ref;
+
+                fn bind_cmd(self, cmd: CommandRef<'a>) -> Self::Ref {
+                    self.compile_shader_and_bind_cmd(cmd)
+                }
+            }
+
+        }
+    };
+}
+
+use pipeline;
+
+// pipeline!(Graphic);
+// pipeline!(RayTrace);
+
+macro_rules! pipeline_handle {
+    ($name:ident) => {
+        ::paste::paste! {
+            impl [<Hot $name Pipeline>] {
+                /// The native Vulkan pipeline handle of this pipeline.
+                pub fn handle(&self) -> ::vk_graph::driver::ash::vk::Pipeline {
+                    self.cache()
+                        .pipeline
+                        .handle()
+                }
+            }
+        }
+    };
+}
+
+use pipeline_handle;
+
+#[derive(Debug)]
+struct HotPipeline<T> {
+    pipeline: T,
+    watcher: RecommendedWatcher,
 }

@@ -4,7 +4,7 @@
 
 /// TODO
 pub mod prelude {
-    pub use super::{imgui, Condition, ImGui, Ui};
+    pub use super::{Condition, ImGui, Ui, imgui};
 }
 
 pub use imgui::{self, Condition, Ui};

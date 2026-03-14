@@ -2,7 +2,7 @@ use {
     anyhow::Context,
     bmfont::BMFont,
     bytemuck::{cast, cast_slice},
-    glam::{vec3, Mat4},
+    glam::{Mat4, vec3},
     std::sync::Arc,
     vk_graph_prelude::*,
     vk_shader_macros::include_glsl,

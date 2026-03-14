@@ -169,8 +169,8 @@ fn remove_common_path(
 fn read_shader_source(path: impl AsRef<Path>) -> String {
     use {
         shader_prepper::{
-            process_file, BoxedIncludeProviderError, IncludeProvider, ResolvedInclude,
-            ResolvedIncludePath,
+            BoxedIncludeProviderError, IncludeProvider, ResolvedInclude, ResolvedIncludePath,
+            process_file,
         },
         std::fs::read_to_string,
     };

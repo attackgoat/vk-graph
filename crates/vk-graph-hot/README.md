@@ -14,11 +14,8 @@ See the [example code](examples/README.md),
 See the [GLSL](examples/glsl.rs) and [HLSL](examples/hlsl.rs) examples for usage - the hot pipelines
 are drop-in replacements for the regular shader pipelines offered by _vk-graph_.
 
-After creating a pipeline two functions are available, `hot` or `cold`. The result of each may be
-bound to a render graph for any sort of regular use.
-
-- `hot()`: Returns the pipeline instance which includes any changes found on disk.
-- `cold()`: Returns the most recent successful compilation without watching for changes.
+Use `HotShader` with a file path and it will automatically update the created pipeline whenever the
+files included in the source code change.
 
 ## Advanced usage
 

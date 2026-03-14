@@ -1,7 +1,7 @@
 use {
     clap::Parser,
     std::path::PathBuf,
-    vk_graph_hot::prelude::*,
+    vk_graph_hot::{HotComputePipeline, HotShader},
     vk_graph_prelude::*,
     vk_graph_window::{Window, WindowError},
 };
@@ -19,10 +19,10 @@ fn main() -> Result<(), WindowError> {
     // Create a compute pipeline - the same as normal except for "Hot" prefixes and we provide the
     // shader source code path instead of the shader source code bytes
     let cargo_manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut pipeline = HotComputePipeline::create(
+    let pipeline = HotComputePipeline::create(
         &window.device,
         ComputePipelineInfo::default(),
-        HotShader::new_compute(cargo_manifest_dir.join("examples/res/fill_image.comp")),
+        HotShader::from_path(cargo_manifest_dir.join("examples/res/fill_image.comp")),
     )?;
 
     let mut frame_index: u32 = 0;
@@ -32,14 +32,12 @@ fn main() -> Result<(), WindowError> {
             .graph
             .begin_cmd()
             .debug_name("make some noise")
-            .bind_pipeline(pipeline.hot())
-            .write_descriptor(0, frame.swapchain_image)
+            .bind_pipeline(&pipeline)
+            .shader_resource_access(0, frame.swapchain_image, AccessType::ComputeShaderWrite)
             .record_cmd_buf(move |cmd_buf| {
-                cmd_buf.push_constants(&frame_index.to_ne_bytes()).dispatch(
-                    frame.width,
-                    frame.height,
-                    1,
-                );
+                cmd_buf
+                    .push_constants(0, &frame_index.to_ne_bytes())
+                    .dispatch(frame.width, frame.height, 1);
             });
 
         frame_index += 1;

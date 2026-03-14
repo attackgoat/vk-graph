@@ -1,12 +1,12 @@
 use {
-    bytemuck::{bytes_of, cast_slice, NoUninit},
+    bytemuck::{NoUninit, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Quat, Vec3},
     pak::{
+        Pak, PakBuf,
         anim::{Channel, Interpolation, Outputs},
         bitmap::BitmapFormat,
         model::{Joint, Vertex},
-        Pak, PakBuf,
     },
     std::{
         cmp::Ordering,
@@ -17,8 +17,10 @@ use {
         time::{Duration, Instant},
     },
     vk_graph::{
+        Graph,
         cmd::{LoadOp, StoreOp},
         driver::{
+            DriverError,
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
@@ -26,10 +28,8 @@ use {
             image::{Image, ImageInfo},
             shader::Shader,
             sync::AccessType,
-            DriverError,
         },
-        pool::{hash::HashPool, lazy::LazyPool, Pool as _},
-        Graph,
+        pool::{Pool as _, hash::HashPool, lazy::LazyPool},
     },
     vk_graph_window::{WindowBuilder, WindowError},
 };

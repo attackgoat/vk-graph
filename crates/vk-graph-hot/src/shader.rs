@@ -9,7 +9,7 @@ use {
     notify::{RecommendedWatcher, RecursiveMode, Watcher},
     shaderc::{CompileOptions, EnvVersion, ShaderKind, TargetEnv},
     std::path::{Path, PathBuf},
-    vk_graph::driver::{ash::vk, shader::SpecializationMap, DriverError},
+    vk_graph::driver::{DriverError, ash::vk, shader::SpecializationMap},
 };
 
 /// Describes a shader program which runs on some pipeline stage.
@@ -28,7 +28,7 @@ pub struct HotShader {
     /// The name of the entry point which will be executed by this shader.
     ///
     /// The default value is `main`.
-    #[builder(default = "\"main\".to_owned()")]
+    #[builder(default = "\"main\".to_owned()", setter(into))]
     pub entry_name: String,
 
     /// Macro definitions.
@@ -40,6 +40,7 @@ pub struct HotShader {
     pub optimization_level: Option<OptimizationLevel>,
 
     /// Shader source code path.
+    #[builder(setter(custom))]
     pub path: PathBuf,
 
     /// Sets the source language.
@@ -314,6 +315,15 @@ impl HotShader {
 
         Ok(res.spirv_code)
     }
+
+    /// Creates a shader using a shader kind inferred from the source code.
+    ///
+    /// # Panics
+    ///
+    /// If the shader code is invalid.
+    pub fn from_path(path: impl AsRef<Path>) -> HotShaderBuilder {
+        HotShaderBuilder::default().path(path)
+    }
 }
 
 impl From<HotShaderBuilder> for HotShader {
@@ -326,9 +336,7 @@ impl From<HotShaderBuilder> for HotShader {
 impl HotShaderBuilder {
     /// Specifies a shader with the given `stage` and shader path values.
     pub fn new(stage: vk::ShaderStageFlags, path: impl AsRef<Path>) -> Self {
-        Self::default()
-            .stage(stage)
-            .path(path.as_ref().to_path_buf())
+        Self::default().stage(stage).path(path)
     }
 
     /// Builds a new `HotShader`.
@@ -359,6 +367,12 @@ impl HotShaderBuilder {
             .unwrap()
             .push((key.into(), value.into()));
 
+        self
+    }
+
+    /// Shader source code path.
+    pub fn path(mut self, path: impl AsRef<Path>) -> Self {
+        self.path = Some(path.as_ref().to_owned());
         self
     }
 }

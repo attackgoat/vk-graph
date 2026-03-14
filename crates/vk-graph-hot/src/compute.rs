@@ -1,30 +1,32 @@
 //! TODO
 
 use {
-    super::{compile_shader_and_watch, create_watcher, shader::HotShader},
-    log::info,
-    notify::RecommendedWatcher,
-    std::{
-        ops::Deref,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        },
+    super::{
+        HotPipeline, compile_shader_and_watch, create_watcher, pipeline, pipeline_handle,
+        shader::HotShader,
     },
-    vk_graph::driver::{
-        compute::{ComputePipeline, ComputePipelineInfo},
-        device::Device,
-        DriverError,
+    log::info,
+    std::sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    vk_graph::{
+        cmd::{CommandPipeline, CommandRef},
+        driver::{
+            DriverError,
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::Device,
+        },
     },
 };
 
 /// TODO
 #[derive(Debug)]
 pub struct HotComputePipeline {
+    cache: RwLock<HotPipeline<ComputePipeline>>,
+    device: Device,
     has_changes: Arc<AtomicBool>,
-    pipeline: ComputePipeline,
     shader: HotShader,
-    watcher: RecommendedWatcher,
 }
 
 impl HotComputePipeline {
@@ -36,75 +38,41 @@ impl HotComputePipeline {
     ) -> Result<Self, DriverError> {
         let shader = shader.into();
 
-        let (mut watcher, has_changes) = create_watcher();
+        let has_changes = Default::default();
+        let mut watcher = create_watcher(&has_changes);
+
         let compiled_shader = compile_shader_and_watch(&shader, &mut watcher)?;
 
         let pipeline = ComputePipeline::create(device, info, compiled_shader)?;
 
         Ok(Self {
+            cache: RwLock::new(HotPipeline { pipeline, watcher }),
+            device: device.clone(),
             has_changes,
-            pipeline,
             shader,
-            watcher,
         })
     }
 
-    /// Returns the most recent compilation without checking for changes or re-compiling the shader
-    /// source code.
-    #[deprecated = "use Deref instead"]
-    #[doc(hidden)]
-    pub fn cold(&self) -> &ComputePipeline {
-        self
-    }
-
-    /// Returns the most recent compilation after checking for changes, and if needed re-compiling
-    /// the shader source code.
-    pub fn hot(&mut self) -> &ComputePipeline {
-        let has_changes = self.has_changes.swap(false, Ordering::Relaxed);
-
-        if has_changes {
+    fn compile_shader_and_bind_cmd<'a>(
+        &self,
+        cmd: CommandRef<'a>,
+    ) -> <ComputePipeline as CommandPipeline<'a>>::Ref {
+        if self.has_changes.swap(false, Ordering::Relaxed) {
             info!("Shader change detected");
 
-            let (mut watcher, has_changes) = create_watcher();
-            if let Ok(compiled_shader) = compile_shader_and_watch(&self.shader, &mut watcher) {
-                if let Ok(pipeline) = ComputePipeline::create(
-                    self.pipeline.device(),
-                    self.pipeline.info(),
-                    compiled_shader,
-                ) {
-                    self.pipeline = pipeline;
-                    self.has_changes = has_changes;
-                    self.watcher = watcher;
-                }
+            let mut cache = self.cache_mut();
+
+            if let Ok(shader) = compile_shader_and_watch(&self.shader, &mut cache.watcher)
+                && let Ok(pipeline) =
+                    ComputePipeline::create(&self.device, cache.pipeline.info(), shader)
+            {
+                cache.pipeline = pipeline;
             }
         }
 
-        self
+        self.cache().pipeline.clone().bind_cmd(cmd)
     }
 }
 
-impl AsRef<ComputePipeline> for HotComputePipeline {
-    fn as_ref(&self) -> &ComputePipeline {
-        self
-    }
-}
-
-impl Deref for HotComputePipeline {
-    type Target = ComputePipeline;
-
-    fn deref(&self) -> &Self::Target {
-        &self.pipeline
-    }
-}
-
-#[allow(unused)]
-mod deprecated {
-    use {crate::compute::HotComputePipeline, vk_graph::driver::compute::ComputePipeline};
-
-    impl HotComputePipeline {
-        #[deprecated = "use Deref instead"]
-        fn as_ref(&self) -> &ComputePipeline {
-            self
-        }
-    }
-}
+pipeline!(Compute);
+pipeline_handle!(Compute);

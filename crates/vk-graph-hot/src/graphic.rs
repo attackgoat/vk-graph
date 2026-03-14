@@ -1,30 +1,29 @@
 //! TODO
 
 use {
-    super::{compile_shader_and_watch, create_watcher, shader::HotShader},
+    super::{HotPipeline, compile_shaders_and_watch, create_watcher, pipeline, shader::HotShader},
     log::info,
-    notify::RecommendedWatcher,
-    std::{
-        ops::Deref,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        },
+    std::sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
     },
-    vk_graph::driver::{
-        device::Device,
-        graphic::{GraphicPipeline, GraphicPipelineInfo},
-        DriverError,
+    vk_graph::{
+        cmd::{CommandPipeline, CommandRef},
+        driver::{
+            DriverError,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+        },
     },
 };
 
 /// TODO
 #[derive(Debug)]
 pub struct HotGraphicPipeline {
+    cache: RwLock<HotPipeline<GraphicPipeline>>,
+    device: Device,
     has_changes: Arc<AtomicBool>,
-    pipeline: GraphicPipeline,
     shaders: Box<[HotShader]>,
-    watcher: RecommendedWatcher,
 }
 
 impl HotGraphicPipeline {
@@ -37,88 +36,46 @@ impl HotGraphicPipeline {
     where
         S: Into<HotShader>,
     {
-        let shaders = shaders
-            .into_iter()
-            .map(|shader| shader.into())
-            .collect::<Box<_>>();
+        let shaders = shaders.into_iter().map(Into::into).collect::<Box<_>>();
 
-        let (mut watcher, has_changes) = create_watcher();
-        let compiled_shaders = shaders
-            .iter()
-            .map(|shader| compile_shader_and_watch(shader, &mut watcher))
-            .collect::<Result<Vec<_>, _>>()?;
+        let has_changes = Default::default();
+        let mut watcher = create_watcher(&has_changes);
 
-        let pipeline = GraphicPipeline::create(device, info, compiled_shaders)?;
+        let pipeline = {
+            GraphicPipeline::create(
+                device,
+                info,
+                compile_shaders_and_watch(&shaders, &mut watcher)?,
+            )
+        }?;
 
         Ok(Self {
+            cache: RwLock::new(HotPipeline { pipeline, watcher }),
+            device: device.clone(),
             has_changes,
-            pipeline,
             shaders,
-            watcher,
         })
     }
 
-    /// Returns the most recent compilation without checking for changes or re-compiling the shader
-    /// source code.
-    #[deprecated = "use Deref instead"]
-    #[doc(hidden)]
-    pub fn cold(&self) -> &GraphicPipeline {
-        self
-    }
-
-    /// Returns the most recent compilation after checking for changes, and if needed re-compiling
-    /// the shader source code.
-    pub fn hot(&mut self) -> &GraphicPipeline {
-        let has_changes = self.has_changes.swap(false, Ordering::Relaxed);
-
-        if has_changes {
+    fn compile_shader_and_bind_cmd<'a>(
+        &self,
+        cmd: CommandRef<'a>,
+    ) -> <GraphicPipeline as CommandPipeline<'a>>::Ref {
+        if self.has_changes.swap(false, Ordering::Relaxed) {
             info!("Shader change detected");
 
-            let (mut watcher, has_changes) = create_watcher();
-            if let Ok(compiled_shaders) = self
-                .shaders
-                .iter()
-                .map(|shader| compile_shader_and_watch(shader, &mut watcher))
-                .collect::<Result<Vec<_>, DriverError>>()
+            let mut cache = self.cache_mut();
+
+            if let Ok(shaders) = compile_shaders_and_watch(&self.shaders, &mut cache.watcher)
+                && let Ok(pipeline) =
+                    GraphicPipeline::create(&self.device, cache.pipeline.info(), shaders)
             {
-                if let Ok(pipeline) = GraphicPipeline::create(
-                    self.pipeline.device(),
-                    self.pipeline.info(),
-                    compiled_shaders,
-                ) {
-                    self.pipeline = pipeline;
-                    self.has_changes = has_changes;
-                    self.watcher = watcher;
-                }
+                cache.pipeline = pipeline;
             }
         }
 
-        self
+        self.cache().pipeline.clone().bind_cmd(cmd)
     }
 }
 
-impl AsRef<GraphicPipeline> for HotGraphicPipeline {
-    fn as_ref(&self) -> &GraphicPipeline {
-        self
-    }
-}
-
-impl Deref for HotGraphicPipeline {
-    type Target = GraphicPipeline;
-
-    fn deref(&self) -> &Self::Target {
-        &self.pipeline
-    }
-}
-
-#[allow(unused)]
-mod deprecated {
-    use {crate::graphic::HotGraphicPipeline, vk_graph::driver::graphic::GraphicPipeline};
-
-    impl HotGraphicPipeline {
-        #[deprecated = "use Deref instead"]
-        fn as_ref(&self) -> &GraphicPipeline {
-            self
-        }
-    }
-}
+pipeline!(Graphic);

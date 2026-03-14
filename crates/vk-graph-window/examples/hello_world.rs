@@ -7,6 +7,6 @@ fn main() -> Result<(), WindowError> {
     Window::new()?.run(|frame| {
         frame
             .graph
-            .clear_color_image(frame.swapchain_image, [100u8, 149, 237]);
+            .clear_color_image(frame.swapchain_image, [100u8, 149, 237, 255]);
     })
 }

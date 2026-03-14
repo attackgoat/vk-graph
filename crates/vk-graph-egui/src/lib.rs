@@ -4,7 +4,7 @@
 
 /// TODO
 pub mod prelude {
-    pub use super::{egui, Egui};
+    pub use super::{Egui, egui};
 }
 
 pub use egui;
@@ -189,10 +189,10 @@ impl Egui {
     ) {
         // Unbind textures
         for (id, tex) in bound_tex.iter() {
-            if let AnyImageNode::ImageLease(tex) = tex {
-                if let egui::TextureId::Managed(_) = *id {
-                    self.textures.insert(*id, graph.resource(*tex).clone());
-                }
+            if let AnyImageNode::ImageLease(tex) = tex
+                && let egui::TextureId::Managed(_) = *id
+            {
+                self.textures.insert(*id, graph.resource(*tex).clone());
             }
         }
 

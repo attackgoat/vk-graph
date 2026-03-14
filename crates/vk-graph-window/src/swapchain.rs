@@ -12,7 +12,9 @@ use {
         time::Instant,
     },
     vk_graph::{
+        Graph,
         driver::{
+            DriverError,
             ash::{self, vk},
             cmd_buf::{CommandBuffer, CommandBufferInfo},
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
@@ -21,12 +23,10 @@ use {
             render_pass::{RenderPass, RenderPassInfo},
             surface::Surface,
             swapchain::{self, SwapchainImage},
-            sync::{cmd::pipeline_barrier, AccessType, ImageBarrier, ImageLayout},
-            DriverError,
+            sync::{AccessType, ImageBarrier, ImageLayout, cmd::pipeline_barrier},
         },
         node::SwapchainImageNode,
         pool::Pool,
-        Graph,
     },
 };
 

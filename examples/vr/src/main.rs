@@ -2,26 +2,27 @@ mod driver;
 
 use {
     self::driver::{Swapchain, XrInstance},
-    bytemuck::{bytes_of, cast_slice, Pod, Zeroable},
-    glam::{vec3, vec4, Mat3, Mat4, Quat, Vec2, Vec3},
+    bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
+    glam::{Mat3, Mat4, Quat, Vec2, Vec3, vec3, vec4},
     log::{debug, error, trace},
     meshopt::{generate_vertex_remap, remap_index_buffer, remap_vertex_buffer},
     openxr::{self as xr, EnvironmentBlendMode, ViewConfigurationType},
     std::{
-        fs::{metadata, File},
+        fs::{File, metadata},
         io::BufReader,
         iter::repeat_with,
         path::{Path, PathBuf},
         ptr::copy_nonoverlapping,
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
         thread::sleep,
         time::Duration,
     },
-    tobj::{load_obj, GPU_LOAD_OPTIONS},
+    tobj::{GPU_LOAD_OPTIONS, load_obj},
     vk_graph::{
+        Graph,
         cmd::{LoadOp, StoreOp},
         driver::{
             ash::vk::{self},
@@ -31,10 +32,9 @@ use {
             image::{Image, ImageInfo},
             sync::AccessType,
         },
-        pool::{lazy::LazyPool, Pool as _},
-        Graph,
+        pool::{Pool as _, lazy::LazyPool},
     },
-    vk_graph_hot::{graphic::HotGraphicPipeline, shader::HotShader},
+    vk_graph_hot::{HotGraphicPipeline, HotShader},
 };
 
 // Sets bits with index 0 and 1 for stereoscopic rendering
@@ -124,7 +124,7 @@ fn main() -> anyhow::Result<()> {
 
     let res_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("res");
 
-    let mut hands_pipeline = HotGraphicPipeline::create(
+    let hands_pipeline = HotGraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
@@ -132,7 +132,7 @@ fn main() -> anyhow::Result<()> {
             HotShader::new_fragment(res_dir.join("hands.frag")),
         ],
     )?;
-    let mut mammoth_pipeline = HotGraphicPipeline::create(
+    let mammoth_pipeline = HotGraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
@@ -358,7 +358,7 @@ fn main() -> anyhow::Result<()> {
             graph
                 .begin_cmd()
                 .debug_name("Left hand")
-                .bind_pipeline(hands_pipeline.hot())
+                .bind_pipeline(&hands_pipeline)
                 .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                 .multiview(VIEW_MASK, VIEW_MASK)
                 .resource_access(index_buf, AccessType::IndexBuffer)
@@ -407,7 +407,7 @@ fn main() -> anyhow::Result<()> {
             graph
                 .begin_cmd()
                 .debug_name("Right hand")
-                .bind_pipeline(hands_pipeline.hot())
+                .bind_pipeline(&hands_pipeline)
                 .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
                 .multiview(VIEW_MASK, VIEW_MASK)
                 .resource_access(index_buf, AccessType::IndexBuffer)
@@ -454,7 +454,7 @@ fn main() -> anyhow::Result<()> {
             graph
                 .begin_cmd()
                 .debug_name("Woolly Mammoth")
-                .bind_pipeline(mammoth_pipeline.hot())
+                .bind_pipeline(&mammoth_pipeline)
                 .resource_access(index_buf, AccessType::IndexBuffer)
                 .resource_access(vertex_buf, AccessType::VertexBuffer)
                 .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)

@@ -12,14 +12,14 @@ use {
     log::{error, info, trace, warn},
     std::{error, fmt},
     vk_graph::{
+        Graph,
         driver::{
+            DriverError,
             ash::vk,
             device::{Device, DeviceInfo},
             surface::Surface,
-            DriverError,
         },
         pool::hash::HashPool,
-        Graph,
     },
     winit::{
         application::ApplicationHandler,

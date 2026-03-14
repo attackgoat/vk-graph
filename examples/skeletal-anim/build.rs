@@ -5,7 +5,7 @@ use {
     simplelog::{CombinedLogger, ConfigBuilder, LevelFilter, WriteLogger},
     std::{
         env::var,
-        fs::{read_to_string, write, File},
+        fs::{File, read_to_string, write},
         path::{Path, PathBuf},
     },
 };

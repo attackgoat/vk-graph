@@ -34,11 +34,12 @@ mod res {
 
 use {
     anyhow::Context,
-    bytemuck::{bytes_of, Pod, Zeroable},
+    bytemuck::{Pod, Zeroable, bytes_of},
     clap::Parser,
     pak::{Pak, PakBuf},
     std::time::Instant,
     vk_graph::{
+        Graph,
         cmd::{LoadOp, StoreOp},
         driver::{
             ash::vk,
@@ -47,8 +48,7 @@ use {
             shader::Shader,
             sync::AccessType,
         },
-        pool::{lazy::LazyPool, Pool as _},
-        Graph,
+        pool::{Pool as _, lazy::LazyPool},
     },
     vk_graph_fx::*,
     vk_graph_window::WindowBuilder,

@@ -28,6 +28,7 @@ cargo fmt --manifest-path examples/vr/Cargo.toml && diff || fail "Unformatted ru
 
 echo "Checking vk-graph" \
     && cargo check --all-targets || fail \
+    && cargo check --all-targets --examples || fail \
     && cargo clippy --all-targets || fail \
     && echo "Checking vk-graph (w/ parking_lot)" \
     && cargo check --all-targets --features parking_lot || fail \
@@ -43,6 +44,7 @@ echo "Checking crates/vk-graph-fx" \
 
 echo "Checking crates/vk-graph-hot" \
     && cargo check --manifest-path crates/vk-graph-hot/Cargo.toml || fail \
+    && cargo check --manifest-path crates/vk-graph-hot/Cargo.toml --examples || fail \
     && cargo clippy --manifest-path crates/vk-graph-hot/Cargo.toml || fail
 
 # echo "Checking crates/vk-graph-imgui" \
@@ -55,6 +57,7 @@ echo "Checking crates/vk-graph-prelude" \
 
 echo "Checking crates/vk-graph-window" \
     && cargo check --manifest-path crates/vk-graph-window/Cargo.toml || fail \
+    && cargo check --manifest-path crates/vk-graph-window/Cargo.toml --examples || fail \
     && cargo clippy --manifest-path crates/vk-graph-window/Cargo.toml || fail
 
 echo "Checking examples/shader-toy" \
