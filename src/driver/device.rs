@@ -245,7 +245,7 @@ impl Device {
             queues.push(queue_family.into_boxed_slice());
         }
 
-        let surface_ext = physical_device.surface_ext.then(|| {
+        let surface_ext = physical_device.swapchain_ext.then(|| {
             khr::surface::Instance::new(&physical_device.instance.entry, &physical_device.instance)
         });
         let swapchain_ext = physical_device

@@ -54,6 +54,7 @@ const fn image_access_layout(access: AccessType) -> ImageLayout {
 pub struct ReadOnlySwapchain {
     exec_idx: usize,
     execs: Box<[Execution]>,
+    image_execs: Vec<usize>,
     pub info: SwapchainInfo,
     pub swapchain: swapchain::Swapchain,
 }
@@ -95,7 +96,7 @@ pub struct Swapchain {
 impl Swapchain {
     /// Constructs a new `Swapchain` object.
     pub fn new(surface: Surface, info: impl Into<SwapchainInfo>) -> Result<Self, DriverError> {
-        let info: SwapchainInfo = info.into();
+        let info = info.into();
 
         assert_ne!(info.command_buffer_count, 0);
 
@@ -170,7 +171,7 @@ impl Swapchain {
             Ok(swapchain_image) => Ok(swapchain_image),
         }?;
 
-        while swapchain_image.idx < self.image_execs.len() as u32 {
+        while self.image_execs.len() >= swapchain_image.idx as _ {
             self.image_execs.push(0);
         }
 
@@ -333,7 +334,14 @@ impl Swapchain {
     ///
     /// Previously acquired swapchain images should be discarded after calling this function.
     pub fn set_info(&mut self, info: impl Into<swapchain::SwapchainInfo>) {
+        let info = info.into();
+
         self.swapchain.set_info(info);
+        self.info.height = info.height;
+        self.info.min_image_count = info.min_image_count;
+        self.info.present_mode = info.present_mode;
+        self.info.surface = info.surface;
+        self.info.width = info.width;
     }
 }
 
@@ -679,6 +687,10 @@ mod test {
         assert_eq!(
             offset_of!(Swapchain, execs),
             offset_of!(ReadOnlySwapchain, execs),
+        );
+        assert_eq!(
+            offset_of!(Swapchain, image_execs),
+            offset_of!(ReadOnlySwapchain, image_execs),
         );
         assert_eq!(
             offset_of!(Swapchain, info),

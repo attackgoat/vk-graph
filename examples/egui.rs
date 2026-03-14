@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
         .v_sync(false)
         .window(|window| window.with_inner_size(LogicalSize::new(1024, 768)))
         .build()?;
-    let mut egui = Egui::new(&window.device, window.as_ref());
+    let mut egui = Egui::new(&window.device, &window);
 
     let mut cache = LazyPool::new(&window.device);
 

@@ -233,12 +233,7 @@ pub struct PhysicalDevice {
     /// _Note:_ This field is read-only.
     pub sampler_filter_minmax_properties: SamplerFilterMinmaxProperties,
 
-    /// True if the device may be used for windowed or full-screen display.
-    ///
-    /// _Note:_ This field is read-only.
-    pub surface_ext: bool,
-
-    /// True if the device may be used for windowed or full-screen display.
+    /// True if the device supports swapchain use.
     ///
     /// _Note:_ This field is read-only.
     pub swapchain_ext: bool,
@@ -348,8 +343,8 @@ impl PhysicalDevice {
         // Check for supported extensions
         let extensions = extensions
             .iter()
-            .map(|property: &vk::ExtensionProperties| property.extension_name.as_ptr())
-            .filter(|&extension_name| !extension_name.is_null())
+            .map(|property| property.extension_name.as_ptr())
+            .filter(|extension_name| !extension_name.is_null())
             .map(|extension_name| unsafe { CStr::from_ptr(extension_name) })
             .collect::<HashSet<_>>();
         let supports_accel_struct = extensions.contains(khr::acceleration_structure::NAME)
@@ -357,7 +352,6 @@ impl PhysicalDevice {
         let supports_index_type_uint8 = extensions.contains(ext::index_type_uint8::NAME);
         let supports_ray_query = extensions.contains(khr::ray_query::NAME);
         let supports_ray_trace = extensions.contains(khr::ray_tracing_pipeline::NAME);
-        let surface_ext = extensions.contains(khr::surface::NAME);
         let swapchain_ext = extensions.contains(khr::swapchain::NAME);
 
         // Gather optional features and properties of the physical device
@@ -398,7 +392,6 @@ impl PhysicalDevice {
             ray_trace_features,
             ray_trace_properties,
             sampler_filter_minmax_properties,
-            surface_ext,
             swapchain_ext,
         })
     }

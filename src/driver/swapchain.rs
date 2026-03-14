@@ -81,7 +81,7 @@ impl Swapchain {
     ) -> Result<SwapchainImage, SwapchainError> {
         for _ in 0..2 {
             if self.suboptimal {
-                self.recreate_swapchain().map_err(|err| {
+                self.recreate().map_err(|err| {
                     if matches!(err, DriverError::Unsupported) {
                         SwapchainError::Suboptimal
                     } else {
@@ -174,7 +174,7 @@ impl Swapchain {
     }
 
     #[profiling::function]
-    fn destroy_swapchain(device: &Device, swapchain: &mut vk::SwapchainKHR) {
+    fn destroy(device: &Device, swapchain: &mut vk::SwapchainKHR) {
         if *swapchain != vk::SwapchainKHR::null() {
             // wait for device to be finished with swapchain before destroying it.
             // This avoid crashes when resizing windows
@@ -216,7 +216,7 @@ impl Swapchain {
                 &present_info,
             ) {
                 Ok(_) => {
-                    Self::destroy_swapchain(&self.surface.device, &mut self.handle_prev);
+                    Self::destroy(&self.surface.device, &mut self.handle_prev);
                 }
                 Err(err)
                     if err == vk::Result::ERROR_DEVICE_LOST
@@ -242,8 +242,8 @@ impl Swapchain {
     }
 
     #[profiling::function]
-    fn recreate_swapchain(&mut self) -> Result<(), DriverError> {
-        Self::destroy_swapchain(&self.surface.device, &mut self.handle_prev);
+    fn recreate(&mut self) -> Result<(), DriverError> {
+        Self::destroy(&self.surface.device, &mut self.handle_prev);
 
         let surface_caps = Surface::capabilities(&self.surface)?;
 
@@ -432,8 +432,8 @@ impl Drop for Swapchain {
             return;
         }
 
-        Self::destroy_swapchain(&self.surface.device, &mut self.handle_prev);
-        Self::destroy_swapchain(&self.surface.device, &mut self.handle);
+        Self::destroy(&self.surface.device, &mut self.handle_prev);
+        Self::destroy(&self.surface.device, &mut self.handle);
     }
 }
 

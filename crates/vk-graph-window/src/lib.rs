@@ -10,7 +10,7 @@ pub use self::frame::FrameContext;
 use {
     self::swapchain::{Swapchain, SwapchainError, SwapchainInfo},
     log::{error, info, trace, warn},
-    std::{error, fmt},
+    std::{error, fmt, ops::Deref},
     vk_graph::{
         Graph,
         driver::{
@@ -21,6 +21,7 @@ use {
         },
         pool::hash::HashPool,
     },
+    winit::raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle},
     winit::{
         application::ApplicationHandler,
         error::EventLoopError,
@@ -41,12 +42,30 @@ pub enum FullscreenMode {
     Exclusive,
 }
 
+#[doc(hidden)]
+#[repr(C)]
+pub struct ReadOnlyWindow {
+    data: WindowData,
+    pub device: Device,
+    event_loop: EventLoop<()>,
+}
+
+impl Deref for ReadOnlyWindow {
+    type Target = EventLoop<()>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.event_loop
+    }
+}
+
 /// TODO
-// #[derive(Debug)]
+#[repr(C)]
 pub struct Window {
     data: WindowData,
 
-    /// TODO
+    /// A device which is compatible with this window.
+    ///
+    /// _Note:_ This field is read-only.
     pub device: Device,
 
     event_loop: EventLoop<()>,
@@ -401,9 +420,18 @@ impl Window {
     }
 }
 
-impl AsRef<EventLoop<()>> for Window {
-    fn as_ref(&self) -> &EventLoop<()> {
-        &self.event_loop
+#[doc(hidden)]
+impl Deref for Window {
+    type Target = ReadOnlyWindow;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self as *const Self as *const Self::Target) }
+    }
+}
+
+impl HasDisplayHandle for Window {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        self.event_loop.display_handle()
     }
 }
 
@@ -606,5 +634,29 @@ impl From<DriverError> for WindowError {
 impl From<EventLoopError> for WindowError {
     fn from(err: EventLoopError) -> Self {
         Self::EventLoop(err)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use {
+        super::*,
+        std::mem::{offset_of, size_of},
+    };
+
+    #[test]
+    pub fn window_repr_c() {
+        // HACK: The readonly crate uses a private implementation and so we can't further deref it
+        // into the native object type. Because of this the ReadOnly part is manually implemented.
+        assert_eq!(size_of::<Window>(), size_of::<ReadOnlyWindow>());
+        assert_eq!(offset_of!(Window, data), offset_of!(ReadOnlyWindow, data));
+        assert_eq!(
+            offset_of!(Window, device),
+            offset_of!(ReadOnlyWindow, device)
+        );
+        assert_eq!(
+            offset_of!(Window, event_loop),
+            offset_of!(ReadOnlyWindow, event_loop)
+        );
     }
 }

@@ -74,7 +74,7 @@ impl Surface {
             )
         }
         .map_err(|err| {
-            warn!("Unable to create surface: {err}");
+            warn!("unable to create surface: {err}");
 
             DriverError::Unsupported
         })?;
@@ -85,18 +85,19 @@ impl Surface {
     /// Lists the supported surface formats.
     #[profiling::function]
     pub fn formats(&self) -> Result<Vec<vk::SurfaceFormatKHR>, DriverError> {
-        unsafe {
-            Device::expect_surface_ext(&self.device)
-                .get_physical_device_surface_formats(
-                    self.device.physical_device.handle,
-                    self.handle,
-                )
-                .map_err(|err| {
-                    warn!("Unable to get surface formats: {err}");
+        let surface_ext = Device::expect_surface_ext(&self.device);
 
-                    DriverError::Unsupported
-                })
+        unsafe {
+            surface_ext.get_physical_device_surface_formats(
+                self.device.physical_device.handle,
+                self.handle,
+            )
         }
+        .map_err(|err| {
+            warn!("unable to get surface formats: {err}");
+
+            DriverError::Unsupported
+        })
     }
 
     /// Helper function to automatically select the best UNORM format, if one is available.
