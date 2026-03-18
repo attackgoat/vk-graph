@@ -1,12 +1,31 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::{NoUninit, cast_slice},
+    ash::vk,
+    bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
     std::sync::Arc,
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph::{
+        Graph,
+        cmd::BuildAccelerationStructureInfo,
+        driver::{
+            DriverError,
+            accel_struct::{
+                AccelerationStructure, AccelerationStructureGeometry,
+                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
+                AccelerationStructureInfo,
+            },
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            physical_device::RayTraceProperties,
+            ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup},
+            shader::Shader,
+        },
+        pool::hash::HashPool,
+    },
+    vk_graph_window::Window,
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 static SHADER_RAY_GEN: &[u32] = glsl!(
@@ -79,7 +98,7 @@ static SHADER_MISS: &[u32] = glsl!(
 fn create_ray_trace_pipeline(device: &Device) -> Result<RayTracePipeline, DriverError> {
     RayTracePipeline::create(
         device,
-        RayTracePipelineInfoBuilder::default().max_ray_recursion_depth(1),
+        RayTracePipelineInfo::builder().max_ray_recursion_depth(1),
         [
             Shader::new_ray_gen(SHADER_RAY_GEN),
             Shader::new_closest_hit(SHADER_CLOSEST_HIT),
@@ -99,7 +118,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let mut pool = HashPool::new(&window.device);
 
     // ------------------------------------------------------------------------------------------ //
@@ -182,7 +201,7 @@ fn main() -> anyhow::Result<()> {
     let vertex_count = triangle_count * 3;
 
     #[repr(C)]
-    #[derive(Debug, Clone, Copy, NoUninit)]
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
     #[allow(dead_code)]
     struct Vertex {
         pos: [f32; 3],

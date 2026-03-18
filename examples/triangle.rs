@@ -1,13 +1,20 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::cast_slice,
     clap::Parser,
     std::sync::Arc,
-    vk_graph::cmd::LoadOp,
-    vk_graph_prelude::*,
-    vk_graph_window::{WindowBuilder, WindowError},
+    vk_graph::{
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            buffer::Buffer,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+        },
+    },
+    vk_graph_window::{Window, WindowError},
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 // A Vulkan triangle using a graphic pipeline, vertex/fragment shaders, and index/vertex buffers.
@@ -16,7 +23,7 @@ fn main() -> Result<(), WindowError> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let triangle_pipeline = GraphicPipeline::create(
         &window.device,
         GraphicPipelineInfo::default(),

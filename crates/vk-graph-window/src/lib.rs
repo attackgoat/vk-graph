@@ -5,7 +5,7 @@
 mod frame;
 pub mod swapchain;
 
-pub use self::frame::FrameContext;
+pub use {self::frame::FrameContext, winit};
 
 use {
     self::swapchain::{Swapchain, SwapchainError, SwapchainInfo},
@@ -66,7 +66,11 @@ pub struct Window {
     /// A device which is compatible with this window.
     ///
     /// _Note:_ This field is read-only.
+    #[cfg(doc)]
     pub device: Device,
+
+    #[cfg(not(doc))]
+    device: Device,
 
     event_loop: EventLoop<()>,
 }
@@ -79,7 +83,7 @@ impl Window {
 
     /// TODO
     pub fn builder() -> WindowBuilder {
-        WindowBuilder::default()
+        Default::default()
     }
 
     /// TODO

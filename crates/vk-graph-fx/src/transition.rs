@@ -2,7 +2,24 @@
 // NOTE: Some are rough or broken and need a bit of care - others should be optimized for production
 // use.
 
-use {log::trace, std::collections::HashMap, vk_graph_prelude::*, vk_shader_macros::include_glsl};
+use {
+    log::trace,
+    std::collections::HashMap,
+    vk_graph::{
+        Graph,
+        driver::{
+            ash::vk,
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::Device,
+            image::ImageInfo,
+            shader::Shader,
+            sync::AccessType,
+        },
+        node::{AnyImageNode, ImageLeaseNode},
+        pool::{Pool as _, hash::HashPool},
+    },
+    vk_shader_macros::include_glsl,
+};
 
 #[allow(missing_docs)]
 #[derive(Clone, Copy, Debug)]
@@ -380,7 +397,7 @@ impl Transition {
 /// TODO
 pub struct TransitionPipeline {
     cache: HashPool,
-    device: Device,
+    device: Device, // TODO REMOVE
     pipelines: HashMap<TransitionType, ComputePipeline>,
 }
 

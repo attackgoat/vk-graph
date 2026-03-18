@@ -20,7 +20,6 @@ cargo fmt --manifest-path crates/vk-graph-egui/Cargo.toml && diff || fail "Unfor
 cargo fmt --manifest-path crates/vk-graph-fx/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-fx)"
 cargo fmt --manifest-path crates/vk-graph-hot/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-hot)"
 cargo fmt --manifest-path crates/vk-graph-imgui/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-imgui)"
-cargo fmt --manifest-path crates/vk-graph-prelude/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-prelude)"
 cargo fmt --manifest-path crates/vk-graph-window/Cargo.toml && diff || fail "Unformatted rust code (vk-graph-window)"
 cargo fmt --manifest-path examples/shader-toy/Cargo.toml && diff || fail "Unformatted rust code (shader-toy)"
 cargo fmt --manifest-path examples/skeletal-anim/Cargo.toml && diff || fail "Unformatted rust code (skeletal-anim)"
@@ -50,10 +49,6 @@ echo "Checking crates/vk-graph-hot" \
 # echo "Checking crates/vk-graph-imgui" \
 #     && cargo check --manifest-path crates/vk-graph-imgui/Cargo.toml || fail \
 #     && cargo clippy --manifest-path crates/vk-graph-imgui/Cargo.toml || fail
-
-echo "Checking crates/vk-graph-prelude" \
-    && cargo check --manifest-path crates/vk-graph-prelude/Cargo.toml || fail \
-    && cargo clippy --manifest-path crates/vk-graph-prelude/Cargo.toml || fail
 
 echo "Checking crates/vk-graph-window" \
     && cargo check --manifest-path crates/vk-graph-window/Cargo.toml || fail \

@@ -1,8 +1,8 @@
 use {
     clap::Parser,
     std::path::PathBuf,
+    vk_graph::driver::{compute::ComputePipelineInfo, sync::AccessType},
     vk_graph_hot::{HotComputePipeline, HotShader},
-    vk_graph_prelude::*,
     vk_graph_window::{Window, WindowError},
 };
 

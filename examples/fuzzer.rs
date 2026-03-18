@@ -22,14 +22,33 @@ Also helpful to run with valgrind:
 
 */
 use {
+    ash::vk,
     clap::Parser,
     log::debug,
     rand::{Rng, rng, seq::IndexedRandom},
     std::mem::size_of,
-    vk_graph::cmd::{BuildAccelerationStructureInfo, LoadOp},
-    vk_graph_prelude::*,
-    vk_graph_window::{FrameContext, WindowBuilder, WindowError},
+    vk_graph::{
+        cmd::{BuildAccelerationStructureInfo, LoadOp, StoreOp},
+        driver::{
+            accel_struct::{
+                AccelerationStructure, AccelerationStructureGeometry,
+                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
+                AccelerationStructureInfo, DeviceOrHostAddress,
+            },
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo, StencilMode},
+            image::{ImageInfo, SampleCount},
+            physical_device::Vulkan10Limits,
+            render_pass::ResolveMode,
+            shader::{Shader, SpecializationMap},
+        },
+        pool::{Pool as _, hash::HashPool},
+    },
+    vk_graph_window::{FrameContext, Window, WindowError},
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 type Operation = fn(&mut FrameContext, &mut HashPool);
@@ -58,7 +77,7 @@ fn main() -> Result<(), WindowError> {
 
     let mut rng = rng();
 
-    let vk_graph = WindowBuilder::default().debug(true).build()?;
+    let vk_graph = Window::builder().debug(true).build()?;
     let mut pool = HashPool::new(&vk_graph.device);
 
     let mut frame_count = 0;
@@ -323,7 +342,7 @@ fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
         "array_bind",
         frame.device,
         ComputePipelineInfo::default(),
-        Shader::new_compute(
+        Shader::from_spirv(
             glsl!(
                 r#"
                 #version 460 core
@@ -726,7 +745,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
 
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfoBuilder::default().samples(sample_count),
+        GraphicPipelineInfo::builder().samples(sample_count),
         glsl!(
             r#"
             #version 460 core

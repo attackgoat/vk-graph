@@ -1,5 +1,5 @@
 use {
-    bytemuck::{NoUninit, bytes_of, cast_slice},
+    bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Quat, Vec3},
     pak::{
@@ -31,7 +31,7 @@ use {
         },
         pool::{Pool as _, hash::HashPool, lazy::LazyPool},
     },
-    vk_graph_window::{WindowBuilder, WindowError},
+    vk_graph_window::{Window, WindowError},
 };
 
 // This blog has a really good overview of what is happening here:
@@ -43,7 +43,7 @@ fn main() -> Result<(), WindowError> {
     let mut pak = PakBuf::open(pak_path).unwrap();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let device = &window.device;
 
     let pipeline = create_pipeline(device, &mut pak)?;
@@ -100,6 +100,7 @@ fn main() -> Result<(), WindowError> {
                     projection,
                     view,
                     position,
+                    ..Default::default()
                 }),
             );
 
@@ -377,14 +378,13 @@ struct Args {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default, Pod, Zeroable)]
 struct CameraUniform {
     projection: Mat4,
     view: Mat4,
     position: Vec3,
+    __: u32,
 }
-
-unsafe impl NoUninit for CameraUniform {}
 
 struct Model {
     index_buf: Arc<Buffer>,

@@ -1,6 +1,24 @@
 use {
-    super::BitmapFont, anyhow::Context, bmfont::BMFont, log::info, std::sync::Arc,
-    vk_graph_prelude::*, vk_shader_macros::include_glsl,
+    super::BitmapFont,
+    anyhow::Context,
+    bmfont::BMFont,
+    log::info,
+    std::sync::Arc,
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            ash::vk,
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::Device,
+            image::{Image, ImageInfo},
+            shader::Shader,
+            sync::AccessType,
+        },
+        pool::{Pool as _, hash::HashPool},
+    },
+    vk_shader_macros::include_glsl,
 };
 
 #[cfg(debug_assertions)]

@@ -1,4 +1,17 @@
-use {clap::Parser, std::time::Instant, vk_graph_prelude::*};
+use {
+    ash::vk,
+    clap::Parser,
+    std::time::Instant,
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            buffer::Buffer,
+            device::{Device, DeviceInfo},
+        },
+        pool::hash::HashPool,
+    },
+};
 
 /// Example demonstrating the steps to take when reading the results of buffer or image operations
 /// on the CPU. These operations take time to submit and the GPU will execute them asynchronously.
@@ -7,7 +20,7 @@ fn main() -> Result<(), DriverError> {
 
     // For this example we create a headless device, but the same thing works using a window
     let args = Args::parse();
-    let device_info = DeviceInfoBuilder::default().debug(args.debug);
+    let device_info = DeviceInfo::builder().debug(args.debug);
     let device = Device::new(device_info)?;
 
     let mut graph = Graph::default();

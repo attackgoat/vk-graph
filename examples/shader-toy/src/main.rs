@@ -51,7 +51,7 @@ use {
         pool::{Pool as _, lazy::LazyPool},
     },
     vk_graph_fx::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph_window::Window,
     winit::dpi::PhysicalSize,
 };
 
@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .min_image_count(3)
         .window(|builder| builder.with_inner_size(PhysicalSize::new(1280.0f64, 720.0f64)))
@@ -210,7 +210,7 @@ fn main() -> anyhow::Result<()> {
             // type will do but we are getting fancy here by defining a struct to be super precise
             // about what we're doing - but you may want to just send a bunch of f32's
             #[repr(C)]
-            #[derive(Clone, Copy)]
+            #[derive(Clone, Copy, Pod, Zeroable)]
             struct PushConstants {
                 resolution: [f32; 3],
                 _pad_1: u32,
@@ -222,25 +222,6 @@ fn main() -> anyhow::Result<()> {
                 sample_rate: f32,
                 channel_time: [f32; 4],
                 channel_resolution: [f32; 16],
-            }
-
-            unsafe impl Pod for PushConstants {}
-
-            unsafe impl Zeroable for PushConstants {
-                fn zeroed() -> Self {
-                    Self {
-                        resolution: [0f32; 3],
-                        _pad_1: 0u32,
-                        date: [0f32; 4],
-                        mouse: [0f32; 4],
-                        time: 0f32,
-                        time_delta: 0f32,
-                        frame: 0i32,
-                        sample_rate: 0f32,
-                        channel_time: [0f32; 4],
-                        channel_resolution: [0f32; 16],
-                    }
-                }
             }
 
             // Each pipeline gets the same constant data

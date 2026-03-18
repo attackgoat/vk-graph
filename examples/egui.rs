@@ -1,7 +1,14 @@
 mod profile_with_puffin;
 
 use {
-    clap::Parser, vk_graph_egui::prelude::*, vk_graph_prelude::*, vk_graph_window::WindowBuilder,
+    ash::vk,
+    clap::Parser,
+    vk_graph::{
+        driver::image::ImageInfo,
+        pool::{Pool as _, lazy::LazyPool},
+    },
+    vk_graph_egui::{Egui, egui},
+    vk_graph_window::Window,
     winit::dpi::LogicalSize,
 };
 
@@ -10,7 +17,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .v_sync(false)
         .window(|window| window.with_inner_size(LogicalSize::new(1024, 768)))

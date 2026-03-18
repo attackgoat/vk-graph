@@ -1,14 +1,27 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{Pod, Zeroable, bytes_of},
     clap::Parser,
     core::f32,
     glam::{Vec4, vec3},
     std::sync::Arc,
-    vk_graph_prelude::*,
-    vk_graph_window::{WindowBuilder, WindowError},
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+            shader::{SamplerInfoBuilder, Shader},
+        },
+        pool::lazy::LazyPool,
+    },
+    vk_graph_window::{Window, WindowError},
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 // TODO: Add texelFetch option
@@ -18,7 +31,7 @@ fn main() -> Result<(), WindowError> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
 
     let size = 237u32;
     let mip_level_count = size.ilog2();
@@ -95,8 +108,8 @@ fn main() -> Result<(), WindowError> {
 }
 
 fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverError> {
-    #[derive(Clone, Copy, Pod, Zeroable)]
     #[repr(C)]
+    #[derive(Clone, Copy, Pod, Zeroable)]
     struct PushConstants {
         a: Vec4,
         b: Vec4,

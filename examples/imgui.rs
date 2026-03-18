@@ -1,11 +1,15 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     clap::Parser,
+    vk_graph::{
+        driver::image::ImageInfo,
+        pool::{Pool as _, lazy::LazyPool},
+    },
     vk_graph_fx::*,
     vk_graph_imgui::{Condition, ImGui},
-    vk_graph_prelude::*,
-    vk_graph_window::{WindowBuilder, WindowError},
+    vk_graph_window::{Window, WindowError},
     winit::dpi::LogicalSize,
 };
 
@@ -15,7 +19,7 @@ fn main() -> Result<(), WindowError> {
 
     // vk-graph things we need for this demo
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .v_sync(false)
         .window(|window| window.with_inner_size(LogicalSize::new(1024, 768)))

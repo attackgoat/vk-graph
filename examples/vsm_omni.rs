@@ -1,6 +1,7 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{NoUninit, Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Quat, Vec3, vec3},
@@ -13,10 +14,23 @@ use {
         sync::Arc,
     },
     tobj::{GPU_LOAD_OPTIONS, load_obj},
-    vk_graph::cmd::LoadOp,
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph::{
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::ImageInfo,
+            physical_device::Vulkan10Features,
+            shader::{Shader, SpecializationMap},
+        },
+        pool::{Lease, Pool, fifo::FifoPool},
+    },
+    vk_graph_window::Window,
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
     winit::{dpi::LogicalSize, event::Event, keyboard::KeyCode, window::Fullscreen},
     winit_input_helper::WinitInputHelper,
 };
@@ -49,7 +63,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut input = WinitInputHelper::default();
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .window(|window| window.with_inner_size(LogicalSize::new(800, 600)))
         .build()?;
@@ -1407,7 +1421,7 @@ where
 /// Loads an .obj model as indexed position and normal vertices
 fn load_model_mesh(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> {
     #[repr(C)]
-    #[derive(Clone, Copy, Default, NoUninit)]
+    #[derive(Clone, Copy, Default, Pod, Zeroable)]
     struct Vertex {
         position: Vec3,
         normal: Vec3,
@@ -1444,7 +1458,7 @@ fn load_model_mesh(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Mo
 /// Loads an .obj model as indexed position vertices
 fn load_model_shadow(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> {
     #[repr(C)]
-    #[derive(Clone, Copy, Default, NoUninit)]
+    #[derive(Clone, Copy, Default, Pod, Zeroable)]
     struct Vertex {
         position: Vec3,
     }

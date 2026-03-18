@@ -1,3 +1,11 @@
+use ash::vk;
+use vk_graph::driver::{
+    compute::{ComputePipeline, ComputePipelineInfo},
+    image::{Image, ImageInfo},
+    shader::Shader,
+};
+use vk_sync::AccessType;
+
 /*
     This example details some common debugging techniques you might find helpful
     when something goes wrong.
@@ -24,7 +32,7 @@
     To continue, uncomment line 30.
 */
 fn main() -> Result<(), vk_graph_window::WindowError> {
-    use {log::debug, vk_graph_prelude::*, vk_graph_window::Window};
+    use {log::debug, vk_graph_window::Window};
 
     // 👋, 🌎!
     //pretty_env_logger::init();

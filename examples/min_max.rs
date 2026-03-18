@@ -1,10 +1,24 @@
 use {
+    ash::vk,
     bytemuck::cast_slice,
     clap::Parser,
     log::warn,
     std::{mem::size_of, sync::Arc},
-    vk_graph_prelude::*,
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::{Device, DeviceInfo},
+            image::{Image, ImageInfo},
+            shader::{SamplerInfo, Shader},
+        },
+        node::ImageNode,
+        pool::hash::HashPool,
+    },
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 // Min/max sampler reduction is commonly used to create depth buffer mip-maps for use with gpu-based
@@ -21,7 +35,7 @@ fn main() -> Result<(), DriverError> {
 
     let mut graph = Graph::default();
     let args = Args::parse();
-    let device_info = DeviceInfoBuilder::default().debug(args.debug);
+    let device_info = DeviceInfo::builder().debug(args.debug);
     let device = Device::new(device_info)?;
     let size = 4;
 

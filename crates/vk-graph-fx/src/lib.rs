@@ -2,14 +2,6 @@
 
 #![warn(missing_docs)]
 
-/// TODO
-pub mod prelude {
-    pub use super::{
-        BitmapFont, BitmapGlyphColor, ComputePresenter, GraphicPresenter, ImageFormat, ImageLoader,
-        Transition, TransitionPipeline,
-    };
-}
-
 mod bitmap_font;
 mod image_loader;
 mod presenter;

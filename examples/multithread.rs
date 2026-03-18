@@ -1,6 +1,7 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bmfont::{BMFont, OrdinateOrientation},
     clap::Parser,
     image::ImageReader,
@@ -16,9 +17,17 @@ use {
         thread::{available_parallelism, sleep, spawn},
         time::{Duration, Instant},
     },
+    vk_graph::{
+        Graph,
+        driver::{
+            buffer::Buffer,
+            device::Device,
+            image::{Image, ImageInfo},
+        },
+        pool::{Pool as _, hash::HashPool},
+    },
     vk_graph_fx::BitmapFont,
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph_window::Window,
 };
 
 const COLOR_SUBRESOURCE_LAYER: vk::ImageSubresourceLayers = vk::ImageSubresourceLayers {
@@ -38,10 +47,7 @@ fn main() -> anyhow::Result<()> {
 
     // For this example we don't use V-Sync so that we are able to submit work as often as possible
     let args = Args::parse();
-    let window = WindowBuilder::default()
-        .debug(args.debug)
-        .v_sync(false)
-        .build()?;
+    let window = Window::builder().debug(args.debug).v_sync(false).build()?;
 
     // We want to create one hardware queue for each CPU, or at least two
     let desired_queue_count = available_parallelism()

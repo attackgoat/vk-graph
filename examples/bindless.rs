@@ -1,13 +1,25 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
     std::sync::Arc,
-    vk_graph::cmd::LoadOp,
-    vk_graph_prelude::*,
-    vk_graph_window::{WindowBuilder, WindowError},
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::Buffer,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+        },
+        pool::lazy::LazyPool,
+    },
+    vk_graph_window::{Window, WindowError},
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
     winit::dpi::LogicalSize,
 };
 
@@ -16,7 +28,7 @@ fn main() -> Result<(), WindowError> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .window(|window| window.with_inner_size(LogicalSize::new(512, 512)))
         .build()?;
@@ -108,57 +120,53 @@ fn create_graphic_pipeline(device: &Device) -> Result<GraphicPipeline, DriverErr
         device,
         GraphicPipelineInfo::default(),
         [
-            Shader::new_vertex(
-                glsl!(
-                    r#"
-                    #version 460 core
-                    #pragma shader_stage(vertex)
+            glsl!(
+                r#"
+                #version 460 core
+                #pragma shader_stage(vertex)
 
-                    const vec2 QUAD[] = {
-                        vec2(0, 0),
-                        vec2(0, 1),
-                        vec2(1, 1),
-                        vec2(0, 0),
-                        vec2(1, 1),
-                        vec2(1, 0),
-                    };
+                const vec2 QUAD[] = {
+                    vec2(0, 0),
+                    vec2(0, 1),
+                    vec2(1, 1),
+                    vec2(0, 0),
+                    vec2(1, 1),
+                    vec2(1, 0),
+                };
 
-                    layout(location = 0) out uint instance_index_out;
+                layout(location = 0) out uint instance_index_out;
 
-                    void main() {
-                        uint x = gl_InstanceIndex % 8;
-                        uint y = gl_InstanceIndex / 8;
+                void main() {
+                    uint x = gl_InstanceIndex % 8;
+                    uint y = gl_InstanceIndex / 8;
 
-                        vec2 scale = vec2(1.0 / 8.0);
-                        vec2 offset = vec2((float(x) - 4.0) * scale.x, (float(y) - 4.0) * scale.y);
+                    vec2 scale = vec2(1.0 / 8.0);
+                    vec2 offset = vec2((float(x) - 4.0) * scale.x, (float(y) - 4.0) * scale.y);
 
-                        gl_Position = vec4(QUAD[gl_VertexIndex] * scale + offset, 0, 1);
-                        instance_index_out = gl_InstanceIndex;
-                    }
-                    "#
-                )
-                .as_slice(),
-            ),
-            Shader::new_fragment(
-                glsl!(
-                    r#"
-                    #version 460 core
-                    #extension GL_EXT_nonuniform_qualifier : require
-                    #pragma shader_stage(fragment)
+                    gl_Position = vec4(QUAD[gl_VertexIndex] * scale + offset, 0, 1);
+                    instance_index_out = gl_InstanceIndex;
+                }
+                "#
+            )
+            .as_slice(),
+            glsl!(
+                r#"
+                #version 460 core
+                #extension GL_EXT_nonuniform_qualifier : require
+                #pragma shader_stage(fragment)
 
-                    layout(set = 0, binding = 0) uniform sampler2D sampler_nnr[];
+                layout(set = 0, binding = 0) uniform sampler2D sampler_nnr[];
 
-                    layout(location = 0) in flat uint instance_index;
+                layout(location = 0) in flat uint instance_index;
 
-                    layout(location = 0) out vec4 color_out;
+                layout(location = 0) out vec4 color_out;
 
-                    void main() {
-                        color_out = texture(sampler_nnr[nonuniformEXT(instance_index)], vec2(0.5, 0.5));
-                    }
-                    "#
-                )
-                .as_slice(),
-            ),
+                void main() {
+                    color_out = texture(sampler_nnr[nonuniformEXT(instance_index)], vec2(0.5, 0.5));
+                }
+                "#
+            )
+            .as_slice(),
         ],
     )
 }

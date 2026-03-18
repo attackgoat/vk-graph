@@ -1,14 +1,28 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3},
     std::sync::Arc,
-    vk_graph::{cmd::LoadOp, driver::graphic::DepthStencilInfo},
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::ImageInfo,
+            shader::Shader,
+        },
+        node::BufferLeaseNode,
+        pool::{Lease, Pool as _, lazy::LazyPool},
+    },
+    vk_graph_window::Window,
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 #[derive(Clone, Copy)]
@@ -49,7 +63,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let depth_stencil_format = best_depth_stencil_format(&window.device);
     let mut pool = LazyPool::new(&window.device);
     let fill_background = create_fill_background_pipeline(&window.device);

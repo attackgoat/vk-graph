@@ -1,4 +1,21 @@
-use {clap::Parser, std::sync::Arc, vk_graph_prelude::*};
+use {
+    ash::vk,
+    clap::Parser,
+    std::sync::Arc,
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            device::{Device, DeviceInfo},
+            image::ImageInfo,
+        },
+        pool::{
+            Pool as _,
+            alias::{Alias as _, AliasWrapper},
+            hash::HashPool,
+        },
+    },
+};
 
 /// This example demonstrates resource aliasing. Aliasing is a memory-efficiency optimization that
 /// may be used anywhere resources are leased and used in a graph. Aliasing allows complex
@@ -17,7 +34,7 @@ fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
     let args = Args::parse();
-    let device_info = DeviceInfoBuilder::default().debug(args.debug);
+    let device_info = DeviceInfo::builder().debug(args.debug);
     let device = Device::new(device_info)?;
 
     // We wrap HashPool in an AliasPool container to enable resource aliasing

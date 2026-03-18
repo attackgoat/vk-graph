@@ -1,6 +1,7 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3, vec4},
@@ -14,10 +15,28 @@ use {
         sync::Arc,
     },
     tobj::{GPU_LOAD_OPTIONS, load_obj},
-    vk_graph::cmd::LoadOp,
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph::{
+        Graph,
+        cmd::{BuildAccelerationStructureInfo, LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            accel_struct::{
+                AccelerationStructure, AccelerationStructureGeometry,
+                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
+                AccelerationStructureInfo,
+            },
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::ImageInfo,
+            shader::Shader,
+        },
+        node::AccelerationStructureLeaseNode,
+        pool::{Pool as _, lazy::LazyPool},
+    },
+    vk_graph_window::Window,
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -25,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let mut pool = LazyPool::new(&window.device);
 
     let depth_fmt = best_2d_optimal_format(

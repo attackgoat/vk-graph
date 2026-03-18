@@ -1,6 +1,24 @@
 mod profile_with_puffin;
 
-use {bytemuck::cast_slice, clap::Parser, vk_graph_prelude::*, vk_shader_macros::glsl};
+use {
+    ash::vk,
+    bytemuck::cast_slice,
+    clap::Parser,
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::{Device, DeviceInfo},
+            image::{Image, ImageInfo},
+            shader::{SamplerInfo, Shader},
+        },
+        pool::hash::HashPool,
+    },
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
+};
 
 /// This program demonstrates a single render pass which uses multiple executions to record a chain
 /// of image copies which reduce an input image from 4x4 into 2x2 and finally 1x1. This is useful
@@ -13,7 +31,7 @@ fn main() -> Result<(), DriverError> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let device_info = DeviceInfoBuilder::default().debug(args.debug);
+    let device_info = DeviceInfo::builder().debug(args.debug);
     let device = Device::new(device_info)?;
 
     let mut graph = Graph::default();
@@ -73,7 +91,7 @@ fn main() -> Result<(), DriverError> {
             )
             .image_sampler(
                 0,
-                SamplerInfoBuilder::default()
+                SamplerInfo::builder()
                     .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                     .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                     .mag_filter(vk::Filter::LINEAR)

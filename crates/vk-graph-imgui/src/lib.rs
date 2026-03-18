@@ -17,7 +17,21 @@ use {
         {HiDpiMode, WinitPlatform},
     },
     std::{sync::Arc, time::Duration},
-    vk_graph_prelude::*,
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            ash::vk,
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{BlendInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+            shader::Shader,
+            sync::AccessType,
+        },
+        node::ImageLeaseNode,
+        pool::{Lease, Pool},
+    },
     vk_shader_macros::include_glsl,
 };
 
@@ -37,7 +51,7 @@ impl ImGui {
         let platform = WinitPlatform::new(&mut context);
         let pipeline = GraphicPipeline::create(
             device,
-            GraphicPipelineInfoBuilder::default()
+            GraphicPipelineInfo::builder()
                 .blend(BlendInfo::PRE_MULTIPLIED_ALPHA)
                 .cull_mode(vk::CullModeFlags::NONE),
             [

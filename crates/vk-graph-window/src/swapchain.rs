@@ -626,7 +626,7 @@ mod test {
                 .color_space(vk::ColorSpaceKHR::PASS_THROUGH_EXT),
             width: 88,
         };
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -657,14 +657,6 @@ mod test {
             )
             .width(88)
             .build();
-
-        assert_eq!(info, builder);
-    }
-
-    #[test]
-    pub fn swapchain_info_default() {
-        let info = Info::default();
-        let builder = Builder::default().build();
 
         assert_eq!(info, builder);
     }

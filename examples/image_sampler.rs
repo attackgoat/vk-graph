@@ -1,15 +1,28 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     clap::Parser,
     hassle_rs::compile_hlsl,
     std::{
         path::{Path, PathBuf},
         sync::Arc,
     },
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            buffer::Buffer,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+            shader::{SamplerInfo, Shader},
+        },
+        pool::hash::HashPool,
+    },
+    vk_graph_window::Window,
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 /// Displays a sequence of image samplers.
@@ -31,18 +44,18 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let gulf_image = read_image(&window.device, "examples/res/image/gulf.jpg")?;
 
     // Sampler info contains the full definition of Vulkan sampler settings using a builder struct
-    let edge_edge = SamplerInfoBuilder::default()
+    let edge_edge = SamplerInfo::builder()
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-    let border_edge_black = SamplerInfoBuilder::default()
+    let border_edge_black = SamplerInfo::builder()
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_BORDER)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .border_color(vk::BorderColor::FLOAT_OPAQUE_BLACK);
-    let edge_border_white = SamplerInfoBuilder::default()
+    let edge_border_white = SamplerInfo::builder()
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_BORDER)
         .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE);

@@ -1,14 +1,24 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bmfont::{BMFont, OrdinateOrientation},
     clap::Parser,
     image::ImageReader,
     std::{io::Cursor, time::Instant},
+    vk_graph::{
+        driver::{
+            compute::{ComputePipeline, ComputePipelineInfo},
+            image::ImageInfo,
+            physical_device::Vulkan11Properties,
+            shader::{Shader, SpecializationMap},
+        },
+        pool::{Pool as _, hash::HashPool},
+    },
     vk_graph_fx::*,
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph_window::Window,
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -17,7 +27,7 @@ fn main() -> anyhow::Result<()> {
 
     // Standard vk-graph stuff
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let display = GraphicPresenter::new(&window.device)?;
     let mut image_loader = ImageLoader::new(&window.device)?;
     let mut pool = HashPool::new(&window.device);

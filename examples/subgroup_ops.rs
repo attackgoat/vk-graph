@@ -1,9 +1,22 @@
 use {
+    ash::vk,
     bytemuck::cast_slice,
     clap::Parser,
     std::{mem::size_of, sync::Arc, time::Instant},
-    vk_graph_prelude::*,
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::{Device, DeviceInfo},
+            physical_device::Vulkan11Properties,
+            shader::{Shader, SpecializationMap},
+        },
+        pool::hash::HashPool,
+    },
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 /// Advanced example demonstrating subgroup operations (arithmetic and ballot).
@@ -30,7 +43,7 @@ fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
     let args = Args::parse();
-    let device_info = DeviceInfoBuilder::default().debug(args.debug);
+    let device_info = DeviceInfo::builder().debug(args.debug);
     let device = Device::new(device_info)?;
     let Vulkan11Properties {
         subgroup_size,
@@ -156,7 +169,7 @@ fn create_reduce_pipeline(device: &Device) -> Result<ComputePipeline, DriverErro
     ComputePipeline::create(
         device,
         ComputePipelineInfo::default(),
-        Shader::new_compute(
+        Shader::from_spirv(
             glsl!(
                 target: vulkan1_2,
                 r#"

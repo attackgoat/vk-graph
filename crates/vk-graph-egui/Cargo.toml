@@ -2,15 +2,16 @@
 name = "vk-graph-egui"
 version = "0.1.0"
 authors = ["Christian Döring <christian.doering@tum.de>"]
-edition = "2024"
-license = "MIT OR Apache-2.0"
-readme = "README.md"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
 
 [dependencies]
 bytemuck = "1.25"
 # TODO: Waiting for egui to update winit version
 egui = { git = "https://github.com/emilk/egui.git", rev = "3777b8d2741f298eaa1409dc08062902f7541990" } #{ version = "0.28", features = ["bytemuck"] }
 egui-winit = { git = "https://github.com/emilk/egui.git", rev = "3777b8d2741f298eaa1409dc08062902f7541990" } #"0.28"
-vk-graph-prelude = { path = "../vk-graph-prelude" }
-vk-graph-fx = { path = "../vk-graph-fx" }
+vk-graph.workspace = true
+vk-graph-fx.workspace = true
 vk-shader-macros = "0.2"

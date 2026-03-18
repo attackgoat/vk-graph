@@ -2,19 +2,27 @@
 
 #![warn(missing_docs)]
 
-/// TODO
-pub mod prelude {
-    pub use super::{Egui, egui};
-}
-
 pub use egui;
-use egui_winit::winit::raw_window_handle::HasDisplayHandle;
+use vk_graph::{
+    cmd::{LoadOp, StoreOp},
+    driver::{
+        ash::vk,
+        buffer::BufferInfo,
+        device::Device,
+        graphic::{BlendInfo, GraphicPipeline, GraphicPipelineInfo},
+        image::{Image, ImageInfo},
+        shader::Shader,
+        sync::AccessType,
+    },
+    node::AnyImageNode,
+    pool::{Lease, Pool as _, hash::HashPool},
+};
 
 use {
     bytemuck::cast_slice,
-    egui_winit::winit::{event::Event, window::Window},
+    egui_winit::winit::{event::Event, raw_window_handle::HasDisplayHandle, window::Window},
     std::{borrow::Cow, collections::HashMap, sync::Arc},
-    vk_graph_prelude::*,
+    vk_graph::Graph,
     vk_shader_macros::include_glsl,
 };
 
@@ -36,7 +44,7 @@ impl Egui {
     pub fn new(device: &Device, display_target: &dyn HasDisplayHandle) -> Self {
         let ppl = GraphicPipeline::create(
             device,
-            GraphicPipelineInfoBuilder::default()
+            GraphicPipelineInfo::builder()
                 .blend(BlendInfo {
                     blend_enable: true,
                     src_color_blend_factor: vk::BlendFactor::ONE,

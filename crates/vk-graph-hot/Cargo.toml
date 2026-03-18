@@ -2,27 +2,27 @@
 name = "vk-graph-hot"
 version = "0.1.0"
 authors = ["John Wells <john@attackgoat.com>"]
-edition = "2024"
-license = "MIT OR Apache-2.0"
-readme = "README.md"
-repository = "https://github.com/attackgoat/vk-graph"
 homepage = "https://github.com/attackgoat/vk-graph/crates/vk-graph-hot"
 keywords = ["gamedev", "vulkan"]
 categories = ["game-development", "multimedia::images", "rendering::engine"]
 description = "Hot-reloading shader pipelines for vk-graph"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow = "1.0"
 derive_builder = "0.20"
-log = "0.4"
+log.workspace = true
 notify = "8.2"
 paste = "1.0"
-vk-graph = { path = "../..", default-features = false }
-vk-graph-window = { path = "../vk-graph-window" }
+vk-graph.workspace = true
+vk-graph-window.workspace = true
 shader-prepper = "0.3.0-pre.3"
 shaderc = "0.10"
 
 [dev-dependencies]
 clap = { version = "4.6", features = ["derive"] }
 pretty_env_logger = "0.5"
-vk-graph-prelude = { path = "../vk-graph-prelude" }
+vk-graph.workspace = true

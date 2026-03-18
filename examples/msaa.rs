@@ -1,15 +1,27 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::{NoUninit, bytes_of, cast_slice},
+    ash::vk,
+    bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3},
     log::warn,
     std::{mem::size_of, sync::Arc},
-    vk_graph::cmd::LoadOp,
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph::{
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::{ImageInfo, SampleCount},
+            physical_device::Vulkan10Limits,
+        },
+        pool::{Pool as _, fifo::FifoPool},
+    },
+    vk_graph_window::Window,
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };
@@ -26,7 +38,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut input = WinitInputHelper::default();
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let depth_format = best_depth_format(&window.device);
     let sample_count = max_supported_sample_count(&window.device);
     let mesh_msaa_pipeline = create_mesh_pipeline(&window.device, sample_count)?;
@@ -385,16 +397,9 @@ fn create_mesh_pipeline(
         "#
     );
 
-    let info = GraphicPipelineInfoBuilder::default().samples(sample_count);
+    let info = GraphicPipelineInfo::builder().samples(sample_count);
 
-    GraphicPipeline::create(
-        device,
-        info,
-        [
-            Shader::new_vertex(vert.as_slice()),
-            Shader::new_fragment(frag.as_slice()),
-        ],
-    )
+    GraphicPipeline::create(device, info, [vert.as_slice(), frag.as_slice()])
 }
 
 #[derive(Parser)]
@@ -410,7 +415,7 @@ struct Model {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, NoUninit)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniformBuffer {
     view: Mat4,
     projection: Mat4,

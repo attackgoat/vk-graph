@@ -36,7 +36,7 @@ typed access to all the resources used while rendering. The `Graph` structure al
 smart pointer resources to be bound as "nodes" which may be used anywhere in a graph. The graph
 itself is not tied to swapchain access and may be used to execute general command streams.
 
-Features of the render graph:
+Features of the graph:
 
  - Compute, graphic, and ray-trace pipelines
  - Automatic Vulkan management (render passes, subpasses, descriptors, pools, _etc._)

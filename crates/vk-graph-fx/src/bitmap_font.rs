@@ -4,7 +4,21 @@ use {
     bytemuck::{cast, cast_slice},
     glam::{Mat4, vec3},
     std::sync::Arc,
-    vk_graph_prelude::*,
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            ash::vk,
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{BlendInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::Image,
+            shader::{Shader, SpecializationMap},
+            sync::AccessType,
+        },
+        node::{AnyImageNode, ImageNode},
+        pool::{Pool as _, lazy::LazyPool},
+    },
     vk_shader_macros::include_glsl,
 };
 
@@ -40,7 +54,7 @@ impl BitmapFont {
         let num_pages = pages.len() as u32;
         let pipeline = GraphicPipeline::create(
             device,
-            GraphicPipelineInfoBuilder::default().blend(BlendInfo::ALPHA),
+            GraphicPipelineInfo::builder().blend(BlendInfo::ALPHA),
             [
                 Shader::new_vertex(include_glsl!("res/shader/graphic/font.vert").as_slice()),
                 Shader::new_fragment(include_glsl!("res/shader/graphic/font.frag").as_slice())

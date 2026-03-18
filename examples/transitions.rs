@@ -8,7 +8,7 @@ use {
     vk_graph::pool::lazy::LazyPool,
     vk_graph_fx::*,
     vk_graph_imgui::prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph_window::Window,
     winit::dpi::LogicalSize,
 };
 
@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<()> {
 
     // Create vk-graph things any similar program might need
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .window(|builder| builder.with_inner_size(LogicalSize::new(1024.0f64, 768.0f64)))
         .build()?;

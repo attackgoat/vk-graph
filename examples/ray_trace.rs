@@ -1,14 +1,34 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::cast_slice,
+    ash::vk,
+    bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     log::warn,
     std::{io::BufReader, mem::size_of, sync::Arc},
     tobj::{GPU_LOAD_OPTIONS, load_mtl_buf, load_obj_buf},
-    vk_graph_prelude::*,
-    vk_graph_window::WindowBuilder,
+    vk_graph::{
+        Graph,
+        cmd::BuildAccelerationStructureInfo,
+        driver::{
+            DriverError,
+            accel_struct::{
+                AccelerationStructure, AccelerationStructureGeometry,
+                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
+                AccelerationStructureInfo,
+            },
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            image::ImageInfo,
+            physical_device::RayTraceProperties,
+            ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup},
+            shader::Shader,
+        },
+        pool::{Pool as _, hash::HashPool},
+    },
+    vk_graph_window::Window,
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };
@@ -332,7 +352,7 @@ static SHADER_SHADOW_MISS: &[u32] = glsl!(
 fn create_ray_trace_pipeline(device: &Device) -> Result<RayTracePipeline, DriverError> {
     RayTracePipeline::create(
         device,
-        RayTracePipelineInfoBuilder::default().max_ray_recursion_depth(1),
+        RayTracePipelineInfo::builder().max_ray_recursion_depth(1),
         [
             Shader::new_ray_gen(SHADER_RAY_GEN),
             Shader::new_closest_hit(SHADER_CLOSEST_HIT),
@@ -488,7 +508,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let mut cache = HashPool::new(&window.device);
 
     // ------------------------------------------------------------------------------------------ //
@@ -819,6 +839,7 @@ fn main() -> anyhow::Result<()> {
 
         let camera_buf = frame.graph.bind_resource({
             #[repr(C)]
+            #[derive(Clone, Copy, Pod, Zeroable)]
             struct Camera {
                 position: [f32; 4],
                 right: [f32; 4],
@@ -833,18 +854,16 @@ fn main() -> anyhow::Result<()> {
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 ))
                 .unwrap();
-            buf.copy_from_slice(0, unsafe {
-                std::slice::from_raw_parts(
-                    &Camera {
-                        position,
-                        right,
-                        up,
-                        forward,
-                        frame_count,
-                    } as *const _ as *const _,
-                    size_of::<Camera>(),
-                )
-            });
+            buf.copy_from_slice(
+                0,
+                bytes_of(&Camera {
+                    position,
+                    right,
+                    up,
+                    forward,
+                    frame_count,
+                }),
+            );
 
             buf
         });

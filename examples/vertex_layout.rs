@@ -1,13 +1,24 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
     half::f16,
     std::{mem::size_of, sync::Arc},
-    vk_graph_prelude::*,
-    vk_graph_window::{FrameContext, WindowBuilder},
+    vk_graph::{
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::Buffer,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            shader::{Shader, ShaderBuilder},
+        },
+    },
+    vk_graph_window::{FrameContext, Window},
     vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 /// This example draws two triangles using two different vertex formats.
@@ -24,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     // https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fxvertex-attrib
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
 
     let f16_pipeline = create_f16_pipeline(&window.device).ok();
     let f16_vertex_buf = {
@@ -231,7 +242,7 @@ fn create_pipeline(device: &Device, vertex: ShaderBuilder) -> Result<GraphicPipe
         GraphicPipelineInfo::default(),
         [
             vertex,
-            Shader::new_fragment(
+            Shader::from_spirv(
                 glsl!(
                     r#"
                     #version 460 core
