@@ -7,7 +7,9 @@ provide SPIR-V binary-format shaders.
 > See [Hot Reload](./pipeline_hot_reload.md) for details on a shader compiler provided as a separate
 > crate.
 
-Examples using multiple shading languages and compilers are provided in the [`examples/`](https://github.com/attackgoat/vk-graph/tree/main/examples) directory.
+Examples using multiple shading languages and compilers are provided in the
+[_`examples/`_](https://github.com/attackgoat/vk-graph/tree/main/examples)
+<i class="fa-solid fa-arrow-up-right-from-square"></i> directory.
 
 ## Shader-stage `#pragma`
 

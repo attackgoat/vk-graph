@@ -5,7 +5,6 @@ use {
         resource::ResourceInner,
     },
     crate::{
-        GraphNode,
         cmd::CommandBufferRef,
         driver::{
             AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DescriptorSet, DriverError,
@@ -2632,7 +2631,7 @@ impl Queue {
     /// which the given node represents.
     pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: GraphNode,
+        N: Node,
     {
         self.graph.resource(node)
     }

@@ -24,12 +24,9 @@ use {
         ExecutionFunction, Graph, GraphResource, ImageLeaseNode, ImageNode, Node, Resource,
         SwapchainImageNode,
     },
-    crate::{
-        driver::{
-            accel_struct::AccelerationStructureSubresourceRange, buffer::BufferSubresourceRange,
-            image::ImageViewInfo,
-        },
-        resource::GraphNode,
+    crate::driver::{
+        accel_struct::AccelerationStructureSubresourceRange, buffer::BufferSubresourceRange,
+        image::ImageViewInfo,
     },
     ash::vk,
     std::ops::Range,
@@ -186,7 +183,7 @@ impl<'a> CommandRef<'a> {
     /// which the given bound resource represents.
     pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: GraphNode,
+        N: Node,
     {
         self.graph.resource(node)
     }

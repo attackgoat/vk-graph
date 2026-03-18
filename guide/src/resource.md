@@ -1,29 +1,35 @@
 # Resources
 
 > [!CAUTION]
-> All pipelines and resources (_buffers, images, and acceleration structures_) "bound" to any
-> `Graph` must have been created by the same `Device`.
+> All pipelines and resources (_buffers, images, and acceleration structures_) used in a `Graph`
+> must have been created using the same `Device`.
 
 Owned resources are created from `Device` references. They may be bound directly to graphs.
 
-A borrow of `Arc<T>` of any resource may be bound to a graph if the resource needs to be referenced
-in future graphs.
+An `Arc<T>` or `&Arc<T>` of any resource may be bound to a graph if the resource needs to be
+referenced in future graphs.
+
+## Binding
 
 Binding resources to a graph produces a "Node" handle which may be used in commands and shader
-pipelines. `Graph::bind_resource<T, N>(resource: T) -> N`:
+pipelines.
 
-`T`|`N`
+Example for buffers using `Graph::bind_resource<R, N>(&mut self, resource: R) -> N`:
+
+`R`|`N`
 -|-
 `Buffer`|`BufferNode`
 `Arc<Buffer>`|`BufferNode`
 `Lease<Buffer>`|`BufferLeaseNode`
 `Arc<Lease<Buffer>>`|`BufferLeaseNode`
 
-_(etc...)_
+## Borrowing
 
-Resources may be borrowed from a graph. `Graph::resource<N, T>(node: N) -> &T`:
+Resources may be borrowed from a graph.
 
-`N`|`T`
+Example for buffers using `Graph::resource<N, R>(&self, node: N) -> &R`:
+
+`N`|`R`
 -|-
 `BufferNode`|`Arc<Buffer>`
 `BufferLeaseNode`|`Arc<Lease<Buffer>>`

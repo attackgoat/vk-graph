@@ -16,14 +16,6 @@ inserted into the command stream. Unsynchronized access results in undefined beh
 `vk-graph` uses an enumeration of possible states to define all supported pipeline barriers in an
 easy-to-use way.
 
-An `AccessType` is composed of a name and three private fields:
-
-Field|Type
--|-
-`stage_mask`|`vk::PipelineStageFlags`
-`access_mask`|`vk::AccessFlags`
-`image_layout`|`vk::ImageLayout`
-
 Sample access types:
 
 Type|Usage
@@ -117,7 +109,7 @@ graph
 
 ## Subresource Access
 
-Buffer ranges and image views are referred to as subresource ranges and bound using "subresource"
+Buffer ranges and image views are referred to as subresource ranges and accessed using "subresource"
 function variants:
 
 ```rust

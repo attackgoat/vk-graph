@@ -1,20 +1,21 @@
 # Pipelines
 
 > [!CAUTION]
-> All pipelines and resources (_buffers, images, and acceleration structures_) "bound" to any
-> `Graph` must have been created by the same `Device`.
+> All pipelines and resources (_buffers, images, and acceleration structures_) used in a `Graph`
+> must have been created using the same `Device`.
 
 Pipelines are created from `Device` references. They may be bound to graph commands.
 
 ```rust
+let info = ComputePipelineInfo::default();
+let shader = include_bytes!("shader.spv");
+let pipeline = ComputePipeline::create(device, info, shader)?;
+
 let mut graph = Graph::default()
     .begin_cmd()
-    .bind_pipeline(ComputePipeline::create(
-        device,
-        include_bytes!("shader.spv"),
-    )?)
+    .bind_pipeline(&pipeline)
     .record_cmd_buf(|cmd_buf| {
-        todo!("add resource access")
+        // Record vulkan commands here
     })
     .end_cmd();
 ```
@@ -47,7 +48,30 @@ graph
     .record_cmd_buf(|cmd_buf| todo!("3rd"));
 ```
 
-A call to `Graph::end_cmd` is never requried and the command is automatically ended. The call is
+A call to `Graph::end_cmd` is never requried and the command is automatically ended. The call may be
 useful for builder-pattern code which is building a very large series of commands.
 
 ## Shaders
+
+Compute, graphic, and ray trace pipelines require one or more shaders:
+
+Pipeline Type|Shaders
+--|--
+`ComputePipeline`|Single: must be compute stage
+`GraphicPipeline`|Multiple: must be a raster stage
+`RayTracePipeline`|Multiple: must be a ray tracing stage
+
+> [!CAUTION]
+> All `Shader` constructors panic when provided with invalid SPIR-V shader code.
+
+The `Shader` type uses a builder pattern:
+
+```rust
+// Pipelines may be created using "code", "shader", or "custom":
+let code = include_bytes!("raygen.spv");
+let shader = Shader::from_spirv(code.as_slice());
+let custom = shader
+                .entry_name("main_but_faster")
+                .image_sampler(0, SamplerInfo::default())
+                .image_sampler(1, SamplerInfo::LINEAR);
+```

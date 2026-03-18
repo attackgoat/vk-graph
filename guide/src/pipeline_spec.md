@@ -14,22 +14,20 @@ required to use this feature.
 
 layout(constant_id = 0) const float INFERNO_EPSILON = 0.999;
 layout(constant_id = 1) const float COEFF_OF_BOOM = 1.4;
-
-...
 ```
 
 ```rust
 // Use this shader for the glsl-specified values:
 let shader = Shader::new_compute(include_bytes!("kaboom.spv").as_slice());
 
-let specialization = SpecializationMap::new(bytemuck::bytes_of([
-        0.99999f32,
-        1.0,
-    ]))
+let better_consts = [
+    0.99999f32,
+    1.0,
+];
+let spec = SpecializationMap::new(bytemuck::bytes_of(better_consts))
     .constant(0, 0, 4)
     .constant(1, 4, 8);
 
 // Use this shader for the updated run-time values:
-let spec_shader = shader.specialization(specialization);
-....
+let spec_shader = shader.specialization(spec);
 ```

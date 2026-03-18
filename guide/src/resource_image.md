@@ -36,10 +36,9 @@ let same_info = ImageInfoBuilder::default()
     .ty(vk::ImageType::TYPE_2D);
 
 // Info built from other info
-let cube_info = cube_info
-    .info
+let array_info = cube_info
     .into_builder()
-    .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
+    .flags(vk::ImageCreateFlags::TYPE_2D_ARRAY_COMPATIBLE)
     .build();
 
 // Images are created simply

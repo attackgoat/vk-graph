@@ -1,11 +1,10 @@
 /*!
 
-This crate provides a high performance [Vulkan](https://www.vulkan.org/) graphics driver with
-automatic resource management and execution.
+This crate provides a high-performance [Vulkan](https://www.vulkan.org/) driver featuring automated
+resource management and execution.
 
-The provided graph structure may be used to compose any type of graphics algorithm using driver
-resources (_buffers, images, and acceleration structures_) and shader pipelines. Some
-implementations of common graphics patterns are provided in the `contrib` directory.
+For a general overview, including installation and typical usage, see the
+[Guide Book](https://attackgoat.github.io/vk-graph).
 
 # Getting Sarted
 
@@ -363,7 +362,7 @@ use crate::cmd::CommandBufferRef;
 
 pub use self::{
     queue::Queue,
-    resource::{GraphNode, GraphResource, Resource},
+    resource::{GraphResource, Resource},
 };
 
 #[allow(deprecated)]
@@ -1254,6 +1253,9 @@ impl Graph {
     pub fn into_queue(mut self) -> Queue {
         // The final execution of each pass has no function
         for cmd in &mut self.cmds {
+            debug_assert!(!cmd.execs.is_empty());
+            debug_assert!(cmd.execs.last().unwrap().func.is_none());
+
             cmd.execs.pop();
         }
 
@@ -1264,7 +1266,7 @@ impl Graph {
     /// which the given node represents.
     pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: GraphNode,
+        N: Node,
     {
         node.borrow(&self.resources)
     }
@@ -1343,7 +1345,7 @@ pub mod graph {
         pub type ImageNode = crate::node::ImageNode;
 
         #[deprecated = "use vk_graph::node::Node"]
-        pub type Node = dyn crate::node::Node;
+        pub type Node = dyn crate::node::Node<Resource = ()>;
 
         #[deprecated = "use vk_graph::node::SwapchainImageNode"]
         pub type SwapchainImageNode = crate::node::SwapchainImageNode;

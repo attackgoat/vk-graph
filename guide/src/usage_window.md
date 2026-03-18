@@ -4,8 +4,9 @@
 `vk-graph-window` is provided, based on `winit`.
 
 > [!TIP]
-> [`vk-graph-window`](https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-window)
-> provides additional documentation and examples.
+> [_`vk-graph-window`_ ](https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-window)
+> <i class="fa-solid fa-arrow-up-right-from-square"></i> provides additional documentation and
+> examples.
 
 ## Swapchain
 
@@ -20,5 +21,6 @@ Type | Usage
 ### OpenXR
 
 Virtual reality support via OpenXR is provided as
-[an example](https://github.com/attackgoat/vk-graph/tree/main/examples/vr) which also implements a
+[_an example_](https://github.com/attackgoat/vk-graph/tree/main/examples/vr)
+<i class="fa-solid fa-arrow-up-right-from-square"></i> which also implements a
 swapchain.

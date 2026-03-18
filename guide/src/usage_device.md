@@ -15,12 +15,13 @@ For any sort of server-based rendering or similar Vulkan usage without a display
 production-ready code used to create a device:
 
 ```rust
-// The default information is:
-// DeviceInfo {
-//     debug: false,
-//     phyiscal_device_index: 0,
-// }
-let device = Device::new(DeviceInfo::default())?;
+let info = DeviceInfo::default();
+let device = Device::new(info)?;
+
+assert_eq!(device.info, DeviceInfo {
+    debug: false,
+    physical_device_index: 0,
+});
 ```
 
 ## Windowed Operation
@@ -106,5 +107,6 @@ let device = Device::try_from_ash_device(device, physical_device)?;
 ```
 
 > [!TIP]
-> See [`examples/vr`](https://github.com/attackgoat/vk-graph/tree/main/examples/vr) for an in-depth
-> example of native device usage.
+> See [_`examples/vr`_](https://github.com/attackgoat/vk-graph/tree/main/examples/vr)
+> <i class="fa-solid fa-arrow-up-right-from-square"></i> for an in-depth example of native device
+> usage.

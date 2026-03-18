@@ -1,6 +1,6 @@
 # Usage
 
-`vk-graph` acts as a safe builder-pattern for Vulkan functions (_Example: [vkCmdDrawIndexed](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDrawIndexed.html)_).
+`vk-graph` acts as a safe builder-pattern for the Vulkan API.
 
 Typical usage contains:
 
@@ -9,10 +9,6 @@ Typical usage contains:
 let device: &Device = &self.device;
 ```
 
-
-
-
-
 ## Resources
 
 Resources, such as buffers and images, may be created from "`Info`" structs:
@@ -20,11 +16,11 @@ Resources, such as buffers and images, may be created from "`Info`" structs:
 ```rust
 let usage = vk::BufferUsageFlags::TRANSFER_SRC;
 let buffer_info = BufferInfo::device_mem(320 * 200 * 4, usage);
-let buffer: Buffer = Buffer::create(device, buffer_info)?;
+let buffer = Buffer::create(device, buffer_info)?;
 
 let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
 let image_info = ImageInfo::image_2d(320, 200, vk::Format::R8G8B8A8_UNORM, usage)?;
-let image: Image = Image::create(device, image_info)?;
+let image = Image::create(device, image_info)?;
 ```
 
 ### Memory Allocation
@@ -85,7 +81,7 @@ graph
     .copy_buffer_to_image(buffer, image);
 ```
 
-Commands enable custom Vulkan behavior:
+Custom commands enable advanced Vulkan behavior:
 
 ```rust
 graph

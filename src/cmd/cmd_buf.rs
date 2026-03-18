@@ -1,6 +1,6 @@
 use {
     crate::{
-        AnyAccelerationStructureNode, GraphNode, Resource,
+        AnyAccelerationStructureNode, Resource,
         driver::{
             accel_struct::{
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
@@ -477,7 +477,7 @@ impl<'a> CommandBufferRef<'a> {
     /// which the given bound resource represents.
     pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: GraphNode + Node,
+        N: Node,
     {
         // You must have called an access function for this node on this execution before indexing
         // into the bindings data!

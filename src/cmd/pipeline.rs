@@ -1,7 +1,7 @@
 use {
     super::{
-        AccessType, CommandRef, Descriptor, Graph, GraphNode, GraphResource, Node,
-        SubresourceRange, View, ViewInfo,
+        AccessType, CommandRef, Descriptor, Graph, GraphResource, Node, SubresourceRange, View,
+        ViewInfo,
     },
     crate::{
         ExecutionPipeline,
@@ -121,7 +121,7 @@ impl<'c, T> PipelineCommandRef<'c, T> {
     /// which the given node represents.
     pub fn resource<N>(&self, node: N) -> &N::Resource
     where
-        N: GraphNode,
+        N: Node,
     {
         self.cmd.resource(node)
     }

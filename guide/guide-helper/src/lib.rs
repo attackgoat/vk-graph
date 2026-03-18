@@ -2,7 +2,11 @@
 
 use {
     cargo_toml::Manifest,
-    mdbook_preprocessor::{Preprocessor, PreprocessorContext, book::Book, errors::Result},
+    mdbook_preprocessor::{
+        Preprocessor, PreprocessorContext,
+        book::Book,
+        errors::{Error, Result},
+    },
     semver::{Version, VersionReq},
     std::{env::current_dir, io},
 };
@@ -40,9 +44,21 @@ impl Preprocessor for GuideHelper {
 
     fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
         insert_crate_version(&mut book);
+        insert_dependency_req(&mut book, "log");
+        insert_dependency_req(&mut book, "profiling");
         insert_vulkan_sdk_version(&mut book);
 
-        Ok(book)
+        let mut ok = true;
+        book.for_each_chapter_mut(|ch| {
+            ok &= !ch.content.contains("{{");
+            ok &= !ch.content.contains("}}");
+        });
+
+        if ok {
+            Ok(book)
+        } else {
+            Err(Error::msg("unredacted formatting marks"))
+        }
     }
 }
 
@@ -62,6 +78,17 @@ fn insert_crate_version(book: &mut Book) {
     book.for_each_chapter_mut(|ch| {
         if ch.content.contains(MARKER) {
             ch.content = ch.content.replace(MARKER, &version);
+        }
+    });
+}
+
+fn insert_dependency_req(book: &mut Book, dep: &str) {
+    let req = manifest().dependencies.get(dep).unwrap().req().to_owned();
+    let marker = format!("{{{{ {dep}.version }}}}");
+
+    book.for_each_chapter_mut(|ch| {
+        if ch.content.contains(&marker) {
+            ch.content = ch.content.replace(&marker, &req);
         }
     });
 }

@@ -1,6 +1,16 @@
 //! Bindings for Vulkan smart-pointer resources.
 
-use crate::NodeIndex;
+use std::sync::Arc;
+
+use crate::{
+    driver::{
+        accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
+        swapchain::SwapchainImage,
+    },
+    pool::Lease,
+};
+
+use super::{NodeIndex, Resource, resource::ResourceInner};
 
 /// Specifies either an owned acceleration structure or an acceleration structure leased from a
 /// pool.
@@ -26,6 +36,12 @@ impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
 }
 
 impl Node for AnyAccelerationStructureNode {
+    type Resource = AccelerationStructure;
+
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+        resources[self.index()].as_driver_accel_struct().unwrap()
+    }
+
     fn index(&self) -> NodeIndex {
         match self {
             Self::AccelerationStructure(node) => node.index(),
@@ -57,6 +73,12 @@ impl From<BufferLeaseNode> for AnyBufferNode {
 }
 
 impl Node for AnyBufferNode {
+    type Resource = Buffer;
+
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+        resources[self.index()].as_driver_buffer().unwrap()
+    }
+
     fn index(&self) -> NodeIndex {
         match self {
             Self::Buffer(node) => node.index(),
@@ -99,6 +121,12 @@ impl From<SwapchainImageNode> for AnyImageNode {
 }
 
 impl Node for AnyImageNode {
+    type Resource = Image;
+
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+        resources[self.index()].as_driver_image().unwrap()
+    }
+
     fn index(&self) -> NodeIndex {
         match self {
             Self::Image(node) => node.index(),
@@ -110,12 +138,18 @@ impl Node for AnyImageNode {
 
 /// A Vulkan resource which has been bound to a [`Graph`] using [`Graph::bind_node`].
 pub trait Node {
+    /// The Vulkan buffer, image, or acceleration struction type.
+    type Resource;
+
+    #[doc(hidden)]
+    fn borrow(self, resources: &[Resource]) -> &Self::Resource;
+
     #[doc(hidden)]
     fn index(&self) -> NodeIndex;
 }
 
 macro_rules! node {
-    ($name:ident) => {
+    ($name:ident, $resource:ty, $fn_name:ident) => {
         paste::paste! {
             /// Resource node.
             #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -132,6 +166,16 @@ macro_rules! node {
             }
 
             impl Node for [<$name Node>] {
+                type Resource = $resource;
+
+                fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+                    let Resource { inner: ResourceInner::$name(res), } = &resources[self.idx] else {
+                        panic!("invalid resource node handle");
+                    };
+
+                    res
+                }
+
                 fn index(&self) -> NodeIndex {
                     self.idx
                 }
@@ -140,10 +184,18 @@ macro_rules! node {
     };
 }
 
-node!(AccelerationStructure);
-node!(AccelerationStructureLease);
-node!(Buffer);
-node!(BufferLease);
-node!(Image);
-node!(ImageLease);
-node!(SwapchainImage);
+node!(
+    AccelerationStructure,
+    Arc<AccelerationStructure>,
+    as_driver_accel_struct
+);
+node!(
+    AccelerationStructureLease,
+    Arc<Lease<AccelerationStructure>>,
+    as_driver_accel_struct
+);
+node!(Buffer, Arc<Buffer>, as_driver_buffer);
+node!(BufferLease, Arc<Lease<Buffer>>, as_driver_buffer);
+node!(Image, Arc<Image>, as_driver_image);
+node!(ImageLease, Arc<Lease<Image>>, as_driver_image);
+node!(SwapchainImage, SwapchainImage, as_swapchain_image);

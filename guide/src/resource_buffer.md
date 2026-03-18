@@ -35,13 +35,13 @@ let more_info = host_mem
 let data = [1u8, 2, 3, 4];
 let buffer = Buffer::create_from_slice(device, usage, &data)?;
 
-// This is equivalent to: 
-let mut buffer = Buffer::create(device, host_mem)?;
-buffer.mapped_slice_mut().copy_from_slice(&data);
-
-// Or:
+// This is equivalent to:
 let mut buffer = Buffer::create(device, host_mem)?;
 buffer.copy_from_slice(&data);
+
+// Or use the std copy_from_slice (it panics if size != range)
+let mut buffer = Buffer::create(device, host_mem)?;
+buffer.mapped_slice_mut().copy_from_slice(&data);
 
 // The provided fields are helpful:
 assert_eq!(buffer.device, *device);

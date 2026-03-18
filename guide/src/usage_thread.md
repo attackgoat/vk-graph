@@ -21,11 +21,13 @@ Resource state is updated during the following function calls:
 
 ## Execution
 
-The provided `Queue` submission functions are designed to this workflow:
-- Submit all commands the swapchain depends on
-- Acquire swapchain
-- Submit swapchain commands
-- Submit any final unrelated commands
+The provided `Queue` submission functions are designed to support a typical swapchain-based
+workflow:
+1. Submit all commands the swapchain depends on
+1. Acquire swapchain
+1. Submit swapchain commands
+1. Present swapchain
+1. Submit any final unrelated commands
 
 ## Safe Patterns
 
@@ -53,10 +55,10 @@ The contents of a buffer are undefined from the time of submission until that `Q
 fully executed, as indicated by `CommandBuffer::has_executed`. This means that you should not call
 `Buffer::mapped_slice` during any submission or execution accessing that memory.
 
-_See:
-[`examples/cpu_readback.rs`](https://github.com/attackgoat/vk-graph/blob/main/examples/cpu_readback.rs)_
+See:
+[_`examples/cpu_readback.rs`_](https://github.com/attackgoat/vk-graph/blob/main/examples/cpu_readback.rs)
+<i class="fa-solid fa-arrow-up-right-from-square"></i>
 
 
 [^threads]: The internal implementation of `GraphicPipeline` does do a bit of caching in order to
-improve performance, however this behavior should never generate issues with any fathomable
-workload.
+improve performance, however this behavior should not generate issues with any reasonable workload.

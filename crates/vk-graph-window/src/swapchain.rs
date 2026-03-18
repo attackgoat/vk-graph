@@ -171,11 +171,11 @@ impl Swapchain {
             Ok(swapchain_image) => Ok(swapchain_image),
         }?;
 
-        while self.image_execs.len() >= swapchain_image.idx as _ {
+        while self.image_execs.len() >= swapchain_image.index as _ {
             self.image_execs.push(0);
         }
 
-        self.image_execs[swapchain_image.idx as usize] = self.exec_idx;
+        self.image_execs[swapchain_image.index as usize] = self.exec_idx;
 
         Ok(Some(swapchain_image))
     }
@@ -203,7 +203,7 @@ impl Swapchain {
             "uninitialized swapchain image: write something each frame!",
         );
 
-        let image_idx = queue.resource(swapchain_image).idx;
+        let image_idx = queue.resource(swapchain_image).index;
         let exec_idx = self.image_execs[image_idx as usize];
         let exec = &mut self.execs[exec_idx];
 

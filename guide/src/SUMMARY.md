@@ -30,4 +30,3 @@
    1. [Computing](./cmd_compute.md)
    1. [Graphics](./cmd_graphic.md)
    1. [Ray Tracing](./cmd_ray_trace.md)
-1. [Queue](./queue.md)

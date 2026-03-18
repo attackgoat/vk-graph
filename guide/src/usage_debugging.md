@@ -1,7 +1,8 @@
 # Debugging
 
 Debug mode (setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`) is supported only
-when a compatible [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) is installed.
+when a compatible [_Vulkan SDK_](https://vulkan.lunarg.com/sdk/home)
+<i class="fa-solid fa-arrow-up-right-from-square"></i> is installed.
 
 > [!IMPORTANT]
 > The installed Vulkan SDK version must be at least v{{ vulkan_sdk.version }}.
@@ -12,11 +13,10 @@ active thread to be parked and log a message indicating how to attach a debugger
 
 ## Logging
 
-`vk-graph` uses [`log`](https://crates.io/crates/log) for low-overhead logging.
+`vk-graph` uses `log` v{{ log.version }} for low-overhead logging.
 
 To enable logging, set the `RUST_LOG` environment variable to `trace`, `debug`, `info`, `warn` or
-`error` and initialize the logging provider of your choice. Examples use
-[`pretty_env_logger`](https://docs.rs/pretty_env_logger/latest/pretty_env_logger/).
+`error` and initialize the logging provider of your choice. Examples use `pretty_env_logger`.
 
 _You may also filter messages, for example:_
 
@@ -35,13 +35,13 @@ DEBUG vk_graph::driver::physical_device > extension "VK_KHR_acceleration_structu
 
 ## Performance Profiling
 
-`vk-graph` uses [`profiling`](https://crates.io/crates/profiling) and supports multiple profiling
-providers. When not in use profiling has zero cost.
+`vk-graph` uses `profiling` v{{ profiling.version }} and supports multiple profiling providers. When not in use profiling has
+zero cost.
 
 To enable profiling, compile with one of the `profile-with-*` features enabled and initialize the
 profiling provider of your choice.
 
-_Example code uses [puffin](https://crates.io/crates/puffin):_
+_Example using `puffin`:_
 
 ```bash
 cargo run --features profile-with-puffin --release --example vsm_omni
@@ -62,11 +62,16 @@ changes. This may be done on Intel Linux machines by modifying the Intel P-State
 echo 100 | sudo tee /sys/devices/system/cpu/intel_pstate/min_perf_pct
 ```
 
-(_[Source](https://www.kernel.org/doc/Documentation/cpu-freq/intel-pstate.txt)_)
+([_Source_](https://www.kernel.org/doc/Documentation/cpu-freq/intel-pstate.txt)
+<i class="fa-solid fa-arrow-up-right-from-square"></i>)
 
 ## Helpful tools
 
-- [VulkanSDK](https://vulkan.lunarg.com/sdk/home) _(Required when setting `debug` to `true`)_
-- NVIDIA: [nvidia-smi](https://developer.nvidia.com/nvidia-system-management-interface)
-- AMD: [RadeonTop](https://github.com/clbr/radeontop)
-- [RenderDoc](https://renderdoc.org/)
+- [_VulkanSDK_](https://vulkan.lunarg.com/sdk/home)
+<i class="fa-solid fa-arrow-up-right-from-square"></i>
+_(Required when setting `debug` to `true`)_
+- NVIDIA: [_nvidia-smi_](https://developer.nvidia.com/nvidia-system-management-interface)
+<i class="fa-solid fa-arrow-up-right-from-square"></i>
+- AMD: [_RadeonTop_](https://github.com/clbr/radeontop)
+<i class="fa-solid fa-arrow-up-right-from-square"></i>
+- [_RenderDoc_](https://renderdoc.org/) <i class="fa-solid fa-arrow-up-right-from-square"></i>

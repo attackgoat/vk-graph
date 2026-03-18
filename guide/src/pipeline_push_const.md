@@ -15,14 +15,22 @@ layout(push_constant) uniform PushConstants {
 ```
 
 ```rust
-let shader = Shader::new_compute(include_bytes!("render_mesh.spv").as_slice());
-let pipeline = ComputePipeline::create(device, ComputePipelineInfo::default(), shader)?;
+let info = ComputePipelineInfo::default();
+let code = include_bytes!("render_mesh.spv");
+let shader = Shader::new_compute(code.as_slice());
+let pipeline = ComputePipeline::create(device, info, shader)?;
 
-Graph::default()
+let mut graph = Graph::default();
+graph
+    .begin_cmd()
     .bind_pipeline(&pipeline)
     .record_cmd_buf(|cmd_buf| {
         cmd_buf
             .push_constants(0, 42u32.to_ne_bytes())
-            .dispatch(8, 8, 1)
+            .dispatch(1, 1, 1);
     });
 ```
+
+> [!TIP]
+> A crate such as `bytemuck` is helpful for converting Rust structures to bytes suitable for push
+> constant usage. See the example code for more.

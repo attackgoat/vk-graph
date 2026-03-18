@@ -17,8 +17,8 @@ use {
 #[doc(hidden)]
 #[repr(C)]
 pub struct ReadOnlySwapchainImage {
-    pub idx: u32,
     image: Image,
+    pub index: u32,
 }
 
 #[doc(hidden)]
@@ -206,7 +206,7 @@ impl Swapchain {
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(wait_semaphores)
             .swapchains(slice::from_ref(&self.handle))
-            .image_indices(slice::from_ref(&image.idx));
+            .image_indices(slice::from_ref(&image.index));
 
         let swapchain_ext = Device::expect_swapchain_ext(&self.surface.device);
 
@@ -237,7 +237,7 @@ impl Swapchain {
             }
         }
 
-        let image_idx = image.idx as usize;
+        let image_idx = image.index as usize;
         self.images[image_idx] = image;
     }
 
@@ -334,8 +334,8 @@ impl Swapchain {
                 image.name = Some(format!("swapchain{image_idx}"));
 
                 Ok(SwapchainImage {
-                    idx: image_idx,
                     image,
+                    index: image_idx,
                 })
             })
             .collect::<Result<Box<_>, _>>()?;
@@ -454,25 +454,25 @@ pub enum SwapchainError {
 #[derive(Debug)]
 #[repr(C)]
 pub struct SwapchainImage {
+    image: Image,
+
     /// The index of this swapchain among the other swapchain images.
     ///
     /// _Note:_ This field is read-only.
     #[cfg(doc)]
-    pub idx: u32,
+    pub index: u32,
 
     #[cfg(not(doc))]
-    idx: u32,
-
-    image: Image,
+    index: u32,
 }
 
 impl Clone for SwapchainImage {
     fn clone(&self) -> Self {
-        let Self { idx, image } = self;
+        let Self { image, index } = self;
 
         Self {
-            idx: *idx,
             image: image.clone_swapchain(),
+            index: *index,
         }
     }
 }
@@ -669,8 +669,8 @@ mod test {
             size_of::<ReadOnlySwapchainImage>()
         );
         assert_eq!(
-            offset_of!(SwapchainImage, idx),
-            offset_of!(ReadOnlySwapchainImage, idx),
+            offset_of!(SwapchainImage, index),
+            offset_of!(ReadOnlySwapchainImage, index),
         );
         assert_eq!(
             offset_of!(SwapchainImage, image),
