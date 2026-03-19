@@ -1,8 +1,7 @@
 use {
     super::{
-        Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, Resource,
+        AnyResource, Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, ResourceInner,
         cmd::{SubresourceAccess, SubresourceRange},
-        resource::ResourceInner,
     },
     crate::{
         cmd::CommandBufferRef,
@@ -402,7 +401,7 @@ impl Queue {
     #[profiling::function]
     fn begin_render_pass(
         cmd_buf: &CommandBuffer,
-        bindings: &[Resource],
+        bindings: &[AnyResource],
         pass: &Command,
         physical_pass: &mut PhysicalPass,
         render_area: vk::Rect2D,
@@ -1887,7 +1886,7 @@ impl Queue {
     #[profiling::function]
     fn record_execution_barriers<'a>(
         cmd_buf: &CommandBuffer,
-        bindings: &mut [Resource],
+        bindings: &mut [AnyResource],
         accesses: impl Iterator<Item = (&'a NodeIndex, &'a Vec<SubresourceAccess>)>,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
@@ -2137,7 +2136,7 @@ impl Queue {
     #[profiling::function]
     fn record_image_layout_transitions(
         cmd_buf: &CommandBuffer,
-        bindings: &mut [Resource],
+        bindings: &mut [AnyResource],
         pass: &mut Command,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
@@ -2531,7 +2530,7 @@ impl Queue {
     }
 
     #[profiling::function]
-    fn render_extent(bindings: &[Resource], pass: &Command) -> vk::Extent2D {
+    fn render_extent(bindings: &[AnyResource], pass: &Command) -> vk::Extent2D {
         // set_render_area was not specified so we're going to guess using the minimum common
         // attachment extents
         let first_exec = pass.execs.first().unwrap();
@@ -2964,7 +2963,7 @@ impl Queue {
     #[profiling::function]
     fn write_descriptor_sets(
         cmd_buf: &CommandBuffer,
-        bindings: &[Resource],
+        bindings: &[AnyResource],
         pass: &Command,
         physical_pass: &PhysicalPass,
     ) -> Result<(), DriverError> {
@@ -3242,14 +3241,13 @@ struct Schedule {
 #[allow(unused)]
 mod derecated {
     use crate::{
-        Queue,
+        Node, Queue,
         driver::{
             DriverError,
             cmd_buf::CommandBuffer,
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
             render_pass::{RenderPass, RenderPassInfo},
         },
-        node::Node,
         pool::Pool,
     };
 

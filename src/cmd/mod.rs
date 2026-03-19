@@ -12,7 +12,7 @@ pub use self::{
         UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
     compute::ComputeCommandBufferRef,
-    graphic::{GraphicCommandBufferRef, LoadOp, StoreOp},
+    graphic::{ClearColorValue, GraphicCommandBufferRef, LoadOp, StoreOp},
     pipeline::{CommandPipeline, PipelineCommandRef},
     ray_trace::RayTraceCommandBufferRef,
 };
@@ -20,9 +20,8 @@ pub use self::{
 use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
-        AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode, Command, Execution,
-        ExecutionFunction, Graph, GraphResource, ImageLeaseNode, ImageNode, Node, Resource,
-        SwapchainImageNode,
+        AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode, BufferNode, Command, Execution,
+        ExecutionFunction, Graph, ImageLeaseNode, ImageNode, Node, Resource, SwapchainImageNode,
     },
     crate::driver::{
         accel_struct::AccelerationStructureSubresourceRange, buffer::BufferSubresourceRange,
@@ -82,7 +81,7 @@ impl<'a> CommandRef<'a> {
     /// Bound nodes may be used in passes for pipeline and shader operations.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
-        R: GraphResource,
+        R: Resource,
     {
         self.graph.bind_resource(resource)
     }
@@ -370,6 +369,7 @@ impl From<ImageViewInfo> for SubresourceRange {
         Self::Image(subresource.into())
     }
 }
+
 impl From<vk::ImageSubresourceRange> for SubresourceRange {
     fn from(subresource: vk::ImageSubresourceRange) -> Self {
         Self::Image(subresource)
@@ -391,12 +391,12 @@ pub trait View {
     type Range;
 
     #[doc(hidden)]
-    fn info(&self, _: &[Resource]) -> Self::Info
+    fn info(&self, _: &[AnyResource]) -> Self::Info
     where
         Self: Node;
 
     #[doc(hidden)]
-    fn range(&self, _: &[Resource]) -> Self::Range
+    fn range(&self, _: &[AnyResource]) -> Self::Range
     where
         Self: Node;
 }
@@ -407,14 +407,14 @@ macro_rules! view_accel_struct {
             type Info = Self::Range;
             type Range = AccelerationStructureSubresourceRange;
 
-            fn info(&self, resources: &[Resource]) -> Self::Info
+            fn info(&self, resources: &[AnyResource]) -> Self::Info
             where
                 Self: Node,
             {
                 self.range(resources)
             }
 
-            fn range(&self, _: &[Resource]) -> Self::Range
+            fn range(&self, _: &[AnyResource]) -> Self::Range
             where
                 Self: Node,
             {
@@ -434,14 +434,14 @@ macro_rules! view_buffer {
             type Info = Self::Range;
             type Range = BufferSubresourceRange;
 
-            fn info(&self, resources: &[Resource]) -> Self::Info
+            fn info(&self, resources: &[AnyResource]) -> Self::Info
             where
                 Self: Node,
             {
                 self.range(resources)
             }
 
-            fn range(&self, resources: &[Resource]) -> Self::Range
+            fn range(&self, resources: &[AnyResource]) -> Self::Range
             where
                 Self: Node,
             {
@@ -463,7 +463,7 @@ macro_rules! view_image {
             type Info = ImageViewInfo;
             type Range = vk::ImageSubresourceRange;
 
-            fn info(&self, resources: &[Resource]) -> Self::Info
+            fn info(&self, resources: &[AnyResource]) -> Self::Info
             where
                 Self: Node,
             {
@@ -472,7 +472,7 @@ macro_rules! view_image {
                 resources[idx].as_image().unwrap().info.into()
             }
 
-            fn range(&self, resources: &[Resource]) -> Self::Range
+            fn range(&self, resources: &[AnyResource]) -> Self::Range
             where
                 Self: Node,
             {
@@ -549,10 +549,9 @@ impl From<Range<vk::DeviceSize>> for ViewInfo {
 mod deprecated {
     use {
         crate::{
-            Graph, GraphResource,
+            Graph, Node, Resource,
             cmd::{CommandBufferRef, CommandRef, SubresourceRange, View},
             deprecated::Info,
-            node::Node,
         },
         ash::vk,
         vk_sync::AccessType,
@@ -641,7 +640,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn bind_node<R>(&mut self, resource: R) -> R::Node
         where
-            R: GraphResource,
+            R: Resource,
         {
             self.bind_resource(resource)
         }

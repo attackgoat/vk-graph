@@ -356,14 +356,19 @@ pub mod node;
 pub mod pool;
 
 mod queue;
-mod resource;
 
-use crate::cmd::CommandBufferRef;
+use std::sync::Arc;
 
-pub use self::{
-    queue::Queue,
-    resource::{GraphResource, Resource},
+use crate::{
+    cmd::{ClearColorValue, CommandBufferRef},
+    driver::{
+        accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
+        swapchain::SwapchainImage,
+    },
+    pool::Lease,
 };
+
+pub use self::queue::Queue;
 
 #[allow(deprecated)]
 pub use self::deprecated::{Display, DisplayInfo, DisplayInfoBuilder};
@@ -371,7 +376,6 @@ pub use self::deprecated::{Display, DisplayInfo, DisplayInfoBuilder};
 use {
     self::{
         cmd::{AttachmentIndex, CommandRef, Descriptor, SubresourceAccess, ViewInfo},
-        node::Node,
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
             AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode,
@@ -401,6 +405,46 @@ use {
 
 type ExecFn = Box<dyn FnOnce(CommandBufferRef) + Send>;
 type NodeIndex = usize;
+
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct AnyResource {
+    pub(crate) inner: ResourceInner,
+}
+
+impl AnyResource {
+    fn as_driver_accel_struct(&self) -> Option<&AccelerationStructure> {
+        Some(match &self.inner {
+            ResourceInner::AccelerationStructure(resource) => resource,
+            ResourceInner::AccelerationStructureLease(resource) => resource,
+            _ => return None,
+        })
+    }
+
+    fn as_driver_buffer(&self) -> Option<&Buffer> {
+        Some(match &self.inner {
+            ResourceInner::Buffer(resource) => resource,
+            ResourceInner::BufferLease(resource) => resource,
+            _ => return None,
+        })
+    }
+
+    fn as_driver_image(&self) -> Option<&Image> {
+        Some(match &self.inner {
+            ResourceInner::Image(resource) => resource,
+            ResourceInner::ImageLease(resource) => resource,
+            ResourceInner::SwapchainImage(resource) => resource,
+            _ => return None,
+        })
+    }
+
+    fn as_swapchain_image(&self) -> Option<&SwapchainImage> {
+        Some(match &self.inner {
+            ResourceInner::SwapchainImage(resource) => resource,
+            _ => return None,
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct Attachment {
@@ -460,93 +504,6 @@ impl Attachment {
             .base_array_layer(self.base_array_layer)
             .base_mip_level(self.base_mip_level)
             .build()
-    }
-}
-
-/// TODO
-#[derive(Clone, Copy, Debug)]
-pub enum ClearColorValue {
-    /// Value as [f32].
-    Float32([f32; 4]),
-
-    /// Value as [i32].
-    Int32([i32; 4]),
-
-    /// Value as [u32].
-    Uint32([u32; 4]),
-}
-
-impl ClearColorValue {
-    /// rgb zeros and alpha ones.
-    pub const BLACK_ALPHA_ONE: Self = Self::Float32([0.0, 0.0, 0.0, 1.0]);
-
-    /// zeros.
-    pub const BLACK_ALPHA_ZERO: Self = Self::Float32([0.0, 0.0, 0.0, 0.0]);
-
-    /// rgb zeros and alpha ones.
-    pub const WHITE_ALPHA_ONE: Self = Self::Float32([1.0, 1.0, 1.0, 1.0]);
-
-    /// rgb ones and alpha zeros.
-    pub const WHITE_ALPHA_ZERO: Self = Self::Float32([1.0, 1.0, 1.0, 0.0]);
-
-    /// Convenience constructor for clear color values.
-    pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self::Float32([r, g, b, a])
-    }
-
-    /// Convert RGB+A values into a ClearColorValue.
-    pub const fn from_f32(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self::rgba(r, g, b, a)
-    }
-
-    /// Convert RGB+A values into a ClearColorValue.
-    pub const fn from_u8(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self::from_f32(
-            r as f32 / u8::MAX as f32,
-            g as f32 / u8::MAX as f32,
-            b as f32 / u8::MAX as f32,
-            a as f32 / u8::MAX as f32,
-        )
-    }
-}
-
-impl Default for ClearColorValue {
-    fn default() -> Self {
-        Self::from_f32(0.0, 0.0, 0.0, 0.0)
-    }
-}
-
-impl From<[f32; 4]> for ClearColorValue {
-    fn from(float32: [f32; 4]) -> Self {
-        Self::Float32(float32)
-    }
-}
-
-impl From<[i32; 4]> for ClearColorValue {
-    fn from(int32: [i32; 4]) -> Self {
-        Self::Int32(int32)
-    }
-}
-
-impl From<[u8; 4]> for ClearColorValue {
-    fn from(uint8: [u8; 4]) -> Self {
-        Self::from_u8(uint8[0], uint8[1], uint8[2], uint8[3])
-    }
-}
-
-impl From<[u32; 4]> for ClearColorValue {
-    fn from(uint32: [u32; 4]) -> Self {
-        Self::Uint32(uint32)
-    }
-}
-
-impl From<ClearColorValue> for vk::ClearColorValue {
-    fn from(value: ClearColorValue) -> Self {
-        match value {
-            ClearColorValue::Float32(float32) => Self { float32 },
-            ClearColorValue::Int32(int32) => Self { int32 },
-            ClearColorValue::Uint32(uint32) => Self { uint32 },
-        }
     }
 }
 
@@ -694,7 +651,7 @@ impl Command {
 #[derive(Debug, Default)]
 pub struct Graph {
     cmds: Vec<Command>,
-    resources: Vec<Resource>,
+    resources: Vec<AnyResource>,
 }
 
 impl Graph {
@@ -714,7 +671,7 @@ impl Graph {
     /// general functions.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
-        R: GraphResource,
+        R: Resource,
     {
         resource.bind_graph(self)
     }
@@ -1312,6 +1269,228 @@ impl Graph {
     }
 }
 
+/// A Vulkan resource which has been bound to a [`Graph`] using [`Graph::bind_node`].
+pub trait Node {
+    /// The Vulkan buffer, image, or acceleration struction type.
+    type Resource;
+
+    #[doc(hidden)]
+    fn borrow(self, resources: &[AnyResource]) -> &Self::Resource;
+
+    #[doc(hidden)]
+    fn index(&self) -> NodeIndex;
+}
+
+/// A trait for resources which may be bound to a `Graph`.
+///
+/// See [`Graph::bind_resource`] and
+/// [`CommandRef::bind_resource`](super::cmd::CommandRef::bind_resource) for details.
+pub trait Resource {
+    /// The resource handle type.
+    type Node;
+
+    #[doc(hidden)]
+    fn bind_graph(self, _: &mut Graph) -> Self::Node;
+
+    #[deprecated = "use bind_graph function"]
+    #[doc(hidden)]
+    fn bind(self, graph: &mut Graph) -> Self::Node
+    where
+        Self: Sized,
+    {
+        self.bind_graph(graph)
+    }
+}
+
+impl Resource for SwapchainImage {
+    type Node = SwapchainImageNode;
+
+    fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+        // We will return a new node
+        let res = Self::Node::new(graph.resources.len());
+
+        //trace!("Node {}: {:?}", res.idx, &self);
+
+        graph.resources.push(AnyResource {
+            inner: ResourceInner::SwapchainImage(Box::new(self)),
+        });
+
+        res
+    }
+}
+
+macro_rules! graph_resource {
+    ($name:ident) => {
+        paste::paste! {
+            impl Resource for $name {
+                type Node = [<$name Node>];
+
+                #[profiling::function]
+                fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+                    // In this function we are resource a new item (Image or Buffer or etc)
+
+                    // We will return a new node
+                    let res = Self::Node::new(graph.resources.len());
+                    let resource = AnyResource {
+                        inner: ResourceInner::$name(Arc::new(self)),
+                    };
+                    graph.resources.push(resource);
+
+                    res
+                }
+            }
+
+            impl Resource for Arc<$name> {
+                type Node = [<$name Node>];
+
+                #[profiling::function]
+                fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+                    // In this function we are resource an existing resource (Arc<Image> or
+                    // Arc<Buffer> or etc)
+
+                    // We will return an existing node, if possible
+                    // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
+                    for (idx, existing_resource) in graph.resources.iter_mut().enumerate() {
+                        if let Some(existing_resource) = existing_resource.[<as_ $name:snake _mut>]() {
+                            if Arc::ptr_eq(existing_resource, &self) {
+                                return Self::Node::new(idx);
+                            }
+                        }
+                    }
+
+                    // Return a new node
+                    let res = Self::Node::new(graph.resources.len());
+                    let resource = AnyResource {
+                        inner: ResourceInner::$name(self),
+                    };
+                    graph.resources.push(resource);
+
+                    res
+                }
+            }
+
+            impl<'a> Resource for &'a Arc<$name> {
+                type Node = [<$name Node>];
+
+                fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+                    // In this function we are resource a borrowed resource (&Arc<Image> or
+                    // &Arc<Buffer> or etc)
+
+                    Arc::clone(self).bind_graph(graph)
+                }
+            }
+
+            impl Resource for Lease<$name> {
+                type Node = [<$name LeaseNode>];
+
+                #[profiling::function]
+                fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+                    // In this function we are resource a new lease (Lease<Image> or Lease<Buffer> or
+                    // etc)
+
+                    // We will return a new node
+                    let res = Self::Node::new(graph.resources.len());
+                    let resource = AnyResource {
+                        inner: ResourceInner::[<$name Lease>](Arc::new(self)),
+                    };
+                    graph.resources.push(resource);
+
+                    res
+                }
+            }
+
+            impl Resource  for Arc<Lease<$name>> {
+                type Node = [<$name LeaseNode>];
+
+                #[profiling::function]
+                fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+                    // In this function we are resource an existing lease resource
+                    // (Arc<Lease<Image>> or Arc<Lease<Buffer>> or etc)
+
+                    // We will return an existing node, if possible
+                    // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
+                    for (idx, existing_resource) in graph.resources.iter_mut().enumerate() {
+                        if let Some(existing_resource) = existing_resource.[<as_ $name:snake _lease_mut>]() {
+                            if Arc::ptr_eq(existing_resource, &self) {
+                                return Self::Node::new(idx);
+                            }
+                        }
+                    }
+
+                    // We will return a new node
+                    let res = Self::Node::new(graph.resources.len());
+                    let resource = AnyResource {
+                        inner: ResourceInner::[<$name Lease>](self),
+                    };
+                    graph.resources.push(resource);
+
+                    res
+                }
+            }
+
+            impl<'a> Resource for &'a Arc<Lease<$name>> {
+                type Node = [<$name LeaseNode>];
+
+                fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+                    // In this function we are resource a borrowed resource (&Arc<Lease<Image>> or
+                    // &Arc<Lease<Buffer>> or etc)
+
+                    Arc::clone(self).bind_graph(graph)
+                }
+            }
+
+            impl AnyResource {
+                fn [<as_ $name:snake>](&self) -> Option<&Arc<$name>> {
+                    let ResourceInner::$name(resource) = &self.inner else {
+                        return None;
+                    };
+
+                    Some(resource)
+                }
+
+                fn [<as_ $name:snake _mut>](&mut self) -> Option<&mut Arc<$name>> {
+                    let ResourceInner::$name(resource) = &mut self.inner else {
+                        return None;
+                    };
+
+                    Some(resource)
+                }
+
+                fn [<as_ $name:snake _lease>](&self) -> Option<&Arc<Lease<$name>>> {
+                    let ResourceInner::[<$name Lease>](resource) = &self.inner else {
+                        return None
+                    };
+
+                    Some(resource)
+                }
+
+                fn [<as_ $name:snake _lease_mut>](&mut self) -> Option<&mut Arc<Lease<$name>>> {
+                    let ResourceInner::[<$name Lease>](resource) = &mut self.inner else {
+                        return None;
+                    };
+
+                    Some(resource)
+                }
+            }
+        }
+    };
+}
+
+graph_resource!(AccelerationStructure);
+graph_resource!(Image);
+graph_resource!(Buffer);
+
+#[derive(Debug)]
+pub(crate) enum ResourceInner {
+    AccelerationStructure(Arc<AccelerationStructure>),
+    AccelerationStructureLease(Arc<Lease<AccelerationStructure>>),
+    Buffer(Arc<Buffer>),
+    BufferLease(Arc<Lease<Buffer>>),
+    Image(Arc<Image>),
+    ImageLease(Arc<Lease<Image>>),
+    SwapchainImage(Box<SwapchainImage>),
+}
+
 #[deprecated]
 #[doc(hidden)]
 pub mod graph {
@@ -1345,7 +1524,7 @@ pub mod graph {
         pub type ImageNode = crate::node::ImageNode;
 
         #[deprecated = "use vk_graph::node::Node"]
-        pub type Node = dyn crate::node::Node<Resource = ()>;
+        pub type Node = dyn crate::Node<Resource = ()>;
 
         #[deprecated = "use vk_graph::node::SwapchainImageNode"]
         pub type SwapchainImageNode = crate::node::SwapchainImageNode;
@@ -1408,7 +1587,7 @@ pub mod graph {
 pub(crate) mod deprecated {
     use {
         crate::{
-            Graph, GraphResource,
+            AnyResource, Graph, Node, Resource,
             driver::{
                 DriverError,
                 accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -1423,10 +1602,9 @@ pub(crate) mod deprecated {
             node::{
                 AccelerationStructureLeaseNode, AccelerationStructureNode,
                 AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode,
-                BufferNode, ImageLeaseNode, ImageNode, Node, SwapchainImageNode,
+                BufferNode, ImageLeaseNode, ImageNode, SwapchainImageNode,
             },
             pool::{Lease, Pool},
-            resource::Resource,
         },
         ash::vk,
         std::{ops::Range, sync::Arc},
@@ -1530,7 +1708,7 @@ pub(crate) mod deprecated {
         #[doc(hidden)]
         pub fn bind_node<R>(&mut self, resource: R) -> R::Node
         where
-            R: GraphResource,
+            R: Resource,
         {
             self.bind_resource(resource)
         }
@@ -1673,7 +1851,7 @@ pub(crate) mod deprecated {
     pub trait Info {
         type Type;
 
-        fn info(&self, _: &[Resource]) -> Self::Type
+        fn info(&self, _: &[AnyResource]) -> Self::Type
         where
             Self: Node;
     }
@@ -1681,11 +1859,11 @@ pub(crate) mod deprecated {
     impl Info for SwapchainImageNode {
         type Type = ImageInfo;
 
-        fn info(&self, resources: &[Resource]) -> Self::Type
+        fn info(&self, resources: &[AnyResource]) -> Self::Type
         where
             Self: Node,
         {
-            resources[self.idx].as_swapchain_image().unwrap().info
+            resources[self.index()].as_swapchain_image().unwrap().info
         }
     }
 
@@ -1695,18 +1873,18 @@ pub(crate) mod deprecated {
                 impl Info for [<$name Node>] {
                     type Type = [<$name Info>];
 
-                    fn info(&self, resources: &[Resource]) -> Self::Type
+                    fn info(&self, resources: &[AnyResource]) -> Self::Type
                     where
                         Self: Node,
                     {
-                        resources[self.idx].[<as_ $name:snake>]().unwrap().info
+                        resources[self.index()].[<as_ $name:snake>]().unwrap().info
                     }
                 }
 
                 impl Info for [<Any $name Node>] {
                     type Type = [<$name Info>];
 
-                    fn info(&self, resources: &[Resource]) -> Self::Type
+                    fn info(&self, resources: &[AnyResource]) -> Self::Type
                     where
                         Self: Node,
                     {
@@ -1717,18 +1895,18 @@ pub(crate) mod deprecated {
                 impl Info for [<$name LeaseNode>] {
                     type Type = [<$name Info>];
 
-                    fn info(&self, resources: &[Resource]) -> Self::Type
+                    fn info(&self, resources: &[AnyResource]) -> Self::Type
                     where
                         Self: Node,
                     {
-                        resources[self.idx].[<as_ $name:snake _lease>]().unwrap().info
+                        resources[self.index()].[<as_ $name:snake _lease>]().unwrap().info
                     }
                 }
 
                 impl Unbind for [<$name Node>] {
                     type Result = Arc<$name>;
 
-                    fn unbind(&self, resources: &[Resource]) -> Self::Result {
+                    fn unbind(&self, resources: &[AnyResource]) -> Self::Result {
                         resources[self.index()].[<as_ $name:snake>]().unwrap().clone()
                     }
                 }
@@ -1736,7 +1914,7 @@ pub(crate) mod deprecated {
                 impl Unbind for [<$name LeaseNode>] {
                     type Result = Arc<Lease<$name>>;
 
-                    fn unbind(&self, resources: &[Resource]) -> Self::Result {
+                    fn unbind(&self, resources: &[AnyResource]) -> Self::Result {
                         resources[self.index()].[<as_ $name:snake _lease>]().unwrap().clone()
                     }
                 }
@@ -1760,6 +1938,6 @@ pub(crate) mod deprecated {
     pub trait Unbind: Node {
         type Result;
 
-        fn unbind(&self, _: &[Resource]) -> Self::Result;
+        fn unbind(&self, _: &[AnyResource]) -> Self::Result;
     }
 }

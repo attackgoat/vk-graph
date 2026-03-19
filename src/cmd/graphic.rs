@@ -1,7 +1,6 @@
 use {
     super::{AttachmentIndex, cmd_buf::CommandBufferRef, pipeline::PipelineCommandRef},
     crate::{
-        ClearColorValue,
         driver::{
             graphic::{DepthStencilInfo, GraphicPipeline},
             image::ImageViewInfo,
@@ -13,6 +12,93 @@ use {
     log::trace,
     std::{cell::RefCell, ops::Deref, slice},
 };
+
+/// TODO
+#[derive(Clone, Copy, Debug)]
+pub enum ClearColorValue {
+    /// Value as [f32].
+    Float32([f32; 4]),
+
+    /// Value as [i32].
+    Int32([i32; 4]),
+
+    /// Value as [u32].
+    Uint32([u32; 4]),
+}
+
+impl ClearColorValue {
+    /// rgb zeros and alpha ones.
+    pub const BLACK_ALPHA_ONE: Self = Self::Float32([0.0, 0.0, 0.0, 1.0]);
+
+    /// zeros.
+    pub const BLACK_ALPHA_ZERO: Self = Self::Float32([0.0, 0.0, 0.0, 0.0]);
+
+    /// rgb zeros and alpha ones.
+    pub const WHITE_ALPHA_ONE: Self = Self::Float32([1.0, 1.0, 1.0, 1.0]);
+
+    /// rgb ones and alpha zeros.
+    pub const WHITE_ALPHA_ZERO: Self = Self::Float32([1.0, 1.0, 1.0, 0.0]);
+
+    /// Convenience constructor for clear color values.
+    pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self::Float32([r, g, b, a])
+    }
+
+    /// Convert RGB+A values into a ClearColorValue.
+    pub const fn from_f32(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self::rgba(r, g, b, a)
+    }
+
+    /// Convert RGB+A values into a ClearColorValue.
+    pub const fn from_u8(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self::from_f32(
+            r as f32 / u8::MAX as f32,
+            g as f32 / u8::MAX as f32,
+            b as f32 / u8::MAX as f32,
+            a as f32 / u8::MAX as f32,
+        )
+    }
+}
+
+impl Default for ClearColorValue {
+    fn default() -> Self {
+        Self::from_f32(0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+impl From<[f32; 4]> for ClearColorValue {
+    fn from(float32: [f32; 4]) -> Self {
+        Self::Float32(float32)
+    }
+}
+
+impl From<[i32; 4]> for ClearColorValue {
+    fn from(int32: [i32; 4]) -> Self {
+        Self::Int32(int32)
+    }
+}
+
+impl From<[u8; 4]> for ClearColorValue {
+    fn from(uint8: [u8; 4]) -> Self {
+        Self::from_u8(uint8[0], uint8[1], uint8[2], uint8[3])
+    }
+}
+
+impl From<[u32; 4]> for ClearColorValue {
+    fn from(uint32: [u32; 4]) -> Self {
+        Self::Uint32(uint32)
+    }
+}
+
+impl From<ClearColorValue> for vk::ClearColorValue {
+    fn from(value: ClearColorValue) -> Self {
+        match value {
+            ClearColorValue::Float32(float32) => Self { float32 },
+            ClearColorValue::Int32(int32) => Self { int32 },
+            ClearColorValue::Uint32(uint32) => Self { uint32 },
+        }
+    }
+}
 
 /// TODO
 #[derive(Clone, Copy, Debug)]
@@ -1135,10 +1221,10 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
 mod deprecated {
     use {
         crate::{
-            Attachment, ClearColorValue, SubresourceAccess,
+            Attachment, Node, SubresourceAccess,
             cmd::{
-                AttachmentIndex, Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
-                graphic::GraphicCommandBufferRef,
+                AttachmentIndex, ClearColorValue, Descriptor, PipelineCommandRef, SubresourceRange,
+                View, ViewInfo, graphic::GraphicCommandBufferRef,
             },
             driver::{
                 graphic::GraphicPipeline,
@@ -1148,7 +1234,7 @@ mod deprecated {
                 },
                 render_pass::ResolveMode,
             },
-            node::{AnyImageNode, Node},
+            node::AnyImageNode,
         },
         ash::vk,
         vk_sync::AccessType,

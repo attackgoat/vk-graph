@@ -363,12 +363,12 @@ impl PipelineCommandRef<'_, ComputePipeline> {
 mod deprecated {
     use {
         crate::{
+            Node,
             cmd::{
                 Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
                 compute::ComputeCommandBufferRef,
             },
             driver::compute::ComputePipeline,
-            node::Node,
         },
         std::any::Any,
         vk_sync::AccessType,

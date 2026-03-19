@@ -333,12 +333,12 @@ impl<'a> Deref for RayTraceCommandBufferRef<'a> {
 mod deprecated {
     use {
         crate::{
+            Node,
             cmd::{
                 Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
                 ray_trace::RayTraceCommandBufferRef,
             },
             driver::ray_trace::RayTracePipeline,
-            node::Node,
         },
         vk_sync::AccessType,
     };

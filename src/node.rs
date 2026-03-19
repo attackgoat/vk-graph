@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::{
+    Node, ResourceInner,
     driver::{
         accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
         swapchain::SwapchainImage,
@@ -10,7 +11,7 @@ use crate::{
     pool::Lease,
 };
 
-use super::{NodeIndex, Resource, resource::ResourceInner};
+use super::{AnyResource, NodeIndex};
 
 /// Specifies either an owned acceleration structure or an acceleration structure leased from a
 /// pool.
@@ -38,7 +39,7 @@ impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
 impl Node for AnyAccelerationStructureNode {
     type Resource = AccelerationStructure;
 
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+    fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
         resources[self.index()].as_driver_accel_struct().unwrap()
     }
 
@@ -75,7 +76,7 @@ impl From<BufferLeaseNode> for AnyBufferNode {
 impl Node for AnyBufferNode {
     type Resource = Buffer;
 
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+    fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
         resources[self.index()].as_driver_buffer().unwrap()
     }
 
@@ -123,7 +124,7 @@ impl From<SwapchainImageNode> for AnyImageNode {
 impl Node for AnyImageNode {
     type Resource = Image;
 
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource {
+    fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
         resources[self.index()].as_driver_image().unwrap()
     }
 
@@ -136,31 +137,19 @@ impl Node for AnyImageNode {
     }
 }
 
-/// A Vulkan resource which has been bound to a [`Graph`] using [`Graph::bind_node`].
-pub trait Node {
-    /// The Vulkan buffer, image, or acceleration struction type.
-    type Resource;
-
-    #[doc(hidden)]
-    fn borrow(self, resources: &[Resource]) -> &Self::Resource;
-
-    #[doc(hidden)]
-    fn index(&self) -> NodeIndex;
-}
-
 macro_rules! node {
     ($name:ident, $resource:ty, $fn_name:ident) => {
         paste::paste! {
             /// Resource node.
             #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
             pub struct [<$name Node>] {
-                pub(super) idx: NodeIndex,
+                index: NodeIndex,
             }
 
             impl [<$name Node>] {
-                pub(super) fn new(idx: usize) -> Self {
+                pub(crate) fn new(index: usize) -> Self {
                     Self {
-                        idx,
+                        index,
                     }
                 }
             }
@@ -168,8 +157,8 @@ macro_rules! node {
             impl Node for [<$name Node>] {
                 type Resource = $resource;
 
-                fn borrow(self, resources: &[Resource]) -> &Self::Resource {
-                    let Resource { inner: ResourceInner::$name(res), } = &resources[self.idx] else {
+                fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
+                    let AnyResource { inner: ResourceInner::$name(res), } = &resources[self.index] else {
                         panic!("invalid resource node handle");
                     };
 
@@ -177,7 +166,7 @@ macro_rules! node {
                 }
 
                 fn index(&self) -> NodeIndex {
-                    self.idx
+                    self.index
                 }
             }
         }

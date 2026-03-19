@@ -1,6 +1,6 @@
 use {
     crate::{
-        AnyAccelerationStructureNode, Resource,
+        AnyAccelerationStructureNode, AnyResource, Node,
         driver::{
             accel_struct::{
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
@@ -9,7 +9,6 @@ use {
             cmd_buf::CommandBuffer,
             device::Device,
         },
-        node::Node,
     },
     ash::vk,
     std::{cell::RefCell, ops::Deref},
@@ -53,13 +52,13 @@ pub struct CommandBufferRef<'a> {
     #[cfg(debug_assertions)]
     exec: &'a Execution,
 
-    resources: &'a [Resource],
+    resources: &'a [AnyResource],
 }
 
 impl<'a> CommandBufferRef<'a> {
     pub(crate) fn new(
         cmd_buf: &'a CommandBuffer,
-        resources: &'a [Resource],
+        resources: &'a [AnyResource],
         #[cfg(debug_assertions)] exec: &'a Execution,
     ) -> Self {
         Self {

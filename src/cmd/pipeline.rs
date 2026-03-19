@@ -1,7 +1,6 @@
 use {
     super::{
-        AccessType, CommandRef, Descriptor, Graph, GraphResource, Node, SubresourceRange, View,
-        ViewInfo,
+        AccessType, CommandRef, Descriptor, Graph, Node, Resource, SubresourceRange, View, ViewInfo,
     },
     crate::{
         ExecutionPipeline,
@@ -107,7 +106,7 @@ impl<'c, T> PipelineCommandRef<'c, T> {
     /// Bound nodes may be used in passes for pipeline and shader operations.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
-        R: GraphResource,
+        R: Resource,
     {
         self.cmd.bind_resource(resource)
     }
@@ -299,11 +298,10 @@ impl<'c, T> PipelineCommandRef<'c, T> {
 mod deprecated {
     use {
         crate::{
-            Graph, GraphResource,
+            Graph, Node, Resource,
             cmd::{Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo},
             deprecated::Info,
             graph::pass_ref::ViewType,
-            node::Node,
         },
         ash::vk,
         vk_sync::AccessType,
@@ -411,7 +409,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn bind_node<R>(&mut self, resource: R) -> R::Node
         where
-            R: GraphResource,
+            R: Resource,
         {
             self.bind_resource(resource)
         }
