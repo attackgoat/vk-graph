@@ -408,39 +408,45 @@ type NodeIndex = usize;
 
 #[derive(Debug)]
 #[doc(hidden)]
-pub struct AnyResource {
-    pub(crate) inner: ResourceInner,
+pub enum AnyResource {
+    AccelerationStructure(Arc<AccelerationStructure>),
+    AccelerationStructureLease(Arc<Lease<AccelerationStructure>>),
+    Buffer(Arc<Buffer>),
+    BufferLease(Arc<Lease<Buffer>>),
+    Image(Arc<Image>),
+    ImageLease(Arc<Lease<Image>>),
+    SwapchainImage(Box<SwapchainImage>),
 }
 
 impl AnyResource {
     fn as_driver_accel_struct(&self) -> Option<&AccelerationStructure> {
-        Some(match &self.inner {
-            ResourceInner::AccelerationStructure(resource) => resource,
-            ResourceInner::AccelerationStructureLease(resource) => resource,
+        Some(match self {
+            Self::AccelerationStructure(resource) => resource,
+            Self::AccelerationStructureLease(resource) => resource,
             _ => return None,
         })
     }
 
     fn as_driver_buffer(&self) -> Option<&Buffer> {
-        Some(match &self.inner {
-            ResourceInner::Buffer(resource) => resource,
-            ResourceInner::BufferLease(resource) => resource,
+        Some(match self {
+            Self::Buffer(resource) => resource,
+            Self::BufferLease(resource) => resource,
             _ => return None,
         })
     }
 
     fn as_driver_image(&self) -> Option<&Image> {
-        Some(match &self.inner {
-            ResourceInner::Image(resource) => resource,
-            ResourceInner::ImageLease(resource) => resource,
-            ResourceInner::SwapchainImage(resource) => resource,
+        Some(match self {
+            Self::Image(resource) => resource,
+            Self::ImageLease(resource) => resource,
+            Self::SwapchainImage(resource) => resource,
             _ => return None,
         })
     }
 
     fn as_swapchain_image(&self) -> Option<&SwapchainImage> {
-        Some(match &self.inner {
-            ResourceInner::SwapchainImage(resource) => resource,
+        Some(match self {
+            Self::SwapchainImage(resource) => resource,
             _ => return None,
         })
     }
@@ -1307,15 +1313,14 @@ impl Resource for SwapchainImage {
 
     fn bind_graph(self, graph: &mut Graph) -> Self::Node {
         // We will return a new node
-        let res = Self::Node::new(graph.resources.len());
+        let node = Self::Node::new(graph.resources.len());
 
         //trace!("Node {}: {:?}", res.idx, &self);
 
-        graph.resources.push(AnyResource {
-            inner: ResourceInner::SwapchainImage(Box::new(self)),
-        });
+        let resource = AnyResource::SwapchainImage(Box::new(self));
+        graph.resources.push(resource);
 
-        res
+        node
     }
 }
 
@@ -1328,15 +1333,13 @@ macro_rules! graph_resource {
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // In this function we are resource a new item (Image or Buffer or etc)
-
                     // We will return a new node
-                    let res = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource {
-                        inner: ResourceInner::$name(Arc::new(self)),
-                    };
+                    let node = Self::Node::new(graph.resources.len());
+
+                    let resource = AnyResource::$name(Arc::new(self));
                     graph.resources.push(resource);
 
-                    res
+                    node
                 }
             }
 
@@ -1347,7 +1350,6 @@ macro_rules! graph_resource {
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // In this function we are resource an existing resource (Arc<Image> or
                     // Arc<Buffer> or etc)
-
                     // We will return an existing node, if possible
                     // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
                     for (idx, existing_resource) in graph.resources.iter_mut().enumerate() {
@@ -1359,13 +1361,11 @@ macro_rules! graph_resource {
                     }
 
                     // Return a new node
-                    let res = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource {
-                        inner: ResourceInner::$name(self),
-                    };
+                    let node = Self::Node::new(graph.resources.len());
+                    let resource = AnyResource::$name(self);
                     graph.resources.push(resource);
 
-                    res
+                    node
                 }
             }
 
@@ -1389,13 +1389,11 @@ macro_rules! graph_resource {
                     // etc)
 
                     // We will return a new node
-                    let res = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource {
-                        inner: ResourceInner::[<$name Lease>](Arc::new(self)),
-                    };
+                    let node = Self::Node::new(graph.resources.len());
+                    let resource = AnyResource::[<$name Lease>](Arc::new(self));
                     graph.resources.push(resource);
 
-                    res
+                    node
                 }
             }
 
@@ -1418,13 +1416,11 @@ macro_rules! graph_resource {
                     }
 
                     // We will return a new node
-                    let res = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource {
-                        inner: ResourceInner::[<$name Lease>](self),
-                    };
+                    let node = Self::Node::new(graph.resources.len());
+                    let resource = AnyResource::[<$name Lease>](self);
                     graph.resources.push(resource);
 
-                    res
+                    node
                 }
             }
 
@@ -1441,7 +1437,7 @@ macro_rules! graph_resource {
 
             impl AnyResource {
                 fn [<as_ $name:snake>](&self) -> Option<&Arc<$name>> {
-                    let ResourceInner::$name(resource) = &self.inner else {
+                    let Self::$name(resource) = self else {
                         return None;
                     };
 
@@ -1449,7 +1445,7 @@ macro_rules! graph_resource {
                 }
 
                 fn [<as_ $name:snake _mut>](&mut self) -> Option<&mut Arc<$name>> {
-                    let ResourceInner::$name(resource) = &mut self.inner else {
+                    let Self::$name(resource) = self else {
                         return None;
                     };
 
@@ -1457,7 +1453,7 @@ macro_rules! graph_resource {
                 }
 
                 fn [<as_ $name:snake _lease>](&self) -> Option<&Arc<Lease<$name>>> {
-                    let ResourceInner::[<$name Lease>](resource) = &self.inner else {
+                    let Self::[<$name Lease>](resource) = self else {
                         return None
                     };
 
@@ -1465,7 +1461,7 @@ macro_rules! graph_resource {
                 }
 
                 fn [<as_ $name:snake _lease_mut>](&mut self) -> Option<&mut Arc<Lease<$name>>> {
-                    let ResourceInner::[<$name Lease>](resource) = &mut self.inner else {
+                    let Self::[<$name Lease>](resource) = self else {
                         return None;
                     };
 
@@ -1479,17 +1475,6 @@ macro_rules! graph_resource {
 graph_resource!(AccelerationStructure);
 graph_resource!(Image);
 graph_resource!(Buffer);
-
-#[derive(Debug)]
-pub(crate) enum ResourceInner {
-    AccelerationStructure(Arc<AccelerationStructure>),
-    AccelerationStructureLease(Arc<Lease<AccelerationStructure>>),
-    Buffer(Arc<Buffer>),
-    BufferLease(Arc<Lease<Buffer>>),
-    Image(Arc<Image>),
-    ImageLease(Arc<Lease<Image>>),
-    SwapchainImage(Box<SwapchainImage>),
-}
 
 #[deprecated]
 #[doc(hidden)]

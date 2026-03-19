@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::{
-    Node, ResourceInner,
+    Node,
     driver::{
         accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
         swapchain::SwapchainImage,
@@ -158,7 +158,7 @@ macro_rules! node {
                 type Resource = $resource;
 
                 fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
-                    let AnyResource { inner: ResourceInner::$name(res), } = &resources[self.index] else {
+                    let AnyResource::$name(res) = &resources[self.index] else {
                         panic!("invalid resource node handle");
                     };
 

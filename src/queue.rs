@@ -1,6 +1,6 @@
 use {
     super::{
-        AnyResource, Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex, ResourceInner,
+        AnyResource, Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex,
         cmd::{SubresourceAccess, SubresourceRange},
     },
     crate::{
@@ -1886,7 +1886,7 @@ impl Queue {
     #[profiling::function]
     fn record_execution_barriers<'a>(
         cmd_buf: &CommandBuffer,
-        bindings: &mut [AnyResource],
+        resources: &mut [AnyResource],
         accesses: impl Iterator<Item = (&'a NodeIndex, &'a Vec<SubresourceAccess>)>,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
@@ -1930,12 +1930,12 @@ impl Queue {
             // render pass leasing function)
 
             for (node_idx, accesses) in accesses {
-                let binding = &bindings[*node_idx];
+                let resource = &resources[*node_idx];
 
-                match &binding.inner {
-                    ResourceInner::AccelerationStructure(..)
-                    | ResourceInner::AccelerationStructureLease(..) => {
-                        let Some(accel_struct) = binding.as_driver_accel_struct() else {
+                match resource {
+                    AnyResource::AccelerationStructure(..)
+                    | AnyResource::AccelerationStructureLease(..) => {
+                        let Some(accel_struct) = resource.as_driver_accel_struct() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -1957,8 +1957,8 @@ impl Queue {
                         );
                         tls.prev_accesses.push(prev_access);
                     }
-                    ResourceInner::Buffer(..) | ResourceInner::BufferLease(..) => {
-                        let Some(buffer) = binding.as_driver_buffer() else {
+                    AnyResource::Buffer(..) | AnyResource::BufferLease(..) => {
+                        let Some(buffer) = resource.as_driver_buffer() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -1990,10 +1990,10 @@ impl Queue {
                             }
                         }
                     }
-                    ResourceInner::Image(..)
-                    | ResourceInner::ImageLease(..)
-                    | ResourceInner::SwapchainImage(..) => {
-                        let Some(image) = binding.as_driver_image() else {
+                    AnyResource::Image(..)
+                    | AnyResource::ImageLease(..)
+                    | AnyResource::SwapchainImage(..) => {
+                        let Some(image) = resource.as_driver_image() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -2136,7 +2136,7 @@ impl Queue {
     #[profiling::function]
     fn record_image_layout_transitions(
         cmd_buf: &CommandBuffer,
-        bindings: &mut [AnyResource],
+        resources: &mut [AnyResource],
         pass: &mut Command,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
@@ -2167,17 +2167,17 @@ impl Queue {
                 .flat_map(|exec| exec.accesses.iter())
                 .map(|(node_idx, accesses)| (*node_idx, accesses))
             {
-                debug_assert!(bindings.get(node_idx).is_some());
+                debug_assert!(resources.get(node_idx).is_some());
 
-                let binding = unsafe {
+                let resource = unsafe {
                     // CommandRef enforces this during push_resource_access
-                    bindings.get_unchecked(node_idx)
+                    resources.get_unchecked(node_idx)
                 };
 
-                match &binding.inner {
-                    ResourceInner::AccelerationStructure(..)
-                    | ResourceInner::AccelerationStructureLease(..) => {
-                        let Some(accel_struct) = binding.as_driver_accel_struct() else {
+                match resource {
+                    AnyResource::AccelerationStructure(..)
+                    | AnyResource::AccelerationStructureLease(..) => {
+                        let Some(accel_struct) = resource.as_driver_accel_struct() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -2189,8 +2189,8 @@ impl Queue {
 
                         AccelerationStructure::access(accel_struct, AccessType::Nothing);
                     }
-                    ResourceInner::Buffer(..) | ResourceInner::BufferLease(..) => {
-                        let Some(buffer) = binding.as_driver_buffer() else {
+                    AnyResource::Buffer(..) | AnyResource::BufferLease(..) => {
+                        let Some(buffer) = resource.as_driver_buffer() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -2220,10 +2220,10 @@ impl Queue {
                             for _ in Buffer::access(buffer, AccessType::Nothing, access_range) {}
                         }
                     }
-                    ResourceInner::Image(..)
-                    | ResourceInner::ImageLease(..)
-                    | ResourceInner::SwapchainImage(..) => {
-                        let Some(image) = binding.as_driver_image() else {
+                    AnyResource::Image(..)
+                    | AnyResource::ImageLease(..)
+                    | AnyResource::SwapchainImage(..) => {
+                        let Some(image) = resource.as_driver_image() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
