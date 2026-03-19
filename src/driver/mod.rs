@@ -49,8 +49,8 @@ pub use {
     vk_sync::{self as sync},
 };
 
-/// Specifying depth and stencil resolve modes.
 #[deprecated = "Use driver::render_pass::ResolveMode instead"]
+#[doc(hidden)]
 pub type ResolveMode = self::render_pass::ResolveMode;
 
 pub(crate) use self::{

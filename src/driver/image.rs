@@ -65,32 +65,6 @@ pub(crate) fn image_subresource_range_intersects(
 /// Smart pointer handle to an [image] object.
 ///
 /// Also contains information about the object.
-///
-/// ## `Deref` behavior
-///
-/// `Image` automatically dereferences to [`vk::Image`] (via the [`Deref`] trait), so you can
-/// call `vk::Image`'s methods on a value of type `Image`. To avoid name clashes with `vk::Image`'s
-/// methods, the methods of `Image` itself are associated functions, called using
-/// [fully qualified syntax]:
-///
-/// ```no_run
-/// # use std::sync::Arc;
-/// # use ash::vk;
-/// # use vk_graph::driver::{AccessType, DriverError};
-/// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::driver::image::{Image, ImageInfo};
-/// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
-/// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
-/// # let my_image = Image::create(&device, info)?;
-/// # let my_subresource_range = vk::ImageSubresourceRange::default();
-/// let prev = Image::access(&my_image, AccessType::AnyShaderWrite, my_subresource_range);
-/// # Ok(()) }
-/// ```
-///
-/// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkImage.html
-/// [deref]: core::ops::Deref
-/// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
 #[readonly::make]
 pub struct Image {
     accesses: Mutex<ImageAccess<AccessType>>,

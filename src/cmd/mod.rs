@@ -12,7 +12,7 @@ pub use self::{
         UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
     compute::ComputeCommandBuffer,
-    graphic::{ClearColor, GraphicCommandBuffer, LoadOp, StoreOp},
+    graphic::{ClearColorValue, GraphicCommandBuffer, LoadOp, StoreOp},
     pipeline::{Pipeline, PipelineCommand},
     ray_trace::RayTraceCommandBuffer,
 };

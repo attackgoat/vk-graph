@@ -454,6 +454,18 @@ pub enum SwapchainError {
 #[derive(Debug)]
 #[repr(C)]
 pub struct SwapchainImage {
+    /// The device which owns this image resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub device: Device,
+
+    /// The native Vulkan resource handle of this image.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub handle: vk::Image,
+
     image: Image,
 
     /// The index of this swapchain among the other swapchain images.
@@ -464,6 +476,18 @@ pub struct SwapchainImage {
 
     #[cfg(not(doc))]
     index: u32,
+
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub info: ImageInfo,
+
+    /// A name for debugging purposes.
+    ///
+    /// _Note:_ This field is read-only.
+    #[cfg(doc)]
+    pub name: Option<String>,
 }
 
 impl Clone for SwapchainImage {
@@ -477,12 +501,21 @@ impl Clone for SwapchainImage {
     }
 }
 
-#[doc(hidden)]
+#[cfg(not(doc))]
 impl Deref for SwapchainImage {
     type Target = ReadOnlySwapchainImage;
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*(self as *const Self as *const Self::Target) }
+    }
+}
+
+#[cfg(doc)]
+impl Deref for SwapchainImage {
+    type Target = Image;
+
+    fn deref(&self) -> &Self::Target {
+        unreachable!()
     }
 }
 

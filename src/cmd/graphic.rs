@@ -18,7 +18,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         mut self,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
-        load: LoadOp<ClearColor>,
+        load: LoadOp<ClearColorValue>,
         store: StoreOp,
     ) -> Self {
         self.set_color_attachment_image(color_attachment_idx, color_image, load, store);
@@ -31,7 +31,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
         color_image_view_info: impl Into<ImageViewInfo>,
-        load: LoadOp<ClearColor>,
+        load: LoadOp<ClearColorValue>,
         store: StoreOp,
     ) -> Self {
         self.set_color_attachment_image_view(
@@ -208,7 +208,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         &mut self,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
-        load: LoadOp<ClearColor>,
+        load: LoadOp<ClearColorValue>,
         store: StoreOp,
     ) -> &mut Self {
         let color_image = color_image.into();
@@ -231,7 +231,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
         color_image_view_info: impl Into<ImageViewInfo>,
-        load: LoadOp<ClearColor>,
+        load: LoadOp<ClearColorValue>,
         store: StoreOp,
     ) -> &mut Self {
         let color_image = color_image.into();
@@ -441,30 +441,45 @@ impl PipelineCommand<'_, GraphicPipeline> {
     }
 }
 
-/// TODO
+/// Structure specifying a clear color value.
 #[derive(Clone, Copy, Debug)]
-pub enum ClearColor {
+pub enum ClearColorValue {
     /// Value as [f32].
+    ///
+    /// Use this member for color clear values when the format of the image or attachment is one of
+    /// the numeric formats with a numeric type that is floating-point. Floating-point values are
+    /// automatically converted to the format of the image, with the clear value being treated as
+    /// linear if the image is sRGB.
     Float32([f32; 4]),
 
     /// Value as [i32].
+    ///
+    /// Use this member for color clear values when the format of the image or attachment has a
+    /// numeric type that is signed integer. Signed integer values are converted to the format of
+    /// the image by casting to the smaller type (with negative 32-bit values mapping to negative
+    /// values in the smaller type). If the integer clear value is not representable in the target
+    /// type (e.g. would overflow in conversion to that type), the clear value is undefined.
     Int32([i32; 4]),
 
     /// Value as [u32].
+    ///
+    /// Use this member for color clear values when the format of the image or attachment has a
+    /// numeric type that is unsigned integer. Unsigned integer values are converted to the format
+    /// of the image by casting to the integer type with fewer bits.
     Uint32([u32; 4]),
 }
 
-impl ClearColor {
-    /// rgb zeros and alpha ones.
+impl ClearColorValue {
+    /// RGB zeros and alpha ones.
     pub const BLACK_ALPHA_ONE: Self = Self::Float32([0.0, 0.0, 0.0, 1.0]);
 
-    /// zeros.
+    /// All zeros.
     pub const BLACK_ALPHA_ZERO: Self = Self::Float32([0.0, 0.0, 0.0, 0.0]);
 
-    /// rgb zeros and alpha ones.
+    /// RGB zeros and alpha ones.
     pub const WHITE_ALPHA_ONE: Self = Self::Float32([1.0, 1.0, 1.0, 1.0]);
 
-    /// rgb ones and alpha zeros.
+    /// RGB ones and alpha zeros.
     pub const WHITE_ALPHA_ZERO: Self = Self::Float32([1.0, 1.0, 1.0, 0.0]);
 
     /// Convenience constructor for clear color values.
@@ -488,42 +503,42 @@ impl ClearColor {
     }
 }
 
-impl Default for ClearColor {
+impl Default for ClearColorValue {
     fn default() -> Self {
         Self::from_f32(0.0, 0.0, 0.0, 0.0)
     }
 }
 
-impl From<[f32; 4]> for ClearColor {
+impl From<[f32; 4]> for ClearColorValue {
     fn from(float32: [f32; 4]) -> Self {
         Self::Float32(float32)
     }
 }
 
-impl From<[i32; 4]> for ClearColor {
+impl From<[i32; 4]> for ClearColorValue {
     fn from(int32: [i32; 4]) -> Self {
         Self::Int32(int32)
     }
 }
 
-impl From<[u8; 4]> for ClearColor {
+impl From<[u8; 4]> for ClearColorValue {
     fn from(uint8: [u8; 4]) -> Self {
         Self::from_u8(uint8[0], uint8[1], uint8[2], uint8[3])
     }
 }
 
-impl From<[u32; 4]> for ClearColor {
+impl From<[u32; 4]> for ClearColorValue {
     fn from(uint32: [u32; 4]) -> Self {
         Self::Uint32(uint32)
     }
 }
 
-impl From<ClearColor> for vk::ClearColorValue {
-    fn from(value: ClearColor) -> Self {
+impl From<ClearColorValue> for vk::ClearColorValue {
+    fn from(value: ClearColorValue) -> Self {
         match value {
-            ClearColor::Float32(float32) => Self { float32 },
-            ClearColor::Int32(int32) => Self { int32 },
-            ClearColor::Uint32(uint32) => Self { uint32 },
+            ClearColorValue::Float32(float32) => Self { float32 },
+            ClearColorValue::Int32(int32) => Self { int32 },
+            ClearColorValue::Uint32(uint32) => Self { uint32 },
         }
     }
 }
@@ -1135,35 +1150,41 @@ impl<'a> Deref for GraphicCommandBuffer<'a> {
     }
 }
 
-/// TODO
+/// Specifies the state of a color or depth stencil image attachment during graphic framebuffer
+/// load operations.
+///
+/// Use this to specify the desired contents of any image before use in a pipeline command buffer.
 #[derive(Clone, Copy, Debug)]
 pub enum LoadOp<T> {
-    /// TODO
+    /// Clears the attachment.
+    ///
+    /// `T` will be [ClearColorValue] for color images or [vk::ClearDepthStencilValue] for
+    /// depth/stencil images.
     Clear(T),
 
-    /// TODO
+    /// The attachment will become undefined and reads will produce garbage data.
     DontCare,
 
-    /// TODO
+    /// The attachment will be preserved in memory.
     Load,
 }
 
-impl LoadOp<ClearColor> {
+impl LoadOp<ClearColorValue> {
     /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
-    pub const CLEAR_BLACK_ALPHA_ONE: Self = Self::Clear(ClearColor::BLACK_ALPHA_ONE);
+    pub const CLEAR_BLACK_ALPHA_ONE: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ONE);
 
     /// A load operation which results in a color attachment filled with zeros.
-    pub const CLEAR_BLACK_ALPHA_ZERO: Self = Self::Clear(ClearColor::BLACK_ALPHA_ZERO);
+    pub const CLEAR_BLACK_ALPHA_ZERO: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ZERO);
 
     /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
-    pub const CLEAR_WHITE_ALPHA_ONE: Self = Self::Clear(ClearColor::WHITE_ALPHA_ONE);
+    pub const CLEAR_WHITE_ALPHA_ONE: Self = Self::Clear(ClearColorValue::WHITE_ALPHA_ONE);
 
     /// A load operation which results in a color attachment filled with rgb ones and alpha zeros.
-    pub const CLEAR_WHITE_ALPHA_ZERO: Self = Self::Clear(ClearColor::WHITE_ALPHA_ZERO);
+    pub const CLEAR_WHITE_ALPHA_ZERO: Self = Self::Clear(ClearColorValue::WHITE_ALPHA_ZERO);
 
     /// Convenience constructor for clear color values.
     pub fn clear_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self::Clear(ClearColor::rgba(r, g, b, a))
+        Self::Clear(ClearColorValue::rgba(r, g, b, a))
     }
 }
 
@@ -1187,13 +1208,16 @@ impl LoadOp<vk::ClearDepthStencilValue> {
     }
 }
 
-/// TODO
+/// Specifies the state of a color or depth stencil image attachment after graphic framebuffer
+/// store operations.
+///
+/// Use this to specify the desired contents of any image after use in a pipeline command buffer.
 #[derive(Clone, Copy, Debug)]
 pub enum StoreOp {
-    /// TODO
+    /// The attachment will become undefined and reads will produce garbage data.
     DontCare,
 
-    /// TODO
+    /// The attachment will be preserved in memory.
     Store,
 }
 
@@ -1203,8 +1227,8 @@ mod deprecated {
         crate::{
             Attachment, Node, SubresourceAccess,
             cmd::{
-                AttachmentIndex, ClearColor, Descriptor, PipelineCommand, SubresourceRange, View,
-                ViewInfo, graphic::GraphicCommandBuffer,
+                AttachmentIndex, ClearColorValue, Descriptor, PipelineCommand, SubresourceRange,
+                View, ViewInfo, graphic::GraphicCommandBuffer,
             },
             driver::{
                 graphic::GraphicPipeline,
@@ -1299,7 +1323,7 @@ mod deprecated {
             self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColor>,
+            color: impl Into<ClearColorValue>,
         ) -> Self {
             let image = image.into();
             let image_info = self.resource(image).info;
@@ -1315,7 +1339,7 @@ mod deprecated {
             mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColor>,
+            color: impl Into<ClearColorValue>,
             image_view_info: impl Into<ImageViewInfo>,
         ) -> Self {
             #[allow(deprecated)]
@@ -1788,7 +1812,7 @@ mod deprecated {
             &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColor>,
+            color: impl Into<ClearColorValue>,
         ) -> &mut Self {
             let image = image.into();
             let image_info = self.resource(image).info;
@@ -1804,7 +1828,7 @@ mod deprecated {
             &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColor>,
+            color: impl Into<ClearColorValue>,
             image_view_info: impl Into<ImageViewInfo>,
         ) -> &mut Self {
             let image = image.into();

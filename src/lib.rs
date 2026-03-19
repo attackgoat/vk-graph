@@ -360,7 +360,7 @@ mod queue;
 use std::sync::Arc;
 
 use crate::{
-    cmd::{ClearColor, CommandBuffer},
+    cmd::{ClearColorValue, CommandBuffer},
     driver::{
         accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
         swapchain::SwapchainImage,
@@ -778,7 +778,7 @@ impl Graph {
     pub fn clear_color_image(
         &mut self,
         image: impl Into<AnyImageNode>,
-        color: impl Into<ClearColor>,
+        color: impl Into<ClearColorValue>,
     ) -> &mut Self {
         let color = color.into().into();
         let image = image.into();
