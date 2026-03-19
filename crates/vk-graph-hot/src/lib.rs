@@ -269,18 +269,18 @@ macro_rules! pipeline {
                 }
             }
 
-            impl<'a> CommandPipeline<'a> for [<Hot $name Pipeline>] {
-                type Ref = <[<$name Pipeline>] as CommandPipeline<'a>>::Ref;
+            impl<'a> Pipeline<'a> for [<Hot $name Pipeline>] {
+                type Command = <[<$name Pipeline>] as Pipeline<'a>>::Command;
 
-                fn bind_cmd(self, cmd: CommandRef<'a>) -> Self::Ref {
+                fn bind_cmd(self, cmd: Command<'a>) -> Self::Command {
                     self.compile_shader_and_bind_cmd(cmd)
                 }
             }
 
-            impl<'a> CommandPipeline<'a> for &'a [<Hot $name Pipeline>] {
-                type Ref = <[<$name Pipeline>] as CommandPipeline<'a>>::Ref;
+            impl<'a> Pipeline<'a> for &'a [<Hot $name Pipeline>] {
+                type Command = <[<$name Pipeline>] as Pipeline<'a>>::Command;
 
-                fn bind_cmd(self, cmd: CommandRef<'a>) -> Self::Ref {
+                fn bind_cmd(self, cmd: Command<'a>) -> Self::Command {
                     self.compile_shader_and_bind_cmd(cmd)
                 }
             }

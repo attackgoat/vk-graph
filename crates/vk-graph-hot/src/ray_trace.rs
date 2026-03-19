@@ -11,7 +11,7 @@ use {
         atomic::{AtomicBool, Ordering},
     },
     vk_graph::{
-        cmd::{CommandPipeline, CommandRef},
+        cmd::{Command, Pipeline},
         driver::{
             DriverError,
             device::Device,
@@ -65,8 +65,8 @@ impl HotRayTracePipeline {
 
     fn compile_shader_and_bind_cmd<'a>(
         &self,
-        cmd: CommandRef<'a>,
-    ) -> <RayTracePipeline as CommandPipeline<'a>>::Ref {
+        cmd: Command<'a>,
+    ) -> <RayTracePipeline as Pipeline<'a>>::Command {
         if self.has_changes.swap(false, Ordering::Relaxed) {
             info!("Shader change detected");
 

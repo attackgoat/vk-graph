@@ -1,5 +1,5 @@
 use {
-    super::{AttachmentIndex, cmd_buf::CommandBufferRef, pipeline::PipelineCommandRef},
+    super::{AttachmentIndex, cmd_buf::CommandBuffer, pipeline::PipelineCommand},
     crate::{
         driver::{
             graphic::{DepthStencilInfo, GraphicPipeline},
@@ -15,7 +15,7 @@ use {
 
 /// TODO
 #[derive(Clone, Copy, Debug)]
-pub enum ClearColorValue {
+pub enum ClearColor {
     /// Value as [f32].
     Float32([f32; 4]),
 
@@ -26,7 +26,7 @@ pub enum ClearColorValue {
     Uint32([u32; 4]),
 }
 
-impl ClearColorValue {
+impl ClearColor {
     /// rgb zeros and alpha ones.
     pub const BLACK_ALPHA_ONE: Self = Self::Float32([0.0, 0.0, 0.0, 1.0]);
 
@@ -60,42 +60,42 @@ impl ClearColorValue {
     }
 }
 
-impl Default for ClearColorValue {
+impl Default for ClearColor {
     fn default() -> Self {
         Self::from_f32(0.0, 0.0, 0.0, 0.0)
     }
 }
 
-impl From<[f32; 4]> for ClearColorValue {
+impl From<[f32; 4]> for ClearColor {
     fn from(float32: [f32; 4]) -> Self {
         Self::Float32(float32)
     }
 }
 
-impl From<[i32; 4]> for ClearColorValue {
+impl From<[i32; 4]> for ClearColor {
     fn from(int32: [i32; 4]) -> Self {
         Self::Int32(int32)
     }
 }
 
-impl From<[u8; 4]> for ClearColorValue {
+impl From<[u8; 4]> for ClearColor {
     fn from(uint8: [u8; 4]) -> Self {
         Self::from_u8(uint8[0], uint8[1], uint8[2], uint8[3])
     }
 }
 
-impl From<[u32; 4]> for ClearColorValue {
+impl From<[u32; 4]> for ClearColor {
     fn from(uint32: [u32; 4]) -> Self {
         Self::Uint32(uint32)
     }
 }
 
-impl From<ClearColorValue> for vk::ClearColorValue {
-    fn from(value: ClearColorValue) -> Self {
+impl From<ClearColor> for vk::ClearColorValue {
+    fn from(value: ClearColor) -> Self {
         match value {
-            ClearColorValue::Float32(float32) => Self { float32 },
-            ClearColorValue::Int32(int32) => Self { int32 },
-            ClearColorValue::Uint32(uint32) => Self { uint32 },
+            ClearColor::Float32(float32) => Self { float32 },
+            ClearColor::Int32(int32) => Self { int32 },
+            ClearColor::Uint32(uint32) => Self { uint32 },
         }
     }
 }
@@ -113,22 +113,22 @@ pub enum LoadOp<T> {
     Load,
 }
 
-impl LoadOp<ClearColorValue> {
+impl LoadOp<ClearColor> {
     /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
-    pub const CLEAR_BLACK_ALPHA_ONE: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ONE);
+    pub const CLEAR_BLACK_ALPHA_ONE: Self = Self::Clear(ClearColor::BLACK_ALPHA_ONE);
 
     /// A load operation which results in a color attachment filled with zeros.
-    pub const CLEAR_BLACK_ALPHA_ZERO: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ZERO);
+    pub const CLEAR_BLACK_ALPHA_ZERO: Self = Self::Clear(ClearColor::BLACK_ALPHA_ZERO);
 
     /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
-    pub const CLEAR_WHITE_ALPHA_ONE: Self = Self::Clear(ClearColorValue::WHITE_ALPHA_ONE);
+    pub const CLEAR_WHITE_ALPHA_ONE: Self = Self::Clear(ClearColor::WHITE_ALPHA_ONE);
 
     /// A load operation which results in a color attachment filled with rgb ones and alpha zeros.
-    pub const CLEAR_WHITE_ALPHA_ZERO: Self = Self::Clear(ClearColorValue::WHITE_ALPHA_ZERO);
+    pub const CLEAR_WHITE_ALPHA_ZERO: Self = Self::Clear(ClearColor::WHITE_ALPHA_ZERO);
 
     /// Convenience constructor for clear color values.
     pub fn clear_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self::Clear(ClearColorValue::rgba(r, g, b, a))
+        Self::Clear(ClearColor::rgba(r, g, b, a))
     }
 }
 
@@ -166,7 +166,7 @@ pub enum StoreOp {
 ///
 /// This structure provides a strongly-typed set of methods which allow rasterization shader code to
 /// be executed. An instance of `Draw` is provided to the closure parameter of
-/// [`PipelineCommandRef::record_pipeline`] which may be accessed by binding a [`GraphicPipeline`] to a
+/// [`PipelineCommand::record_pipeline`] which may be accessed by binding a [`GraphicPipeline`] to a
 /// render pass.
 ///
 /// # Examples
@@ -202,12 +202,12 @@ pub enum StoreOp {
 ///     });
 /// # Ok(()) }
 /// ```
-pub struct GraphicCommandBufferRef<'a> {
-    cmd_buf: CommandBufferRef<'a>,
+pub struct GraphicCommandBuffer<'a> {
+    cmd_buf: CommandBuffer<'a>,
     pipeline: GraphicPipeline,
 }
 
-impl GraphicCommandBufferRef<'_> {
+impl GraphicCommandBuffer<'_> {
     /// Bind an index buffer to the current pass.
     ///
     /// `offset` is the starting offset in bytes within `buffer` used in index buffer address
@@ -779,8 +779,8 @@ impl GraphicCommandBufferRef<'_> {
     }
 }
 
-impl<'a> Deref for GraphicCommandBufferRef<'a> {
-    type Target = CommandBufferRef<'a>;
+impl<'a> Deref for GraphicCommandBuffer<'a> {
+    type Target = CommandBuffer<'a>;
 
     fn deref(&self) -> &Self::Target {
         &self.cmd_buf
@@ -788,13 +788,13 @@ impl<'a> Deref for GraphicCommandBufferRef<'a> {
 }
 
 // NOTE: local implementation of type from super module
-impl PipelineCommandRef<'_, GraphicPipeline> {
+impl PipelineCommand<'_, GraphicPipeline> {
     /// TODO
     pub fn color_attachment_image(
         mut self,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
-        load: LoadOp<ClearColorValue>,
+        load: LoadOp<ClearColor>,
         store: StoreOp,
     ) -> Self {
         self.set_color_attachment_image(color_attachment_idx, color_image, load, store);
@@ -807,7 +807,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
         color_image_view_info: impl Into<ImageViewInfo>,
-        load: LoadOp<ClearColorValue>,
+        load: LoadOp<ClearColor>,
         store: StoreOp,
     ) -> Self {
         self.set_color_attachment_image_view(
@@ -935,7 +935,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     /// Begin recording a graphics pipeline command buffer.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(GraphicCommandBufferRef<'_>) + Send + 'static,
+        func: impl FnOnce(GraphicCommandBuffer<'_>) + Send + 'static,
     ) -> Self {
         self.record_cmd_buf_mut(func);
         self
@@ -944,7 +944,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
     /// Begin recording a graphics pipeline command buffer.
     pub fn record_cmd_buf_mut(
         &mut self,
-        func: impl FnOnce(GraphicCommandBufferRef<'_>) + Send + 'static,
+        func: impl FnOnce(GraphicCommandBuffer<'_>) + Send + 'static,
     ) {
         let pipeline = self
             .cmd
@@ -959,7 +959,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
             .clone();
 
         self.cmd.push_exec(move |cmd_buf| {
-            func(GraphicCommandBufferRef { cmd_buf, pipeline });
+            func(GraphicCommandBuffer { cmd_buf, pipeline });
         });
     }
 
@@ -984,7 +984,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         &mut self,
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
-        load: LoadOp<ClearColorValue>,
+        load: LoadOp<ClearColor>,
         store: StoreOp,
     ) -> &mut Self {
         let color_image = color_image.into();
@@ -1007,7 +1007,7 @@ impl PipelineCommandRef<'_, GraphicPipeline> {
         color_attachment_idx: AttachmentIndex,
         color_image: impl Into<AnyImageNode>,
         color_image_view_info: impl Into<ImageViewInfo>,
-        load: LoadOp<ClearColorValue>,
+        load: LoadOp<ClearColor>,
         store: StoreOp,
     ) -> &mut Self {
         let color_image = color_image.into();
@@ -1223,8 +1223,8 @@ mod deprecated {
         crate::{
             Attachment, Node, SubresourceAccess,
             cmd::{
-                AttachmentIndex, ClearColorValue, Descriptor, PipelineCommandRef, SubresourceRange,
-                View, ViewInfo, graphic::GraphicCommandBufferRef,
+                AttachmentIndex, ClearColor, Descriptor, PipelineCommand, SubresourceRange, View,
+                ViewInfo, graphic::GraphicCommandBuffer,
             },
             driver::{
                 graphic::GraphicPipeline,
@@ -1240,7 +1240,7 @@ mod deprecated {
         vk_sync::AccessType,
     };
 
-    impl GraphicCommandBufferRef<'_> {
+    impl GraphicCommandBuffer<'_> {
         #[deprecated = "use push_constants function"]
         #[doc(hidden)]
         pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
@@ -1249,7 +1249,7 @@ mod deprecated {
     }
 
     // Attachment functions from previous version
-    impl PipelineCommandRef<'_, GraphicPipeline> {
+    impl PipelineCommand<'_, GraphicPipeline> {
         #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
         pub fn attach_color(
@@ -1319,7 +1319,7 @@ mod deprecated {
             self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColorValue>,
+            color: impl Into<ClearColor>,
         ) -> Self {
             let image = image.into();
             let image_info = self.resource(image).info;
@@ -1335,7 +1335,7 @@ mod deprecated {
             mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColorValue>,
+            color: impl Into<ClearColor>,
             image_view_info: impl Into<ImageViewInfo>,
         ) -> Self {
             #[allow(deprecated)]
@@ -1573,7 +1573,7 @@ mod deprecated {
     }
 
     // Attachment functions as setters
-    impl PipelineCommandRef<'_, GraphicPipeline> {
+    impl PipelineCommand<'_, GraphicPipeline> {
         #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
         #[doc(hidden)]
         pub fn set_attach_color(
@@ -1808,7 +1808,7 @@ mod deprecated {
             &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColorValue>,
+            color: impl Into<ClearColor>,
         ) -> &mut Self {
             let image = image.into();
             let image_info = self.resource(image).info;
@@ -1824,7 +1824,7 @@ mod deprecated {
             &mut self,
             attachment_idx: AttachmentIndex,
             image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColorValue>,
+            color: impl Into<ClearColor>,
             image_view_info: impl Into<ImageViewInfo>,
         ) -> &mut Self {
             let image = image.into();
@@ -3073,7 +3073,7 @@ mod deprecated {
     }
 
     // Resource functions
-    impl PipelineCommandRef<'_, GraphicPipeline> {
+    impl PipelineCommand<'_, GraphicPipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer"]
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
@@ -3116,7 +3116,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_subpass(
             self,
-            func: impl FnOnce(GraphicCommandBufferRef<'_>, ()) + Send + 'static,
+            func: impl FnOnce(GraphicCommandBuffer<'_>, ()) + Send + 'static,
         ) -> Self {
             self.record_cmd_buf(|cmd_buf| {
                 func(cmd_buf, ());

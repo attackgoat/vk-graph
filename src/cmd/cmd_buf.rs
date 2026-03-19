@@ -6,7 +6,6 @@ use {
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
                 DeviceOrHostAddress,
             },
-            cmd_buf::CommandBuffer,
             device::Device,
         },
     },
@@ -46,8 +45,8 @@ use crate::Execution;
 /// # Ok(()) }
 /// ```
 #[derive(Clone, Copy)]
-pub struct CommandBufferRef<'a> {
-    cmd_buf: &'a CommandBuffer,
+pub struct CommandBuffer<'a> {
+    cmd_buf: &'a crate::driver::cmd_buf::CommandBuffer,
 
     #[cfg(debug_assertions)]
     exec: &'a Execution,
@@ -55,9 +54,9 @@ pub struct CommandBufferRef<'a> {
     resources: &'a [AnyResource],
 }
 
-impl<'a> CommandBufferRef<'a> {
+impl<'a> CommandBuffer<'a> {
     pub(crate) fn new(
-        cmd_buf: &'a CommandBuffer,
+        cmd_buf: &'a crate::driver::cmd_buf::CommandBuffer,
         resources: &'a [AnyResource],
         #[cfg(debug_assertions)] exec: &'a Execution,
     ) -> Self {
@@ -493,8 +492,8 @@ impl<'a> CommandBufferRef<'a> {
     }
 }
 
-impl<'a> Deref for CommandBufferRef<'a> {
-    type Target = CommandBuffer;
+impl<'a> Deref for CommandBuffer<'a> {
+    type Target = crate::driver::cmd_buf::CommandBuffer;
 
     fn deref(&self) -> &Self::Target {
         self.cmd_buf
@@ -702,9 +701,8 @@ mod deprecated {
 
     use crate::{
         cmd::{
-            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo,
-            CommandBufferRef, UpdateAccelerationStructureIndirectInfo,
-            UpdateAccelerationStructureInfo,
+            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandBuffer,
+            UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
         },
         driver::accel_struct::{
             AccelerationStructureGeometry, AccelerationStructureGeometryInfo, DeviceOrHostAddress,
@@ -716,7 +714,7 @@ mod deprecated {
         node::AnyAccelerationStructureNode,
     };
 
-    impl<'a> CommandBufferRef<'a> {
+    impl<'a> CommandBuffer<'a> {
         #[deprecated = "use build_accel_struct function"]
         #[doc(hidden)]
         pub fn build_structure(

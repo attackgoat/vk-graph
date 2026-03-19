@@ -1,5 +1,5 @@
 use {
-    super::{cmd_buf::CommandBufferRef, pipeline::PipelineCommandRef},
+    super::{cmd_buf::CommandBuffer, pipeline::PipelineCommand},
     crate::{driver::compute::ComputePipeline, node::AnyBufferNode},
     ash::vk,
     log::trace,
@@ -10,7 +10,7 @@ use {
 ///
 /// This structure provides a strongly-typed set of methods which allow compute shader code to be
 /// executed. An instance of `Compute` is provided to the closure parameter of
-/// [`PipelineCommandRef::record_pipeline`] which may be accessed by binding a [`ComputePipeline`] to a
+/// [`PipelineCommand::record_pipeline`] which may be accessed by binding a [`ComputePipeline`] to a
 /// render pass.
 ///
 /// # Examples
@@ -38,12 +38,12 @@ use {
 ///     });
 /// # Ok(()) }
 /// ```
-pub struct ComputeCommandBufferRef<'a> {
-    cmd_buf: CommandBufferRef<'a>,
+pub struct ComputeCommandBuffer<'a> {
+    cmd_buf: CommandBuffer<'a>,
     pipeline: ComputePipeline,
 }
 
-impl ComputeCommandBufferRef<'_> {
+impl ComputeCommandBuffer<'_> {
     /// [Dispatch] compute work items.
     ///
     /// When the command is executed, a global workgroup consisting of
@@ -317,8 +317,8 @@ impl ComputeCommandBufferRef<'_> {
     }
 }
 
-impl<'a> Deref for ComputeCommandBufferRef<'a> {
-    type Target = CommandBufferRef<'a>;
+impl<'a> Deref for ComputeCommandBuffer<'a> {
+    type Target = CommandBuffer<'a>;
 
     fn deref(&self) -> &Self::Target {
         &self.cmd_buf
@@ -326,11 +326,11 @@ impl<'a> Deref for ComputeCommandBufferRef<'a> {
 }
 
 // NOTE: local implementation of type from super module
-impl PipelineCommandRef<'_, ComputePipeline> {
+impl PipelineCommand<'_, ComputePipeline> {
     /// Begin recording a compute pipeline command buffer.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(ComputeCommandBufferRef<'_>) + Send + 'static,
+        func: impl FnOnce(ComputeCommandBuffer<'_>) + Send + 'static,
     ) -> Self {
         self.record_cmd_buf_mut(func);
         self
@@ -339,7 +339,7 @@ impl PipelineCommandRef<'_, ComputePipeline> {
     /// Begin recording a compute pipeline command buffer.
     pub fn record_cmd_buf_mut(
         &mut self,
-        func: impl FnOnce(ComputeCommandBufferRef<'_>) + Send + 'static,
+        func: impl FnOnce(ComputeCommandBuffer<'_>) + Send + 'static,
     ) {
         let pipeline = self
             .cmd
@@ -354,7 +354,7 @@ impl PipelineCommandRef<'_, ComputePipeline> {
             .clone();
 
         self.cmd.push_exec(move |cmd_buf| {
-            func(ComputeCommandBufferRef { cmd_buf, pipeline });
+            func(ComputeCommandBuffer { cmd_buf, pipeline });
         });
     }
 }
@@ -365,8 +365,8 @@ mod deprecated {
         crate::{
             Node,
             cmd::{
-                Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
-                compute::ComputeCommandBufferRef,
+                Descriptor, PipelineCommand, SubresourceRange, View, ViewInfo,
+                compute::ComputeCommandBuffer,
             },
             driver::compute::ComputePipeline,
         },
@@ -374,7 +374,7 @@ mod deprecated {
         vk_sync::AccessType,
     };
 
-    impl ComputeCommandBufferRef<'_> {
+    impl ComputeCommandBuffer<'_> {
         #[deprecated = "use push_constants function"]
         #[doc(hidden)]
         pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
@@ -382,7 +382,7 @@ mod deprecated {
         }
     }
 
-    impl PipelineCommandRef<'_, ComputePipeline> {
+    impl PipelineCommand<'_, ComputePipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderReadOther"]
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
@@ -421,7 +421,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_compute(
             self,
-            func: impl FnOnce(ComputeCommandBufferRef<'_>, ()) + Send + 'static,
+            func: impl FnOnce(ComputeCommandBuffer<'_>, ()) + Send + 'static,
         ) -> Self {
             self.record_cmd_buf(|cmd_buf| func(cmd_buf, ()))
         }

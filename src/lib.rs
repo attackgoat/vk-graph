@@ -360,7 +360,7 @@ mod queue;
 use std::sync::Arc;
 
 use crate::{
-    cmd::{ClearColorValue, CommandBufferRef},
+    cmd::{ClearColor, CommandBuffer},
     driver::{
         accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
         swapchain::SwapchainImage,
@@ -375,7 +375,7 @@ pub use self::deprecated::{Display, DisplayInfo, DisplayInfoBuilder};
 
 use {
     self::{
-        cmd::{AttachmentIndex, CommandRef, Descriptor, SubresourceAccess, ViewInfo},
+        cmd::{AttachmentIndex, Command, Descriptor, SubresourceAccess, ViewInfo},
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
             AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode,
@@ -403,7 +403,7 @@ use {
     vk_sync::AccessType,
 };
 
-type ExecFn = Box<dyn FnOnce(CommandBufferRef) + Send>;
+type ExecFn = Box<dyn FnOnce(CommandBuffer) + Send>;
 type NodeIndex = usize;
 
 #[derive(Debug)]
@@ -626,12 +626,12 @@ impl ExecutionPipeline {
 }
 
 #[derive(Debug)]
-struct Command {
+struct CommandData {
     execs: Vec<Execution>,
     name: Option<String>,
 }
 
-impl Command {
+impl CommandData {
     fn descriptor_pools_sizes(
         &self,
     ) -> impl Iterator<Item = &HashMap<u32, HashMap<vk::DescriptorType, u32>>> {
@@ -656,7 +656,7 @@ impl Command {
 /// [`graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/graph.cpp).
 #[derive(Debug, Default)]
 pub struct Graph {
-    cmds: Vec<Command>,
+    cmds: Vec<CommandData>,
     resources: Vec<AnyResource>,
 }
 
@@ -667,8 +667,8 @@ impl Graph {
     }
 
     /// Allocates and begins writing a new command.
-    pub fn begin_cmd(&mut self) -> CommandRef<'_> {
-        CommandRef::new(self)
+    pub fn begin_cmd(&mut self) -> Command<'_> {
+        Command::new(self)
     }
 
     /// Binds a Vulkan buffer, image, or acceleration structure resource to this graph.
@@ -778,7 +778,7 @@ impl Graph {
     pub fn clear_color_image(
         &mut self,
         image: impl Into<AnyImageNode>,
-        color: impl Into<ClearColorValue>,
+        color: impl Into<ClearColor>,
     ) -> &mut Self {
         let color = color.into().into();
         let image = image.into();
@@ -1519,7 +1519,7 @@ pub mod graph {
     #[doc(hidden)]
     pub mod pass_ref {
         #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
-        pub type Acceleration<'a> = crate::cmd::CommandBufferRef<'a>;
+        pub type Acceleration<'a> = crate::cmd::CommandBuffer<'a>;
 
         #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
         pub type AccelerationStructureBuildInfo = crate::cmd::BuildAccelerationStructureInfo;
@@ -1539,16 +1539,16 @@ pub mod graph {
         pub type Descriptor = crate::cmd::Descriptor;
 
         #[deprecated = "use vk_graph::cmd::GraphicCommandBufferRef"]
-        pub type Draw<'a> = crate::cmd::GraphicCommandBufferRef<'a>;
+        pub type Draw<'a> = crate::cmd::GraphicCommandBuffer<'a>;
 
         #[deprecated = "use vk_graph::cmd::CommandRef"]
-        pub type PassRef<'a> = crate::cmd::CommandRef<'a>;
+        pub type PassRef<'a> = crate::cmd::Command<'a>;
 
-        #[deprecated = "use vk_graph::cmd::PipelineCommandRef"]
-        pub type PipelinePassRef<'a, T> = crate::cmd::PipelineCommandRef<'a, T>;
+        #[deprecated = "use vk_graph::cmd::PipelineCommand"]
+        pub type PipelinePassRef<'a, T> = crate::cmd::PipelineCommand<'a, T>;
 
         #[deprecated = "use vk_graph::cmd::RayTraceCommandBufferRef"]
-        pub type RayTrace<'a> = crate::cmd::RayTraceCommandBufferRef<'a>;
+        pub type RayTrace<'a> = crate::cmd::RayTraceCommandBuffer<'a>;
 
         #[deprecated = "use vk_graph::ViewInfo"]
         pub type ViewType = crate::cmd::ViewInfo;

@@ -1,6 +1,6 @@
 use {
     super::{
-        AccessType, CommandRef, Descriptor, Graph, Node, Resource, SubresourceRange, View, ViewInfo,
+        AccessType, Command, Descriptor, Graph, Node, Resource, SubresourceRange, View, ViewInfo,
     },
     crate::{
         ExecutionPipeline,
@@ -9,26 +9,26 @@ use {
     std::marker::PhantomData,
 };
 
-/// A trait for pipelines which may be bound to a `CommandRef`.
+/// A trait for pipelines which may be bound to a `Command`.
 ///
-/// See [`CommandRef::bind_pipeline`](super::cmd::CommandRef::bind_pipeline) for details.
-pub trait CommandPipeline<'a> {
+/// See [`Command::bind_pipeline`](super::cmd::Command::bind_pipeline) for details.
+pub trait Pipeline<'a> {
     /// The resource reference type.
-    type Ref;
+    type Command;
 
     /// Binds the resource to a command.
     ///
     /// Returns a reference type.
-    fn bind_cmd(self, _: CommandRef<'a>) -> Self::Ref;
+    fn bind_cmd(self, _: Command<'a>) -> Self::Command;
 }
 
 macro_rules! pipeline {
     ($name:ident) => {
         paste::paste! {
-            impl<'a> CommandPipeline<'a> for [<$name Pipeline>] {
-                type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
+            impl<'a> Pipeline<'a> for [<$name Pipeline>] {
+                type Command = PipelineCommand<'a, [<$name Pipeline>]>;
 
-                fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
+                fn bind_cmd(self, mut cmd: Command<'a>) -> Self::Command {
                     {
                         let cmd = cmd.cmd_mut();
                         if cmd.execs.last().unwrap().pipeline.is_some() {
@@ -39,17 +39,17 @@ macro_rules! pipeline {
                             = Some(ExecutionPipeline::$name(self));
                     }
 
-                    Self::Ref {
+                    Self::Command {
                         __: PhantomData,
                         cmd,
                     }
                 }
             }
 
-            impl<'a> CommandPipeline<'a> for &'a [<$name Pipeline>] {
-                type Ref = PipelineCommandRef<'a, [<$name Pipeline>]>;
+            impl<'a> Pipeline<'a> for &'a [<$name Pipeline>] {
+                type Command = PipelineCommand<'a, [<$name Pipeline>]>;
 
-                fn bind_cmd(self, mut cmd: CommandRef<'a>) -> Self::Ref {
+                fn bind_cmd(self, mut cmd: Command<'a>) -> Self::Command {
                     {
                         let cmd = cmd.cmd_mut();
                         if cmd.execs.last().unwrap().pipeline.is_some() {
@@ -60,7 +60,7 @@ macro_rules! pipeline {
                             = Some(ExecutionPipeline::$name(self.clone()));
                     }
 
-                    Self::Ref {
+                    Self::Command {
                         __: PhantomData,
                         cmd,
                     }
@@ -93,13 +93,13 @@ pipeline!(Graphic);
 pipeline!(RayTrace);
 
 /// A render pass which has been bound to a particular compute, graphic, or ray-trace pipeline.
-pub struct PipelineCommandRef<'c, T> {
+pub struct PipelineCommand<'c, T> {
     pub(super) __: PhantomData<T>,
-    pub(super) cmd: CommandRef<'c>,
+    pub(super) cmd: Command<'c>,
 }
 
 // NOTE: There are specific implementations of T in the compute, graphic, and ray trace modules
-impl<'c, T> PipelineCommandRef<'c, T> {
+impl<'c, T> PipelineCommand<'c, T> {
     /// Binds a Vulkan buffer, image, or acceleration structure resource to the graph associated
     /// with this command.
     ///
@@ -299,7 +299,7 @@ mod deprecated {
     use {
         crate::{
             Graph, Node, Resource,
-            cmd::{Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo},
+            cmd::{Descriptor, PipelineCommand, SubresourceRange, View, ViewInfo},
             deprecated::Info,
             graph::pass_ref::ViewType,
         },
@@ -307,7 +307,7 @@ mod deprecated {
         vk_sync::AccessType,
     };
 
-    impl<'a, T> PipelineCommandRef<'a, T> {
+    impl<'a, T> PipelineCommand<'a, T> {
         #[deprecated = "use shader_resource_access function"]
         #[doc(hidden)]
         pub fn access_descriptor<N>(

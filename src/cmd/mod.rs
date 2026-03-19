@@ -8,20 +8,21 @@ mod ray_trace;
 
 pub use self::{
     cmd_buf::{
-        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandBufferRef,
+        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandBuffer,
         UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
-    compute::ComputeCommandBufferRef,
-    graphic::{ClearColorValue, GraphicCommandBufferRef, LoadOp, StoreOp},
-    pipeline::{CommandPipeline, PipelineCommandRef},
-    ray_trace::RayTraceCommandBufferRef,
+    compute::ComputeCommandBuffer,
+    graphic::{ClearColor, GraphicCommandBuffer, LoadOp, StoreOp},
+    pipeline::{Pipeline, PipelineCommand},
+    ray_trace::RayTraceCommandBuffer,
 };
 
 use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
-        AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode, BufferNode, Command, Execution,
-        ExecutionFunction, Graph, ImageLeaseNode, ImageNode, Node, Resource, SwapchainImageNode,
+        AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode, BufferNode, CommandData,
+        Execution, ExecutionFunction, Graph, ImageLeaseNode, ImageNode, Node, Resource,
+        SwapchainImageNode,
     },
     crate::driver::{
         accel_struct::AccelerationStructureSubresourceRange, buffer::BufferSubresourceRange,
@@ -46,16 +47,16 @@ pub type DescriptorSetIndex = u32;
 
 /// A general render pass which may contain acceleration structure commands, general commands, or
 /// have pipeline bound to then record commands specific to those pipeline types.
-pub struct CommandRef<'a> {
+pub struct Command<'a> {
     pub(super) cmd_idx: usize,
     pub(super) exec_idx: usize,
     pub(super) graph: &'a mut Graph,
 }
 
-impl<'a> CommandRef<'a> {
+impl<'a> Command<'a> {
     pub(super) fn new(graph: &'a mut Graph) -> Self {
         let cmd_idx = graph.cmds.len();
-        graph.cmds.push(Command {
+        graph.cmds.push(CommandData {
             execs: vec![Default::default()], // We start off with a default execution!
             name: None,
         });
@@ -67,11 +68,11 @@ impl<'a> CommandRef<'a> {
         }
     }
 
-    fn cmd(&self) -> &Command {
+    fn cmd(&self) -> &CommandData {
         &self.graph.cmds[self.cmd_idx]
     }
 
-    fn cmd_mut(&mut self) -> &mut Command {
+    fn cmd_mut(&mut self) -> &mut CommandData {
         &mut self.graph.cmds[self.cmd_idx]
     }
 
@@ -88,9 +89,9 @@ impl<'a> CommandRef<'a> {
 
     /// Binds a [`ComputePipeline`], [`GraphicPipeline`], or [`RayTracePipeline`] to the current
     /// pass, allowing for strongly typed access to the related functions.
-    pub fn bind_pipeline<P>(self, pipeline: P) -> P::Ref
+    pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
-        P: CommandPipeline<'a>,
+        P: Pipeline<'a>,
     {
         pipeline.bind_cmd(self)
     }
@@ -112,7 +113,7 @@ impl<'a> CommandRef<'a> {
         self.graph
     }
 
-    fn push_exec(&mut self, func: impl FnOnce(CommandBufferRef) + Send + 'static) {
+    fn push_exec(&mut self, func: impl FnOnce(CommandBuffer) + Send + 'static) {
         let cmd = self.cmd_mut();
         let exec = {
             let last_exec = cmd.execs.last_mut().unwrap();
@@ -158,10 +159,7 @@ impl<'a> CommandRef<'a> {
     ///
     /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
     /// code and interfaces.
-    pub fn record_cmd_buf(
-        mut self,
-        func: impl FnOnce(CommandBufferRef<'_>) + Send + 'static,
-    ) -> Self {
+    pub fn record_cmd_buf(mut self, func: impl FnOnce(CommandBuffer<'_>) + Send + 'static) -> Self {
         self.record_cmd_buf_mut(func);
         self
     }
@@ -172,7 +170,7 @@ impl<'a> CommandRef<'a> {
     ///
     /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
     /// code and interfaces.
-    pub fn record_cmd_buf_mut(&mut self, func: impl FnOnce(CommandBufferRef<'_>) + Send + 'static) {
+    pub fn record_cmd_buf_mut(&mut self, func: impl FnOnce(CommandBuffer<'_>) + Send + 'static) {
         self.push_exec(move |cmd_buf| {
             func(cmd_buf);
         });
@@ -550,14 +548,14 @@ mod deprecated {
     use {
         crate::{
             Graph, Node, Resource,
-            cmd::{CommandBufferRef, CommandRef, SubresourceRange, View},
+            cmd::{Command, CommandBuffer, SubresourceRange, View},
             deprecated::Info,
         },
         ash::vk,
         vk_sync::AccessType,
     };
 
-    impl<'a> CommandRef<'a> {
+    impl<'a> Command<'a> {
         #[deprecated = "use resource_access function"]
         #[doc(hidden)]
         pub fn access_node<N>(mut self, node: N, access: AccessType) -> Self
@@ -669,7 +667,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_acceleration(
             mut self,
-            func: impl FnOnce(CommandBufferRef<'_>, ()) + Send + 'static,
+            func: impl FnOnce(CommandBuffer<'_>, ()) + Send + 'static,
         ) -> Self {
             self.push_exec(|cmd_buf| {
                 func(cmd_buf, ());

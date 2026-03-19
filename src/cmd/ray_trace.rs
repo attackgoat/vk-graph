@@ -1,5 +1,5 @@
 use {
-    super::{PipelineCommandRef, cmd_buf::CommandBufferRef},
+    super::{PipelineCommand, cmd_buf::CommandBuffer},
     crate::driver::{device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     log::trace,
@@ -7,11 +7,11 @@ use {
 };
 
 // NOTE: local implementation of type from super module
-impl PipelineCommandRef<'_, RayTracePipeline> {
+impl PipelineCommand<'_, RayTracePipeline> {
     /// Begin recording a ray trace pipeline command buffer.
     pub fn record_cmd_buf(
         mut self,
-        func: impl FnOnce(RayTraceCommandBufferRef<'_>) + Send + 'static,
+        func: impl FnOnce(RayTraceCommandBuffer<'_>) + Send + 'static,
     ) -> Self {
         self.record_cmd_buf_mut(func);
         self
@@ -20,7 +20,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
     /// Begin recording a ray trace pipeline command buffer.
     pub fn record_cmd_buf_mut(
         &mut self,
-        func: impl FnOnce(RayTraceCommandBufferRef<'_>) + Send + 'static,
+        func: impl FnOnce(RayTraceCommandBuffer<'_>) + Send + 'static,
     ) {
         let pipeline = self
             .cmd
@@ -38,7 +38,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
         let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
         self.cmd.push_exec(move |cmd_buf| {
-            func(RayTraceCommandBufferRef {
+            func(RayTraceCommandBuffer {
                 cmd_buf,
 
                 #[cfg(debug_assertions)]
@@ -54,7 +54,7 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
 ///
 /// This structure provides a strongly-typed set of methods which allow ray trace shader code to be
 /// executed. An instance of `RayTrace` is provided to the closure parameter of
-/// [`PipelineCommandRef::record_pipeline`] which may be accessed by binding a [`RayTracePipeline`] to
+/// [`PipelineCommand::record_pipeline`] which may be accessed by binding a [`RayTracePipeline`] to
 /// a render pass.
 ///
 /// # Examples
@@ -85,8 +85,8 @@ impl PipelineCommandRef<'_, RayTracePipeline> {
 ///         });
 /// # Ok(()) }
 /// ```
-pub struct RayTraceCommandBufferRef<'a> {
-    cmd_buf: CommandBufferRef<'a>,
+pub struct RayTraceCommandBuffer<'a> {
+    cmd_buf: CommandBuffer<'a>,
 
     #[cfg(debug_assertions)]
     dynamic_stack_size: bool,
@@ -94,7 +94,7 @@ pub struct RayTraceCommandBufferRef<'a> {
     pipeline: RayTracePipeline,
 }
 
-impl RayTraceCommandBufferRef<'_> {
+impl RayTraceCommandBuffer<'_> {
     /// Updates push constants.
     ///
     /// Push constants represent a high speed path to modify constant data in pipelines that is
@@ -321,8 +321,8 @@ impl RayTraceCommandBufferRef<'_> {
     }
 }
 
-impl<'a> Deref for RayTraceCommandBufferRef<'a> {
-    type Target = CommandBufferRef<'a>;
+impl<'a> Deref for RayTraceCommandBuffer<'a> {
+    type Target = CommandBuffer<'a>;
 
     fn deref(&self) -> &Self::Target {
         &self.cmd_buf
@@ -335,15 +335,15 @@ mod deprecated {
         crate::{
             Node,
             cmd::{
-                Descriptor, PipelineCommandRef, SubresourceRange, View, ViewInfo,
-                ray_trace::RayTraceCommandBufferRef,
+                Descriptor, PipelineCommand, SubresourceRange, View, ViewInfo,
+                ray_trace::RayTraceCommandBuffer,
             },
             driver::ray_trace::RayTracePipeline,
         },
         vk_sync::AccessType,
     };
 
-    impl RayTraceCommandBufferRef<'_> {
+    impl RayTraceCommandBuffer<'_> {
         #[deprecated = "use push_constants function"]
         #[doc(hidden)]
         pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
@@ -351,7 +351,7 @@ mod deprecated {
         }
     }
 
-    impl PipelineCommandRef<'_, RayTracePipeline> {
+    impl PipelineCommand<'_, RayTracePipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer"]
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
@@ -394,7 +394,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn record_ray_trace(
             self,
-            func: impl FnOnce(RayTraceCommandBufferRef<'_>, ()) + Send + 'static,
+            func: impl FnOnce(RayTraceCommandBuffer<'_>, ()) + Send + 'static,
         ) -> Self {
             self.record_cmd_buf(|cmd_buf| {
                 func(cmd_buf, ());

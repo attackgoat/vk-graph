@@ -11,7 +11,7 @@ use {
         atomic::{AtomicBool, Ordering},
     },
     vk_graph::{
-        cmd::{CommandPipeline, CommandRef},
+        cmd::{Command, Pipeline},
         driver::{
             DriverError,
             compute::{ComputePipeline, ComputePipelineInfo},
@@ -55,8 +55,8 @@ impl HotComputePipeline {
 
     fn compile_shader_and_bind_cmd<'a>(
         &self,
-        cmd: CommandRef<'a>,
-    ) -> <ComputePipeline as CommandPipeline<'a>>::Ref {
+        cmd: Command<'a>,
+    ) -> <ComputePipeline as Pipeline<'a>>::Command {
         if self.has_changes.swap(false, Ordering::Relaxed) {
             info!("Shader change detected");
 

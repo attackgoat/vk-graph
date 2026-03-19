@@ -1,10 +1,9 @@
 use {
     super::{
-        AnyResource, Attachment, Command, ExecutionPipeline, Graph, Node, NodeIndex,
+        AnyResource, Attachment, CommandData, ExecutionPipeline, Graph, Node, NodeIndex,
         cmd::{SubresourceAccess, SubresourceRange},
     },
     crate::{
-        cmd::CommandBufferRef,
         driver::{
             AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DescriptorSet, DriverError,
             FramebufferAttachmentImageInfo, FramebufferInfo, SubpassDependency, SubpassInfo,
@@ -202,8 +201,8 @@ impl Queue {
     }
 
     #[profiling::function]
-    fn allow_merge_passes(lhs: &Command, rhs: &Command) -> bool {
-        fn first_graphic_pipeline(pass: &Command) -> Option<&GraphicPipeline> {
+    fn allow_merge_passes(lhs: &CommandData, rhs: &CommandData) -> bool {
+        fn first_graphic_pipeline(pass: &CommandData) -> Option<&GraphicPipeline> {
             pass.execs
                 .first()
                 .and_then(|exec| exec.pipeline.as_ref().map(ExecutionPipeline::as_graphic))
@@ -402,7 +401,7 @@ impl Queue {
     fn begin_render_pass(
         cmd_buf: &CommandBuffer,
         bindings: &[AnyResource],
-        pass: &Command,
+        pass: &CommandData,
         physical_pass: &mut PhysicalPass,
         render_area: vk::Rect2D,
     ) -> Result<(), DriverError> {
@@ -697,7 +696,7 @@ impl Queue {
     #[profiling::function]
     fn lease_descriptor_pool<P>(
         pool: &mut P,
-        pass: &Command,
+        pass: &CommandData,
     ) -> Result<Option<Lease<DescriptorPool>>, DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool>,
@@ -1753,7 +1752,7 @@ impl Queue {
     #[profiling::function]
     fn merge_scheduled_passes(&mut self, schedule: &mut Vec<usize>) {
         thread_local! {
-            static PASSES: RefCell<Vec<Option<Command>>> = Default::default();
+            static PASSES: RefCell<Vec<Option<CommandData>>> = Default::default();
         }
 
         PASSES.with_borrow_mut(|passes| {
@@ -2137,7 +2136,7 @@ impl Queue {
     fn record_image_layout_transitions(
         cmd_buf: &CommandBuffer,
         resources: &mut [AnyResource],
-        pass: &mut Command,
+        pass: &mut CommandData,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
         thread_local! {
@@ -2476,7 +2475,7 @@ impl Queue {
                     profiling::scope!("Execute callback");
 
                     let exec_func = exec.func.take().unwrap().0;
-                    exec_func(CommandBufferRef::new(
+                    exec_func(crate::cmd::CommandBuffer::new(
                         cmd_buf,
                         &self.graph.resources,
                         #[cfg(debug_assertions)]
@@ -2491,7 +2490,7 @@ impl Queue {
         }
 
         thread_local! {
-            static PASSES: RefCell<Vec<Command>> = Default::default();
+            static PASSES: RefCell<Vec<CommandData>> = Default::default();
         }
 
         PASSES.with_borrow_mut(|passes| {
@@ -2530,7 +2529,7 @@ impl Queue {
     }
 
     #[profiling::function]
-    fn render_extent(bindings: &[AnyResource], pass: &Command) -> vk::Extent2D {
+    fn render_extent(bindings: &[AnyResource], pass: &CommandData) -> vk::Extent2D {
         // set_render_area was not specified so we're going to guess using the minimum common
         // attachment extents
         let first_exec = pass.execs.first().unwrap();
@@ -2964,7 +2963,7 @@ impl Queue {
     fn write_descriptor_sets(
         cmd_buf: &CommandBuffer,
         bindings: &[AnyResource],
-        pass: &Command,
+        pass: &CommandData,
         physical_pass: &PhysicalPass,
     ) -> Result<(), DriverError> {
         struct IndexWrite<'a> {
