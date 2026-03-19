@@ -2,11 +2,9 @@ use {
     super::{PipelineCommand, cmd_buf::CommandBuffer},
     crate::driver::{device::Device, ray_trace::RayTracePipeline},
     ash::vk,
-    log::trace,
     std::ops::Deref,
 };
 
-// NOTE: local implementation of type from super module
 impl PipelineCommand<'_, RayTracePipeline> {
     /// Begin recording a ray trace pipeline command buffer.
     pub fn record_cmd_buf(
@@ -165,29 +163,12 @@ impl RayTraceCommandBuffer<'_> {
     /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
     #[profiling::function]
     pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
-        for push_const in self.pipeline.inner.push_constants.iter() {
-            let push_const_end = push_const.offset + push_const.size;
-            let data_end = offset + data.len() as u32;
-            let end = data_end.min(push_const_end);
-            let start = offset.max(push_const.offset);
-
-            if end > start {
-                trace!(
-                    "      push constants {:?} {}..{}",
-                    push_const.stage_flags, start, end
-                );
-
-                unsafe {
-                    self.cmd_buf.device.cmd_push_constants(
-                        self.cmd_buf.handle,
-                        self.pipeline.inner.layout,
-                        push_const.stage_flags,
-                        start,
-                        &data[(start - offset) as usize..(end - offset) as usize],
-                    );
-                }
-            }
-        }
+        self.cmd_push_constants(
+            self.pipeline.inner.layout,
+            &self.pipeline.inner.push_constants,
+            offset,
+            data,
+        );
 
         self
     }

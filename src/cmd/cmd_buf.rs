@@ -10,6 +10,7 @@ use {
         },
     },
     ash::vk,
+    log::trace,
     std::{cell::RefCell, ops::Deref},
 };
 
@@ -301,6 +302,38 @@ impl<'a> CommandBuffer<'a> {
         });
 
         self
+    }
+
+    pub(crate) fn cmd_push_constants(
+        &self,
+        layout: vk::PipelineLayout,
+        push_consts: &[vk::PushConstantRange],
+        offset: u32,
+        data: &[u8],
+    ) {
+        for push_const in push_consts {
+            let push_const_end = push_const.offset + push_const.size;
+            let data_end = offset + data.len() as u32;
+            let end = data_end.min(push_const_end);
+            let start = offset.max(push_const.offset);
+
+            if end > start {
+                trace!(
+                    "      push constants {:?} {}..{}",
+                    push_const.stage_flags, start, end
+                );
+
+                unsafe {
+                    self.device.cmd_push_constants(
+                        self.handle,
+                        layout,
+                        push_const.stage_flags,
+                        start,
+                        &data[(start - offset) as usize..(end - offset) as usize],
+                    );
+                }
+            }
+        }
     }
 
     /// Update acceleration structures.

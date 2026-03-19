@@ -2,9 +2,41 @@ use {
     super::{cmd_buf::CommandBuffer, pipeline::PipelineCommand},
     crate::{driver::compute::ComputePipeline, node::AnyBufferNode},
     ash::vk,
-    log::trace,
     std::ops::Deref,
 };
+
+impl PipelineCommand<'_, ComputePipeline> {
+    /// Begin recording a compute pipeline command buffer.
+    pub fn record_cmd_buf(
+        mut self,
+        func: impl FnOnce(ComputeCommandBuffer<'_>) + Send + 'static,
+    ) -> Self {
+        self.record_cmd_buf_mut(func);
+        self
+    }
+
+    /// Begin recording a compute pipeline command buffer.
+    pub fn record_cmd_buf_mut(
+        &mut self,
+        func: impl FnOnce(ComputeCommandBuffer<'_>) + Send + 'static,
+    ) {
+        let pipeline = self
+            .cmd
+            .cmd()
+            .execs
+            .last()
+            .unwrap()
+            .pipeline
+            .as_ref()
+            .unwrap()
+            .unwrap_compute()
+            .clone();
+
+        self.cmd.push_exec(move |cmd_buf| {
+            func(ComputeCommandBuffer { cmd_buf, pipeline });
+        });
+    }
+}
 
 /// Recording interface for computing commands.
 ///
@@ -288,30 +320,12 @@ impl ComputeCommandBuffer<'_> {
     /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
     #[profiling::function]
     pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
-        if let Some(push_const) = self.pipeline.inner.push_constants {
-            // Determine the range of the overall pipline push constants which overlap with `data`
-            let push_const_end = push_const.offset + push_const.size;
-            let data_end = offset + data.len() as u32;
-            let end = data_end.min(push_const_end);
-            let start = offset.max(push_const.offset);
-
-            if end > start {
-                trace!(
-                    "      push constants {:?} {}..{}",
-                    push_const.stage_flags, start, end
-                );
-
-                unsafe {
-                    self.cmd_buf.device.cmd_push_constants(
-                        self.cmd_buf.handle,
-                        self.pipeline.inner.layout,
-                        vk::ShaderStageFlags::COMPUTE,
-                        push_const.offset,
-                        &data[(start - offset) as usize..(end - offset) as usize],
-                    );
-                }
-            }
-        }
+        self.cmd_push_constants(
+            self.pipeline.inner.layout,
+            self.pipeline.inner.push_constants.as_slice(),
+            offset,
+            data,
+        );
 
         self
     }
@@ -322,40 +336,6 @@ impl<'a> Deref for ComputeCommandBuffer<'a> {
 
     fn deref(&self) -> &Self::Target {
         &self.cmd_buf
-    }
-}
-
-// NOTE: local implementation of type from super module
-impl PipelineCommand<'_, ComputePipeline> {
-    /// Begin recording a compute pipeline command buffer.
-    pub fn record_cmd_buf(
-        mut self,
-        func: impl FnOnce(ComputeCommandBuffer<'_>) + Send + 'static,
-    ) -> Self {
-        self.record_cmd_buf_mut(func);
-        self
-    }
-
-    /// Begin recording a compute pipeline command buffer.
-    pub fn record_cmd_buf_mut(
-        &mut self,
-        func: impl FnOnce(ComputeCommandBuffer<'_>) + Send + 'static,
-    ) {
-        let pipeline = self
-            .cmd
-            .cmd()
-            .execs
-            .last()
-            .unwrap()
-            .pipeline
-            .as_ref()
-            .unwrap()
-            .unwrap_compute()
-            .clone();
-
-        self.cmd.push_exec(move |cmd_buf| {
-            func(ComputeCommandBuffer { cmd_buf, pipeline });
-        });
     }
 }
 
