@@ -1297,43 +1297,43 @@ impl From<vk::PhysicalDeviceFeatures> for Vulkan10Features {
 #[derive(Clone, Copy, Debug)]
 pub struct Vulkan10Limits {
     /// The largest dimension (width) that is guaranteed to be supported for all images created with
-    /// an image type of [`ImageType::Texture1D`](super::image::ImageType).
+    /// an image type of [`vk::ImageType::TYPE_1D`].
     ///
     /// Some combinations of image parameters (format, usage, etc.) may allow support for larger
     /// dimensions, which can be queried using
-    /// [`Device::image_format_properties`](super::device::Device::image_format_properties).
+    /// [`PhysicalDevice::image_format_properties`].
     pub max_image_dimension1_d: u32,
 
     /// The largest dimension (width or height) that is guaranteed to be supported for all images
-    /// created with an image type of [`ImageType::Texture2D`](super::image::ImageType) and without
+    /// created with an image type of [`vk::ImageType::TYPE_2D`] and without
     /// [`vk::ImageCreateFlags::CUBE_COMPATIBLE`] set in
     /// [`ImageInfo::flags`](super::image::ImageInfo::flags).
     ///
     /// Some combinations of image parameters (format, usage, etc.) may allow support for larger
     /// dimensions, which can be queried using
-    /// [`Device::image_format_properties`](super::device::Device::image_format_properties).
+    /// [`PhysicalDevice::image_format_properties`].
     pub max_image_dimension2_d: u32,
 
     /// The largest dimension (width, height, or depth) that is guaranteed to be supported for all
-    /// images created with an image type of [`ImageType::Texture3D`](super::image::ImageType).
+    /// images created with an image type of [`vk::ImageType::TYPE_3D`].
     ///
     /// Some combinations of image parameters (format, usage, etc.) may allow support for larger
     /// dimensions, which can be queried using
-    /// [`Device::image_format_properties`](super::device::Device::image_format_properties).
+    /// [`PhysicalDevice::image_format_properties`].
     pub max_image_dimension3_d: u32,
 
     /// The largest dimension (width or height) that is guaranteed to be supported for all images
-    /// created with an image type of [`ImageType::Texture2D`](super::image::ImageType) and with
+    /// created with an image type of [`vk::ImageType::TYPE_2D`] and with
     /// [`vk::ImageCreateFlags::CUBE_COMPATIBLE`] set in
     /// [`ImageInfo::flags`](super::image::ImageInfo::flags).
     ///
     /// Some combinations of image parameters (format, usage, etc.) may allow support for larger
     /// dimensions, which can be queried using
-    /// [`Device::image_format_properties`](super::device::Device::image_format_properties).
+    /// [`PhysicalDevice::image_format_properties`].
     pub max_image_dimension_cube: u32,
 
     /// The maximum number of layers
-    /// ([`ImageInfo::array_elements`](super::image::ImageInfo::array_elements)) for an image.
+    /// ([`ImageInfo::array_layer_count`](super::image::ImageInfo::array_layer_count)) for an image.
     pub max_image_array_layers: u32,
 
     /// The maximum number of addressable texels for a buffer view created on a buffer which was

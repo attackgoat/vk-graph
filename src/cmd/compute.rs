@@ -41,8 +41,8 @@ impl PipelineCommand<'_, ComputePipeline> {
 /// Recording interface for computing commands.
 ///
 /// This structure provides a strongly-typed set of methods which allow compute shader code to be
-/// executed. An instance of `Compute` is provided to the closure parameter of
-/// [`PipelineCommand::record_pipeline`] which may be accessed by binding a [`ComputePipeline`] to a
+/// executed. An instance is provided to the closure parameter of
+/// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`ComputePipeline`] to a
 /// render pass.
 ///
 /// # Examples
@@ -150,7 +150,7 @@ impl ComputeCommandBuffer<'_> {
     /// WorkgroupId values ranging from `[base_group*, base_group* + group_count*)` in each
     /// component.
     ///
-    /// [`Compute::dispatch`] is equivalent to
+    /// [`Self::dispatch`] is equivalent to
     /// `dispatch_base(0, 0, 0, group_count_x, group_count_y, group_count_z)`.
     ///
     /// [Dispatch]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdDispatchBase.html
@@ -181,7 +181,7 @@ impl ComputeCommandBuffer<'_> {
 
     /// Dispatch compute work items with indirect parameters.
     ///
-    /// `dispatch_indirect` behaves similarly to [`Compute::dispatch`] except that the parameters
+    /// `dispatch_indirect` behaves similarly to [`Self::dispatch`] except that the parameters
     /// are read by the device from `args_buf` during execution. The parameters of the dispatch are
     /// encoded in a [`vk::DispatchIndirectCommand`] structure taken from `args_buf` starting at
     /// `args_offset`.

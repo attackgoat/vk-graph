@@ -19,20 +19,9 @@ use {
     },
 };
 
-/// Smart pointer handle to a [pipeline] object.
+/// Smart pointer handle of a pipeline object.
 ///
 /// Also contains information about the object.
-///
-/// ## `Deref` behavior
-///
-/// `RayTracePipeline` automatically dereferences to [`vk::Pipeline`] (via the [`Deref`]
-/// trait), so you can call `vk::Pipeline`'s methods on a value of type `RayTracePipeline`. To avoid
-/// name clashes with `vk::Pipeline`'s methods, the methods of `RayTracePipeline` itself are
-/// associated functions, called using [fully qualified syntax]:
-///
-/// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
-/// [deref]: core::ops::Deref
-/// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
 #[derive(Clone, Debug)]
 #[readonly::make]
 pub struct RayTracePipeline {

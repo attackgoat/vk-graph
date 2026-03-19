@@ -317,7 +317,7 @@ impl DepthStencilInfoBuilder {
     }
 }
 
-/// Opaque representation of a [pipeline] object.
+/// Opaque representation of a pipeline object.
 ///
 /// Also contains information about the object.
 ///

@@ -23,32 +23,23 @@ use std::sync::Mutex;
 ///
 /// Also contains the backing buffer and information about the object.
 ///
-/// ## `Deref` behavior
-///
-/// `AccelerationStructure` automatically dereferences to [`vk::AccelerationStructureKHR`] (via the
-/// [`Deref`] trait), so you can call `vk::AccelerationStructureKHR`'s methods on a value of
-/// type `AccelerationStructure`. To avoid name clashes with `vk::AccelerationStructureKHR`'s
-/// methods, the methods of `AccelerationStructure` itself are associated functions, called using
-/// [fully qualified syntax]:
-///
 /// ```no_run
-/// # use std::sync::Arc;
 /// # use ash::vk;
-/// # use vk_graph::driver::{AccessType, DriverError};
+/// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Device::new(DeviceInfo::default())?;
-/// # const SIZE: vk::DeviceSize = 1024;
-/// # let info = AccelerationStructureInfo::blas(SIZE);
-/// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
-/// let addr = AccelerationStructure::device_address(&my_accel_struct);
+/// let info = AccelerationStructureInfo::blas(0);
+/// let accel_struct = AccelerationStructure::create(&device, info)?;
+/// let addr = accel_struct.device_address();
+///
+/// assert_eq!(accel_struct.info, info);
+/// assert_ne!(accel_struct.handle, vk::AccelerationStructureKHR::null());
 /// # Ok(()) }
 /// ```
 ///
 /// [acceleration structure]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureKHR.html
-/// [deref]: core::ops::Deref
-/// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
 #[derive(Debug)]
 #[readonly::make]
 pub struct AccelerationStructure {

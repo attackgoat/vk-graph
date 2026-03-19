@@ -3,348 +3,11 @@
 This crate provides a high-performance [Vulkan](https://www.vulkan.org/) driver featuring automated
 resource management and execution.
 
-For a general overview, including installation and typical usage, see the
+For an overview, including installation and typical usage, see the
 [Guide Book](https://attackgoat.github.io/vk-graph).
 
-# Getting Sarted
 
-Typical usage begins by displaying a winit [`Window`()]. The provided example code displays a window
-and creates Vulkan [`Device`] driver automatically:
 
-```no_run
-use vk_graph_window::{Window, WindowError};
-
-fn main() -> Result<(), WindowError> {
-    let window = Window::new()?;
-
-    // Use the device to create resources and pipelines before running
-    let device = &window.device;
-
-    window.run(|frame| {
-        // You may also create resources and pipelines while running
-        let device = &frame.device;
-    })
-}
-```
-
-## _Optional_: Headless Rendering
-
-```no_run
-use vk_graph::driver::{device::{Device, DeviceInfo}, DriverError};
-
-fn main() -> Result<(), DriverError> {
-    let device = Device::new(DeviceInfo::default())?;
-
-    // Do stuff...
-    # Ok(())
-}
-```
-
-# Resources and Pipelines
-
-All resources and pipelines, as well as the driver itself, use shared reference tracking to keep
-pointers alive. _vk-graph_ uses `std::sync::Arc` to track references.
-
-## Information
-
-All [`driver`] types have associated information structures which describe their properties.
-Each object provides a `create` function which uses the information to return an instance.
-
-| Resource                      | Create Using                                        |
-|-------------------------------|-----------------------------------------------------|
-| [`AccelerationStructureInfo`] | [`AccelerationStructure::create`]                   |
-| [`BufferInfo`]                | [`Buffer::create`] or [`Buffer::create_from_slice`] |
-| [`ImageInfo`]                 | [`Image::create`]                                   |
-
-For example, a typical host-mappable buffer:
-
-```no_run
-# use std::sync::Arc;
-# use ash::vk;
-# use vk_graph::driver::DriverError;
-# use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::buffer::{Buffer, BufferInfo};
-# fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
-let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
-let my_buf = Buffer::create(&device, info)?;
-# Ok(()) }
-```
-
-| Pipeline                      | Create Using                                        |
-|-------------------------------|-----------------------------------------------------|
-| [`ComputePipelineInfo`]       | [`ComputePipeline::create`]                         |
-| [`GraphicPipelineInfo`]       | [`GraphicPipeline::create`]                         |
-| [`RayTracePipelineInfo`]      | [`RayTracePipeline::create`]                        |
-
-For example, a graphics pipeline:
-
-```no_run
-# use std::sync::Arc;
-# use ash::vk;
-# use vk_graph::driver::DriverError;
-# use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
-# use vk_graph::driver::shader::Shader;
-# fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
-# let my_frag_code = [0u8; 1];
-# let my_vert_code = [0u8; 1];
-// shader code is SPIR-V in u32 format
-let vert = Shader::new_vertex(my_vert_code.as_slice());
-let frag = Shader::new_fragment(my_frag_code.as_slice());
-let info = GraphicPipelineInfo::default();
-let my_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
-# Ok(()) }
-```
-
-_Note:_ dtolnay's read-only public field deref pattern
-(_[link](https://github.com/dtolnay/case-studies/blob/master/readonly-fields/README.md)_) is used to
-make the information of each resource easily available and immutable.
-
-```no_run
-# use std::sync::Arc;
-# use ash::vk;
-# use vk_graph::driver::DriverError;
-# use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::image::{Image, ImageInfo};
-# fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
-let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::empty());
-let my_image = Image::create(&device, info)?;
-
-// Note: info is a field provided through the Deref trait and is immutable!
-assert_eq!(8, my_image.info.width);
-# Ok(()) }
-```
-
-## Pooling
-
-Multiple [`pool`] types are available to reduce the impact of frequently creating and dropping
-resources. Leased resources behave identically to owned resources and can be used in a render graph.
-
-Resource aliasing is also availble as an optional way to reduce the number of concurrent resources
-that may be required.
-
-For example, leasing an image:
-
-```no_run
-# use std::sync::Arc;
-# use ash::vk;
-# use vk_graph::driver::DriverError;
-# use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::image::{ImageInfo};
-# use vk_graph::pool::{Pool};
-# use vk_graph::pool::lazy::{LazyPool};
-# fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
-let mut pool = LazyPool::new(&device);
-
-let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
-let my_image = pool.lease_resource(info)?;
-# Ok(()) }
-```
-
-# Render Graph Operations
-
-All rendering in _vk-graph_ is performed using a [`Graph`] composed of user-specified passes,
-which may include pipelines and read/write access to resources. Recorded passes are automatically
-optimized before submission to the graphics hardware.
-
-Some notes about the awesome render pass optimization which was _totally stolen_ from [Granite]:
-
-- Scheduling: passes are submitted to the Vulkan API using batches designed for low-latency
-- Re-ordering: passes are shuffled using a heuristic which gives the GPU more time to complete work
-- Merging: compatible passes are merged into dynamic subpasses when it is more efficient (_on-tile
-  rendering_)
-- Aliasing: resources and pipelines are optimized to emit minimal barriers per unit of work (_max
-  one, typically zero_)
-
-## Nodes
-
-Resources may be directly bound to a render graph. During the time a resource is bound we refer to
-it as a node. Bound nodes may only be used with the graphs they were bound to. Nodes implement
-`Copy` to make using them easier.
-
-```no_run
-# use std::sync::Arc;
-# use ash::vk;
-# use vk_graph::driver::DriverError;
-# use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::buffer::{Buffer, BufferInfo};
-# use vk_graph::driver::image::{Image, ImageInfo};
-# use vk_graph::Graph;
-# use vk_graph::pool::{Pool};
-# use vk_graph::pool::lazy::{LazyPool};
-# fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
-# let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
-# let buffer = Buffer::create(&device, info)?;
-# let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
-# let image = Image::create(&device, info)?;
-# let mut graph = Graph::default();
-println!("{:?}", buffer); // Buffer
-println!("{:?}", image); // Image
-
-// Bind our resources into opaque "usize" nodes
-let buffer = graph.bind_resource(buffer);
-let image = graph.bind_resource(image);
-
-// The results have unique types!
-println!("{:?}", buffer); // BufferNode
-println!("{:?}", image); // ImageNode
-
-// Borrow resources using nodes (Optional!)
-println!("{:?}", graph.resource(buffer)); // &Arc<Buffer>
-println!("{:?}", graph.resource(image)); // &Arc<Image>
-# Ok(()) }
-```
-
-_Note:_ See [this code](https://github.com/attackgoat/vk-graph/blob/master/src/graph/edge.rs#L34)
-for all the things that can be bound or unbound from a graph.
-
-_Note:_ Once unbound, the node is invalid and should be dropped.
-
-## Access and synchronization
-
-Render graphs and their passes contain a set of functions used to handle Vulkan synchronization with
-prefixes of `access`, `read`, or `write`. For each resource used in a computing, graphics subpass,
-ray tracing, or general command buffer you must call an access function. Generally choose a `read`
-or `write` function unless you want to be most efficient.
-
-Example:
-
-```no_run
-# use std::sync::Arc;
-# use ash::vk;
-# use vk_graph::driver::DriverError;
-# use vk_graph::driver::sync::AccessType;
-# use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::buffer::{Buffer, BufferInfo};
-# use vk_graph::driver::image::{Image, ImageInfo};
-# use vk_graph::Graph;
-# use vk_graph::node::{BufferNode, ImageNode};
-# use vk_graph::pool::{Pool};
-# use vk_graph::pool::lazy::{LazyPool};
-# fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
-# let info = BufferInfo::host_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
-# let buffer = Buffer::create(&device, info)?;
-# let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
-# let image = Image::create(&device, info)?;
-let mut graph = Graph::default();
-let buffer: BufferNode = graph.bind_resource(buffer);
-let image: ImageNode = graph.bind_resource(image);
-graph
-    .begin_cmd()
-    .debug_name("Do some raw Vulkan or interop with another Vulkan library")
-    .record_cmd_buf(|cmd_buf| {
-        // I always run first!
-    })
-    .resource_access(buffer, AccessType::HostRead)
-    .resource_access(image, AccessType::HostWrite)
-    .record_cmd_buf(move |cmd_buf| {
-        // cmd_buf allows you to borrow the Vulkan resources
-        let buffer: vk::Buffer = cmd_buf.resource(buffer).handle;
-        let image: vk::Image = cmd_buf.resource(image).handle;
-
-        // Raw ash types are also available
-        let device: &ash::Device = &cmd_buf.device;
-        let cmd_buf: vk::CommandBuffer = cmd_buf.handle;
-
-        // You are free to READ buffer and WRITE image!
-    });
-# Ok(()) }
-```
-
-## Shader pipelines
-
-Pipeline instances may be bound to a [`PassRef`] in order to execute the associated shader code:
-
-```no_run
-# use ash::vk;
-# use vk_graph::driver::DriverError;
-# use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
-# use vk_graph::driver::shader::{Shader};
-# use vk_graph::Graph;
-# fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
-# let my_shader_code = [0u8; 1];
-# let info = ComputePipelineInfo::default();
-# let shader = Shader::new_compute(my_shader_code.as_slice());
-# let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
-# let mut graph = Graph::default();
-graph
-    .begin_cmd()
-    .debug_name("My compute pass")
-    .bind_pipeline(&my_compute_pipeline)
-    .record_cmd_buf(|cmd_buf| {
-        cmd_buf.push_constants(0, &42u32.to_ne_bytes())
-               .dispatch(128, 1, 1);
-    });
-# Ok(()) }
-```
-
-## Image samplers
-
-By default, _vk-graph_ will use "linear repeat-mode" samplers unless a special suffix appears as
-part of the name within GLSL or HLSL shader code. The `_sampler_123` suffix should be used where
-`1`, `2`, and `3` are replaced with:
-
-1. `l` for `LINEAR` texel filtering (default) or `n` for `NEAREST`
-1. `l` (default) or `n`, as above, but for mipmap filtering
-1. Addressing mode where:
-    - `b` is `CLAMP_TO_BORDER`
-    - `e` is `CLAMP_TO_EDGE`
-    - `m` is `MIRRORED_REPEAT`
-    - `r` is `REPEAT`
-
-For example, the following sampler named `pages_sampler_nnr` specifies nearest texel/mipmap modes and repeat addressing:
-
-```glsl
-layout(set = 0, binding = 0) uniform sampler2D pages_sampler_nnr[NUM_PAGES];
-```
-
-For more complex image sampling, use [`ShaderBuilder::image_sampler`] to specify the exact image
-sampling mode.
-
-## Vertex input
-
-Optional name suffixes are used in the same way with vertex input as with image samplers. The
-additional attribution of your shader code is optional but may help in a few scenarios:
-
-- Per-instance vertex rate data
-- Multiple vertex buffer binding indexes
-
-The data for vertex input is assumed to be per-vertex and bound to vertex buffer binding index zero.
-Add `_ibindX` for per-instance data, or the matching `_vbindX` for per-vertex data where `X` is
-replaced with the vertex buffer binding index in each case.
-
-For more complex vertex layouts, use the [`ShaderBuilder::vertex_input`] to specify the exact
-layout.
-
-[`AccelerationStructureInfo`]: driver::accel_struct::AccelerationStructureInfo
-[`AccelerationStructure::create`]: driver::accel_struct::AccelerationStructure::create
-[`Buffer::create`]: driver::buffer::Buffer::create
-[`Buffer::create_from_slice`]: driver::buffer::Buffer::create_from_slice
-[`BufferInfo`]: driver::buffer::BufferInfo
-[`ComputePipeline::create`]: driver::compute::ComputePipeline::create
-[`ComputePipelineInfo`]: driver::compute::ComputePipelineInfo
-[`Device`]: driver::device::Device
-[`EventLoop`]: EventLoop
-[`FrameContext`]: FrameContext
-[Granite]: https://github.com/Themaister/Granite
-[`GraphicPipeline::create`]: driver::graphic::GraphicPipeline::create
-[`GraphicPipelineInfo`]: driver::graphic::GraphicPipelineInfo
-[`Image::create`]: driver::image::Image::create
-[`ImageInfo`]: driver::image::ImageInfo
-[`PassRef`]: graph::pass_ref::PassRef
-[`RayTracePipeline::create`]: driver::ray_trace::RayTracePipeline::create
-[`RayTracePipelineInfo`]: driver::ray_trace::RayTracePipelineInfo
-[`Graph`]: graph::Graph
-[`ShaderBuilder::image_sampler`]: driver::shader::ShaderBuilder::image_sampler
-[`ShaderBuilder::vertex_input`]: driver::shader::ShaderBuilder::vertex_input
 
 */
 
@@ -646,7 +309,7 @@ impl CommandData {
     }
 }
 
-/// A composable graph of render pass operations.
+/// A composable graph of Vulkan command buffer operations.
 ///
 /// `Graph` instances are are intended for one-time use.
 ///
@@ -1275,7 +938,9 @@ impl Graph {
     }
 }
 
-/// A Vulkan resource which has been bound to a [`Graph`] using [`Graph::bind_node`].
+/// A Vulkan resource which has been bound to a [`Graph`].
+///
+/// See [`Graph::bind_resource`].
 pub trait Node {
     /// The Vulkan buffer, image, or acceleration struction type.
     type Resource;
@@ -1287,10 +952,10 @@ pub trait Node {
     fn index(&self) -> NodeIndex;
 }
 
-/// A trait for resources which may be bound to a `Graph`.
+/// A Vulkan resource which may be bound to a [`Graph`].
 ///
 /// See [`Graph::bind_resource`] and
-/// [`CommandRef::bind_resource`](super::cmd::CommandRef::bind_resource) for details.
+/// [`Command::bind_resource`](crate::cmd::Command::bind_resource).
 pub trait Resource {
     /// The resource handle type.
     type Node;

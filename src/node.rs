@@ -1,4 +1,4 @@
-//! Bindings for Vulkan smart-pointer resources.
+//! Handles for Vulkan smart-pointer resources.
 
 use std::sync::Arc;
 

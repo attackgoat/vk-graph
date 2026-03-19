@@ -17,33 +17,24 @@ use {
 #[cfg(debug_assertions)]
 use crate::Execution;
 
-/// Recording interface for acceleration structure commands.
+/// Recording interface for general Vulkan commands.
 ///
 /// This structure provides a strongly-typed set of methods which allow acceleration structures to
-/// be built and updated. An instance of `Acceleration` is provided to the closure parameter of
-/// [`PassRef::record_accel_struct`].
+/// be built and updated.
 ///
 /// # Examples
 ///
 /// Basic usage:
 ///
 /// ```no_run
-/// # use std::sync::Arc;
-/// # use ash::vk;
-/// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
-/// # use vk_graph::driver::DriverError;
-/// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::Graph;
-/// # use vk_graph::driver::shader::Shader;
-/// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
+/// # fn main() {
 /// # let mut my_graph = Graph::default();
-/// # let info = AccelerationStructureInfo::blas(1);
 /// my_graph.begin_cmd()
 ///         .record_cmd_buf(move |cmd_buf| {
-///             // During this closure we have access to the build and update methods
+///             // Use provided command buffer functions or native calls
 ///         });
-/// # Ok(()) }
+/// # }
 /// ```
 #[derive(Clone, Copy)]
 pub struct CommandBuffer<'a> {
@@ -78,8 +69,8 @@ impl<'a> CommandBuffer<'a> {
     ///
     /// - Flags must include [`vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS`]
     /// - Size must be equal to or greater than the `build_size` value returned by
-    ///   [`AccelerationStructure::size_of`] aligned to `min_accel_struct_scratch_offset_alignment`
-    ///   of
+    ///   [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)
+    ///   aligned to `min_accel_struct_scratch_offset_alignment` of
     ///   [`PhysicalDevice::accel_struct_properties`](crate::driver::physical_device::PhysicalDevice::accel_struct_properties).
     ///
     ///     TODO: Link to somewhere else for a full example of the scratch buffer steps
@@ -225,7 +216,7 @@ impl<'a> CommandBuffer<'a> {
     /// structure builds.
     ///
     /// `range` is a buffer device address which points to `info.geometry.len()`
-    /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
+    /// [vk::AccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
     /// addresses where geometry data is stored, as defined by `info`.
     pub fn build_accel_struct_indirect(
         &self,
@@ -345,8 +336,8 @@ impl<'a> CommandBuffer<'a> {
     ///
     /// - Flags must include [`vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS`]
     /// - Size must be equal to or greater than the `update_size` value returned by
-    ///   [`AccelerationStructure::size_of`] aligned to `min_accel_struct_scratch_offset_alignment`
-    ///   of
+    ///   [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)
+    ///   aligned to `min_accel_struct_scratch_offset_alignment` of
     ///   [`PhysicalDevice::accel_struct_properties`](crate::driver::physical_device::PhysicalDevice::accel_struct_properties).
     pub fn update_accel_struct(&self, infos: &[UpdateAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
@@ -424,7 +415,7 @@ impl<'a> CommandBuffer<'a> {
     /// structure updates.
     ///
     /// `range` is a buffer device address which points to `info.geometry.len()`
-    /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
+    /// [vk::AccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
     /// addresses where geometry data is stored, as defined by `info`.
     pub fn update_accel_struct_indirect(
         &self,
@@ -550,7 +541,7 @@ pub struct BuildAccelerationStructureInfo {
     )>,
 
     /// The temporary buffer or host address (with enough capacity per
-    /// [AccelerationStructure::size_of]).
+    /// [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)).
     pub scratch_addr: DeviceOrHostAddress,
 }
 
@@ -590,15 +581,15 @@ pub struct BuildAccelerationStructureIndirectInfo {
     pub build_data: AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
 
     /// A buffer device addresses which points to `data.geometry.len()`
-    /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
+    /// [vk::AccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
     /// addresses where geometry data is stored.
     pub range_base: vk::DeviceAddress,
 
-    /// Byte stride between elements of [range].
+    /// Byte stride between elements of [`Self::range_base`].
     pub range_stride: u32,
 
     /// The temporary buffer or host address (with enough capacity per
-    /// [AccelerationStructure::size_of]).
+    /// [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)).
     pub scratch_data: DeviceOrHostAddress,
 }
 
@@ -636,15 +627,15 @@ pub struct UpdateAccelerationStructureIndirectInfo {
     pub dst_accel_struct: AnyAccelerationStructureNode,
 
     /// A buffer device addresses which points to `data.geometry.len()`
-    /// [vk::VkAccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
+    /// [vk::AccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
     /// addresses where geometry data is stored.
     pub range_base: vk::DeviceAddress,
 
-    /// Byte stride between elements of [range].
+    /// Byte stride between elements of [`Self::range_base`].
     pub range_stride: u32,
 
     /// The temporary buffer or host address (with enough capacity per
-    /// [AccelerationStructure::size_of]).
+    /// [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)).
     pub scratch_addr: DeviceOrHostAddress,
 
     /// The source acceleration structure to be read.
@@ -690,7 +681,7 @@ pub struct UpdateAccelerationStructureInfo {
     pub dst_accel_struct: AnyAccelerationStructureNode,
 
     /// The temporary buffer or host address (with enough capacity per
-    /// [AccelerationStructure::size_of]).
+    /// [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)).
     pub scratch_addr: DeviceOrHostAddress,
 
     /// The source acceleration structure to be read.

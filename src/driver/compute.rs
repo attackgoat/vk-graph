@@ -18,17 +18,9 @@ use {
     },
 };
 
-/// Smart pointer handle to a [pipeline] object.
+/// Smart pointer handle of a pipeline object.
 ///
 /// Also contains information about the object.
-///
-/// ## `Deref` behavior
-///
-/// `ComputePipeline` automatically dereferences to [`vk::Pipeline`] (via the [`Deref`]
-/// trait), so you can call `vk::Pipeline`'s methods on a value of type `ComputePipeline`.
-///
-/// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
-/// [deref]: core::ops::Deref
 #[derive(Clone, Debug)]
 pub struct ComputePipeline {
     pub(crate) inner: Arc<ComputePipelineInner>,

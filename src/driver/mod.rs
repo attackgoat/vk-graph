@@ -1,5 +1,4 @@
-//! [Vulkan](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/index.html) interface
-//! based on smart pointers.
+//! Vulkan interface based on smart pointers.
 //!
 //! # Resources
 //!
@@ -23,7 +22,7 @@
 //! The following pipelines are available:
 //!
 //! - [`ComputePipeline`](compute::ComputePipeline)
-//! - [`GraphicPipeline`]
+//! - [`GraphicPipeline`](graphic::GraphicPipeline)
 //! - [`RayTracePipeline`](ray_trace::RayTracePipeline)
 
 pub mod accel_struct;

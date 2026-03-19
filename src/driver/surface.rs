@@ -43,8 +43,7 @@ impl Surface {
 
     /// Create a surface from a raw window display handle.
     ///
-    /// `device` must have been created with platform specific surface extensions enabled, acquired
-    /// through [`Device::create_display_window`].
+    /// `device` must have been created with platform specific surface extensions enabled.
     #[profiling::function]
     pub fn create(
         device: &Device,

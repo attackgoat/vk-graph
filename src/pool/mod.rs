@@ -1,4 +1,4 @@
-//! Resource leasing and pooling types.
+//! Resource pooling, leasing, and aliasing types.
 //!
 //! _vk-graph_ provides caching for acceleration structure, buffer and image resources which may be
 //! leased from configurable pools using their corresponding information structure. Most programs

@@ -180,7 +180,9 @@ impl Drop for PhysicalPass {
     }
 }
 
-/// A structure which can optimize and submit graphs. This pattern was derived from:
+/// A structure which can optimize and submit [`Graph`] instances.
+///
+/// This pattern was derived from:
 ///
 /// <http://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/>
 /// <https://github.com/EmbarkStudios/kajiya>

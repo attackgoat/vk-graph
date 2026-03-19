@@ -65,6 +65,25 @@ pub(crate) fn image_subresource_range_intersects(
 /// Smart pointer handle to an [image] object.
 ///
 /// Also contains information about the object.
+///
+/// ```no_run
+/// # use ash::vk;
+/// # use vk_graph::driver::{AccessType, DriverError};
+/// # use vk_graph::driver::device::{Device, DeviceInfo};
+/// # use vk_graph::driver::image::{Image, ImageInfo};
+/// # fn main() -> Result<(), DriverError> {
+/// # let device = Device::new(DeviceInfo::default())?;
+/// let fmt = vk::Format::R8G8B8A8_UNORM;
+/// let usage = vk::ImageUsageFlags::SAMPLED;
+/// let info = ImageInfo::image_2d(320, 200, fmt, usage);
+/// let my_img = Image::create(&device, info)?;
+///
+/// assert_eq!(my_img.info, info);
+/// assert_ne!(my_img.handle, vk::Image::null());
+/// # Ok(()) }
+/// ```
+///
+/// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
 #[readonly::make]
 pub struct Image {
     accesses: Mutex<ImageAccess<AccessType>>,

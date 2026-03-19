@@ -11,7 +11,7 @@ use {
 
 /// A trait for pipelines which may be bound to a `Command`.
 ///
-/// See [`Command::bind_pipeline`](super::cmd::Command::bind_pipeline) for details.
+/// See [`Command::bind_pipeline`](crate::cmd::Command::bind_pipeline) for details.
 pub trait Pipeline<'a> {
     /// The resource reference type.
     type Command;

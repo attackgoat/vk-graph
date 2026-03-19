@@ -1,4 +1,4 @@
-//! Strongly-typed rendering commands.
+//! Strongly-typed [`Graph`] commands.
 
 mod cmd_buf;
 mod compute;
@@ -79,7 +79,7 @@ impl<'a> Command<'a> {
     /// Binds a Vulkan buffer, image, or acceleration structure resource to the graph associated
     /// with this command.
     ///
-    /// Bound nodes may be used in passes for pipeline and shader operations.
+    /// Bound nodes may be used in commands for pipeline and shader operations.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
         R: Resource,
@@ -87,8 +87,14 @@ impl<'a> Command<'a> {
         self.graph.bind_resource(resource)
     }
 
-    /// Binds a [`ComputePipeline`], [`GraphicPipeline`], or [`RayTracePipeline`] to the current
-    /// pass, allowing for strongly typed access to the related functions.
+    /// Binds a shader pipeline to the current command, allowing for strongly typed access to the
+    /// related functions.
+    ///
+    /// `P`|`P::Command`
+    /// -|-
+    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_, ComputePipeline>`]
+    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_, GraphicPipeline>`]
+    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_, RayTracePipeline>`]
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'a>,
@@ -155,7 +161,8 @@ impl<'a> Command<'a> {
 
     /// Begin recording an acceleration structure command buffer.
     ///
-    /// This is the entry point for building and updating an [`AccelerationStructure`] instance.
+    /// This is the entry point for building and updating an
+    /// [`AccelerationStructure`](crate::driver::accel_struct::AccelerationStructure) instance.
     ///
     /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
     /// code and interfaces.
@@ -166,7 +173,8 @@ impl<'a> Command<'a> {
 
     /// Begin recording an acceleration structure command buffer.
     ///
-    /// This is the entry point for building and updating an [`AccelerationStructure`] instance.
+    /// This is the entry point for building and updating an
+    /// [`AccelerationStructure`](crate::driver::accel_struct::AccelerationStructure) instance.
     ///
     /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
     /// code and interfaces.

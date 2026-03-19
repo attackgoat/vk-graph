@@ -51,9 +51,9 @@ impl PipelineCommand<'_, RayTracePipeline> {
 /// Recording interface for ray tracing commands.
 ///
 /// This structure provides a strongly-typed set of methods which allow ray trace shader code to be
-/// executed. An instance of `RayTrace` is provided to the closure parameter of
-/// [`PipelineCommand::record_pipeline`] which may be accessed by binding a [`RayTracePipeline`] to
-/// a render pass.
+/// executed. An instance of is provided to the closure parameter of
+/// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`RayTracePipeline`] to
+/// a command.
 ///
 /// # Examples
 ///
@@ -275,7 +275,7 @@ impl RayTraceCommandBuffer<'_> {
     ///
     /// See [`vkCmdTraceRaysIndirectKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkCmdTraceRaysIndirectKHR.html).
     ///
-    /// [buffer device address]: Buffer::device_address
+    /// [buffer device address]: crate::driver::buffer::Buffer::device_address
     #[profiling::function]
     pub fn trace_rays_indirect(
         &self,

@@ -29,30 +29,22 @@ use std::sync::Mutex;
 ///
 /// Also contains information about the object.
 ///
-/// ## `Deref` behavior
-///
-/// `Buffer` automatically dereferences to [`vk::Buffer`] (via the [`Deref`] trait), so you
-/// can call `vk::Buffer`'s methods on a value of type `Buffer`. To avoid name clashes with
-/// `vk::Buffer`'s methods, the methods of `Buffer` itself are associated functions, called using
-/// [fully qualified syntax]:
-///
 /// ```no_run
-/// # use std::sync::Arc;
 /// # use ash::vk;
-/// # use vk_graph::driver::{AccessType, DriverError};
+/// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Device::new(DeviceInfo::default())?;
-/// # let info = BufferInfo::device_mem(8, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
-/// # let my_buf = Buffer::create(&device, info)?;
-/// let addr = my_buf.device_address();
+/// let info = BufferInfo::device_mem(1_024, vk::BufferUsageFlags::STORAGE_BUFFER);
+/// let my_buf = Buffer::create(&device, info)?;
+///
+/// assert_eq!(my_buf.info, info);
+/// assert_ne!(my_buf.handle, vk::Buffer::null());
 /// # Ok(()) }
 /// ```
 ///
 /// [buffer]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
-/// [deref]: core::ops::Deref
-/// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
 #[readonly::make]
 pub struct Buffer {
     accesses: Mutex<BufferAccess>,

@@ -203,7 +203,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [color_attachment_image]
+    /// See [Self::color_attachment_image]
     pub fn set_color_attachment_image(
         &mut self,
         color_attachment_idx: AttachmentIndex,
@@ -225,7 +225,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [color_attachment_image_view]
+    /// See [Self::color_attachment_image_view]
     pub fn set_color_attachment_image_view(
         &mut self,
         color_attachment_idx: AttachmentIndex,
@@ -264,7 +264,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [color_attachment_resolve_image]
+    /// See [Self::color_attachment_resolve_image]
     pub fn set_color_attachment_resolve_image(
         &mut self,
         msaa_attachment_idx: AttachmentIndex,
@@ -284,7 +284,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [color_attachment_resolve_image_view]
+    /// See [Self::color_attachment_resolve_image_view]
     pub fn set_color_attachment_resolve_image_view(
         &mut self,
         msaa_attachment_idx: AttachmentIndex,
@@ -307,7 +307,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [depth_stencil]
+    /// See [Self::depth_stencil]
     pub fn set_depth_stencil(&mut self, depth_stencil: impl Into<DepthStencilInfo>) -> &mut Self {
         let depth_stencil = depth_stencil.into();
         let cmd = self.cmd.cmd_mut();
@@ -320,7 +320,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [depth_stencil_attachment_image]
+    /// See [Self::depth_stencil_attachment_image]
     pub fn set_depth_stencil_attachment_image(
         &mut self,
         depth_stencil_image: impl Into<AnyImageNode>,
@@ -340,7 +340,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [depth_stencil_attachment_image_view]
+    /// See [Self::depth_stencil_attachment_image_view]
     pub fn set_depth_stencil_attachment_image_view(
         &mut self,
         depth_stencil_image: impl Into<AnyImageNode>,
@@ -376,7 +376,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [depth_stencil_attachment_resolve_image]
+    /// See [Self::depth_stencil_attachment_resolve_image]
     pub fn set_depth_stencil_attachment_resolve_image(
         &mut self,
         attachment_idx: AttachmentIndex,
@@ -398,7 +398,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [depth_stencil_attachment_resolve_image_view]
+    /// See [Self::depth_stencil_attachment_resolve_image_view]
     pub fn set_depth_stencil_attachment_resolve_image_view(
         &mut self,
         attachment_idx: AttachmentIndex,
@@ -423,7 +423,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [multiview]
+    /// See [Self::multiview]
     pub fn set_multiview(&mut self, view_mask: u32, correlated_view_mask: u32) -> &mut Self {
         let cmd = self.cmd.cmd_mut();
         let exec = cmd.execs.last_mut().unwrap();
@@ -434,7 +434,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [render_area]
+    /// See [Self::render_area]
     pub fn set_render_area(&mut self, area: vk::Rect2D) -> &mut Self {
         self.cmd.cmd_mut().execs.last_mut().unwrap().render_area = Some(area);
         self
@@ -547,7 +547,7 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 ///
 /// This structure provides a strongly-typed set of methods which allow rasterization shader code to
 /// be executed. An instance of `Draw` is provided to the closure parameter of
-/// [`PipelineCommand::record_pipeline`] which may be accessed by binding a [`GraphicPipeline`] to a
+/// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`GraphicPipeline`] to a
 /// render pass.
 ///
 /// # Examples
@@ -977,7 +977,7 @@ impl GraphicCommandBuffer<'_> {
 
     /// Draw primitives with indirect parameters and unindexed vertices.
     ///
-    /// Behaves otherwise similar to [`Draw::draw_indexed_indirect`].
+    /// Behaves otherwise similar to [`Self::draw_indexed_indirect`].
     #[profiling::function]
     pub fn draw_indirect(
         &self,
@@ -1004,7 +1004,7 @@ impl GraphicCommandBuffer<'_> {
 
     /// Draw primitives with indirect parameters, unindexed vertices, and draw count.
     ///
-    /// Behaves otherwise similar to [`Draw::draw_indexed_indirect_count`].
+    /// Behaves otherwise similar to [`Self::draw_indexed_indirect_count`].
     #[profiling::function]
     pub fn draw_indirect_count(
         &self,
