@@ -1,6 +1,6 @@
 #version 460 core
 
-#include "noise.glsl"
+#include "plasma.glsl"
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -11,8 +11,17 @@ layout(push_constant) uniform PushConstants {
 layout(set = 0, binding = 0, rgba32f) restrict writeonly uniform image2D image;
 
 void main() {
-    uvec3 data = uvec3(gl_GlobalInvocationID.xy, push_const.frame_index);
-    vec4 color = vec4(hash(data), 1.0);
+    vec2 extent = vec2(1.0, 1024 / 768);
+    vec2 offset = vec2(gl_GlobalInvocationID.xy) / extent;
+    vec4 color = plasma(
+        offset,
+        extent,
+        float(push_const.frame_index) / 1440.0,
+        0.0015,
+        1.0,
+        0.02,
+        vec3(0.2, 0.8, 0.5)
+    );
 
     imageStore(image, ivec2(gl_GlobalInvocationID.xy), color);
 }

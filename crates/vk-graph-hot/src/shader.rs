@@ -5,7 +5,7 @@ pub use shaderc::{OptimizationLevel, SourceLanguage, SpirvVersion};
 use {
     super::{compile_shader, guess_shader_source_language},
     derive_builder::{Builder, UninitializedFieldError},
-    log::{debug, error},
+    log::{Level, debug, error, log_enabled},
     notify::{RecommendedWatcher, RecursiveMode, Watcher},
     shaderc::{CompileOptions, EnvVersion, ShaderKind, TargetEnv},
     std::path::{Path, PathBuf},
@@ -238,21 +238,25 @@ impl HotShader {
         &self,
         watcher: &mut RecommendedWatcher,
     ) -> Result<Vec<u8>, DriverError> {
-        let shader_kind = match self.stage {
-            vk::ShaderStageFlags::ANY_HIT_KHR => ShaderKind::AnyHit,
-            vk::ShaderStageFlags::CALLABLE_KHR => ShaderKind::Callable,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR => ShaderKind::ClosestHit,
-            vk::ShaderStageFlags::COMPUTE => ShaderKind::Compute,
-            vk::ShaderStageFlags::FRAGMENT => ShaderKind::Fragment,
-            vk::ShaderStageFlags::GEOMETRY => ShaderKind::Geometry,
-            vk::ShaderStageFlags::INTERSECTION_KHR => ShaderKind::Intersection,
-            vk::ShaderStageFlags::MISS_KHR => ShaderKind::Miss,
-            vk::ShaderStageFlags::RAYGEN_KHR => ShaderKind::RayGeneration,
-            vk::ShaderStageFlags::TASK_EXT => ShaderKind::Task,
-            vk::ShaderStageFlags::TESSELLATION_CONTROL => ShaderKind::TessControl,
-            vk::ShaderStageFlags::TESSELLATION_EVALUATION => ShaderKind::TessEvaluation,
-            vk::ShaderStageFlags::VERTEX => ShaderKind::Vertex,
-            _ => unimplemented!("{:?}", self.stage),
+        let shader_kind = if self.stage == vk::ShaderStageFlags::empty() {
+            None
+        } else {
+            Some(match self.stage {
+                vk::ShaderStageFlags::ANY_HIT_KHR => ShaderKind::AnyHit,
+                vk::ShaderStageFlags::CALLABLE_KHR => ShaderKind::Callable,
+                vk::ShaderStageFlags::CLOSEST_HIT_KHR => ShaderKind::ClosestHit,
+                vk::ShaderStageFlags::COMPUTE => ShaderKind::Compute,
+                vk::ShaderStageFlags::FRAGMENT => ShaderKind::Fragment,
+                vk::ShaderStageFlags::GEOMETRY => ShaderKind::Geometry,
+                vk::ShaderStageFlags::INTERSECTION_KHR => ShaderKind::Intersection,
+                vk::ShaderStageFlags::MISS_KHR => ShaderKind::Miss,
+                vk::ShaderStageFlags::RAYGEN_KHR => ShaderKind::RayGeneration,
+                vk::ShaderStageFlags::TASK_EXT => ShaderKind::Task,
+                vk::ShaderStageFlags::TESSELLATION_CONTROL => ShaderKind::TessControl,
+                vk::ShaderStageFlags::TESSELLATION_EVALUATION => ShaderKind::TessEvaluation,
+                vk::ShaderStageFlags::VERTEX => ShaderKind::Vertex,
+                _ => unimplemented!("{:?}", self.stage),
+            })
         };
 
         let mut additional_opts = CompileOptions::new().map_err(|err| {
@@ -294,10 +298,14 @@ impl HotShader {
         let res = compile_shader(
             &self.path,
             &self.entry_name,
-            Some(shader_kind),
+            shader_kind,
             Some(&additional_opts),
         )
         .map_err(|err| {
+            if !log_enabled!(Level::Error) {
+                panic!("Unable to compile shader {}: {err}", self.path.display());
+            }
+
             error!("Unable to compile shader {}: {err}", self.path.display());
 
             DriverError::InvalidData
@@ -345,6 +353,12 @@ impl HotShaderBuilder {
 
         #[cfg(target_os = "macos")]
         let this = this.macro_definition("MOLTEN_VK", Some("1".to_string()));
+
+        let mut this = this;
+
+        if this.stage.is_none() {
+            this.stage = Some(vk::ShaderStageFlags::empty());
+        }
 
         this.fallible_build()
             .expect("All required fields set at initialization")
