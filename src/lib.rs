@@ -82,7 +82,7 @@ pub enum AnyResource {
 }
 
 impl AnyResource {
-    fn as_driver_accel_struct(&self) -> Option<&AccelerationStructure> {
+    fn as_accel_struct(&self) -> Option<&AccelerationStructure> {
         Some(match self {
             Self::AccelerationStructure(resource) => resource,
             Self::AccelerationStructureLease(resource) => resource,
@@ -90,7 +90,7 @@ impl AnyResource {
         })
     }
 
-    fn as_driver_buffer(&self) -> Option<&Buffer> {
+    fn as_buffer(&self) -> Option<&Buffer> {
         Some(match self {
             Self::Buffer(resource) => resource,
             Self::BufferLease(resource) => resource,
@@ -98,7 +98,7 @@ impl AnyResource {
         })
     }
 
-    fn as_driver_image(&self) -> Option<&Image> {
+    fn as_image(&self) -> Option<&Image> {
         Some(match self {
             Self::Image(resource) => resource,
             Self::ImageLease(resource) => resource,
@@ -1018,7 +1018,7 @@ macro_rules! graph_resource {
                     // We will return an existing node, if possible
                     // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
                     for (idx, existing_resource) in graph.resources.iter_mut().enumerate() {
-                        if let Some(existing_resource) = existing_resource.[<as_ $name:snake _mut>]() {
+                        if let AnyResource::$name(existing_resource) = existing_resource {
                             if Arc::ptr_eq(existing_resource, &self) {
                                 return Self::Node::new(idx);
                             }
@@ -1072,8 +1072,8 @@ macro_rules! graph_resource {
 
                     // We will return an existing node, if possible
                     // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
-                    for (idx, existing_resource) in graph.resources.iter_mut().enumerate() {
-                        if let Some(existing_resource) = existing_resource.[<as_ $name:snake _lease_mut>]() {
+                    for (idx, existing_resource) in graph.resources.iter().enumerate() {
+                        if let AnyResource::[<$name Lease>](existing_resource) = existing_resource {
                             if Arc::ptr_eq(existing_resource, &self) {
                                 return Self::Node::new(idx);
                             }
@@ -1097,40 +1097,6 @@ macro_rules! graph_resource {
                     // &Arc<Lease<Buffer>> or etc)
 
                     Arc::clone(self).bind_graph(graph)
-                }
-            }
-
-            impl AnyResource {
-                fn [<as_ $name:snake>](&self) -> Option<&Arc<$name>> {
-                    let Self::$name(resource) = self else {
-                        return None;
-                    };
-
-                    Some(resource)
-                }
-
-                fn [<as_ $name:snake _mut>](&mut self) -> Option<&mut Arc<$name>> {
-                    let Self::$name(resource) = self else {
-                        return None;
-                    };
-
-                    Some(resource)
-                }
-
-                fn [<as_ $name:snake _lease>](&self) -> Option<&Arc<Lease<$name>>> {
-                    let Self::[<$name Lease>](resource) = self else {
-                        return None
-                    };
-
-                    Some(resource)
-                }
-
-                fn [<as_ $name:snake _lease_mut>](&mut self) -> Option<&mut Arc<Lease<$name>>> {
-                    let Self::[<$name Lease>](resource) = self else {
-                        return None;
-                    };
-
-                    Some(resource)
                 }
             }
         }
@@ -1456,10 +1422,7 @@ pub(crate) mod deprecated {
         pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {
             let idx = node.index();
 
-            self.resources[idx]
-                .as_driver_buffer()
-                .unwrap()
-                .device_address()
+            self.resources[idx].as_buffer().unwrap().device_address()
         }
 
         #[deprecated = "dereference info field of resource function result"]
@@ -1527,7 +1490,11 @@ pub(crate) mod deprecated {
                     where
                         Self: Node,
                     {
-                        resources[self.index()].[<as_ $name:snake>]().unwrap().info
+                        let AnyResource::$name(resource) = &resources[self.index()] else {
+                            panic!("invalid node");
+                        };
+
+                        resource.info
                     }
                 }
 
@@ -1538,7 +1505,11 @@ pub(crate) mod deprecated {
                     where
                         Self: Node,
                     {
-                        resources[self.index()].[<as_ $name:snake>]().unwrap().info
+                        let AnyResource::$name(resource) = &resources[self.index()] else {
+                            panic!("invalid node");
+                        };
+
+                        resource.info
                     }
                 }
 
@@ -1549,7 +1520,11 @@ pub(crate) mod deprecated {
                     where
                         Self: Node,
                     {
-                        resources[self.index()].[<as_ $name:snake _lease>]().unwrap().info
+                        let AnyResource::[<$name Lease>](resource) = &resources[self.index()] else {
+                            panic!("invalid node");
+                        };
+
+                        resource.info
                     }
                 }
 
@@ -1557,7 +1532,11 @@ pub(crate) mod deprecated {
                     type Result = Arc<$name>;
 
                     fn unbind(&self, resources: &[AnyResource]) -> Self::Result {
-                        resources[self.index()].[<as_ $name:snake>]().unwrap().clone()
+                        let AnyResource::$name(resource) = &resources[self.index()] else {
+                            panic!("invalid node");
+                        };
+
+                        resource.clone()
                     }
                 }
 
@@ -1565,7 +1544,11 @@ pub(crate) mod deprecated {
                     type Result = Arc<Lease<$name>>;
 
                     fn unbind(&self, resources: &[AnyResource]) -> Self::Result {
-                        resources[self.index()].[<as_ $name:snake _lease>]().unwrap().clone()
+                        let AnyResource::[<$name Lease>](resource) = &resources[self.index()] else {
+                            panic!("invalid node");
+                        };
+
+                        resource.clone()
                     }
                 }
             }

@@ -420,7 +420,7 @@ mod deprecated {
             let idx = node.index();
 
             self.cmd.graph.resources[idx]
-                .as_driver_buffer()
+                .as_buffer()
                 .unwrap()
                 .device_address()
         }

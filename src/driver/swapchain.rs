@@ -77,6 +77,7 @@ impl Swapchain {
     #[profiling::function]
     pub fn acquire_next_image(
         &mut self,
+        timeout: u64,
         acquired: vk::Semaphore,
     ) -> Result<SwapchainImage, SwapchainError> {
         for _ in 0..2 {
@@ -93,7 +94,7 @@ impl Swapchain {
             let swapchain_ext = Device::expect_swapchain_ext(&self.surface.device);
 
             let image_idx = unsafe {
-                swapchain_ext.acquire_next_image(self.handle, u64::MAX, acquired, vk::Fence::null())
+                swapchain_ext.acquire_next_image(self.handle, timeout, acquired, vk::Fence::null())
             }
             .map(|(idx, suboptimal)| {
                 if suboptimal {

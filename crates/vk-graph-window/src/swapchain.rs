@@ -156,7 +156,9 @@ impl Swapchain {
                 })?;
         }
 
-        let acquire_next_image = self.swapchain.acquire_next_image(exec.swapchain_acquired);
+        let acquire_next_image = self
+            .swapchain
+            .acquire_next_image(u64::MAX, exec.swapchain_acquired);
 
         if let Err(err) = acquire_next_image {
             warn!("unable to acquire next swapchain image: {err:?}");
@@ -171,7 +173,7 @@ impl Swapchain {
             Ok(swapchain_image) => Ok(swapchain_image),
         }?;
 
-        while self.image_execs.len() >= swapchain_image.index as _ {
+        while swapchain_image.index >= self.image_execs.len() as u32 {
             self.image_execs.push(0);
         }
 

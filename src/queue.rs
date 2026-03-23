@@ -446,7 +446,7 @@ impl Queue {
                             },
                         };
 
-                        let image = bindings[attachment.target].as_driver_image().unwrap();
+                        let image = bindings[attachment.target].as_image().unwrap();
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -474,7 +474,7 @@ impl Queue {
                         .view_formats
                         .binary_search(&attachment.format)
                     {
-                        let image = bindings[attachment.target].as_driver_image().unwrap();
+                        let image = bindings[attachment.target].as_image().unwrap();
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -500,7 +500,7 @@ impl Queue {
                             depth_stencil: *clear_value,
                         };
 
-                        let image = bindings[attachment.target].as_driver_image().unwrap();
+                        let image = bindings[attachment.target].as_image().unwrap();
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -526,7 +526,7 @@ impl Queue {
                         .view_formats
                         .binary_search(&attachment.format)
                     {
-                        let image = bindings[attachment.target].as_driver_image().unwrap();
+                        let image = bindings[attachment.target].as_image().unwrap();
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -550,7 +550,7 @@ impl Queue {
                         .view_formats
                         .binary_search(&attachment.format)
                     {
-                        let image = bindings[attachment.target].as_driver_image().unwrap();
+                        let image = bindings[attachment.target].as_image().unwrap();
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -1936,7 +1936,7 @@ impl Queue {
                 match resource {
                     AnyResource::AccelerationStructure(..)
                     | AnyResource::AccelerationStructureLease(..) => {
-                        let Some(accel_struct) = resource.as_driver_accel_struct() else {
+                        let Some(accel_struct) = resource.as_accel_struct() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -1959,7 +1959,7 @@ impl Queue {
                         tls.prev_accesses.push(prev_access);
                     }
                     AnyResource::Buffer(..) | AnyResource::BufferLease(..) => {
-                        let Some(buffer) = resource.as_driver_buffer() else {
+                        let Some(buffer) = resource.as_buffer() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -1994,7 +1994,7 @@ impl Queue {
                     AnyResource::Image(..)
                     | AnyResource::ImageLease(..)
                     | AnyResource::SwapchainImage(..) => {
-                        let Some(image) = resource.as_driver_image() else {
+                        let Some(image) = resource.as_image() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -2178,7 +2178,7 @@ impl Queue {
                 match resource {
                     AnyResource::AccelerationStructure(..)
                     | AnyResource::AccelerationStructureLease(..) => {
-                        let Some(accel_struct) = resource.as_driver_accel_struct() else {
+                        let Some(accel_struct) = resource.as_accel_struct() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -2191,7 +2191,7 @@ impl Queue {
                         AccelerationStructure::access(accel_struct, AccessType::Nothing);
                     }
                     AnyResource::Buffer(..) | AnyResource::BufferLease(..) => {
-                        let Some(buffer) = resource.as_driver_buffer() else {
+                        let Some(buffer) = resource.as_buffer() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -2224,7 +2224,7 @@ impl Queue {
                     AnyResource::Image(..)
                     | AnyResource::ImageLease(..)
                     | AnyResource::SwapchainImage(..) => {
-                        let Some(image) = resource.as_driver_image() else {
+                        let Some(image) = resource.as_image() else {
                             #[cfg(debug_assertions)]
                             unreachable!();
 
@@ -2554,7 +2554,7 @@ impl Queue {
             .chain(first_exec.depth_stencil_load)
             .chain(first_exec.depth_stencil_store)
             .map(|attachment| {
-                let info = bindings[attachment.target].as_driver_image().unwrap().info;
+                let info = bindings[attachment.target].as_image().unwrap().info;
 
                 (
                     info.width >> attachment.base_mip_level,
@@ -3008,7 +3008,7 @@ impl Queue {
                         .unwrap_or_else(|| panic!("descriptor {descriptor_set_idx}.{dst_binding}[{binding_offset}] specified in recorded execution of pass \"{}\" was not discovered through shader reflection", pass.name()));
                 let descriptor_type = descriptor_info.descriptor_type();
                 let bound_node = &bindings[*node_idx];
-                if let Some(image) = bound_node.as_driver_image() {
+                if let Some(image) = bound_node.as_image() {
                     let mut image_view_info = *view_info.as_image().unwrap();
 
                     // Handle default views which did not specify a particaular aspect
@@ -3062,7 +3062,7 @@ impl Queue {
                             .image_layout(image_layout)
                             .image_view(image_view),
                     );
-                } else if let Some(buffer) = bound_node.as_driver_buffer() {
+                } else if let Some(buffer) = bound_node.as_buffer() {
                     let buffer_view_info = view_info.as_buffer().unwrap();
 
                     if binding_offset == 0 {
@@ -3086,7 +3086,7 @@ impl Queue {
                             .offset(buffer_view_info.start)
                             .range(buffer_view_info.end - buffer_view_info.start),
                     );
-                } else if let Some(accel_struct) = bound_node.as_driver_accel_struct() {
+                } else if let Some(accel_struct) = bound_node.as_accel_struct() {
                     if binding_offset == 0 {
                         tls.accel_struct_writes.push(IndexWrite {
                             idx: tls.accel_struct_infos.len(),
@@ -3148,7 +3148,7 @@ impl Queue {
                             let late = &write_exec.accesses[&attachment.target].last().unwrap();
                             let image_range = late.subresource.as_image().unwrap();
                             let image_binding = &bindings[attachment.target];
-                            let image = image_binding.as_driver_image().unwrap();
+                            let image = image_binding.as_image().unwrap();
                             let image_view_info = attachment
                                 .image_view_info(image.info)
                                 .into_builder()

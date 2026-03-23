@@ -40,7 +40,7 @@ impl Node for AnyAccelerationStructureNode {
     type Resource = AccelerationStructure;
 
     fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
-        resources[self.index()].as_driver_accel_struct().unwrap()
+        resources[self.index()].as_accel_struct().unwrap()
     }
 
     fn index(&self) -> NodeIndex {
@@ -77,7 +77,7 @@ impl Node for AnyBufferNode {
     type Resource = Buffer;
 
     fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
-        resources[self.index()].as_driver_buffer().unwrap()
+        resources[self.index()].as_buffer().unwrap()
     }
 
     fn index(&self) -> NodeIndex {
@@ -125,7 +125,7 @@ impl Node for AnyImageNode {
     type Resource = Image;
 
     fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
-        resources[self.index()].as_driver_image().unwrap()
+        resources[self.index()].as_image().unwrap()
     }
 
     fn index(&self) -> NodeIndex {
@@ -176,15 +176,15 @@ macro_rules! node {
 node!(
     AccelerationStructure,
     Arc<AccelerationStructure>,
-    as_driver_accel_struct
+    as_accel_struct
 );
 node!(
     AccelerationStructureLease,
     Arc<Lease<AccelerationStructure>>,
-    as_driver_accel_struct
+    as_accel_struct
 );
-node!(Buffer, Arc<Buffer>, as_driver_buffer);
-node!(BufferLease, Arc<Lease<Buffer>>, as_driver_buffer);
-node!(Image, Arc<Image>, as_driver_image);
-node!(ImageLease, Arc<Lease<Image>>, as_driver_image);
+node!(Buffer, Arc<Buffer>, as_buffer);
+node!(BufferLease, Arc<Lease<Buffer>>, as_buffer);
+node!(Image, Arc<Image>, as_image);
+node!(ImageLease, Arc<Lease<Image>>, as_image);
 node!(SwapchainImage, SwapchainImage, as_swapchain_image);
