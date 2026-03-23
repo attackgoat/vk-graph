@@ -9,8 +9,8 @@ use {
     vk_graph_window::{Window, WindowError},
 };
 
-/// This program draws a noise signal to the swapchain - make changes to fill_image.hlsl or the
-/// noise.hlsl file it includes to see those changes update while the program is still running.
+/// This program draws a plasma animation to the swapchain - make changes to fill_image.hlsl or the
+/// plasma.hlsl file it includes to see those changes update while the program is still running.
 ///
 /// Run with RUST_LOG=info to get notification of shader compilations.
 fn main() -> Result<(), WindowError> {
@@ -38,7 +38,7 @@ fn main() -> Result<(), WindowError> {
         frame
             .graph
             .begin_cmd()
-            .debug_name("make some noise")
+            .debug_name("neato colors")
             .bind_pipeline(&pipeline)
             .color_attachment_image(
                 0,

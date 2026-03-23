@@ -1,4 +1,4 @@
-#include "noise.hlsl"
+#include "plasma.hlsl"
 
 struct PushConst {
     uint frame_index;
@@ -7,7 +7,7 @@ struct PushConst {
 };
 
 [[vk::push_constant]]
-cbuffer {
+cbuffer PushConst {
     PushConst push_const;
 };
 
@@ -26,10 +26,17 @@ Vertex vertex_main(uint vertex_id: SV_VERTEXID) {
 }
 
 float4 fragment_main(Vertex vertex): SV_TARGET {
-    uint3 coord;
-    coord.x = uint(vertex.tex_coord.x * float(push_const.frame_width));
-    coord.y = uint(vertex.tex_coord.y * float(push_const.frame_height));
-    coord.z = push_const.frame_index;
+    float2 extent = float2(1.0, float(push_const.frame_width) / float(push_const.frame_height));
+    float2 offset = vertex.tex_coord * float(push_const.frame_width);
+    float4 color = plasma(
+        offset,
+        extent,
+        float(push_const.frame_index) / 12440.0,
+        0.215,
+        1.0,
+        0.143,
+        float3(0.6, 0.3, 0.2)
+    );
 
-    return float4(hash(coord), 1.0);
+    return color;
 }
