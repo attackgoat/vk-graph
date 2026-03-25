@@ -32,6 +32,9 @@ use {
     },
 };
 
+/// A closure type for picking surface formats.
+pub type SurfaceFormatFn = dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR;
+
 /// Describes a screen mode for display.
 #[derive(Clone, Copy, Debug)]
 pub enum FullscreenMode {
@@ -445,7 +448,7 @@ pub struct WindowBuilder {
     cmd_buf_count: usize,
     device_info: DeviceInfo,
     min_image_count: Option<u32>,
-    surface_format_fn: Option<Box<dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR>>,
+    surface_format_fn: Option<Box<SurfaceFormatFn>>,
     v_sync: Option<bool>,
     window_mode_override: Option<Option<FullscreenMode>>,
 }
@@ -597,7 +600,7 @@ struct WindowData {
     attributes: WindowAttributes,
     cmd_buf_count: usize,
     min_image_count: Option<u32>,
-    surface_format_fn: Option<Box<dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR>>,
+    surface_format_fn: Option<Box<SurfaceFormatFn>>,
     v_sync: Option<bool>,
     window_mode_override: Option<Option<FullscreenMode>>,
 }
