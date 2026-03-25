@@ -6,7 +6,7 @@ use {
         Pak, PakBuf,
         anim::{Channel, Interpolation, Outputs},
         bitmap::BitmapFormat,
-        model::{Joint, Vertex},
+        mesh::{Joint, VertexType},
     },
     std::{
         cmp::Ordering,
@@ -395,26 +395,24 @@ struct Model {
 
 impl Model {
     fn load(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Self, DriverError> {
-        let model = pak.read_model(key).unwrap();
+        let mesh = pak.read_mesh(key).unwrap();
 
         // This obviously makes some assumptions about the input model!
 
-        let mesh = model
-            .meshes()
-            .iter()
-            .find(|mesh| mesh.skin().is_some())
-            .unwrap();
         let joints = mesh.skin().unwrap().joints().to_vec();
-        let parts = mesh.parts();
+        let primitives = mesh.primitives();
 
-        assert_eq!(parts.len(), 1);
+        assert_eq!(primitives.len(), 1);
 
-        let part = &parts[0];
-        let lods = part.lods();
+        let primitive = &primitives[0];
+        let lods = primitive.lods();
 
         assert_eq!(
-            part.vertex(),
-            Vertex::POSITION | Vertex::NORMAL | Vertex::TEXTURE0 | Vertex::JOINTS_WEIGHTS
+            primitive.vertex_type(),
+            VertexType::POSITION
+                | VertexType::NORMAL
+                | VertexType::TEXTURE0
+                | VertexType::JOINTS_WEIGHTS
         );
         assert!(!lods.is_empty());
 
@@ -425,7 +423,7 @@ impl Model {
 
         let indices = indices.as_u16().unwrap();
         let index_data = cast_slice(&indices);
-        let vertex_data = part.vertex_data();
+        let vertex_data = primitive.vertex_data();
 
         // Host-accessible staging buffers
         let index_staging_buf =
