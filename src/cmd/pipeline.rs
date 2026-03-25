@@ -1,6 +1,7 @@
 use {
     super::{
-        AccessType, Command, Descriptor, Graph, Node, Resource, SubresourceRange, View, ViewInfo,
+        AccessType, Command, Descriptor, Graph, Node, Resource, Subresource, SubresourceRange,
+        ViewInfo,
     },
     crate::{
         ExecutionPipeline,
@@ -147,7 +148,7 @@ impl<'c, T> PipelineCommand<'c, T> {
     /// `record_`-function.
     pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         SubresourceRange: From<N::Range>,
     {
         self.cmd.set_resource_access(resource_node, access);
@@ -161,7 +162,7 @@ impl<'c, T> PipelineCommand<'c, T> {
     /// `record_`-function.
     pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType) -> &mut Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         SubresourceRange: From<N::Range>,
     {
         self.cmd.set_resource_access(resource_node, access);
@@ -180,7 +181,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         access: AccessType,
     ) -> &mut Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         N::Info: Copy,
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
@@ -204,7 +205,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         access: AccessType,
     ) -> &mut Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         N::Info: Copy,
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
@@ -246,7 +247,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         access: AccessType,
     ) -> &mut Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         SubresourceRange: From<N::Range>,
     {
         self.cmd
@@ -266,7 +267,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         access: AccessType,
     ) -> Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         N::Info: Copy,
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
@@ -289,7 +290,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         access: AccessType,
     ) -> Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         N::Info: Copy,
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
@@ -310,7 +311,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         access: AccessType,
     ) -> Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         SubresourceRange: From<N::Range>,
     {
         self.cmd
@@ -325,7 +326,7 @@ mod deprecated {
     use {
         crate::{
             Graph, Node, Resource,
-            cmd::{Descriptor, PipelineCommand, SubresourceRange, View, ViewInfo},
+            cmd::{Descriptor, PipelineCommand, Subresource, SubresourceRange, ViewInfo},
             deprecated::Info,
             graph::pass_ref::ViewType,
         },
@@ -343,12 +344,12 @@ mod deprecated {
             access: AccessType,
         ) -> Self
         where
-            N: Node + Info + View,
-            ViewType: From<<N as View>::Info>,
-            <N as View>::Info: Copy + From<<N as Info>::Type>,
-            <N as View>::Range: From<<N as View>::Info>,
+            N: Node + Info + Subresource,
+            ViewType: From<<N as Subresource>::Info>,
+            <N as Subresource>::Info: Copy + From<<N as Info>::Type>,
+            <N as Subresource>::Range: From<<N as Subresource>::Info>,
         {
-            let view_info = View::info(&node, &self.cmd.graph.resources);
+            let view_info = Subresource::info(&node, &self.cmd.graph.resources);
 
             self.access_descriptor_as(descriptor, node, access, view_info)
         }
@@ -363,12 +364,12 @@ mod deprecated {
             view_info: impl Into<N::Info>,
         ) -> Self
         where
-            N: View,
-            <N as View>::Info: Copy + Into<ViewType>,
-            <N as View>::Range: From<<N as View>::Info>,
+            N: Subresource,
+            <N as Subresource>::Info: Copy + Into<ViewType>,
+            <N as Subresource>::Range: From<<N as Subresource>::Info>,
         {
             let view_info = view_info.into();
-            let subresource = <N as View>::Range::from(view_info);
+            let subresource = <N as Subresource>::Range::from(view_info);
 
             self.access_descriptor_subrange(descriptor, node, access, view_info, subresource)
         }
@@ -384,8 +385,8 @@ mod deprecated {
             subresource: impl Into<N::Range>,
         ) -> Self
         where
-            N: View,
-            <N as View>::Info: Into<ViewType>,
+            N: Subresource,
+            <N as Subresource>::Info: Into<ViewType>,
         {
             unimplemented!()
         }
@@ -394,7 +395,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn access_node<N>(mut self, node: N, access: AccessType) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.resource_access(node, access)
@@ -409,7 +410,7 @@ mod deprecated {
             subresource: impl Into<N::Range>,
         ) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.access_node_subrange_mut(node, access, subresource);
@@ -425,7 +426,7 @@ mod deprecated {
             subresource: impl Into<N::Range>,
         ) -> &mut Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.set_subresource_access(node, subresource, access)

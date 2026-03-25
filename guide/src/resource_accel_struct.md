@@ -6,7 +6,7 @@
 # use vk_graph::driver::accel_struct::{
 #   AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData,
 #   AccelerationStructureGeometryInfo, AccelerationStructureInfo, AccelerationStructureInfoBuilder,
-#   AccelerationStructureSize, AccelerationStructureSubresourceRange, DeviceOrHostAddress
+#   AccelerationStructureSize, DeviceOrHostAddress
 # };
 # use vk_graph::driver::buffer::Buffer;
 # fn test(
@@ -87,6 +87,5 @@ assert_ne!(blas.buffer.handle, vk::Buffer::null());
 assert_ne!(blas.handle, vk::AccelerationStructureKHR::null());
 
 // Acceleration structures have no "subresources" and are bound whole
-let whole_resource = AccelerationStructureSubresourceRange;
 # Ok(()) }
 ```

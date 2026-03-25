@@ -346,7 +346,7 @@ mod deprecated {
         crate::{
             Node,
             cmd::{
-                Descriptor, PipelineCommand, SubresourceRange, View, ViewInfo,
+                Descriptor, PipelineCommand, Subresource, SubresourceRange, ViewInfo,
                 compute::ComputeCommandBuffer,
             },
             driver::compute::ComputePipeline,
@@ -368,7 +368,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             N::Info: Copy,
             SubresourceRange: From<N::Info>,
             ViewInfo: From<N::Info>,
@@ -385,7 +385,7 @@ mod deprecated {
             node_view: impl Into<N::Info>,
         ) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             N::Info: Copy,
             SubresourceRange: From<N::Info>,
             ViewInfo: From<N::Info>,
@@ -411,7 +411,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn write_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             N::Info: Copy,
             SubresourceRange: From<N::Info>,
             ViewInfo: From<N::Info>,
@@ -428,7 +428,7 @@ mod deprecated {
             node_view: impl Into<N::Info>,
         ) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             N::Info: Copy,
             SubresourceRange: From<N::Info>,
             ViewInfo: From<N::Info>,

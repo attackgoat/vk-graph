@@ -24,10 +24,7 @@ use {
         Execution, ExecutionFunction, Graph, ImageLeaseNode, ImageNode, Node, Resource,
         SwapchainImageNode,
     },
-    crate::driver::{
-        accel_struct::AccelerationStructureSubresourceRange, buffer::BufferSubresourceRange,
-        image::ImageViewInfo,
-    },
+    crate::driver::{buffer::BufferSubresourceRange, image::ImageViewInfo},
     ash::vk,
     std::ops::Range,
     vk_sync::AccessType,
@@ -211,7 +208,7 @@ impl<'a> Command<'a> {
     /// `record_`-function.
     pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         SubresourceRange: From<N::Range>,
     {
         self.set_resource_access(resource_node, access);
@@ -235,7 +232,7 @@ impl<'a> Command<'a> {
     /// `record_`-function.
     pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType)
     where
-        N: Node + View,
+        N: Node + Subresource,
         SubresourceRange: From<N::Range>,
     {
         let whole_resource = resource_node.range(&self.graph.resources);
@@ -255,7 +252,7 @@ impl<'a> Command<'a> {
         subresource: impl Into<N::Range>,
         access: AccessType,
     ) where
-        N: Node + View,
+        N: Node + Subresource,
         SubresourceRange: From<N::Range>,
     {
         let subresource = subresource.into();
@@ -275,7 +272,7 @@ impl<'a> Command<'a> {
         access: AccessType,
     ) -> Self
     where
-        N: Node + View,
+        N: Node + Subresource,
         SubresourceRange: From<N::Range>,
     {
         self.set_subresource_access(resource_node, subresource, access);
@@ -365,65 +362,12 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-#[doc(hidden)]
-pub enum SubresourceRange {
-    /// Acceleration structures are bound whole.
-    AccelerationStructure(AccelerationStructureSubresourceRange),
-
-    /// Images may be partially bound.
-    Image(vk::ImageSubresourceRange),
-
-    /// Buffers may be partially bound.
-    Buffer(BufferSubresourceRange),
-}
-
-impl SubresourceRange {
-    pub(super) fn as_image(&self) -> Option<&vk::ImageSubresourceRange> {
-        if let Self::Image(subresource) = self {
-            Some(subresource)
-        } else {
-            None
-        }
-    }
-}
-
-impl From<AccelerationStructureSubresourceRange> for SubresourceRange {
-    fn from(_: AccelerationStructureSubresourceRange) -> Self {
-        Self::AccelerationStructure(AccelerationStructureSubresourceRange)
-    }
-}
-
-impl From<BufferSubresourceRange> for SubresourceRange {
-    fn from(subresource: BufferSubresourceRange) -> Self {
-        Self::Buffer(subresource)
-    }
-}
-
-impl From<ImageViewInfo> for SubresourceRange {
-    fn from(subresource: ImageViewInfo) -> Self {
-        Self::Image(subresource.into())
-    }
-}
-
-impl From<vk::ImageSubresourceRange> for SubresourceRange {
-    fn from(subresource: vk::ImageSubresourceRange) -> Self {
-        Self::Image(subresource)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SubresourceAccess {
-    pub access: AccessType,
-    pub subresource: SubresourceRange,
-}
-
 /// Allows for a resource to be reinterpreted as differently formatted data.
-pub trait View {
-    /// The information about the resource when bound directly to shader descriptors.
+pub trait Subresource {
+    /// The information about the subresource when bound directly to shader descriptors.
     type Info;
 
-    /// The information about the resource when used indirectly by any part of a graph.
+    /// The information about the subresource when used indirectly by any part of a graph.
     type Range;
 
     #[doc(hidden)]
@@ -439,22 +383,20 @@ pub trait View {
 
 macro_rules! view_accel_struct {
     ($name:ident) => {
-        impl View for $name {
+        impl Subresource for $name {
             type Info = Self::Range;
-            type Range = AccelerationStructureSubresourceRange;
+            type Range = ();
 
-            fn info(&self, resources: &[AnyResource]) -> Self::Info
+            fn info(&self, _: &[AnyResource]) -> Self::Info
             where
                 Self: Node,
             {
-                self.range(resources)
             }
 
             fn range(&self, _: &[AnyResource]) -> Self::Range
             where
                 Self: Node,
             {
-                Self::Range::default()
             }
         }
     };
@@ -466,7 +408,7 @@ view_accel_struct!(AccelerationStructureNode);
 
 macro_rules! view_buffer {
     ($name:ident) => {
-        impl View for $name {
+        impl Subresource for $name {
             type Info = Self::Range;
             type Range = BufferSubresourceRange;
 
@@ -495,7 +437,7 @@ view_buffer!(BufferNode);
 
 macro_rules! view_image {
     ($name:ident) => {
-        impl View for $name {
+        impl Subresource for $name {
             type Info = ImageViewInfo;
             type Range = vk::ImageSubresourceRange;
 
@@ -523,12 +465,65 @@ view_image!(ImageLeaseNode);
 view_image!(ImageNode);
 view_image!(SwapchainImageNode);
 
+#[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
+pub enum SubresourceRange {
+    /// Acceleration structures are bound whole.
+    AccelerationStructure,
+
+    /// Images may be partially bound.
+    Image(vk::ImageSubresourceRange),
+
+    /// Buffers may be partially bound.
+    Buffer(BufferSubresourceRange),
+}
+
+impl SubresourceRange {
+    pub(super) fn as_image(&self) -> Option<&vk::ImageSubresourceRange> {
+        if let Self::Image(subresource) = self {
+            Some(subresource)
+        } else {
+            None
+        }
+    }
+}
+
+impl From<BufferSubresourceRange> for SubresourceRange {
+    fn from(subresource: BufferSubresourceRange) -> Self {
+        Self::Buffer(subresource)
+    }
+}
+
+impl From<()> for SubresourceRange {
+    fn from(_: ()) -> Self {
+        Self::AccelerationStructure
+    }
+}
+
+impl From<ImageViewInfo> for SubresourceRange {
+    fn from(subresource: ImageViewInfo) -> Self {
+        Self::Image(subresource.into())
+    }
+}
+
+impl From<vk::ImageSubresourceRange> for SubresourceRange {
+    fn from(subresource: vk::ImageSubresourceRange) -> Self {
+        Self::Image(subresource)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SubresourceAccess {
+    pub access: AccessType,
+    pub subresource: SubresourceRange,
+}
+
 /// Describes the interpretation of a resource.
 #[derive(Debug)]
 #[doc(hidden)]
 pub enum ViewInfo {
     /// Acceleration structures are always whole resources.
-    AccelerationStructure(AccelerationStructureSubresourceRange),
+    AccelerationStructure,
 
     /// Images may be interpreted as differently formatted images.
     Image(ImageViewInfo),
@@ -553,9 +548,9 @@ impl ViewInfo {
     }
 }
 
-impl From<AccelerationStructureSubresourceRange> for ViewInfo {
-    fn from(info: AccelerationStructureSubresourceRange) -> Self {
-        Self::AccelerationStructure(info)
+impl From<()> for ViewInfo {
+    fn from(_: ()) -> Self {
+        Self::AccelerationStructure
     }
 }
 
@@ -586,7 +581,7 @@ mod deprecated {
     use {
         crate::{
             Graph, Node, Resource,
-            cmd::{Command, CommandBuffer, SubresourceRange, View},
+            cmd::{Command, CommandBuffer, Subresource, SubresourceRange},
             deprecated::Info,
         },
         ash::vk,
@@ -598,7 +593,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn access_node<N>(mut self, node: N, access: AccessType) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.resource_access(node, access)
@@ -608,7 +603,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn access_node_mut<N>(&mut self, node: N, access: AccessType) -> &mut Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.set_resource_access(node, access);
@@ -624,7 +619,7 @@ mod deprecated {
             subresource: impl Into<N::Range>,
         ) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.access_node_subrange_mut(node, access, subresource);
@@ -640,7 +635,7 @@ mod deprecated {
             subresource: impl Into<N::Range>,
         ) -> &mut Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.set_subresource_access(node, subresource, access);
@@ -651,7 +646,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn access_resource<N>(mut self, node: N, access: AccessType) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.resource_access(node, access)
@@ -666,7 +661,7 @@ mod deprecated {
             access: AccessType,
         ) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             SubresourceRange: From<N::Range>,
         {
             self.subresource_access(node, subresource, access)

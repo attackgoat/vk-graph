@@ -747,16 +747,6 @@ impl From<UninitializedFieldError> for AccelerationStructureInfoBuilderError {
     }
 }
 
-/// Specifies a range of acceleration structure data.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct AccelerationStructureSubresourceRange;
-
-impl From<AccelerationStructureInfo> for AccelerationStructureSubresourceRange {
-    fn from(_: AccelerationStructureInfo) -> Self {
-        Self
-    }
-}
-
 /// Holds the results of the [`AccelerationStructure::size_of`] function.
 #[derive(Clone, Copy, Debug)]
 pub struct AccelerationStructureSize {

@@ -1241,8 +1241,8 @@ mod deprecated {
         crate::{
             Attachment, Node, SubresourceAccess,
             cmd::{
-                AttachmentIndex, ClearColorValue, Descriptor, PipelineCommand, SubresourceRange,
-                View, ViewInfo, graphic::GraphicCommandBuffer,
+                AttachmentIndex, ClearColorValue, Descriptor, PipelineCommand, Subresource,
+                SubresourceRange, ViewInfo, graphic::GraphicCommandBuffer,
             },
             driver::{
                 graphic::GraphicPipeline,
@@ -3096,7 +3096,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             N::Info: Copy,
             SubresourceRange: From<N::Info>,
             ViewInfo: From<N::Info>,
@@ -3117,7 +3117,7 @@ mod deprecated {
             node_view: impl Into<N::Info>,
         ) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             N::Info: Copy,
             SubresourceRange: From<N::Info>,
             ViewInfo: From<N::Info>,
@@ -3145,7 +3145,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn write_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             N::Info: Copy,
             SubresourceRange: From<N::Info>,
             ViewInfo: From<N::Info>,
@@ -3162,7 +3162,7 @@ mod deprecated {
             node_view: impl Into<N::Info>,
         ) -> Self
         where
-            N: Node + View,
+            N: Node + Subresource,
             N::Info: Copy,
             SubresourceRange: From<N::Info>,
             ViewInfo: From<N::Info>,
