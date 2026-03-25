@@ -34,7 +34,7 @@ use {
 };
 
 /// Alias for the index of a framebuffer attachment.
-pub type AttachmentIndex = u32;
+pub(crate) type AttachmentIndex = u32;
 
 /// Alias for the binding index of a shader descriptor.
 pub type BindingIndex = u32;
@@ -45,8 +45,19 @@ pub type BindingOffset = u32;
 /// Alias for the descriptor set index of a shader descriptor.
 pub type DescriptorSetIndex = u32;
 
-/// A general render pass which may contain acceleration structure commands, general commands, or
-/// have pipeline bound to then record commands specific to those pipeline types.
+/// A general-purpose Vulkan command which may contain acceleration structure operations, transfers,
+/// or shader pipelines.
+///
+/// There are four main uses of a [`Command`]:
+///
+/// 1. Bind resources ([`Self::bind_resource`])
+/// 1. Declare resource accesses ([`Self::resource_access`])
+/// 1. Record general-purpose command buffers or acceleration structure operations
+///    ([`Self::record_cmd_buf`])
+/// 1. Bind shader pipelines ([`Self::bind_pipeline`])
+///
+/// When bound, a shader pipeline consumes the `Command` and returns a [`PipelineCommand`] which
+/// provides command recording functions specific to each pipeline type.
 pub struct Command<'a> {
     pub(super) cmd_idx: usize,
     pub(super) exec_idx: usize,
@@ -137,11 +148,11 @@ impl<'a> Command<'a> {
 
     fn push_subresource_access(
         &mut self,
-        resource: impl Node,
+        resource_node: impl Node,
         subresource: SubresourceRange,
         access: AccessType,
     ) {
-        let node_idx = resource.index();
+        let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());
 
@@ -159,7 +170,7 @@ impl<'a> Command<'a> {
             .or_insert(vec![access]);
     }
 
-    /// Begin recording an acceleration structure command buffer.
+    /// Begin recording a general-purpose command buffer.
     ///
     /// This is the entry point for building and updating an
     /// [`AccelerationStructure`](crate::driver::accel_struct::AccelerationStructure) instance.
@@ -171,7 +182,7 @@ impl<'a> Command<'a> {
         self
     }
 
-    /// Begin recording an acceleration structure command buffer.
+    /// Begin recording a general-purpose command buffer.
     ///
     /// This is the entry point for building and updating an
     /// [`AccelerationStructure`](crate::driver::accel_struct::AccelerationStructure) instance.
@@ -185,24 +196,25 @@ impl<'a> Command<'a> {
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given bound resource represents.
-    pub fn resource<N>(&self, node: N) -> &N::Resource
+    /// which the given bound resource node represents.
+    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
         N: Node,
     {
-        self.graph.resource(node)
+        self.graph.resource(resource_node)
     }
 
-    /// Informs the command that the next recorded command buffer will read or write `node` using
-    /// `access`.
+    /// Informs the command that the next recorded command buffer will read or write `resource_node`
+    /// using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
-    pub fn resource_access<N>(mut self, resource: N, access: AccessType) -> Self
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
+    pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
     where
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        self.set_resource_access(resource, access);
+        self.set_resource_access(resource_node, access);
         self
     }
 
@@ -216,28 +228,30 @@ impl<'a> Command<'a> {
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write `node` using
-    /// `access`.
+    /// Informs the command that the next recorded command buffer will read or write `resource_node`
+    /// using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
-    pub fn set_resource_access<N>(&mut self, resource: N, access: AccessType)
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
+    pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType)
     where
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        let whole_resource = resource.range(&self.graph.resources);
+        let whole_resource = resource_node.range(&self.graph.resources);
         let subresource = SubresourceRange::from(whole_resource);
 
-        self.push_subresource_access(resource, subresource, access);
+        self.push_subresource_access(resource_node, subresource, access);
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
-    /// `subresource` of `node` using `access`.
+    /// `subresource` of `resource_node` using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
     pub fn set_subresource_access<N>(
         &mut self,
-        resource: N,
+        resource_node: N,
         subresource: impl Into<N::Range>,
         access: AccessType,
     ) where
@@ -247,16 +261,16 @@ impl<'a> Command<'a> {
         let subresource = subresource.into();
         let subresource = SubresourceRange::from(subresource);
 
-        self.push_subresource_access(resource, subresource, access);
+        self.push_subresource_access(resource_node, subresource, access);
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
-    /// `subresource` of `node` using `access`.
+    /// `subresource` of `resource` using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
+    /// An access function must be called for `resource` before it is used within a `record_`-function.
     pub fn subresource_access<N>(
         mut self,
-        resource: N,
+        resource_node: N,
         subresource: impl Into<N::Range>,
         access: AccessType,
     ) -> Self
@@ -264,7 +278,7 @@ impl<'a> Command<'a> {
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        self.set_subresource_access(resource, subresource, access);
+        self.set_subresource_access(resource_node, subresource, access);
         self
     }
 }

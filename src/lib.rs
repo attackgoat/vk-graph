@@ -859,8 +859,8 @@ impl Graph {
 
     /// Returns the index of the first pass which accesses a given node
     #[profiling::function]
-    fn first_node_access_pass_index(&self, node: impl Node) -> Option<usize> {
-        let node_idx = node.index();
+    fn first_node_access_pass_index(&self, resource_node: impl Node) -> Option<usize> {
+        let node_idx = resource_node.index();
 
         for (pass_idx, pass) in self.cmds.iter().enumerate() {
             for exec in pass.execs.iter() {
@@ -889,12 +889,12 @@ impl Graph {
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given node represents.
-    pub fn resource<N>(&self, node: N) -> &N::Resource
+    /// which the given bound resource node represents.
+    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
         N: Node,
     {
-        node.borrow(&self.resources)
+        resource_node.borrow(&self.resources)
     }
 
     /// Note: `data` must not exceed 65536 bytes.

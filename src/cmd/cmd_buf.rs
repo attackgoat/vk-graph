@@ -27,12 +27,14 @@ use crate::Execution;
 /// Basic usage:
 ///
 /// ```no_run
+/// # use ash::vk;
 /// # use vk_graph::Graph;
 /// # fn main() {
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd()
 ///         .record_cmd_buf(move |cmd_buf| {
 ///             // Use provided command buffer functions or native calls
+///             assert_ne!(cmd_buf.handle, vk::CommandBuffer::null());
 ///         });
 /// # }
 /// ```
@@ -72,8 +74,6 @@ impl<'a> CommandBuffer<'a> {
     ///   [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)
     ///   aligned to `min_accel_struct_scratch_offset_alignment` of
     ///   [`PhysicalDevice::accel_struct_properties`](crate::driver::physical_device::PhysicalDevice::accel_struct_properties).
-    ///
-    ///     TODO: Link to somewhere else for a full example of the scratch buffer steps
     ///
     /// # Examples
     ///
@@ -141,6 +141,13 @@ impl<'a> CommandBuffer<'a> {
     ///         });
     /// # Ok(()) }
     /// ```
+    ///
+    /// See also:
+    ///
+    /// - [`examples/ray_omni.rs`](/examples/ray_omni.rs)
+    /// - [`examples/ray_trace.rs`](/examples/ray_trace.rs)
+    /// - [`examples/rt_triangle.rs`](/examples/rt_triangle.rs)
+    ///
     pub fn build_accel_struct(&self, infos: &[BuildAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
@@ -215,9 +222,9 @@ impl<'a> CommandBuffer<'a> {
     /// There is no ordering or synchronization implied between any of the individual acceleration
     /// structure builds.
     ///
-    /// `range` is a buffer device address which points to `info.geometry.len()`
-    /// [vk::AccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
-    /// addresses where geometry data is stored, as defined by `info`.
+    /// Each [`BuildAccelerationStructureIndirectInfo::range_base`] is a buffer device address which
+    /// points to an array of [`vk::AccelerationStructureBuildRangeInfoKHR`] structures defining
+    /// dynamic offsets to the addresses where geometry data is stored.
     pub fn build_accel_struct_indirect(
         &self,
         infos: &[BuildAccelerationStructureIndirectInfo],
@@ -414,9 +421,9 @@ impl<'a> CommandBuffer<'a> {
     /// There is no ordering or synchronization implied between any of the individual acceleration
     /// structure updates.
     ///
-    /// `range` is a buffer device address which points to `info.geometry.len()`
-    /// [vk::AccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
-    /// addresses where geometry data is stored, as defined by `info`.
+    /// Each [`UpdateAccelerationStructureIndirectInfo::range_base`] is a buffer device address
+    /// which points to an array of [`vk::AccelerationStructureBuildRangeInfoKHR`] structures
+    /// defining dynamic offsets to the addresses where geometry data is stored.
     pub fn update_accel_struct_indirect(
         &self,
         infos: &[UpdateAccelerationStructureIndirectInfo],
@@ -496,23 +503,25 @@ impl<'a> CommandBuffer<'a> {
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given bound resource represents.
-    pub fn resource<N>(&self, node: N) -> &N::Resource
+    /// which the given bound resource node represents.
+    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
         N: Node,
     {
-        // You must have called an access function for this node on this execution before indexing
-        // into the bindings data!
+        // You must have called an access function for this node on this execution before borrowing
+        // the resource!
         //
         // Why: Code that attempts to access this function is attempting to get access to the Vulkan
         // resource (buffer, image, or acceleration structure). In order to access any resources the
         // access type must first be specified so the correct barriers may be added.
+        //
+        // See: https://attackgoat.github.io/vk-graph/pipeline_sync.html
         debug_assert!(
-            self.exec.accesses.contains_key(&node.index()),
-            "unexpected node access: call access, read, or write first"
+            self.exec.accesses.contains_key(&resource_node.index()),
+            "unexpected node access: call an access function first"
         );
 
-        node.borrow(self.resources)
+        resource_node.borrow(self.resources)
     }
 }
 

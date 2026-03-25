@@ -13,65 +13,74 @@ use {
 };
 
 impl PipelineCommand<'_, GraphicPipeline> {
-    /// TODO
+    /// Sets the `color_attachment` attachment index of the following render pass to the given
+    /// `image`.
+    ///
+    /// Note: To use multi-sampled (MSAA) rendering, use an image created with a sample count
+    /// greater than one.
+    ///
+    /// Note: The default view (the whole image) is used for `image`.
+    ///
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
     pub fn color_attachment_image(
         mut self,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
+        color_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
         load: LoadOp<ClearColorValue>,
         store: StoreOp,
     ) -> Self {
-        self.set_color_attachment_image(color_attachment_idx, color_image, load, store);
+        self.set_color_attachment_image(color_attachment, image, load, store);
         self
     }
 
-    /// TODO
+    /// Sets the `color_attachment` attachment index of the following render pass to the given
+    /// `image`, as interpreted by `image_view_info`.
+    ///
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
     pub fn color_attachment_image_view(
         mut self,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
-        color_image_view_info: impl Into<ImageViewInfo>,
+        color_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
         load: LoadOp<ClearColorValue>,
         store: StoreOp,
     ) -> Self {
-        self.set_color_attachment_image_view(
-            color_attachment_idx,
-            color_image,
-            color_image_view_info,
-            load,
-            store,
-        );
+        self.set_color_attachment_image_view(color_attachment, image, image_view_info, load, store);
         self
     }
 
-    /// TODO
+    /// Resolves a multi-sampled (MSAA) color image attachment into a single-sampled attachment
+    /// using the given `image`.
+    ///
+    /// Note: The default view (the whole image) is used for `image`.
+    ///
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
     pub fn color_attachment_resolve_image(
         mut self,
-        msaa_attachment_idx: AttachmentIndex,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
+        msaa_attachment: AttachmentIndex,
+        color_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
     ) -> Self {
-        self.set_color_attachment_resolve_image(
-            msaa_attachment_idx,
-            color_attachment_idx,
-            color_image,
-        );
+        self.set_color_attachment_resolve_image(msaa_attachment, color_attachment, image);
         self
     }
 
-    /// TODO
+    /// Resolves a multi-sampled (MSAA) color image attachment into a single-sampled attachment
+    /// using the given `image`, as interpreted by `image_view_info`.
+    ///
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
     pub fn color_attachment_resolve_image_view(
         mut self,
-        msaa_attachment_idx: AttachmentIndex,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
-        color_image_view_info: impl Into<ImageViewInfo>,
+        msaa_attachment: AttachmentIndex,
+        color_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
     ) -> Self {
         self.set_color_attachment_resolve_image_view(
-            msaa_attachment_idx,
-            color_attachment_idx,
-            color_image,
-            color_image_view_info,
+            msaa_attachment,
+            color_attachment,
+            image,
+            image_view_info,
         );
         self
     }
@@ -83,64 +92,85 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// TODO
+    /// Sets the combined depth and stencil attachment of the following render pass to the given
+    /// `image`.
+    ///
+    /// Note: To use multi-sampled (MSAA) rendering, use an image created with a sample count
+    /// greater than one.
+    ///
+    /// Note: The default view (the whole image) is used for `image`.
+    ///
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
     pub fn depth_stencil_attachment_image(
         mut self,
-        depth_stencil_image: impl Into<AnyImageNode>,
+        image: impl Into<AnyImageNode>,
         load: LoadOp<vk::ClearDepthStencilValue>,
         store: StoreOp,
     ) -> Self {
-        self.set_depth_stencil_attachment_image(depth_stencil_image, load, store);
+        self.set_depth_stencil_attachment_image(image, load, store);
         self
     }
 
-    /// TODO
+    /// Sets the combined depth and stencil attachment of the following render pass to the given
+    /// `image`, as interpreted by `image_view_info`.
+    ///
+    /// Note: To use multi-sampled (MSAA) rendering, use an image created with a sample count
+    /// greater than one.
+    ///
+    /// Note: The default view (the whole image) is used for `image`.
+    ///
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
     pub fn depth_stencil_attachment_image_view(
         mut self,
-        depth_stencil_image: impl Into<AnyImageNode>,
-        depth_stencil_image_view_info: impl Into<ImageViewInfo>,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
         load: LoadOp<vk::ClearDepthStencilValue>,
         store: StoreOp,
     ) -> Self {
-        self.set_depth_stencil_attachment_image_view(
-            depth_stencil_image,
-            depth_stencil_image_view_info,
-            load,
-            store,
-        );
+        self.set_depth_stencil_attachment_image_view(image, image_view_info, load, store);
         self
     }
 
-    /// TODO
+    /// Resolves a multi-sampled (MSAA) combined depth and stencil image attachment into a
+    /// single-sampled attachment using the given `image`.
+    ///
+    /// Note: The default view (the whole image) is used for `image`.
+    ///
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
     pub fn depth_stencil_attachment_resolve_image(
         mut self,
-        attachment_idx: AttachmentIndex,
-        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_stencil_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
         depth_mode: Option<ResolveMode>,
         stencil_mode: Option<ResolveMode>,
     ) -> Self {
         self.set_depth_stencil_attachment_resolve_image(
-            attachment_idx,
-            depth_stencil_image,
+            depth_stencil_attachment,
+            image,
             depth_mode,
             stencil_mode,
         );
         self
     }
 
-    /// TODO
+    /// Resolves a multi-sampled (MSAA) combined depth and stencil image attachment into a
+    /// single-sampled attachment using the given `image`, as interpreted by `image_view_info`.
+    ///
+    /// Note: The default view (the whole image) is used for `image`.
+    ///
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
     pub fn depth_stencil_attachment_resolve_image_view(
         mut self,
-        attachment_idx: AttachmentIndex,
-        depth_stencil_image: impl Into<AnyImageNode>,
-        depth_stencil_image_view_info: impl Into<ImageViewInfo>,
+        depth_stencil_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
         depth_mode: Option<ResolveMode>,
         stencil_mode: Option<ResolveMode>,
     ) -> Self {
         self.set_depth_stencil_attachment_resolve_image_view(
-            attachment_idx,
-            depth_stencil_image,
-            depth_stencil_image_view_info,
+            depth_stencil_attachment,
+            image,
+            image_view_info,
             depth_mode,
             stencil_mode,
         );
@@ -203,111 +233,93 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [Self::color_attachment_image]
+    /// See [`Self::color_attachment_image`]
     pub fn set_color_attachment_image(
         &mut self,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
+        color_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
         load: LoadOp<ClearColorValue>,
         store: StoreOp,
     ) -> &mut Self {
-        let color_image = color_image.into();
-        let color_image_view = self.resource(color_image).info;
+        let image = image.into();
+        let image_view = self.resource(image).info;
 
-        self.set_color_attachment_image_view(
-            color_attachment_idx,
-            color_image,
-            color_image_view,
-            load,
-            store,
-        );
+        self.set_color_attachment_image_view(color_attachment, image, image_view, load, store);
 
         self
     }
 
-    /// See [Self::color_attachment_image_view]
+    /// See [`Self::color_attachment_image_view`]
     pub fn set_color_attachment_image_view(
         &mut self,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
-        color_image_view_info: impl Into<ImageViewInfo>,
+        color_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
         load: LoadOp<ClearColorValue>,
         store: StoreOp,
     ) -> &mut Self {
-        let color_image = color_image.into();
-        let color_image_view_info = color_image_view_info.into();
+        let image = image.into();
+        let image_view_info = image_view_info.into();
 
         #[allow(deprecated)]
         {
             match load {
-                LoadOp::Clear(color) => self.set_clear_color_value_as(
-                    color_attachment_idx,
-                    color_image,
-                    color,
-                    color_image_view_info,
-                ),
-                LoadOp::DontCare => self.set_attach_color_as(
-                    color_attachment_idx,
-                    color_image,
-                    color_image_view_info,
-                ),
-                LoadOp::Load => {
-                    self.set_load_color_as(color_attachment_idx, color_image, color_image_view_info)
+                LoadOp::Clear(color) => {
+                    self.set_clear_color_value_as(color_attachment, image, color, image_view_info)
                 }
+                LoadOp::DontCare => {
+                    self.set_attach_color_as(color_attachment, image, image_view_info)
+                }
+                LoadOp::Load => self.set_load_color_as(color_attachment, image, image_view_info),
             };
 
             if let StoreOp::Store = store {
-                self.set_store_color_as(color_attachment_idx, color_image, color_image_view_info);
+                self.set_store_color_as(color_attachment, image, image_view_info);
             }
         }
 
         self
     }
 
-    /// See [Self::color_attachment_resolve_image]
+    /// See [`Self::color_attachment_resolve_image`]
     pub fn set_color_attachment_resolve_image(
         &mut self,
-        msaa_attachment_idx: AttachmentIndex,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
+        msaa_attachment: AttachmentIndex,
+        color_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
     ) -> &mut Self {
-        let color_image = color_image.into();
-        let color_image_view = self.resource(color_image).info;
+        let image = image.into();
+        let image_view = self.resource(image).info;
 
         self.set_color_attachment_resolve_image_view(
-            msaa_attachment_idx,
-            color_attachment_idx,
-            color_image,
-            color_image_view,
+            msaa_attachment,
+            color_attachment,
+            image,
+            image_view,
         );
 
         self
     }
 
-    /// See [Self::color_attachment_resolve_image_view]
+    /// See [`Self::color_attachment_resolve_image_view`]
     pub fn set_color_attachment_resolve_image_view(
         &mut self,
-        msaa_attachment_idx: AttachmentIndex,
-        color_attachment_idx: AttachmentIndex,
-        color_image: impl Into<AnyImageNode>,
-        color_image_view_info: impl Into<ImageViewInfo>,
+        msaa_attachment: AttachmentIndex,
+        color_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
     ) -> &mut Self {
-        let color_image = color_image.into();
-        let color_image_view_info = color_image_view_info.into();
+        let image = image.into();
+        let image_view_info = image_view_info.into();
 
         #[allow(deprecated)]
-        self.set_attach_color_as(color_attachment_idx, color_image, color_image_view_info)
-            .set_resolve_color_as(
-                msaa_attachment_idx,
-                color_attachment_idx,
-                color_image,
-                color_image_view_info,
-            );
+        self.set_attach_color_as(color_attachment, image, image_view_info)
+            .set_resolve_color_as(msaa_attachment, color_attachment, image, image_view_info);
 
         self
     }
 
-    /// See [Self::depth_stencil]
+    /// See [`Self::depth_stencil`]
     pub fn set_depth_stencil(&mut self, depth_stencil: impl Into<DepthStencilInfo>) -> &mut Self {
         let depth_stencil = depth_stencil.into();
         let cmd = self.cmd.cmd_mut();
@@ -320,77 +332,68 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [Self::depth_stencil_attachment_image]
+    /// See [`Self::depth_stencil_attachment_image`]
     pub fn set_depth_stencil_attachment_image(
         &mut self,
-        depth_stencil_image: impl Into<AnyImageNode>,
+        image: impl Into<AnyImageNode>,
         load: LoadOp<vk::ClearDepthStencilValue>,
         store: StoreOp,
     ) -> &mut Self {
-        let depth_stencil_image = depth_stencil_image.into();
-        let depth_stencil_image_view_info = self.resource(depth_stencil_image).info;
+        let image = image.into();
+        let image_view_info = self.resource(image).info;
 
-        self.set_depth_stencil_attachment_image_view(
-            depth_stencil_image,
-            depth_stencil_image_view_info,
-            load,
-            store,
-        );
+        self.set_depth_stencil_attachment_image_view(image, image_view_info, load, store);
 
         self
     }
 
-    /// See [Self::depth_stencil_attachment_image_view]
+    /// See [`Self::depth_stencil_attachment_image_view`]
     pub fn set_depth_stencil_attachment_image_view(
         &mut self,
-        depth_stencil_image: impl Into<AnyImageNode>,
-        depth_stencil_image_view_info: impl Into<ImageViewInfo>,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
         load: LoadOp<vk::ClearDepthStencilValue>,
         store: StoreOp,
     ) -> &mut Self {
-        let depth_stencil_image = depth_stencil_image.into();
-        let depth_stencil_image_view_info = depth_stencil_image_view_info.into();
+        let image = image.into();
+        let image_view_info = image_view_info.into();
 
         #[allow(deprecated)]
         {
             match load {
                 LoadOp::Clear(color) => self.set_clear_depth_stencil_value_as(
-                    depth_stencil_image,
+                    image,
                     color.depth,
                     color.stencil,
-                    depth_stencil_image_view_info,
+                    image_view_info,
                 ),
-                LoadOp::DontCare => self.set_attach_depth_stencil_as(
-                    depth_stencil_image,
-                    depth_stencil_image_view_info,
-                ),
-                LoadOp::Load => self
-                    .set_load_depth_stencil_as(depth_stencil_image, depth_stencil_image_view_info),
+                LoadOp::DontCare => self.set_attach_depth_stencil_as(image, image_view_info),
+                LoadOp::Load => self.set_load_depth_stencil_as(image, image_view_info),
             };
 
             if let StoreOp::Store = store {
-                self.set_store_depth_stencil_as(depth_stencil_image, depth_stencil_image_view_info);
+                self.set_store_depth_stencil_as(image, image_view_info);
             }
         }
 
         self
     }
 
-    /// See [Self::depth_stencil_attachment_resolve_image]
+    /// See [`Self::depth_stencil_attachment_resolve_image`]
     pub fn set_depth_stencil_attachment_resolve_image(
         &mut self,
-        attachment_idx: AttachmentIndex,
-        depth_stencil_image: impl Into<AnyImageNode>,
+        depth_stencil_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
         depth_mode: Option<ResolveMode>,
         stencil_mode: Option<ResolveMode>,
     ) -> &mut Self {
-        let depth_stencil_image = depth_stencil_image.into();
-        let depth_stencil_image_view = self.resource(depth_stencil_image).info;
+        let image = image.into();
+        let image_view = self.resource(image).info;
 
         self.set_depth_stencil_attachment_resolve_image_view(
-            attachment_idx,
-            depth_stencil_image,
-            depth_stencil_image_view,
+            depth_stencil_attachment,
+            image,
+            image_view,
             depth_mode,
             stencil_mode,
         );
@@ -398,24 +401,24 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [Self::depth_stencil_attachment_resolve_image_view]
+    /// See [`Self::depth_stencil_attachment_resolve_image_view`]
     pub fn set_depth_stencil_attachment_resolve_image_view(
         &mut self,
-        attachment_idx: AttachmentIndex,
-        depth_stencil_image: impl Into<AnyImageNode>,
-        depth_stencil_image_view_info: impl Into<ImageViewInfo>,
+        depth_stencil_attachment: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
         depth_mode: Option<ResolveMode>,
         stencil_mode: Option<ResolveMode>,
     ) -> &mut Self {
-        let depth_stencil_image = depth_stencil_image.into();
-        let depth_stencil_image_view_info = depth_stencil_image_view_info.into();
+        let image = image.into();
+        let image_view_info = image_view_info.into();
 
         #[allow(deprecated)]
-        self.set_attach_depth_stencil_as(depth_stencil_image, depth_stencil_image_view_info)
+        self.set_attach_depth_stencil_as(image, image_view_info)
             .set_resolve_depth_stencil_as(
-                attachment_idx,
-                depth_stencil_image,
-                depth_stencil_image_view_info,
+                depth_stencil_attachment,
+                image,
+                image_view_info,
                 depth_mode,
                 stencil_mode,
             );
@@ -423,7 +426,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [Self::multiview]
+    /// See [`Self::multiview`]
     pub fn set_multiview(&mut self, view_mask: u32, correlated_view_mask: u32) -> &mut Self {
         let cmd = self.cmd.cmd_mut();
         let exec = cmd.execs.last_mut().unwrap();
@@ -434,7 +437,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         self
     }
 
-    /// See [Self::render_area]
+    /// See [`Self::render_area`]
     pub fn set_render_area(&mut self, area: vk::Rect2D) -> &mut Self {
         self.cmd.cmd_mut().execs.last_mut().unwrap().render_area = Some(area);
         self
@@ -545,10 +548,10 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 
 /// Recording interface for drawing commands.
 ///
-/// This structure provides a strongly-typed set of methods which allow rasterization shader code to
-/// be executed. An instance of `Draw` is provided to the closure parameter of
+/// This structure provides a strongly-typed set of methods which allow raster graphics shader code
+/// to be executed. An instance is provided to the closure argument of
 /// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`GraphicPipeline`] to a
-/// render pass.
+/// command.
 ///
 /// # Examples
 ///
@@ -556,6 +559,7 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 ///
 /// ```no_run
 /// # use ash::vk;
+/// # use vk_graph::cmd::{LoadOp, StoreOp};
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -575,11 +579,12 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
 /// my_graph
 ///     .begin_cmd()
-///     .debug_name("my draw pass")
+///     .debug_name("my draw command")
 ///     .bind_pipeline(&my_graphic_pipeline)
-///     .store_color(0, swapchain_image)
+///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
 ///     .record_cmd_buf(move |cmd_buf| {
-///         // During this closure we have access to the draw methods!
+///         // During this closure we have access to the drawing functions!
+///         cmd_buf.draw(3, 1, 0, 0);
 ///     });
 /// # Ok(()) }
 /// ```
@@ -589,7 +594,7 @@ pub struct GraphicCommandBuffer<'a> {
 }
 
 impl GraphicCommandBuffer<'_> {
-    /// Bind an index buffer to the current pass.
+    /// Bind an index buffer to the current command.
     ///
     /// `offset` is the starting offset in bytes within `buffer` used in index buffer address
     /// calculations.
@@ -600,6 +605,7 @@ impl GraphicCommandBuffer<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
+    /// # use vk_graph::cmd::{LoadOp, StoreOp};
     /// # use vk_graph::driver::{AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
@@ -628,7 +634,7 @@ impl GraphicCommandBuffer<'_> {
     ///     .begin_cmd()
     ///     .debug_name("my indexed geometry draw pass")
     ///     .bind_pipeline(&my_graphic_pipeline)
-    ///     .store_color(0, swapchain_image)
+    ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
     ///     .record_cmd_buf(move |cmd_buf| {
@@ -671,6 +677,7 @@ impl GraphicCommandBuffer<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
+    /// # use vk_graph::cmd::{LoadOp, StoreOp};
     /// # use vk_graph::driver::{sync::AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
@@ -696,7 +703,7 @@ impl GraphicCommandBuffer<'_> {
     ///     .begin_cmd()
     ///     .debug_name("my unindexed geometry draw pass")
     ///     .bind_pipeline(&my_graphic_pipeline)
-    ///     .store_color(0, swapchain_image)
+    ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
     ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf
@@ -851,6 +858,7 @@ impl GraphicCommandBuffer<'_> {
     /// ```no_run
     /// # use std::mem::size_of;
     /// # use ash::vk;
+    /// # use vk_graph::cmd::{LoadOp, StoreOp};
     /// # use vk_graph::driver::{AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
@@ -896,7 +904,7 @@ impl GraphicCommandBuffer<'_> {
     ///     .begin_cmd()
     ///     .debug_name("draw a single triangle")
     ///     .bind_pipeline(&my_graphic_pipeline)
-    ///     .store_color(0, swapchain_image)
+    ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
     ///     .resource_access(buf_node, AccessType::IndirectBuffer)
@@ -1073,6 +1081,7 @@ impl GraphicCommandBuffer<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
+    /// # use vk_graph::cmd::{LoadOp, StoreOp};
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -1095,7 +1104,7 @@ impl GraphicCommandBuffer<'_> {
     ///     .begin_cmd()
     ///     .debug_name("draw a quad")
     ///     .bind_pipeline(&my_graphic_pipeline)
-    ///     .store_color(0, swapchain_image)
+    ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .record_cmd_buf(move |cmd_buf| {
     ///         cmd_buf
     ///             .push_constants(0, &[42])
@@ -1118,6 +1127,8 @@ impl GraphicCommandBuffer<'_> {
     }
 
     /// Set scissor rectangle dynamically for the current command.
+    ///
+    /// The default scissor state is no-clip.
     #[profiling::function]
     pub fn set_scissor(&self, first_scissor: u32, scissors: &[vk::Rect2D]) -> &Self {
         unsafe {
@@ -1130,6 +1141,9 @@ impl GraphicCommandBuffer<'_> {
     }
 
     /// Set the viewport dynamically for the current command.
+    ///
+    /// The default viewport state is the entire render target as defined by all combined image
+    /// attachments.
     #[profiling::function]
     pub fn set_viewport(&self, first_viewport: u32, viewports: &[vk::Viewport]) -> &Self {
         unsafe {
@@ -1150,8 +1164,8 @@ impl<'a> Deref for GraphicCommandBuffer<'a> {
     }
 }
 
-/// Specifies the state of a color or depth stencil image attachment during graphic framebuffer
-/// load operations.
+/// Specifies the state of a color or combined depth and stencil attachment image during graphic
+/// render pass framebuffer load operations.
 ///
 /// Use this to specify the desired contents of any image before use in a pipeline command buffer.
 #[derive(Clone, Copy, Debug)]
@@ -1159,7 +1173,7 @@ pub enum LoadOp<T> {
     /// Clears the attachment.
     ///
     /// `T` will be [ClearColorValue] for color images or [vk::ClearDepthStencilValue] for
-    /// depth/stencil images.
+    /// combined depth and stencil images.
     Clear(T),
 
     /// The attachment will become undefined and reads will produce garbage data.
@@ -1208,8 +1222,8 @@ impl LoadOp<vk::ClearDepthStencilValue> {
     }
 }
 
-/// Specifies the state of a color or depth stencil image attachment after graphic framebuffer
-/// store operations.
+/// Specifies the state of a color or combined depth and stencil attachment image after graphic
+/// render pass framebuffer store operations.
 ///
 /// Use this to specify the desired contents of any image after use in a pipeline command buffer.
 #[derive(Clone, Copy, Debug)]

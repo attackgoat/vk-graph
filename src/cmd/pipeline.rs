@@ -92,7 +92,7 @@ pipeline!(Compute);
 pipeline!(Graphic);
 pipeline!(RayTrace);
 
-/// A render pass which has been bound to a particular compute, graphic, or ray-trace pipeline.
+/// A [`Command`] which has been bound to a particular compute, graphic, or ray-trace pipeline.
 pub struct PipelineCommand<'c, T> {
     pub(super) __: PhantomData<T>,
     pub(super) cmd: Command<'c>,
@@ -117,48 +117,51 @@ impl<'c, T> PipelineCommand<'c, T> {
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given node represents.
-    pub fn resource<N>(&self, node: N) -> &N::Resource
+    /// which the given bound resource node represents.
+    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
         N: Node,
     {
-        self.cmd.resource(node)
+        self.cmd.resource(resource_node)
     }
 
-    /// Informs the command that the next recorded command buffer will read or write `node` using
-    /// `access`.
+    /// Informs the command that the next recorded command buffer will read or write `resource_node`
+    /// using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
-    pub fn resource_access<N>(mut self, resource: N, access: AccessType) -> Self
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
+    pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
     where
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        self.cmd.set_resource_access(resource, access);
+        self.cmd.set_resource_access(resource_node, access);
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write `node` using
-    /// `access`.
+    /// Informs the command that the next recorded command buffer will read or write `resource_node`
+    /// using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
-    pub fn set_resource_access<N>(&mut self, resource: N, access: AccessType) -> &mut Self
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
+    pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType) -> &mut Self
     where
         N: Node + View,
         SubresourceRange: From<N::Range>,
     {
-        self.cmd.set_resource_access(resource, access);
+        self.cmd.set_resource_access(resource_node, access);
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the `resource`
+    /// Informs the command that the next recorded command buffer will read or write the `resource_node`
     /// at the specified shader `descriptor` using `access`.
     ///
-    /// This function must be called for `resource` before it is used within a `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
     pub fn set_shader_resource_access<N>(
         &mut self,
         descriptor: impl Into<Descriptor>,
-        resource: N,
+        resource_node: N,
         access: AccessType,
     ) -> &mut Self
     where
@@ -167,20 +170,21 @@ impl<'c, T> PipelineCommand<'c, T> {
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
     {
-        let subresource = resource.info(&self.cmd.graph.resources);
+        let subresource = resource_node.info(&self.cmd.graph.resources);
 
-        self.set_shader_subresource_access(descriptor, resource, subresource, access)
+        self.set_shader_subresource_access(descriptor, resource_node, subresource, access)
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the `node` at
-    /// the specified shader `descriptor` using `access`. The node will be interpreted
-    /// using `view_info`.
+    /// Informs the command that the next recorded command buffer will read or write the
+    /// `resource_node` at the specified shader `descriptor` using `access`. The resource will be
+    /// interpreted using `view_info`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
     pub fn set_shader_subresource_access<N>(
         &mut self,
         descriptor: impl Into<Descriptor>,
-        resource: N,
+        resource_node: N,
         subresource: impl Into<N::Info>,
         access: AccessType,
     ) -> &mut Self
@@ -192,10 +196,13 @@ impl<'c, T> PipelineCommand<'c, T> {
     {
         let descriptor = descriptor.into();
         let subresource = subresource.into();
-        let node_idx = resource.index();
+        let node_idx = resource_node.index();
 
-        self.cmd
-            .push_subresource_access(resource, SubresourceRange::from(subresource), access);
+        self.cmd.push_subresource_access(
+            resource_node,
+            SubresourceRange::from(subresource),
+            access,
+        );
 
         assert!(
             self.cmd
@@ -213,12 +220,13 @@ impl<'c, T> PipelineCommand<'c, T> {
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
-    /// `subresource` of `node` using `access`.
+    /// `subresource` of `resource_node` using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
     pub fn set_subresource_access<N>(
         &mut self,
-        resource: N,
+        resource_node: N,
         subresource: impl Into<N::Range>,
         access: AccessType,
     ) -> &mut Self
@@ -227,18 +235,19 @@ impl<'c, T> PipelineCommand<'c, T> {
         SubresourceRange: From<N::Range>,
     {
         self.cmd
-            .set_subresource_access(resource, subresource, access);
+            .set_subresource_access(resource_node, subresource, access);
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the `node` at
-    /// the specified shader `descriptor` using `access`.
+    /// Informs the command that the next recorded command buffer will read or write the
+    /// `resource_node` at the specified shader `descriptor` using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
     pub fn shader_resource_access<N>(
         mut self,
         descriptor: impl Into<Descriptor>,
-        resource: N,
+        resource_node: N,
         access: AccessType,
     ) -> Self
     where
@@ -247,19 +256,20 @@ impl<'c, T> PipelineCommand<'c, T> {
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
     {
-        self.set_shader_resource_access(descriptor, resource, access);
+        self.set_shader_resource_access(descriptor, resource_node, access);
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the `node` at
-    /// the specified shader `descriptor` using `access`. The node will be interpreted
-    /// using `view_info`.
+    /// Informs the command that the next recorded command buffer will read or write the
+    /// `resource_node` at the specified shader `descriptor` using `access`. The resource will be
+    /// interpreted using `view_info`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
     pub fn shader_subresource_access<N>(
         mut self,
         descriptor: impl Into<Descriptor>,
-        resource: N,
+        resource_node: N,
         subresource: impl Into<N::Info>,
         access: AccessType,
     ) -> Self
@@ -269,17 +279,18 @@ impl<'c, T> PipelineCommand<'c, T> {
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
     {
-        self.set_shader_subresource_access(descriptor, resource, subresource, access);
+        self.set_shader_subresource_access(descriptor, resource_node, subresource, access);
         self
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
-    /// `subresource` of `node` using `access`.
+    /// `subresource` of `resource_node` using `access`.
     ///
-    /// This function must be called for `node` before it is used within a `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a
+    /// `record_`-function.
     pub fn subresource_access<N>(
         mut self,
-        resource: N,
+        resource_node: N,
         subresource: impl Into<N::Range>,
         access: AccessType,
     ) -> Self
@@ -288,7 +299,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         SubresourceRange: From<N::Range>,
     {
         self.cmd
-            .set_subresource_access(resource, subresource, access);
+            .set_subresource_access(resource_node, subresource, access);
         self
     }
 }

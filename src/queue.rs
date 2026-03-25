@@ -2629,11 +2629,11 @@ impl Queue {
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given node represents.
-    pub fn resource<N>(&self, node: N) -> &N::Resource
+    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
         N: Node,
     {
-        self.graph.resource(node)
+        self.graph.resource(resource_node)
     }
 
     /// Returns a vec of pass indexes that are required to be executed, in order, for the given
@@ -2914,14 +2914,14 @@ impl Queue {
     #[profiling::function]
     pub fn submit_resource<P>(
         &mut self,
-        node: impl Node,
+        resource_node: impl Node,
         pool: &mut P,
         cmd_buf: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
     {
-        let node_idx = node.index();
+        let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());
 
@@ -2942,19 +2942,19 @@ impl Queue {
     #[profiling::function]
     pub fn submit_resource_dependencies<P>(
         &mut self,
-        node: impl Node,
+        resource_node: impl Node,
         pool: &mut P,
         cmd_buf: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
     {
-        let node_idx = node.index();
+        let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());
 
         // We record up to but not including the first pass which accesses the target node
-        if let Some(end_pass_idx) = self.graph.first_node_access_pass_index(node) {
+        if let Some(end_pass_idx) = self.graph.first_node_access_pass_index(resource_node) {
             self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)?;
         }
 

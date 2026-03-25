@@ -1,11 +1,11 @@
 //! Resource pooling, leasing, and aliasing types.
 //!
-//! _vk-graph_ provides caching for acceleration structure, buffer and image resources which may be
-//! leased from configurable pools using their corresponding information structure. Most programs
-//! will do fine with a single [`FifoPool`](self::fifo::FifoPool).
+//! Resource pools provide caching for buffer, image, and acceleration structure resources. Pooled
+//! resources may be leased from a pool using their corresponding information structure.
 //!
-//! Leased resources may be bound directly to a render graph and used in the same manner as regular
-//! resources. After rendering has finished, the leased resources will return to the pool for reuse.
+//! Leased resources may be bound directly to a [`Graph`](crate::Graph) and used in the same manner
+//! as regular resources. After execution has completed leased resources are automatically returned
+//! to their pool for reuse.
 //!
 //! # Buckets
 //!
@@ -59,15 +59,15 @@
 //!
 //! # When Should You Use Resource Aliasing?
 //!
-//! Wrapping any pool using [`AliasPool::new`](self::alias::AliasPool::new) enables resource
+//! Wrapping any pool using [`AliasWrapper::new`](self::alias::AliasWrapper::new) enables resource
 //! aliasing, which prevents excess resources from being created even when different parts of your
 //! code request new resources.
 //!
-//! **_NOTE:_** Render graph submission will automatically attempt to re-order submitted passes to
+//! **_NOTE:_** Graph submission will automatically attempt to re-order submitted commands to
 //! reduce contention between individual resources.
 //!
 //! **_NOTE:_** In cases where multiple aliased resources using identical request information are
-//! used in the same render graph pass you must ensure the resources are aliased from different
+//! used in the same graph command you must ensure the resources are aliased from different
 //! pools. There is currently no tagging or filter which would prevent "ping-pong" rendering of such
 //! resources from being the same actual resources; this causes Vulkan validation warnings when
 //! reading from and writing to the same images, or whatever your operations may be.

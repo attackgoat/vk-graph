@@ -51,7 +51,7 @@ impl PipelineCommand<'_, RayTracePipeline> {
 /// Recording interface for ray tracing commands.
 ///
 /// This structure provides a strongly-typed set of methods which allow ray trace shader code to be
-/// executed. An instance of is provided to the closure parameter of
+/// executed. An instance is provided to the closure argument of
 /// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`RayTracePipeline`] to
 /// a command.
 ///
@@ -71,15 +71,15 @@ impl PipelineCommand<'_, RayTracePipeline> {
 /// # let info = RayTracePipelineInfo::default();
 /// # let my_miss_code = [0u8; 1];
 /// # let my_ray_trace_pipeline = RayTracePipeline::create(&device, info,
-///     [Shader::new_miss(my_miss_code.as_slice())],
-///     [RayTraceShaderGroup::new_general(0)],
-/// )?;
+/// #     [Shader::new_miss(my_miss_code.as_slice())],
+/// #     [RayTraceShaderGroup::new_general(0)],
+/// # )?;
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd()
-///         .debug_name("my ray trace pass")
+///         .debug_name("my ray trace command")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
 ///         .record_cmd_buf(move |cmd_buf| {
-///             // During this closure we have access to the ray trace methods!
+///             // During this closure we have access to the ray trace functions!
 ///         });
 /// # Ok(()) }
 /// ```
@@ -155,7 +155,7 @@ impl RayTraceCommandBuffer<'_> {
     ///         .bind_pipeline(&my_ray_trace_pipeline)
     ///         .record_cmd_buf(move |cmd_buf| {
     ///             cmd_buf.push_constants(0, &[0xcb])
-    ///                     .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
+    ///                    .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
     /// ```

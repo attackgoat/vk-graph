@@ -2,9 +2,7 @@
 //!
 //! # Resources
 //!
-//! Each resource contains an opaque Vulkan object handle and an information structure which
-//! describes the object. Resources also contain an atomic [`AccessType`] state value which is used to
-//! maintain consistency in any system which accesses the resource.
+//! Resources are created and destroyed using RAII-style wrapper structures.
 //!
 //! The following resources are available:
 //!
@@ -12,24 +10,42 @@
 //! - [`Buffer`]
 //! - [`Image`](image::Image)
 //!
+//! Resources are logically mutable. All resource types contain useful read-only public fields, for
+//! example:
+//!
+//! [`Buffer`] Field|`->`
+//! -|-
+//! [`device`](Buffer::device)|[`Device`](device::Device)
+//! [`handle`](Buffer::handle)|[`vk::Buffer`]
+//! [`info`](Buffer::info)|[`BufferInfo`]
+//!
+//! Resources use atomic [`AccessType`](sync::AccessType) values to maintain consistency and track
+//! changes.
+//!
 //! # Pipelines
 //!
-//! Pipelines allow you to run shader code which read and write resources using graphics hardware.
-//!
-//! Each pipeline contains an opaque Vulkan object handle and an information structure which
-//! describes the configuration and shaders. They are immutable once created.
+//! Pipelines enable reading and writing resources using shader code running on physical graphics
+//! hardware.
 //!
 //! The following pipelines are available:
 //!
 //! - [`ComputePipeline`](compute::ComputePipeline)
 //! - [`GraphicPipeline`](graphic::GraphicPipeline)
 //! - [`RayTracePipeline`](ray_trace::RayTracePipeline)
+//!
+//! Pipelines are immutable. All pipeline types contain useful public methods, for
+//! example:
+//!
+//! [`ComputePipeline`](compute::ComputePipeline) Method|`->`
+//! -|-
+//! [`device(&self)`](compute::ComputePipeline::device)|[`Device`](device::Device)
+//! [`handle(&self)`](compute::ComputePipeline::handle)|[`vk::Pipeline`]
+//! [`info(&self)`](compute::ComputePipeline::info)|[`ComputePipelineInfo`](compute::ComputePipelineInfo)
 
 pub mod accel_struct;
 pub mod buffer;
 pub mod cmd_buf;
 pub mod compute;
-pub mod descriptor_set;
 pub mod device;
 pub mod graphic;
 pub mod image;
@@ -40,6 +56,9 @@ pub mod render_pass;
 pub mod shader;
 pub mod surface;
 pub mod swapchain;
+
+#[doc(hidden)]
+pub mod descriptor_set;
 
 mod descriptor_set_layout;
 

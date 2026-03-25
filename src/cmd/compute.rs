@@ -41,9 +41,9 @@ impl PipelineCommand<'_, ComputePipeline> {
 /// Recording interface for computing commands.
 ///
 /// This structure provides a strongly-typed set of methods which allow compute shader code to be
-/// executed. An instance is provided to the closure parameter of
+/// executed. An instance is provided to the closure argument of
 /// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`ComputePipeline`] to a
-/// render pass.
+/// command.
 ///
 /// # Examples
 ///
@@ -66,7 +66,8 @@ impl PipelineCommand<'_, ComputePipeline> {
 ///     .begin_cmd()
 ///     .bind_pipeline(&my_compute_pipeline)
 ///     .record_cmd_buf(move |cmd_buf| {
-///         // During this closure we have access to the compute dispatch methods!
+///         // During this closure we have access to the compute functions!
+///         cmd_buf.dispatch(64, 1, 1);
 ///     });
 /// # Ok(()) }
 /// ```
