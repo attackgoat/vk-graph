@@ -1,4 +1,4 @@
-//! Physical device resource types
+//! Physical device types
 
 use {
     super::{DriverError, instance::Instance},

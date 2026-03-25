@@ -37,13 +37,13 @@ use {
 pub(crate) type AttachmentIndex = u32;
 
 /// Alias for the binding index of a shader descriptor.
-pub type BindingIndex = u32;
+pub(crate) type BindingIndex = u32;
 
 /// Alias for the binding offset of a shader descriptor array element.
-pub type BindingOffset = u32;
+pub(crate) type BindingOffset = u32;
 
 /// Alias for the descriptor set index of a shader descriptor.
-pub type DescriptorSetIndex = u32;
+pub(crate) type DescriptorSetIndex = u32;
 
 /// A general-purpose Vulkan command which may contain acceleration structure operations, transfers,
 /// or shader pipelines.
@@ -301,22 +301,20 @@ impl<'a> Command<'a> {
 /// - `(42, [8])` for the same binding, but the 8th element
 /// - `(0, 42, [8])` same as the previous example
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum Descriptor {
-    /// An array binding which includes an `offset` argument for the bound element.
-    ArrayBinding(DescriptorSetIndex, BindingIndex, BindingOffset),
+pub struct Descriptor {
+    /// The value of the descriptor binding decoration applied to the variable.
+    pub binding: u32,
 
-    /// A single binding.
-    Binding(DescriptorSetIndex, BindingIndex),
+    /// An array-element offset applied to this descriptor.
+    pub offset: u32,
+
+    /// An optional descriptor set index value.
+    pub set: u32,
 }
 
 impl Descriptor {
     pub(super) fn into_tuple(self) -> (DescriptorSetIndex, BindingIndex, BindingOffset) {
-        match self {
-            Self::ArrayBinding(descriptor_set_idx, binding_idx, binding_offset) => {
-                (descriptor_set_idx, binding_idx, binding_offset)
-            }
-            Self::Binding(descriptor_set_idx, binding_idx) => (descriptor_set_idx, binding_idx, 0),
-        }
+        (self.set, self.binding, self.offset)
     }
 
     pub(super) fn set(self) -> DescriptorSetIndex {
@@ -326,26 +324,44 @@ impl Descriptor {
 }
 
 impl From<BindingIndex> for Descriptor {
-    fn from(val: BindingIndex) -> Self {
-        Self::Binding(0, val)
+    fn from(binding: BindingIndex) -> Self {
+        Self {
+            binding,
+            offset: 0,
+            set: 0,
+        }
     }
 }
 
 impl From<(DescriptorSetIndex, BindingIndex)> for Descriptor {
-    fn from(tuple: (DescriptorSetIndex, BindingIndex)) -> Self {
-        Self::Binding(tuple.0, tuple.1)
+    fn from((set, binding): (DescriptorSetIndex, BindingIndex)) -> Self {
+        Self {
+            binding,
+            offset: 0,
+            set,
+        }
     }
 }
 
 impl From<(BindingIndex, [BindingOffset; 1])> for Descriptor {
-    fn from(tuple: (BindingIndex, [BindingOffset; 1])) -> Self {
-        Self::ArrayBinding(0, tuple.0, tuple.1[0])
+    fn from((binding, [offset]): (BindingIndex, [BindingOffset; 1])) -> Self {
+        Self {
+            binding,
+            offset,
+            set: 0,
+        }
     }
 }
 
 impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor {
-    fn from(tuple: (DescriptorSetIndex, BindingIndex, [BindingOffset; 1])) -> Self {
-        Self::ArrayBinding(tuple.0, tuple.1, tuple.2[0])
+    fn from(
+        (set, binding, [offset]): (DescriptorSetIndex, BindingIndex, [BindingOffset; 1]),
+    ) -> Self {
+        Self {
+            binding,
+            offset,
+            set,
+        }
     }
 }
 

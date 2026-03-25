@@ -1,4 +1,4 @@
-//! Logical device resource types
+//! Logical device types
 
 use {
     super::{

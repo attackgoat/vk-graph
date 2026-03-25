@@ -1,4 +1,4 @@
-//! TODO
+//! Command buffer types
 
 use {
     super::{DriverError, device::Device},
