@@ -450,6 +450,14 @@ impl Drop for Image {
     }
 }
 
+impl Eq for Image {}
+
+impl PartialEq for Image {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ImageAccess<A> {
     accesses: Box<[A]>,

@@ -26,16 +26,22 @@ void main() {
 }
 ```
 
+```bash
+glslc shader.glsl -o shader.spv
+```
+
 ```rust
-let spirv = include_glsl!("shader.glsl");
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
+# use vk_graph::driver::shader::Shader;
+let spirv = include_bytes!("shader.spv");
 
 // #pragma allows for from_spirv syntax:
-let vertex_shader = Shader::from_spirv(
+let shader = Shader::from_spirv(
     spirv.as_slice(),
 );
 
 // Without this #pragma we must specify stage:
-let vertex_shader = Shader::new_compute(
+let shader = Shader::new_compute(
     spirv.as_slice(),
 );
 ```

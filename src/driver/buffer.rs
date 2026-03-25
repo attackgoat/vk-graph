@@ -488,6 +488,14 @@ impl Drop for Buffer {
     }
 }
 
+impl Eq for Buffer {}
+
+impl PartialEq for Buffer {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+
 #[derive(Debug)]
 struct BufferAccess {
     accesses: Vec<(AccessType, vk::DeviceSize)>,

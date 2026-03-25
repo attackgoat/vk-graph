@@ -24,6 +24,8 @@ Type|Usage
 `AccessType::ColorAttachmentWrite`|Written as a color attachment during rendering
 `AccessType::ComputeShaderReadUniformBuffer`|Read as a uniform buffer in a compute shader
 
+([_Full list_](https://docs.rs/vk-graph/latest/vk_graph/driver/sync/enum.AccessType.html))
+
 ## Resource Access
 
 The required access varies depending on the function being called and what the Vulkan specification
@@ -33,6 +35,15 @@ Generally, access must be specified before each command uses a resource. It appe
 function call:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, device::Device, sync::AccessType};
+# use vk_graph::node::{BufferNode, ImageNode};
+# fn test(
+#     device: &Device,
+#     some_buffer: BufferNode,
+#     some_image: ImageNode,
+# ) -> Result<(), DriverError> {
+# let mut graph = Graph::default();
 graph
     .begin_cmd()
     .resource_access(some_buffer, AccessType::TransferRead)
@@ -43,12 +54,22 @@ graph
         //  - Read some_buffer
         //  - Write some_image
     });
+# Ok(()) }
 ```
 
 Resource access is specified for and consumed by the following command buffer recording. For
 multiple accesses, use multiple "access" and "record" function calls:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, device::Device, sync::AccessType};
+# use vk_graph::node::{BufferNode, ImageNode};
+# fn test(
+#     device: &Device,
+#     buffer: BufferNode,
+#     image: ImageNode,
+# ) -> Result<(), DriverError> {
+# let mut graph = Graph::default();
 graph
     .begin_cmd()
     .resource_access(buffer, AccessType::TransferRead)
@@ -61,6 +82,7 @@ graph
     .record_cmd_buf(|cmd_buf| {
         // Safe to copy image to buffer
     });
+# Ok(()) }
 ```
 
 ## Shader Resource Access
@@ -85,6 +107,12 @@ void main() {
 ```
 
 ```rust
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, ash::vk, device::Device, sync::AccessType};
+# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# fn test(device: &Device) -> Result<(), DriverError> {
 let mut graph = Graph::default();
 
 let fmt = vk::Format::R8G8B8A8_UNORM;
@@ -99,12 +127,14 @@ graph
     .begin_cmd()
     .bind_pipeline(ComputePipeline::create(
         device,
-        include_glsl!("clear_image.glsl").as_slice(),
-    ))
+        ComputePipelineInfo::default(),
+        include_bytes!("clear_image.spv").as_slice(),
+    )?)
     .shader_resource_access(42, image, AccessType::ComputeShaderWrite)
     .record_cmd_buf(|cmd_buf| {
         cmd_buf.dispatch(32, 32, 1);
     });
+# Ok(()) }
 ```
 
 ## Subresource Access
@@ -113,6 +143,12 @@ Buffer ranges and image views are referred to as subresource ranges and accessed
 function variants:
 
 ```rust
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, ash::vk, device::Device, sync::AccessType};
+# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# fn test(device: &Device) -> Result<(), DriverError> {
 let mut graph = Graph::default();
 
 let fmt = vk::Format::R8G8B8A8_UNORM;
@@ -127,12 +163,14 @@ graph
     .begin_cmd()
     .bind_pipeline(ComputePipeline::create(
         device,
-        include_glsl!("clear_image.glsl").as_slice(),
-    ))
+        ComputePipelineInfo::default(),
+        include_bytes!("clear_image.spv").as_slice(),
+    )?)
     .shader_subresource_access(42, image, info, AccessType::ComputeShaderWrite)
     .record_cmd_buf(|cmd_buf| {
         cmd_buf.dispatch(32, 32, 1);
     });
+# Ok(()) }
 ```
 
 ## Built-In Commands

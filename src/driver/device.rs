@@ -396,6 +396,14 @@ impl Deref for Device {
     }
 }
 
+impl Eq for Device {}
+
+impl PartialEq for Device {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
 /// Information used to create a [`Device`] instance.
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[builder(
@@ -609,7 +617,7 @@ mod test {
         // HACK: The readonly crate uses a private implementation and so we can't further deref it
         // into the native object type. Because of this the ReadOnly part is manually implemented.
         assert_eq!(size_of::<Device>(), size_of::<ReadOnlyDevice>());
-        assert_eq!(offset_of!(Device, inner), offset_of!(ReadOnlyDevice, inner),);
+        assert_eq!(offset_of!(Device, inner), offset_of!(ReadOnlyDevice, inner));
         assert_eq!(
             offset_of!(Device, physical_device),
             offset_of!(ReadOnlyDevice, physical_device),

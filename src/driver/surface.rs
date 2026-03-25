@@ -15,7 +15,7 @@ use {
 /// Smart pointer handle to a [`vk::SurfaceKHR`] object.
 #[readonly::make]
 pub struct Surface {
-    /// The device which owns this buffer resource.
+    /// The device which owns this surface resource.
     ///
     /// _Note:_ This field is read-only.
     pub device: Device,
@@ -181,5 +181,13 @@ impl Drop for Surface {
         unsafe {
             surface_ext.destroy_surface(self.handle, None);
         }
+    }
+}
+
+impl Eq for Surface {}
+
+impl PartialEq for Surface {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
     }
 }

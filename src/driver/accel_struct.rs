@@ -352,6 +352,14 @@ impl Drop for AccelerationStructure {
     }
 }
 
+impl Eq for AccelerationStructure {}
+
+impl PartialEq for AccelerationStructure {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+
 /// Structure specifying geometries to be built into an acceleration structure.
 ///
 /// See

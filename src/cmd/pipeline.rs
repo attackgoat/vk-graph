@@ -100,6 +100,21 @@ pub struct PipelineCommand<'c, T> {
 
 // NOTE: There are specific implementations of T in the compute, graphic, and ray trace modules
 impl<'c, T> PipelineCommand<'c, T> {
+    /// Binds a shader pipeline to the current command, allowing for strongly typed access to the
+    /// related functions.
+    ///
+    /// `P`|`P::Command`
+    /// -|-
+    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_, ComputePipeline>`]
+    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_, GraphicPipeline>`]
+    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_, RayTracePipeline>`]
+    pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
+    where
+        P: Pipeline<'c>,
+    {
+        pipeline.bind_cmd(self.cmd)
+    }
+
     /// Binds a Vulkan buffer, image, or acceleration structure resource to the graph associated
     /// with this command.
     ///

@@ -35,8 +35,8 @@ DEBUG vk_graph::driver::physical_device > extension "VK_KHR_acceleration_structu
 
 ## Performance Profiling
 
-`vk-graph` uses `profiling` v{{ profiling.version }} and supports multiple profiling providers. When not in use profiling has
-zero cost.
+`vk-graph` uses `profiling` v{{ profiling.version }} and supports multiple profiling providers. When
+not in use profiling has zero cost.
 
 To enable profiling, compile with one of the `profile-with-*` features enabled and initialize the
 profiling provider of your choice.

@@ -1,8 +1,14 @@
 # Buffers
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, ash::vk, device::Device};
+# use vk_graph::driver::buffer::{Buffer, BufferInfo, BufferInfoBuilder};
+# fn test(
+#     device: &Device,
+# ) -> Result<(), DriverError> {
 let size = 1_024;
-let usage = vk::BufferUsageFlags::STORAGE;
+let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
 
 // Create buffer info multiple ways:
 let info = BufferInfo {
@@ -26,7 +32,6 @@ let same_info = BufferInfoBuilder::default()
 
 // Info built from other info
 let more_info = host_mem
-    .info
     .into_builder()
     .usage(usage | vk::BufferUsageFlags::INDIRECT_BUFFER)
     .build();
@@ -37,7 +42,7 @@ let buffer = Buffer::create_from_slice(device, usage, &data)?;
 
 // This is equivalent to:
 let mut buffer = Buffer::create(device, host_mem)?;
-buffer.copy_from_slice(&data);
+buffer.copy_from_slice(0, &data);
 
 // Or use the std copy_from_slice (it panics if size != range)
 let mut buffer = Buffer::create(device, host_mem)?;
@@ -50,4 +55,5 @@ assert_ne!(buffer.handle, vk::Buffer::null());
 
 // Buffer "subresources" are just ranges of that buffer
 let my_subresource = 0..size;
+# Ok(()) }
 ```

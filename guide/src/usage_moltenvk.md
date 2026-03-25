@@ -12,4 +12,5 @@ Vulkan is emulated on Apple platforms using MoltenVK.
 
 Support for MoltenVK is best-effort and may not always be up to date. In the event that any
 `vk-graph` workflow does not work using MoltenVK please
-[_open an issue_](https://github.com/attackgoat/vk-graph/issues) <i class="fa-solid fa-arrow-up-right-from-square"></i>.
+[_open an issue_](https://github.com/attackgoat/vk-graph/issues)
+<i class="fa-solid fa-arrow-up-right-from-square"></i>.

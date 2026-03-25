@@ -648,7 +648,7 @@ mod test {
         };
         let builder = Builder::default()
             .command_buffer_count(42)
-            .height(42)
+            .height(123)
             .min_image_count(99)
             .present_mode(vk::PresentModeKHR::IMMEDIATE)
             .queue_family_index(16)
@@ -666,7 +666,33 @@ mod test {
     #[test]
     #[should_panic(expected = "Field value invalid: command_buffer_count")]
     pub fn swapchain_info_builder_uninit_command_buffer_count() {
-        Builder::default().command_buffer_count(0).build();
+        Builder::default()
+            .height(1)
+            .surface(vk::SurfaceFormatKHR::default())
+            .width(1)
+            .command_buffer_count(0)
+            .build();
+    }
+
+    #[test]
+    #[should_panic(expected = "Field not initialized: height")]
+    pub fn swapchain_info_builder_uninit_height() {
+        Builder::default().build();
+    }
+
+    #[test]
+    #[should_panic(expected = "Field not initialized: surface")]
+    pub fn swapchain_info_builder_uninit_surface() {
+        Builder::default().height(1).build();
+    }
+
+    #[test]
+    #[should_panic(expected = "Field not initialized: width")]
+    pub fn swapchain_info_builder_uninit_width() {
+        Builder::default()
+            .height(1)
+            .surface(vk::SurfaceFormatKHR::default())
+            .build();
     }
 
     #[test]

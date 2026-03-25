@@ -5,7 +5,7 @@ commands support being called concurrently from multiple threads, but resources 
 externally synchronized. This means that the caller must guarantee that no more than one thread is
 submitting a resource at a given time.
 
-More precisely, `vk-graph` stores the most recent access of each subresource of a resource. As
+More precisely, `vk-graph` stores the most recent access type of each subresource of a resource. As
 commands are submitted to the Vulkan implementation queue, the internal state of these resources is
 updated.
 

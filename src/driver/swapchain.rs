@@ -438,6 +438,14 @@ impl Drop for Swapchain {
     }
 }
 
+impl Eq for Swapchain {}
+
+impl PartialEq for Swapchain {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+
 /// Describes the condition of a swapchain.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SwapchainError {

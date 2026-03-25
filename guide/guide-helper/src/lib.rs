@@ -64,8 +64,11 @@ impl Preprocessor for GuideHelper {
 
 fn manifest() -> Manifest {
     let path = current_dir().unwrap().parent().unwrap().join("Cargo.toml");
+    let res = Manifest::from_path(path).unwrap();
 
-    Manifest::from_path(path).unwrap()
+    assert_eq!(res.package.as_ref().unwrap().name, "vk-graph");
+
+    res
 }
 
 fn insert_crate_version(book: &mut Book) {
@@ -94,15 +97,21 @@ fn insert_dependency_req(book: &mut Book, dep: &str) {
 }
 
 fn insert_vulkan_sdk_version(book: &mut Book) {
-    // Technically this is a VersionReq but we're not using it that way and want the build metadata
-    let Version { build, .. } =
+    // Technically this is a VersionReq but we're not using it that way!
+    let Version { major, minor, .. } =
         Version::parse(manifest().dependencies.get("ash").unwrap().req()).unwrap();
+
+    // HACK: Instead of parsing the current lock file, just hardcode new versions into this
+    let vulkan_sdk_version = match (major, minor) {
+        (0, 38) => "1.3.281",
+        _ => todo!("add new version details"),
+    };
 
     const MARKER: &str = "{{ vulkan_sdk.version }}";
 
     book.for_each_chapter_mut(|ch| {
         if ch.content.contains(MARKER) {
-            ch.content = ch.content.replace(MARKER, build.as_str());
+            ch.content = ch.content.replace(MARKER, vulkan_sdk_version);
         }
     });
 }

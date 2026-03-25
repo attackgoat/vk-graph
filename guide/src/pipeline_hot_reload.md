@@ -18,6 +18,7 @@ vk-graph-hot = { version = "{{ crate.version }}", optional = true }
 ```
 
 ```rust
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
 use vk_graph::driver::{DriverError, compute::ComputePipelineInfo, device::Device};
 
 #[cfg(feature = "hot")]
@@ -32,17 +33,16 @@ use vk_graph::driver::{
     shader::Shader,
 };
 
-pub fn create_explosion_pipeline(
+pub fn create_fire_pipeline(
     device: &Device,
 ) -> Result<ComputePipeline, DriverError> {
     let info = ComputePipelineInfo::default();
-    let shader = {
-        #[cfg(feature = "hot")]
-        HotShader::from_path("shaders/explosion.glsl")
 
-        #[cfg(not(feature = "hot"))]
-        Shader::from_spirv(include_bytes!("shaders/explosion.spv"))
-    };
+    #[cfg(feature = "hot")]
+    let shader = HotShader::from_path("fire.glsl");
+
+    #[cfg(not(feature = "hot"))]
+    let shader = Shader::from_spirv(include_bytes!("fire.spv").as_slice());
 
     ComputePipeline::create(device, info, shader)
 }

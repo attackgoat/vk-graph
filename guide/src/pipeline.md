@@ -7,9 +7,14 @@
 Pipelines are created from `Device` references. They may be bound to graph commands.
 
 ```rust
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, device::Device};
+# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+# fn test(device: &Device) -> Result<(), DriverError> {
 let info = ComputePipelineInfo::default();
 let shader = include_bytes!("shader.spv");
-let pipeline = ComputePipeline::create(device, info, shader)?;
+let pipeline = ComputePipeline::create(device, info, shader.as_slice())?;
 
 let mut graph = Graph::default()
     .begin_cmd()
@@ -18,6 +23,7 @@ let mut graph = Graph::default()
         // Record vulkan commands here
     })
     .end_cmd();
+# Ok(()) }
 ```
 
 Pipelines are cheap to `Clone` and should be cached in between use. The recommendation is to bind a
@@ -34,22 +40,45 @@ modify shader descriptor bindings, or otherwise modify the state of the command 
 Example:
 
 ```rust
-let fire_pipeline = ComputePipeline::create(device, include_bytes!("fire.spv"))?;
-let water_pipeline = ComputePipeline::create(device, include_bytes!("water.spv"))?;
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, device::Device};
+# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+# fn test(device: &Device) -> Result<(), DriverError> {
+let info = ComputePipelineInfo::default();
+
+let fire = include_bytes!("fire.spv");
+let fire = ComputePipeline::create(device, info, fire.as_slice())?;
+
+let water = include_bytes!("water.spv");
+let water = ComputePipeline::create(device, info, water.as_slice())?;
 
 let mut graph = Graph::default();
 graph
     .begin_cmd()
-    .bind_pipeline(&fire_pipeline)
-    .record_cmd_buf(|cmd_buf| todo!("1st"))
-    .bind_pipeline(&water_pipeline)
-    .record_cmd_buf(|cmd_buf| todo!("2nd"))
-    .bind_pipeline(&fire_pipeline)
-    .record_cmd_buf(|cmd_buf| todo!("3rd"));
+    .bind_pipeline(&fire)
+    .record_cmd_buf(|cmd_buf| {
+        println!("1st");
+    })
+    .bind_pipeline(&water)
+    .record_cmd_buf(|cmd_buf| {
+        println!("2nd");
+    })
+    .bind_pipeline(&fire)
+    .record_cmd_buf(|cmd_buf| {
+        println!("3rd");
+    })
+    .end_cmd()
+    .begin_cmd()
+    .bind_pipeline(&water)
+    .record_cmd_buf(|cmd_buf| {
+        println!("4th");
+    });
+# Ok(()) }
 ```
 
-A call to `Graph::end_cmd` is never requried and the command is automatically ended. The call may be
-useful for builder-pattern code which is building a very large series of commands.
+A call to `Graph::end_cmd` is not requried. The _end-command_ method exists to support builder-style
+function-chaining. In the above example two commands are built and added to the graph.
 
 ## Shaders
 
@@ -67,11 +96,18 @@ Pipeline Type|Shaders
 The `Shader` type uses a builder pattern:
 
 ```rust
-// Pipelines may be created using "code", "shader", or "custom":
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, device::Device};
+# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+# use vk_graph::driver::shader::{SamplerInfo, Shader};
+# fn test(device: &Device) -> Result<(), DriverError> {
+// Pipelines may be created using "shader" or "custom":
 let code = include_bytes!("raygen.spv");
 let shader = Shader::from_spirv(code.as_slice());
 let custom = shader
                 .entry_name("main_but_faster")
                 .image_sampler(0, SamplerInfo::default())
                 .image_sampler(1, SamplerInfo::LINEAR);
+# Ok(()) }
 ```

@@ -684,7 +684,7 @@ pub struct Shader {
     /// The name of the entry point which will be executed by this shader.
     ///
     /// The default value is `main`.
-    #[builder(default = "\"main\".to_owned()")]
+    #[builder(default = "\"main\".to_owned()", setter(into))]
     pub entry_name: String,
 
     /// Data about Vulkan specialization constants.

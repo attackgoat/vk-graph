@@ -17,17 +17,27 @@ layout(constant_id = 1) const float COEFF_OF_BOOM = 1.4;
 ```
 
 ```rust
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
+# use vk_graph::driver::{DriverError, device::Device};
+# use vk_graph::driver::shader::{Shader, SpecializationMap};
+# fn test(device: &Device) -> Result<(), DriverError> {
+use bytemuck::bytes_of;
+
+let kaboom = include_bytes!("kaboom.spv");
+
 // Use this shader for the glsl-specified values:
-let shader = Shader::new_compute(include_bytes!("kaboom.spv").as_slice());
+let shader = Shader::new_compute(kaboom.as_slice());
 
 let better_consts = [
     0.99999f32,
     1.0,
 ];
-let spec = SpecializationMap::new(bytemuck::bytes_of(better_consts))
+let better_consts = bytes_of(&better_consts);
+let spec = SpecializationMap::new(better_consts)
     .constant(0, 0, 4)
     .constant(1, 4, 8);
 
 // Use this shader for the updated run-time values:
 let spec_shader = shader.specialization(spec);
+# Ok(()) }
 ```

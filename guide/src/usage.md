@@ -5,8 +5,18 @@
 Typical usage contains:
 
 ```rust
+# use vk_graph::driver::DriverError;
+# struct Foo { device: vk_graph::driver::device::Device }
+# impl Foo {
+# fn test(
+#     &self,
+# ) {
+use vk_graph::driver::ash::vk;
+use vk_graph::driver::device::Device;
+
 // A borrow of Device is an argument of many vk-graph functions
 let device: &Device = &self.device;
+# } }
 ```
 
 ## Resources
@@ -14,26 +24,44 @@ let device: &Device = &self.device;
 Resources, such as buffers and images, may be created from "`Info`" structs:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, ash::vk, device::Device, sync::AccessType};
+# use vk_graph::driver::buffer::{Buffer, BufferInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# fn test(
+#     device: &Device,
+# ) -> Result<(), DriverError> {
 let usage = vk::BufferUsageFlags::TRANSFER_SRC;
 let buffer_info = BufferInfo::device_mem(320 * 200 * 4, usage);
 let buffer = Buffer::create(device, buffer_info)?;
 
 let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
-let image_info = ImageInfo::image_2d(320, 200, vk::Format::R8G8B8A8_UNORM, usage)?;
+let image_info = ImageInfo::image_2d(320, 200, vk::Format::R8G8B8A8_UNORM, usage);
 let image = Image::create(device, image_info)?;
+# Ok(()) }
 ```
 
 ### Memory Allocation
 
-`vk-graph` uses a single memory allocator instance (currently `gpu-allocator`) for all allocations.
+`vk-graph` uses an external memory allocator (currently `gpu-allocator`) for resource memory
+allocations.
 
-The memory allocation strategy provides a large section of memory which is then sub-allocated for
-the resources which use it. This may lead to fragmentation and memory exhaustion in some scenarios.
+The allocation strategy provides a large section of memory which is then sub-allocated for any
+resources which use it. This may lead to fragmentation and memory exhaustion in some scenarios.
 
 Individual buffers or images may use dedicated memory allocations by setting their `dedicated`
 field:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, ash::vk, device::Device, sync::AccessType};
+# use vk_graph::driver::buffer::{Buffer, BufferInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# fn test(
+#     device: &Device,
+# ) -> Result<(), DriverError> {
+# let buffer_info = BufferInfo::device_mem(1, vk::BufferUsageFlags::empty());
+# let image_info = ImageInfo::image_2d(32, 32, vk::Format::R16_UNORM, vk::ImageUsageFlags::empty());
 // The info fields may be used or set directly
 let uber_mesh_buf = Buffer::create(
     device,
@@ -44,25 +72,47 @@ let uber_mesh_buf = Buffer::create(
 )?;
 
 // Builder functions are also availble
-// (builder and the info types are interchangable)
+// (builder and info types are interchangable)
 let dedicated_info = image_info.into_builder().dedicated(true);
 let important_image = Image::create(device, dedicated_info)?;
+# Ok(()) }
 ```
 
 Resources may be bound to a graph as `usize` handles referred to as _"nodes"_:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, ash::vk, device::Device, sync::AccessType};
+# use vk_graph::driver::buffer::{Buffer, BufferInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# use vk_graph::node::{BufferNode, ImageNode};
+# fn test(
+#     device: &Device,
+#     buffer: Buffer,
+#     image: Image,
+# ) -> Result<(), DriverError> {
 let mut graph = Graph::default();
 let buffer: BufferNode = graph.bind_resource(buffer);
 let image: ImageNode = graph.bind_resource(image);
+# Ok(()) }
 ```
 
-Bound resources may be borrowed from graphs, commands, pipeline commands, or active command buffers using their node handle:
+Bound resources may be borrowed from graphs, commands, pipeline commands, or command buffers using
+their node handle:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::image::Image;
+# use vk_graph::node::ImageNode;
+# use std::sync::Arc;
+# fn test(
+#     graph: &mut Graph,
+#     image: ImageNode,
+# ) {
 let shared_image: &Arc<Image> = graph.resource(image);
 
 assert_eq!(shared_image.info.width, 320);
+# }
 ```
 
 ## Commands
@@ -70,24 +120,53 @@ assert_eq!(shared_image.info.width, 320);
 Nodes may be used with built-in graph commands:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::cmd::ClearColorValue;
+# use vk_graph::node::ImageNode;
+# use std::sync::Arc;
+# fn test(
+#     graph: &mut Graph,
+#     image: ImageNode,
+# ) {
 graph.clear_color_image(image, ClearColorValue::BLACK_ALPHA_ZERO);
+# }
 ```
 
 Graphs may contain many commands:
 
-```
+```rust
+# use vk_graph::Graph;
+# use vk_graph::cmd::ClearColorValue;
+# use vk_graph::node::{BufferNode, ImageNode};
+# use std::sync::Arc;
+# fn test(
+#     graph: &mut Graph,
+#     buffer: BufferNode,
+#     image: ImageNode,
+# ) {
 graph
     .fill_buffer(buffer, 0..320 * 200, 0)
     .copy_buffer_to_image(buffer, image);
+# }
 ```
 
 Custom commands enable advanced Vulkan behavior:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::cmd::ClearColorValue;
+# use vk_graph::driver::{ash::vk, sync::AccessType};
+# use vk_graph::node::{BufferNode, ImageNode};
+# use std::sync::Arc;
+# fn test(
+#     graph: &mut Graph,
+#     buffer: BufferNode,
+#     image: ImageNode,
+# ) {
 graph
     .begin_cmd()
-    .access_resource(image, AccessType::TransferRead)
-    .access_resource(buffer, AccessType::TransferWrite)
+    .resource_access(image, AccessType::TransferRead)
+    .resource_access(buffer, AccessType::TransferWrite)
     .record_cmd_buf(move |cmd_buf| {
         // Borrow resources from nodes we move into the closure
         let buffer = cmd_buf.resource(buffer);
@@ -98,13 +177,14 @@ graph
             // Note: for example only, use safe versions!
             cmd_buf.device.cmd_copy_image_to_buffer2(
                 cmd_buf.handle,
-                vk::CopyImageToBufferInfo2::default()
+                &vk::CopyImageToBufferInfo2::default()
                     .src_image(image.handle)
                     .dst_buffer(buffer.handle),
             );
         }
     })
     .end_cmd();
+# }
 ```
 
 ## Pipelines
@@ -136,10 +216,20 @@ glslc compute.glsl -o compute.spv
 ```
 
 ```rust
+# macro_rules! include_bytes { ($path:expr) => { [0u8] }; }
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, device::Device, sync::AccessType};
+# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+# use vk_graph::node::ImageNode;
+# fn test(
+#     graph: &mut Graph,
+#     device: &Device,
+#     image: ImageNode,
+# ) -> Result<(), DriverError> {
 let pipeline = ComputePipeline::create(
     device,
     ComputePipelineInfo::default(),
-    include!("compute.spv"),
+    include_bytes!("compute.spv").as_slice(),
 )?;
 
 graph
@@ -149,6 +239,7 @@ graph
     .record_cmd_buf(|cmd_buf| {
         cmd_buf.dispatch(320, 200, 1);
     });
+# Ok(()) }
 ```
 
 ## Queue Submission
@@ -164,15 +255,22 @@ Typical programs rely on a single `Graph` per frame and let their window impleme
 graph, but they may do so manually:
 
 ```rust
-// NOTE: This blocks, but may run on backgound threads or checked periodically
-// NOTE: Dropping the submitted queue blocks, so we must choose wait-or-async
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, device::Device};
+# use vk_graph::pool::lazy::LazyPool;
+# fn test(
+#     graph: Graph,
+#     device: &Device,
+# ) -> Result<(), DriverError> {
+// NOTE: This will stall! Use the async functions to check periodically instead
 graph
     .into_queue()
-    .submit(LazyPool::new(device), 0, 0)?
+    .submit(&mut LazyPool::new(device), 0, 0)?
     .wait_until_executed()?;
+# Ok(()) }
 ```
 
 ### Device Usage
 
-Buffers, images, and acceleration structures resources are created and used by a single `Device`.
+Buffers, images, and acceleration structure resources are created and used by a single `Device`.
 All commands which use a resource must execute on the same `Device` which created the resource.

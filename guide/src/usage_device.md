@@ -15,13 +15,14 @@ For any sort of server-based rendering or similar Vulkan usage without a display
 production-ready code used to create a device:
 
 ```rust
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# fn test() -> Result<(), DriverError> {
 let info = DeviceInfo::default();
 let device = Device::new(info)?;
 
-assert_eq!(device.info, DeviceInfo {
-    debug: false,
-    physical_device_index: 0,
-});
+assert_eq!(device.physical_device.instance.info.debug, false);
+# Ok(()) }
 ```
 
 ## Windowed Operation
@@ -37,6 +38,9 @@ vk-graph-window = "{{ crate.version }}"
 ```
 
 ```rust
+# use vk_graph::driver::device::Device;
+# use vk_graph_window::WindowError;
+# fn test() -> Result<(), WindowError> {
 use vk_graph_window::WindowBuilder;
 
 let window = WindowBuilder::default().build()?;
@@ -48,6 +52,7 @@ window.run(|frame| {
     // During any frame
     let _: &Device = frame.device;
 })?;
+# Ok(()) }
 ```
 
 ## Advanced
@@ -64,6 +69,10 @@ There are several scenarios that require advanced `Device` creation techniques:
 The entrypoint is an `Instance` from which the available hardware is enumerated and inspected:
 
 ```rust
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::Device;
+# use vk_graph::driver::instance::{Instance, InstanceInfo};
+# fn test() -> Result<(), DriverError> {
 let instance = Instance::new(InstanceInfo::default())?;
 let physical_devices = Instance::physical_devices(&instance)?;
 
@@ -76,6 +85,7 @@ for physical_device in physical_devices {
 
     let _: Device = physical_device.try_into_device()?;
 }
+# Ok(()) }
 ```
 
 ### Native Device Usage
@@ -84,6 +94,12 @@ Some scenarios require the Vulkan instance and/or device be created by other cod
 use by `vk-graph`:
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::ash::{self, vk};
+# use vk_graph::driver::device::Device;
+# use vk_graph::driver::instance::Instance;
+# fn test() -> Result<(), DriverError> {
 // Native ash types from somewhere else
 let entry: ash::Entry = todo!();
 let instance: vk::Instance = todo!();
@@ -91,19 +107,26 @@ let physical_device: vk::PhysicalDevice = todo!();
 
 // vk-graph types
 let instance = Instance::from_entry(entry, instance)?;
-let physical_device = Instance::phsyical_device(&instance, physical_device)?;
+let physical_device = Instance::physical_device(&instance, physical_device)?;
 
-// Use our PhysicalDevice to create a native ash::Device (OpenXR requires this pattern)
-let device: ash::Device = physical_device
-    .create_ash_device(|create_info| {
-        // Somewhere else also provides the logical device!
-        let device: vk::Device = todo!();
+// Use our PhysicalDevice to create a native ash::Device (OpenXR requires this)
+let device: ash::Device = unsafe {
+    physical_device
+        .create_ash_device(|create_info| {
+            // Somewhere else also provides the logical device!
+            let device: vk::Device = todo!();
 
-        Ok(ash::Device::load(instance.fp_v1_0(), device))
-    })?;
+            let device: ash::Device = unsafe {
+                ash::Device::load(instance.fp_v1_0(), device)
+            };
+
+            Ok(device)
+        })
+}.unwrap();
 
 // Create a Device from their native stuff
 let device = Device::try_from_ash_device(device, physical_device)?;
+# Ok(()) }
 ```
 
 > [!TIP]

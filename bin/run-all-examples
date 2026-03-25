@@ -2,25 +2,11 @@
 
 set -e
 
-# Update everything
-cargo update
-cargo update --manifest-path crates/vk-graph-egui/Cargo.toml
-cargo update --manifest-path crates/vk-graph-fx/Cargo.toml
-cargo update --manifest-path crates/vk-graph-hot/Cargo.toml
-cargo update --manifest-path crates/vk-graph-imgui/Cargo.toml
-cargo update --manifest-path crates/vk-graph-window/Cargo.toml
-cargo update --manifest-path examples/skeletal-anim/Cargo.toml
-cargo update --manifest-path examples/shader-toy/Cargo.toml
-cargo update --manifest-path examples/vr/Cargo.toml
-
-# Build everything
-cargo build --examples
-
 # Run the "test" example first
 cargo run --example fuzzer
 
 # Run all regular examples, in debug mode, next
-cargo run --manifest-path crates/vk-graph-window/Cargo.toml --example hello_world -- --debug
+cargo run -p vk-graph-window --example hello_world -- --debug
 cargo run --example app -- --debug
 cargo run --example aliasing -- --debug
 cargo run --example cpu_readback -- --debug
@@ -47,11 +33,11 @@ cargo run --example transitions -- --debug
 cargo run --example vsm_omni -- --debug
 cargo run --example vsm_omni -- --debug --geometry-shader
 cargo run --example ray_omni -- --debug
-cargo run --manifest-path examples/skeletal-anim/Cargo.toml -- --debug
+cargo run -p skeletal-anim -- --debug
 
 # Hot-reload examples
-cargo run --manifest-path crates/vk-graph-hot/Cargo.toml --example glsl -- --debug
-cargo run --manifest-path crates/vk-graph-hot/Cargo.toml --example hlsl -- --debug
+cargo run -p vk-graph-hot --example glsl -- --debug
+cargo run -p vk-graph-hot --example hlsl -- --debug
 
 # Run this one in release mode
-cargo run --manifest-path examples/shader-toy/Cargo.toml --release -- --debug
+cargo run -p shader-toy --release -- --debug

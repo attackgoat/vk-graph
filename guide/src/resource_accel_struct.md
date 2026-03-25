@@ -1,16 +1,31 @@
 # Acceleration Structures
 
 ```rust
+# use vk_graph::Graph;
+# use vk_graph::driver::{DriverError, ash::vk, device::Device};
+# use vk_graph::driver::accel_struct::{
+#   AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData,
+#   AccelerationStructureGeometryInfo, AccelerationStructureInfo, AccelerationStructureInfoBuilder,
+#   AccelerationStructureSize, AccelerationStructureSubresourceRange, DeviceOrHostAddress
+# };
+# use vk_graph::driver::buffer::Buffer;
+# fn test(
+#     device: &Device,
+# ) -> Result<(), DriverError> {
 // Some buffer holding geometry data
 let buffer: Buffer = todo!();
 
 // Some sample geometry to put into a BLAS:
 let geometry = AccelerationStructureGeometryData::Triangles {
-    index_addr: buffer.device_address(),
+    index_addr: DeviceOrHostAddress::DeviceAddress(
+        buffer.device_address()
+    ),
     index_type: vk::IndexType::UINT16,
     max_vertex: 100,
     transform_addr: None,
-    vertex_addr: buffer.device_address() + 2_048,
+    vertex_addr: DeviceOrHostAddress::DeviceAddress(
+        buffer.device_address() + 2_048
+    ),
     vertex_format: vk::Format::R32G32B32_SFLOAT,
     vertex_stride: 12,
 };
@@ -35,21 +50,24 @@ let geom_info = AccelerationStructureGeometryInfo {
 };
 
 // Use helper function to find size
-let size = AccelerationStructure::size_of(device, &geom_info);
+let AccelerationStructureSize {
+    build_size,
+    ..
+} = AccelerationStructure::size_of(device, &geom_info);
 
 // Create acceleration structure info multiple ways:
 let info = AccelerationStructureInfo {
     ty,
-    size,
+    size: build_size,
 };
-let other_info = AccelerationStructureInfo::blas(size);
+let other_info = AccelerationStructureInfo::blas(build_size);
 
 assert_eq!(info, other_info);
 
 // Builder pattern
 let same_info = AccelerationStructureInfoBuilder::default()
     .ty(ty)
-    .size(size);
+    .size(build_size);
 
 // Create directly from info
 let blas = AccelerationStructure::create(device, info)?;
@@ -59,15 +77,16 @@ let blas = AccelerationStructure::create(device, info)?;
 let more_info = blas
     .info
     .into_builder()
-    .size(size * 2)
+    .size(build_size * 2)
     .build();
 
 // The provided fields are helpful:
-assert_eq!(blas.device, *device);
+assert_eq!(blas.buffer.device, *device);
 assert_eq!(blas.info, info);
-assert_ne!(blas.buffer, vk::Buffer::null());
-assert_ne!(blas.handle, vk::AccelerationStrucuture::null());
+assert_ne!(blas.buffer.handle, vk::Buffer::null());
+assert_ne!(blas.handle, vk::AccelerationStructureKHR::null());
 
 // Acceleration structures have no "subresources" and are bound whole
-let my_subresource = AccelerationStructureSubresourceRange;
+let whole_resource = AccelerationStructureSubresourceRange;
+# Ok(()) }
 ```
