@@ -1,10 +1,9 @@
 [package]
 name = "guide-helper"
-version = "0.1.0"
+authors = ["John Wells <john@attackgoat.com>"]
+edition.workspace = true
+license.workspace = true
 publish = false
-edition = "2024"
-license = "MIT OR Apache-2.0"
-readme = "README.md"
 
 [dependencies]
 cargo_toml = "0.22"
