@@ -698,13 +698,20 @@ fn load_model(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> 
             res
         }
 
-        fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
-            self.vertex_mut(face, vert)[3..7].copy_from_slice(&tangent);
+        fn set_tangent(
+            &mut self,
+            tangent: Option<mikktspace::TangentSpace>,
+            face: usize,
+            vert: usize,
+        ) {
+            if let Some(tangent) = tangent {
+                self.vertex_mut(face, vert)[3..7].copy_from_slice(&tangent.tangent_encoded());
+            }
         }
     }
 
     let mut mesh = Mesh(vertices);
-    assert!(mikktspace::generate_tangents(&mut mesh));
+    assert!(mikktspace::generate_tangents(&mut mesh).is_ok());
     let vertices = mesh.0;
 
     // Re-index and de-dupe the model vertices using meshopt
