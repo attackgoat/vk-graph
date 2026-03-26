@@ -416,6 +416,7 @@ impl PhysicalDevice {
 
         if self.swapchain_ext {
             enabled_ext_names.push(khr::swapchain::NAME.as_ptr());
+            enabled_ext_names.push(khr::surface::NAME.as_ptr());
         }
 
         if self.accel_struct_properties.is_some() {
