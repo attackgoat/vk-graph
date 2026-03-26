@@ -11,13 +11,17 @@ vk-graph = "{{ crate.version }}"
 
 ## Features
 
-- `loaded` (_default_): Support searching for the Vulkan loader manually at runtime.
-- `linked`: Link the Vulkan loader at compile time.
-- `profile_with_`: Use the specified profiling backend
-    - ...`puffin`
-    - ...`optick`
-    - ...`superluminal`
-    - ...`tracy`
+_vk-graph_ puts a lot of functionality behind optional features in order to optimize
+compile time for the most common use cases. The following features are
+available.
+
+- **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
+- **`linked`** — Link the Vulkan loader at compile time.
+- **`profile_with_`** — Use the specified profiling backend
+    - ...**`puffin`**
+    - ...**`optick`**
+    - ...**`superluminal`**
+    - ...**`tracy`**
 
 ## Vulkan SDK
 

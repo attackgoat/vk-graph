@@ -1,23 +1,27 @@
-# vk-graph
+Vulkan graph driver
+===================
 
 [![Crates.io](https://img.shields.io/crates/v/vk-graph.svg)](https://crates.io/crates/vk-graph)
 [![Docs.rs](https://docs.rs/vk-graph/badge.svg)](https://docs.rs/vk-graph)
-[![Guide Book](https://img.shields.io/badge/vk--graph-Guide--Book-blue?link=https%3A%2F%2Fattackgoat.github.io%2Fvk-graph%2F)](https://attackgoat.github.io/vk-graph)
+[![Guide Book](https://img.shields.io/badge/vk--graph-Guide_Book-blue?link=https%3A%2F%2Fattackgoat.github.io%2Fvk-graph%2F)](https://attackgoat.github.io/vk-graph)
 
-
-_vk-graph_ is a high-performance Vulkan graphics driver with automatic resource management and
-execution.
+_vk-graph_ is a high-performance [Vulkan](https://www.vulkan.org/) driver for the Rust programming
+language featuring automated resource management and execution. It is _blazingly_-fast, built for
+real-world use, and supports modern Vulkan commands[^modern].
 
 ```toml
 [dependencies]
 vk-graph = "0.14"
 ```
 
+[*Changelog*](https://github.com/attackgoat/vk-graph/blob/main/CHANGELOG.md)
+
+<br>
+
 ## Overview
 
-_vk-graph_ provides a high performance [Vulkan](https://www.vulkan.org/) driver using smart
-pointers. The driver may be created manually for headless rendering or automatically using the
-built-in window abstraction:
+_vk-graph_ supports desktop, mobile, and AR/VR platforms in headless, windowed, or full-screen
+modes. An [accessory crate]((crates/vk-graph-window/README.md)) is provided for `winit` support:
 
 ```rust
 use vk_graph_window::{Window, WindowError};
@@ -29,12 +33,14 @@ fn main() -> Result<(), WindowError> {
 }
 ```
 
+<br>
+
 ## Usage
 
-_vk-graph_ provides a fully-generic render graph structure for simple and statically
-typed access to all the resources used while rendering. The `Graph` structure allows Vulkan
-smart pointer resources to be bound as "nodes" which may be used anywhere in a graph. The graph
-itself is not tied to swapchain access and may be used to execute general command streams.
+_vk-graph_ provides a fully-generic graph structure for statically typed access to resources used
+while rendering. The `Graph` structure allows Vulkan smart pointer resources to be bound as
+"nodes" which may be used by shader pipelines. The graph supports swapchain integration and may be
+used to execute custom command streams.
 
 Features of the graph:
 
@@ -43,6 +49,8 @@ Features of the graph:
  - Automatic render pass scheduling, re-ordering, merging, with resource aliasing
  - Interoperable with existing Vulkan code
  - Optional [shader hot-reload](crates/vk-graph-hot/README.md) from disk
+
+Example code:
 
 ```rust
 graph
@@ -60,7 +68,28 @@ graph
             .draw(6, 1, 0, 0);
     });
 ```
-### Debug Logging
+
+<br>
+
+## Optional features
+
+_vk-graph_ puts a lot of functionality behind optional features in order to optimize
+compile time for the most common use cases. The following features are
+available.
+
+- **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
+- **`linked`** — Link the Vulkan loader at compile time.
+- **`profile_with_`** — Use the specified profiling backend
+    - ...**`puffin`**
+    - ...**`optick`**
+    - ...**`superluminal`**
+    - ...**`tracy`**
+
+<br>
+
+
+
+## Debug Logging
 
 This crate uses [`log`](https://crates.io/crates/log) for low-overhead logging.
 
@@ -83,7 +112,9 @@ DEBUG vk_graph::driver::physical_device > extension "VK_KHR_acceleration_structu
 ...
 ```
 
-### Performance Profiling
+<br>
+
+## Performance Profiling
 
 This crates uses [`profiling`](https://crates.io/crates/profiling) and supports multiple profiling
 providers. When not in use profiling has zero cost.
@@ -99,46 +130,41 @@ cargo run --features profile-with-puffin --release --example vsm_omni
 
 <img src="guide/src/profile.png" alt="Flamegraph of performance data" width=30%>
 
+<br>
+
 ## Quick Start
 
 Included are some examples you might find helpful:
 
-- [`hello_world.rs`](crates/vk-graph-window/examples/hello_world.rs) — Displays a window on the screen. Please start here.
+- [`hello_world.rs`](crates/vk-graph-window/examples/hello_world.rs) — Displays a window on the
+  screen. Please start here.
 - [`triangle.rs`](examples/triangle.rs) — Shaders and full setup of index/vertex buffers; < 100 LOC.
 - [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass shader toy using the original
   shader code.
 
 See the [example code](examples/README.md), 
 [documentation](https://docs.rs/vk-graph/latest/vk_graph/), or helpful
-[getting started guide](examples/getting-started.md) for more information.
+[guide book](https://attackgoat.github.io/vk-graph) for more information.
 
-**_NOTE:_** Required development packages and libraries are listed in the _getting started guide_.
-All new users should read and understand the guide.
+**_NOTE:_** Required development packages and libraries are listed in the _guide_. All new users
+should read and understand the guide.
 
-## History
+<br>
 
-As a child I was given access to a computer that had _GW-Basic_; and later one with _QBasic_. All of
-my favorite programs started with:
+#### License
 
-```basic
-CLS
-SCREEN 13
-```
+<sup>
+Licensed under either of <a href="LICENSE-APACHE">Apache License, Version
+2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
+</sup>
 
-These commands cleared the screen of text and setup a 320x200 256-color paletized video mode. There
-were other video modes available, but none of them had the 'magic' of 256 colors.
+<br>
 
-Additional commands _QBasic_ offered, such as `DRAW`, allowed you to build simple games quickly
-because you didn't have to grok the entirety of compiling and linking. I think we should have
-options like this today, and so I started this project to allow future developers to have the
-ability to get things done quickly while using modern tools.
+<sub>
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
+</sub>
 
-### Inspirations
-
-_vk-graph_ was built from the learnings and lessons shared by others throughout our community. In
-particular, here are some of the repositories I found useful:
-
- - [Bevy](https://bevyengine.org/): A refreshingly simple data-driven game engine built in Rust
- - [Granite](https://github.com/Themaister/Granite) - Open-source Vulkan renderer
- - [Kajiya](https://github.com/EmbarkStudios/kajiya) - Experimental real-time global illumination
-   renderer made with Rust and Vulkan
+[^modern]: Modern Vulkan usage means no pixel queries. Anything else unsupported is due to there
+being better options, no current need, or no interest. Please open an issue.
