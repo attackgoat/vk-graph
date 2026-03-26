@@ -1,4 +1,4 @@
-Vulkan graph driver
+Vulkan Graph Driver
 ===================
 
 [![Crates.io](https://img.shields.io/crates/v/vk-graph.svg)](https://crates.io/crates/vk-graph)

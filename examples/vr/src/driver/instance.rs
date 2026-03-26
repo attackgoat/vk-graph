@@ -50,6 +50,7 @@ impl XrInstance {
         }
 
         let app_info = xr::ApplicationInfo {
+            api_version: xr::Version::new(1, 0, 0),
             application_name: "vk-graph-example-vr",
             application_version: 0,
             engine_name: "vk-graph-example-vr",

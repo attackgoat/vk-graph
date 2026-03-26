@@ -97,10 +97,10 @@ fn main() -> anyhow::Result<()> {
     session.attach_action_sets(&[&action_set]).unwrap();
 
     let right_space = right_action
-        .create_space(session.clone(), xr::Path::NULL, xr::Posef::IDENTITY)
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
         .unwrap();
     let left_space = left_action
-        .create_space(session.clone(), xr::Path::NULL, xr::Posef::IDENTITY)
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
         .unwrap();
     let stage = session
         .create_reference_space(xr::ReferenceSpaceType::STAGE, xr::Posef::IDENTITY)

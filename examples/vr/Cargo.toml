@@ -11,13 +11,13 @@ repository.workspace = true
 anyhow = "1.0"
 bytemuck = { version = "1.25", features = ["derive"] }
 ctrlc = "3.4"
-glam = { version = "0.27", features = ["bytemuck", "mint"] }
+glam = { version = "0.32", features = ["bytemuck", "mint"] }
 image = "0.25"
 log.workspace = true
-meshopt = "0.2"
+meshopt = "0.6"
 mikktspace = "0.3"
 mint = "0.5"
-openxr = { version = "0.18", features = ["mint", "static"] }
+openxr = { version = "0.21", features = ["mint", "static"] }
 pretty_env_logger = "0.5"
 vk-graph.workspace = true
 vk-graph-hot.workspace = true

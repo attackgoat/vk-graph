@@ -35,9 +35,9 @@ Example | Instructions | Preview
 [vsm_omni.rs](vsm_omni.rs) | <pre>cargo run --example vsm_omni</pre> Variance shadow mapping for omni/point lights | <image alt="vsm_omni.rs" src="../.github/img/vsm_omni.png" width="176" height="150">
 [ray_omni.rs](ray_omni.rs) | <pre>cargo run --example ray_omni</pre> Ray query for omni/point lights | <image alt="ray_omni.rs" src="../.github/img/ray_omni.png" width="176" height="150">
 [transitions.rs](transitions.rs) | <pre>cargo run --example transitions</pre> | <image alt="transitions.rs" src="../.github/img/transitions.png" width="176" height="150">
-[skeletal-anim/](skeletal-anim/src/main.rs) | <pre>cargo run --manifest-path examples/skeletal-anim/Cargo.toml</pre> Skeletal mesh animation using GLTF | <image alt="skeletal-anim" src="../.github/img/skeletal-anim.png" width="176" height="150">
-[shader-toy/](shader-toy/src/main.rs) | <pre>cargo run --manifest-path examples/shader-toy/Cargo.toml</pre> | <image alt="shader-toy" src="../.github/img/shader-toy.png" width="176" height="105">
-[vr/](vr/src/main.rs) | <pre>cargo run --manifest-path examples/vr/Cargo.toml</pre> | <image alt="vr" src="../.github/img/vr.png" width="176" height="146">
+[skeletal-anim/](skeletal-anim/src/main.rs) | <pre>cargo run -p skeletal-anim</pre> Skeletal mesh animation using GLTF | <image alt="skeletal-anim" src="../.github/img/skeletal-anim.png" width="176" height="150">
+[shader-toy/](shader-toy/src/main.rs) | <pre>cargo run -p shader-toy</pre> | <image alt="shader-toy" src="../.github/img/shader-toy.png" width="176" height="105">
+[vr/](vr/src/main.rs) | <pre>cargo run -p vr</pre> | <image alt="vr" src="../.github/img/vr.png" width="176" height="146">
 
 ## Additional Examples
 
