@@ -15,8 +15,8 @@ include-pak = []
 [dependencies]
 anyhow = "1.0"
 bytemuck = { version = "1.25", features = ["derive"] }
-clap = { version = "4.5", features = ["derive"] }
-pak = "0.5"
+clap = { version = "4.6", features = ["derive"] }
+pak = "0.7"
 pretty_env_logger = "0.5"
 vk-graph.workspace = true
 vk-graph-fx.workspace = true
@@ -25,7 +25,7 @@ winit.workspace = true
 
 [build-dependencies]
 anyhow = "1.0"
-pak = { version = "0.5", features = ["bake"] }
+pak = { version = "0.7", features = ["bake"] }
 paste = "1.0"
 shader-prepper = "0.3.0-pre.3"  
 shaderc = "0.10"

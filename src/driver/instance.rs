@@ -118,17 +118,14 @@ unsafe extern "system" fn vulkan_debug_callback(
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum ApiVersion {
     /// Version 1.2
+    #[default]
     Vulkan12,
 
     /// Version 1.3
-    #[default]
     Vulkan13,
 }
 
 impl ApiVersion {
-    /// The most recent supported version of Vulkan
-    pub const MAX_SUPPORTED: Self = Self::Vulkan13;
-
     /// Returns a version parsed from a native Vulkan value.
     pub fn try_parse_vk_api_version(version: u32) -> Result<Self, ParseApiVersionError> {
         Self::try_from(version)
@@ -230,6 +227,9 @@ pub struct Instance {
 }
 
 impl Instance {
+    /// The most recent supported version of Vulkan
+    pub const LATEST_API_VERSION: ApiVersion = ApiVersion::Vulkan13;
+
     /// Creates a new Vulkan instance.
     #[profiling::function]
     pub fn new(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
@@ -343,6 +343,7 @@ impl Instance {
                 _debug_loader: debug_loader,
                 debug_utils,
                 instance,
+                instance_created: true,
             }),
         })
     }
@@ -369,7 +370,7 @@ impl Instance {
             })?
             .unwrap_or_else(|| {
                 // The implementation *should* provide a version. If it does not we just send it.
-                ApiVersion::MAX_SUPPORTED.to_vk_api_version()
+                Self::LATEST_API_VERSION.to_vk_api_version()
             })
             .try_into()
             .map_err(|err| {
@@ -391,6 +392,7 @@ impl Instance {
                 _debug_loader: None,
                 debug_utils: None,
                 instance,
+                instance_created: false,
             }),
         })
     }
@@ -584,6 +586,7 @@ struct InstanceInner {
     debug_utils: Option<ext::debug_utils::Instance>,
 
     instance: ash::Instance,
+    instance_created: bool,
 }
 
 impl Drop for InstanceInner {
@@ -600,7 +603,9 @@ impl Drop for InstanceInner {
                 debug_loader.destroy_debug_report_callback(debug_callback, None);
             }
 
-            self.instance.destroy_instance(None);
+            if self.instance_created {
+                self.instance.destroy_instance(None);
+            }
         }
     }
 }

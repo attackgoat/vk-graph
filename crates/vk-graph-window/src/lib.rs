@@ -127,32 +127,31 @@ impl Window {
                     swapchain_info = swapchain_info.min_image_count(min_image_count);
                 }
 
-                if let Some(v_sync) = self.data.v_sync {
-                    let present_modes = Surface::present_modes(&surface)?;
-                    if !present_modes.is_empty() {
-                        let best_modes = if v_sync {
-                            [vk::PresentModeKHR::FIFO_RELAXED, vk::PresentModeKHR::FIFO].as_slice()
-                        } else {
-                            [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE].as_slice()
-                        };
+                let v_sync = self.data.v_sync.unwrap_or_default();
+                let present_modes = Surface::present_modes(&surface)?;
+                if !present_modes.is_empty() {
+                    let best_modes = if v_sync {
+                        [vk::PresentModeKHR::FIFO_RELAXED, vk::PresentModeKHR::FIFO].as_slice()
+                    } else {
+                        [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE].as_slice()
+                    };
 
-                        swapchain_info = swapchain_info.present_mode(
-                            best_modes
-                                .iter()
-                                .copied()
-                                .find(|best| present_modes.contains(best))
-                                .or_else(|| {
-                                    warn!("requested present modes unsupported: {best_modes:?}");
+                    swapchain_info = swapchain_info.present_mode(
+                        best_modes
+                            .iter()
+                            .copied()
+                            .find(|best| present_modes.contains(best))
+                            .or_else(|| {
+                                warn!("requested present modes unsupported: {best_modes:?}");
 
-                                    present_modes.first().copied()
-                                })
-                                .ok_or_else(|| {
-                                    error!("display does not support presentation");
+                                present_modes.first().copied()
+                            })
+                            .ok_or_else(|| {
+                                error!("display does not support presentation");
 
-                                    DriverError::Unsupported
-                                })?,
-                        );
-                    }
+                                DriverError::Unsupported
+                            })?,
+                    );
                 }
 
                 let swapchain = Swapchain::new(surface, swapchain_info)?;

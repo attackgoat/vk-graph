@@ -587,7 +587,7 @@ pub struct SwapchainInfo {
     ///
     /// * **Tearing**: No tearing will be observed.
     /// * **Also known as**: "Fast Vsync"
-    #[builder(default = vk::PresentModeKHR::MAILBOX)]
+    #[builder(default = vk::PresentModeKHR::IMMEDIATE)]
     pub present_mode: vk::PresentModeKHR,
 
     /// The format and color space of the surface.
@@ -613,7 +613,7 @@ impl SwapchainInfo {
             desired_image_count: 0,
             height,
             min_image_count: 2,
-            present_mode: vk::PresentModeKHR::MAILBOX,
+            present_mode: vk::PresentModeKHR::IMMEDIATE,
             surface,
             width,
         }

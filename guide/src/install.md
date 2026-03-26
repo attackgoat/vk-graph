@@ -23,16 +23,7 @@ available.
     - ...**`superluminal`**
     - ...**`tracy`**
 
-## Vulkan SDK
-
-Debug mode (setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`) is supported only
-when a compatible [_Vulkan SDK_](https://vulkan.lunarg.com/sdk/home)
-<i class="fa-solid fa-arrow-up-right-from-square"></i> is installed.
-
-> [!IMPORTANT]
-> The installed Vulkan SDK version must be at least v{{ vulkan_sdk.version }}.
-
-## Required Packages
+## Required Development Packages
 
 _Linux (Debian-like)_:
 - `sudo apt install cmake uuid-dev libfontconfig-dev libssl-dev`
@@ -44,3 +35,18 @@ _Mac OS (10.15 or later)_:
 
 _Windows_:
 - TODO
+
+## Vulkan SDK
+
+Debug mode (setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`) is only supported
+when certain validation layers are installed. The [_Vulkan SDK_](https://vulkan.lunarg.com/sdk/home)
+<i class="fa-solid fa-arrow-up-right-from-square"></i> provides these layers and a number of helpful
+tools.
+
+> [!IMPORTANT]
+> The installed Vulkan SDK version must be at least v{{ vulkan_sdk.version }}.
+
+### Optional Distribution-Provided Validation Layers
+
+_Linux (Debian-like)_:
+- `sudo apt install vulkan-validationlayers`
