@@ -436,6 +436,11 @@ impl PhysicalDevice {
             enabled_ext_names.push(ext::index_type_uint8::NAME.as_ptr());
         }
 
+        // Molten-vk doesn't support the full Vulkan feature set, hence the portability subset
+        // extension must be enabled.
+        #[cfg(all(target_os = "macos", feature = "loaded"))]
+        enabled_ext_names.push(khr::portability_subset::NAME.as_ptr());
+
         let priorities = repeat_n(
             1.0,
             self.queue_families

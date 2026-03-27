@@ -16,7 +16,7 @@ use {
     },
 };
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(feature = "loaded")]
 use {
     log::{Level, Metadata, info, logger},
     std::{
@@ -30,7 +30,7 @@ use {
 #[cfg(target_os = "macos")]
 use std::env::set_var;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(feature = "loaded")]
 unsafe extern "system" fn vulkan_debug_callback(
     _flags: vk::DebugReportFlagsEXT,
     _obj_type: vk::DebugReportObjectTypeEXT,
@@ -241,7 +241,8 @@ impl Instance {
             set_var("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "1");
         }
 
-        #[cfg(not(target_os = "macos"))]
+        // Link molten-vk dynamically if not on MacOS, or if explicitly requested.
+        #[cfg(feature = "loaded")]
         let entry = unsafe {
             ash::Entry::load().map_err(|err| {
                 error!("Vulkan driver not found: {err}");
@@ -250,18 +251,38 @@ impl Instance {
             })?
         };
 
-        #[cfg(target_os = "macos")]
+        // On MacOS, by default link molten-vk statically using ash-molten.
+        #[cfg(all(target_os = "macos", not(feature = "loaded")))]
         let entry = ash_molten::load();
 
-        let mut extension_names = Self::debug_extension_names(info.debug);
+        let mut extension_names = Vec::with_capacity(16);
         extension_names.extend(info.extension_names);
+
+        if info.debug {
+            extension_names.extend(Self::debug_extension_names());
+        }
+
+        // If linking dynamically on MacOS, we require a few additional extensions.
+        // Based on "Encountered VK_ERROR_INCOMPATIBLE_DRIVER" section in:
+        // https://vulkan.lunarg.com/doc/view/latest/mac/getting_started.html
+        #[cfg(all(target_os = "macos", feature = "loaded"))]
+        {
+            extension_names.push(ash::khr::get_physical_device_properties2::NAME);
+            extension_names.push(ash::khr::portability_enumeration::NAME);
+        }
+
         let extension_name_ptrs = extension_names
             .iter()
             .copied()
             .map(CStr::as_ptr)
             .collect::<Box<[_]>>();
 
-        let layer_names = Self::debug_layer_names(info.debug);
+        let mut layer_names = Vec::with_capacity(1);
+
+        if info.debug {
+            layer_names.extend(Self::debug_layer_names());
+        }
+
         let layer_name_ptrs = layer_names
             .iter()
             .copied()
@@ -276,6 +297,11 @@ impl Instance {
             .application_info(&app_desc)
             .enabled_layer_names(&layer_name_ptrs)
             .enabled_extension_names(&extension_name_ptrs);
+
+        // Molten-vk doesn't support the full Vulkan feature set, hence the portability flag needs
+        // to be set.
+        #[cfg(all(target_os = "macos", feature = "loaded"))]
+        let instance_desc = instance_desc.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
 
         let instance = unsafe {
             entry.create_instance(&instance_desc, None).map_err(|_| {
@@ -305,10 +331,10 @@ impl Instance {
 
         trace!("created a Vulkan instance");
 
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", not(feature = "loaded")))]
         let (debug_loader, debug_callback, debug_utils) = (None, None, None);
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
         let (debug_loader, debug_callback, debug_utils) = if info.debug {
             let debug_info = vk::DebugReportCallbackCreateInfoEXT {
                 flags: vk::DebugReportFlagsEXT::ERROR
@@ -397,34 +423,28 @@ impl Instance {
         })
     }
 
-    fn debug_extension_names(
-        #[cfg_attr(target_os = "macos", allow(unused_variables))] debug: bool,
-    ) -> Vec<&'static CStr> {
-        #[cfg_attr(target_os = "macos", allow(unused_mut))]
-        let mut res = vec![];
-
-        #[cfg(not(target_os = "macos"))]
-        if debug {
+    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+    fn debug_extension_names() -> impl IntoIterator<Item = &'static CStr> {
+        vec![
             #[allow(deprecated)]
-            res.push(ext::debug_report::NAME);
-            res.push(ext::debug_utils::NAME);
-        }
-
-        res
+            ext::debug_report::NAME,
+            ext::debug_utils::NAME,
+        ]
     }
 
-    fn debug_layer_names(
-        #[cfg_attr(target_os = "macos", allow(unused_variables))] debug: bool,
-    ) -> Vec<&'static CStr> {
-        #[cfg_attr(target_os = "macos", allow(unused_mut))]
-        let mut res = vec![];
+    #[cfg(all(target_os = "macos", not(feature = "loaded")))]
+    fn debug_extension_names() -> impl IntoIterator<Item = &'static CStr> {
+        vec![]
+    }
 
-        #[cfg(not(target_os = "macos"))]
-        if debug {
-            res.push(c"VK_LAYER_KHRONOS_validation");
-        }
+    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+    fn debug_layer_names() -> impl IntoIterator<Item = &'static CStr> {
+        vec![c"VK_LAYER_KHRONOS_validation"]
+    }
 
-        res
+    #[cfg(all(target_os = "macos", not(feature = "loaded")))]
+    fn debug_layer_names() -> Vec<&'static CStr> {
+        vec![]
     }
 
     /// Returns a wrapper structure for a physical device of this instance.
