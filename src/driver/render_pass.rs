@@ -136,7 +136,7 @@ impl RenderPass {
             .iter()
             .copied()
             .map(Into::into)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let correlated_view_masks = if info.subpasses.iter().any(|subpass| subpass.view_mask != 0) {
             {
                 info.subpasses
@@ -152,7 +152,7 @@ impl RenderPass {
             .iter()
             .copied()
             .map(Into::into)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
 
         let subpass_attachments = info
             .subpasses
@@ -296,7 +296,7 @@ impl RenderPass {
                     .usage(attachment.usage)
                     .view_formats(&attachment.view_formats)
             })
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let mut imageless_info =
             vk::FramebufferAttachmentsCreateInfoKHR::default().attachment_image_infos(&attachments);
         let mut create_info = vk::FramebufferCreateInfo::default()
@@ -345,7 +345,7 @@ impl RenderPass {
             .color_attachments
             .iter()
             .map(|_| pipeline.inner.info.blend.into())
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
             .attachments(&color_blend_attachment_states);
         let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
@@ -381,7 +381,7 @@ impl RenderPass {
 
                 info
             })
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_attribute_descriptions(
                 &pipeline.inner.vertex_input.vertex_attribute_descriptions,

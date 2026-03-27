@@ -422,7 +422,7 @@ impl GraphicPipeline {
             .layouts
             .values()
             .map(|descriptor_set_layout| descriptor_set_layout.handle)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
 
         let push_constants = shaders
             .iter()

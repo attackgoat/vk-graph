@@ -78,7 +78,7 @@ impl ComputePipeline {
             .layouts
             .values()
             .map(|descriptor_set_layout| descriptor_set_layout.handle)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
 
         unsafe {
             let shader_module = device

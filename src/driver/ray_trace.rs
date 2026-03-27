@@ -127,7 +127,7 @@ impl RayTracePipeline {
             .layouts
             .values()
             .map(|layout| layout.handle)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
 
         unsafe {
             let layout = device

@@ -480,7 +480,7 @@ fn load_scene_buffers(
                     0.0,
                 ]
             })
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let buf_len = materials.len() * 64;
         let mut buf = Buffer::create(
             device,

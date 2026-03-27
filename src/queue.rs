@@ -2128,8 +2128,8 @@ impl Queue {
                 &cmd_buf.device,
                 cmd_buf.handle,
                 global_barrier,
-                &buffer_barriers.collect::<Box<[_]>>(),
-                &image_barriers.collect::<Box<[_]>>(),
+                &buffer_barriers.collect::<Box<_>>(),
+                &image_barriers.collect::<Box<_>>(),
             );
         });
     }

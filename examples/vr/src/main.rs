@@ -120,7 +120,7 @@ fn main() -> anyhow::Result<()> {
     let swapchain_image_count = Swapchain::images(&swapchain).len();
     let mut swapchain_queues = repeat_with(|| None)
         .take(swapchain_image_count)
-        .collect::<Box<[_]>>();
+        .collect::<Box<_>>();
 
     let res_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("res");
 

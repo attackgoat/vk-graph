@@ -275,7 +275,7 @@ impl Instance {
             .iter()
             .copied()
             .map(CStr::as_ptr)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
 
         let mut layer_names = Vec::with_capacity(1);
 
@@ -287,7 +287,7 @@ impl Instance {
             .iter()
             .copied()
             .map(CStr::as_ptr)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
 
         let app_desc = vk::ApplicationInfo::default().api_version(match info.api_version {
             ApiVersion::Vulkan12 => vk::API_VERSION_1_2,
