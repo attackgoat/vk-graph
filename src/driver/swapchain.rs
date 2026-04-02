@@ -369,7 +369,7 @@ impl Swapchain {
         if self.info != info {
             // attempt to reducing flickering when resizing windows on mac
             #[cfg(target_os = "macos")]
-            if let Err(err) = unsafe { self.device.device_wait_idle() } {
+            if let Err(err) = unsafe { self.surface.device.device_wait_idle() } {
                 warn!("device_wait_idle() failed: {err}");
             }
 

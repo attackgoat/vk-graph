@@ -989,7 +989,7 @@ impl Resource for SwapchainImage {
     }
 }
 
-macro_rules! graph_resource {
+macro_rules! resource {
     ($name:ident) => {
         paste::paste! {
             impl Resource for $name {
@@ -1018,10 +1018,9 @@ macro_rules! graph_resource {
                     // We will return an existing node, if possible
                     // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
                     for (idx, existing_resource) in graph.resources.iter_mut().enumerate() {
-                        if let AnyResource::$name(existing_resource) = existing_resource {
-                            if Arc::ptr_eq(existing_resource, &self) {
+                        if let AnyResource::$name(existing_resource) = existing_resource
+                            && Arc::ptr_eq(existing_resource, &self) {
                                 return Self::Node::new(idx);
-                            }
                         }
                     }
 
@@ -1073,10 +1072,9 @@ macro_rules! graph_resource {
                     // We will return an existing node, if possible
                     // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
                     for (idx, existing_resource) in graph.resources.iter().enumerate() {
-                        if let AnyResource::[<$name Lease>](existing_resource) = existing_resource {
-                            if Arc::ptr_eq(existing_resource, &self) {
+                        if let AnyResource::[<$name Lease>](existing_resource) = existing_resource
+                            && Arc::ptr_eq(existing_resource, &self) {
                                 return Self::Node::new(idx);
-                            }
                         }
                     }
 
@@ -1103,9 +1101,9 @@ macro_rules! graph_resource {
     };
 }
 
-graph_resource!(AccelerationStructure);
-graph_resource!(Image);
-graph_resource!(Buffer);
+resource!(AccelerationStructure);
+resource!(Image);
+resource!(Buffer);
 
 #[deprecated]
 #[doc(hidden)]

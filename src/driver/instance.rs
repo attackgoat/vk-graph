@@ -241,7 +241,7 @@ impl Instance {
             set_var("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "1");
         }
 
-        // Link molten-vk dynamically if not on MacOS, or if explicitly requested.
+        // Link the Vulkan loader dynamically (default feature).
         #[cfg(feature = "loaded")]
         let entry = unsafe {
             ash::Entry::load().map_err(|err| {
@@ -251,9 +251,16 @@ impl Instance {
             })?
         };
 
-        // On MacOS, by default link molten-vk statically using ash-molten.
-        #[cfg(all(target_os = "macos", not(feature = "loaded")))]
-        let entry = ash_molten::load();
+        // Link the Vulkan loader statically if explicitly requested
+        #[cfg(not(feature = "loaded"))]
+        let entry = {
+            #[cfg(not(target_os = "macos"))]
+            let entry = ash::Entry::linked();
+
+            // On MacOS, by default link molten-vk statically using ash-molten.
+            #[cfg(target_os = "macos")]
+            let entry = ash_molten::load();
+        };
 
         let mut extension_names = Vec::with_capacity(16);
         extension_names.extend(info.extension_names);
