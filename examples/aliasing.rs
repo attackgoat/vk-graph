@@ -11,7 +11,7 @@ use {
         },
         pool::{
             Pool as _,
-            alias::{Alias as _, AliasWrapper},
+            cache::Cache,
             hash::HashPool,
         },
     },
@@ -26,10 +26,11 @@ use {
 ///
 /// Acceleration structures, buffers and images may be "aliased" by different parts of any one or
 /// more graphs. The process involves wrapping any pool type (FifoPool, LazyPool, HashPool)
-/// in an AliasPool container. AliasPool offers an alias(..) function which operates exactly the
-/// same as a regular pool lease_resource(..) except that the result is wrapped in an Arc<>.
+/// in a Cache container. Cache offers `accel_struct`, `buffer` and `image` functions which operate
+/// exactly the same as a regular pool lease_resource(..) except that the result is wrapped in an
+/// Arc<>.
 ///
-/// AliasPool derefs to the base pool type and so leasing may be used normally too.
+/// Cache derefs to the base pool type and so leasing may be used normally too.
 fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
@@ -37,8 +38,8 @@ fn main() -> Result<(), DriverError> {
     let device_info = DeviceInfo::builder().debug(args.debug);
     let device = Device::new(device_info)?;
 
-    // We wrap HashPool in an AliasPool container to enable resource aliasing
-    let mut pool = AliasWrapper::new(HashPool::new(&device));
+    // We wrap HashPool in a Cache container to enable resource aliasing
+    let mut cache = Cache::new(HashPool::new(&device));
 
     // This is the information we will use to alias image1 and image2
     let image_info = ImageInfo::image_2d(
@@ -49,8 +50,8 @@ fn main() -> Result<(), DriverError> {
     );
 
     // Any two compatible images aliased from the same pool will be the same physical image
-    let image1 = pool.alias_resource(image_info)?;
-    let image2 = pool.alias_resource(image_info)?;
+    let image1 = cache.image(image_info)?;
+    let image2 = cache.image(image_info)?;
     assert!(Arc::ptr_eq(&image1, &image2));
 
     let mut graph = Graph::default();
@@ -78,11 +79,11 @@ fn main() -> Result<(), DriverError> {
     );
 
     // We alias the compatible information and still produce the same physical image and node
-    let image3_node = graph.bind_resource(pool.alias_resource(image_info)?);
+    let image3_node = graph.bind_resource(cache.image(image_info)?);
     assert_eq!(image1_node, image3_node);
 
     // Using the same information for a new LEASE will generate an entirely different image!!
-    let image4_node = graph.bind_resource(pool.lease_resource(image_info)?);
+    let image4_node = graph.bind_resource(cache.lease_resource(image_info)?);
     assert_ne!(image1_node, image4_node);
 
     Ok(())

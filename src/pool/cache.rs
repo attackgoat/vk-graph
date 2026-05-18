@@ -4,11 +4,9 @@ use {
     super::{Lease, Pool},
     crate::driver::{
         DriverError,
-        accel_struct::{
-            AccelerationStructure, AccelerationStructureInfo, AccelerationStructureInfoBuilder,
-        },
-        buffer::{Buffer, BufferInfo, BufferInfoBuilder},
-        image::{Image, ImageInfo, ImageInfoBuilder},
+        accel_struct::{AccelerationStructure, AccelerationStructureInfo},
+        buffer::{Buffer, BufferInfo},
+        image::{Image, ImageInfo},
     },
     log::debug,
     std::{
@@ -16,44 +14,6 @@ use {
         sync::{Arc, Weak},
     },
 };
-
-#[deprecated = "use AliasWrapper type"]
-#[doc(hidden)]
-pub type AliasPool<T> = self::AliasWrapper<T>;
-
-/// Allows aliasing of resources using driver information structures.
-///
-/// Aliasing is just like leasing except you don't get an instance and somebody else might have
-/// already recorded commands against the resource which have not yet completed.
-pub trait Alias<I, T> {
-    #[deprecated = "use alias_resource function"]
-    #[doc(hidden)]
-    fn alias(&mut self, info: I) -> Result<Arc<Lease<T>>, DriverError> {
-        self.alias_resource(info)
-    }
-
-    /// Returns an alias of a resource.
-    fn alias_resource(&mut self, info: I) -> Result<Arc<Lease<T>>, DriverError>;
-}
-
-// Enable aliasing items using their info builder type for convenience
-macro_rules! alias_builder {
-    ($info:ident => $item:ident) => {
-        paste::paste! {
-            impl<T> Alias<[<$info Builder>], $item> for T where T: Alias<$info, $item> {
-                fn alias_resource(&mut self, builder: [<$info Builder>]) -> Result<Arc<Lease<$item>>, DriverError> {
-                    let info = builder.build();
-
-                    self.alias_resource(info)
-                }
-            }
-        }
-    };
-}
-
-alias_builder!(AccelerationStructureInfo => AccelerationStructure);
-alias_builder!(BufferInfo => Buffer);
-alias_builder!(ImageInfo => Image);
 
 /// A memory-efficient resource wrapper for any [`Pool`] type.
 ///
@@ -64,8 +24,9 @@ alias_builder!(ImageInfo => Image);
 /// All regular leasing and other functionality of the wrapped pool is available through `Deref` and
 /// `DerefMut`.
 ///
-/// **_NOTE:_** You must call `alias_resource(..)` to use resource aliasing as regular
-/// `lease_resource(..)` calls will not inspect or return aliased resources.
+/// **_NOTE:_** You must call the resource-specific alias methods (e.g. `image_alias(..)`)
+/// to use resource aliasing as regular `lease_resource(..)` calls will not inspect or return
+/// aliased resources.
 ///
 /// # Details
 ///
@@ -76,7 +37,7 @@ alias_builder!(ImageInfo => Image);
 /// # Examples
 ///
 /// See [`aliasing.rs`](https://github.com/attackgoat/vk-graph/blob/master/examples/aliasing.rs)
-pub struct AliasWrapper<T> {
+pub struct Cache<T> {
     accel_structs: Vec<(
         AccelerationStructureInfo,
         Weak<Lease<AccelerationStructure>>,
@@ -86,8 +47,8 @@ pub struct AliasWrapper<T> {
     pool: T,
 }
 
-impl<T> AliasWrapper<T> {
-    /// Creates a new aliasable wrapper over the given pool.
+impl<T> Cache<T> {
+    /// Creates a new cache wrapper over the given pool.
     pub fn new(pool: T) -> Self {
         Self {
             accel_structs: Default::default(),
@@ -102,7 +63,7 @@ impl<T> AliasWrapper<T> {
 macro_rules! lease_pass_through {
     ($info:ident => $item:ident) => {
         paste::paste! {
-            impl<T> Pool<$info, $item> for AliasWrapper<T> where T: Pool<$info, $item> {
+            impl<T> Pool<$info, $item> for Cache<T> where T: Pool<$info, $item> {
                 fn lease_resource(&mut self, info: $info) -> Result<Lease<$item>, DriverError> {
                     self.pool.lease_resource(info)
                 }
@@ -115,11 +76,14 @@ lease_pass_through!(AccelerationStructureInfo => AccelerationStructure);
 lease_pass_through!(BufferInfo => Buffer);
 lease_pass_through!(ImageInfo => Image);
 
-impl<T> Alias<AccelerationStructureInfo, AccelerationStructure> for AliasWrapper<T>
+impl<T> Cache<T>
 where
     T: Pool<AccelerationStructureInfo, AccelerationStructure>,
 {
-    fn alias_resource(
+    /// Alias an acceleration structure using the given info.
+    ///
+    /// Returns an existing aliased resource if a compatible one is found, or leases a new one.
+    pub fn accel_struct(
         &mut self,
         info: AccelerationStructureInfo,
     ) -> Result<Arc<Lease<AccelerationStructure>>, DriverError> {
@@ -149,11 +113,14 @@ where
     }
 }
 
-impl<T> Alias<BufferInfo, Buffer> for AliasWrapper<T>
+impl<T> Cache<T>
 where
     T: Pool<BufferInfo, Buffer>,
 {
-    fn alias_resource(&mut self, info: BufferInfo) -> Result<Arc<Lease<Buffer>>, DriverError> {
+    /// Alias a buffer using the given info.
+    ///
+    /// Returns an existing aliased resource if a compatible one is found, or leases a new one.
+    pub fn buffer(&mut self, info: BufferInfo) -> Result<Arc<Lease<Buffer>>, DriverError> {
         self.buffers.retain(|(_, item)| item.strong_count() > 0);
 
         {
@@ -185,11 +152,14 @@ where
     }
 }
 
-impl<T> Alias<ImageInfo, Image> for AliasWrapper<T>
+impl<T> Cache<T>
 where
     T: Pool<ImageInfo, Image>,
 {
-    fn alias_resource(&mut self, info: ImageInfo) -> Result<Arc<Lease<Image>>, DriverError> {
+    /// Alias an image using the given info.
+    ///
+    /// Returns an existing aliased resource if a compatible one is found, or leases a new one.
+    pub fn image(&mut self, info: ImageInfo) -> Result<Arc<Lease<Image>>, DriverError> {
         self.images.retain(|(_, item)| item.strong_count() > 0);
 
         {
@@ -227,7 +197,7 @@ where
     }
 }
 
-impl<T> Deref for AliasWrapper<T> {
+impl<T> Deref for Cache<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -235,7 +205,7 @@ impl<T> Deref for AliasWrapper<T> {
     }
 }
 
-impl<T> DerefMut for AliasWrapper<T> {
+impl<T> DerefMut for Cache<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.pool
     }

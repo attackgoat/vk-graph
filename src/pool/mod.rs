@@ -59,7 +59,7 @@
 //!
 //! # When Should You Use Resource Aliasing?
 //!
-//! Wrapping any pool using [`AliasWrapper::new`](self::alias::AliasWrapper::new) enables resource
+//! Wrapping any pool using [`cache::Cache::new`] enables resource
 //! aliasing, which prevents excess resources from being created even when different parts of your
 //! code request new resources.
 //!
@@ -84,7 +84,7 @@
 //! * May cause GPU stalling if there is not enough work being submitted
 //! * Aliased resources are typed `Arc<Lease<T>>` and are not guaranteed to be mutable or unique
 
-pub mod alias;
+pub mod cache;
 pub mod fifo;
 pub mod hash;
 pub mod lazy;
