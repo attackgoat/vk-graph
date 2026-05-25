@@ -1,4 +1,4 @@
-//! TODO
+//! Reusable effects and rendering utilities built on top of `vk-graph`.
 
 #![warn(missing_docs)]
 

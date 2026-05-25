@@ -1,4 +1,4 @@
-//! TODO
+//! Hot-reload shader descriptions and builder APIs.
 
 pub use shaderc::{OptimizationLevel, SourceLanguage, SpirvVersion};
 
@@ -53,8 +53,8 @@ pub struct HotShader {
     ///
     /// Basic usage (GLSL):
     ///
-    /// ```
-    /// # vk_shader_macros::glsl!(kind: comp, r#"
+    /// ```glsl
+    /// // fire.comp
     /// #version 460 core
     ///
     /// // Defaults to 6 if not set using HotShader specialization_info!
@@ -66,25 +66,18 @@ pub struct HotShader {
     /// {
     ///     // Code uses MY_COUNT number of my_samplers here
     /// }
-    /// # "#);
     /// ```
     ///
     /// ```no_run
-    /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
-    /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::shader::{SpecializationInfo};
-    /// # use vk_graph_hot::shader::HotShader;
-    /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
-    /// # let my_shader_code = [0u8; 1];
+    /// use vk_graph::driver::shader::SpecializationMap;
+    /// use vk_graph_hot::HotShader;
+    ///
     /// // We instead specify 42 for MY_COUNT:
-    /// let shader = HotShader::new_fragment(my_shader_code.as_slice())
+    /// let shader = HotShader::new_compute("shaders/fire.comp")
     ///     .specialization(
     ///         SpecializationMap::new(42u32.to_ne_bytes())
     ///             .constant(0, 0, 4)
     ///     );
-    /// # Ok(()) }
     /// ```
     #[builder(default, setter(strip_option))]
     pub specialization: Option<SpecializationMap>,
@@ -207,22 +200,34 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::TASK_EXT, path)
     }
 
-    /// Creates a new tesselation control shader.
+    /// Creates a new tessellation control shader.
     ///
     /// # Panics
     ///
     /// If the shader code is invalid.
-    pub fn new_tesselation_ctrl(path: impl AsRef<Path>) -> HotShaderBuilder {
+    pub fn new_tessellation_ctrl(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, path)
     }
 
-    /// Creates a new tesselation evaluation shader.
+    #[deprecated = "use new_tessellation_ctrl function"]
+    #[doc(hidden)]
+    pub fn new_tesselation_ctrl(path: impl AsRef<Path>) -> HotShaderBuilder {
+        Self::new_tessellation_ctrl(path)
+    }
+
+    /// Creates a new tessellation evaluation shader.
     ///
     /// # Panics
     ///
     /// If the shader code is invalid.
-    pub fn new_tesselation_eval(spirv: impl AsRef<Path>) -> HotShaderBuilder {
-        Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, spirv)
+    pub fn new_tessellation_eval(path: impl AsRef<Path>) -> HotShaderBuilder {
+        Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, path)
+    }
+
+    #[deprecated = "use new_tessellation_eval function"]
+    #[doc(hidden)]
+    pub fn new_tesselation_eval(path: impl AsRef<Path>) -> HotShaderBuilder {
+        Self::new_tessellation_eval(path)
     }
 
     /// Creates a new vertex shader.
@@ -255,12 +260,18 @@ impl HotShader {
                 vk::ShaderStageFlags::TESSELLATION_CONTROL => ShaderKind::TessControl,
                 vk::ShaderStageFlags::TESSELLATION_EVALUATION => ShaderKind::TessEvaluation,
                 vk::ShaderStageFlags::VERTEX => ShaderKind::Vertex,
-                _ => unimplemented!("{:?}", self.stage),
+                _ => {
+                    error!(
+                        "unsupported shader stage for shaderc kind inference: {:?}",
+                        self.stage
+                    );
+                    return Err(DriverError::Unsupported);
+                }
             })
         };
 
         let mut additional_opts = CompileOptions::new().map_err(|err| {
-            error!("Unable to initialize compiler options: {err:?}");
+            error!("unable to initialize compiler options: {err:?}");
 
             DriverError::Unsupported
         })?;
@@ -303,10 +314,10 @@ impl HotShader {
         )
         .map_err(|err| {
             if !log_enabled!(Level::Error) {
-                panic!("Unable to compile shader {}: {err}", self.path.display());
+                panic!("unable to compile shader {}: {err}", self.path.display());
             }
 
-            error!("Unable to compile shader {}: {err}", self.path.display());
+            error!("unable to compile shader {}: {err}", self.path.display());
 
             DriverError::InvalidData
         })?;
@@ -315,7 +326,7 @@ impl HotShader {
             watcher
                 .watch(&path, RecursiveMode::NonRecursive)
                 .map_err(|err| {
-                    error!("Unable to watch file: {err}");
+                    error!("unable to watch file: {err}");
 
                     DriverError::Unsupported
                 })?;
@@ -360,8 +371,7 @@ impl HotShaderBuilder {
             this.stage = Some(vk::ShaderStageFlags::empty());
         }
 
-        this.fallible_build()
-            .expect("All required fields set at initialization")
+        this.fallible_build().expect("invalid hot shader")
     }
 
     /// Defines a single macro.
@@ -370,16 +380,11 @@ impl HotShaderBuilder {
         key: impl Into<String>,
         value: impl Into<Option<String>>,
     ) -> Self {
-        if self.macro_definitions.is_none() || self.macro_definitions.as_ref().unwrap().is_none() {
-            self.macro_definitions = Some(Some(vec![]));
-        }
-
-        self.macro_definitions
-            .as_mut()
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .push((key.into(), value.into()));
+        let macro_definitions = self
+            .macro_definitions
+            .get_or_insert_with(|| Some(Vec::new()))
+            .get_or_insert_with(Vec::new);
+        macro_definitions.push((key.into(), value.into()));
 
         self
     }
@@ -388,5 +393,43 @@ impl HotShaderBuilder {
     pub fn path(mut self, path: impl AsRef<Path>) -> Self {
         self.path = Some(path.as_ref().to_owned());
         self
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn new_compute_sets_stage_and_path() {
+        let shader = HotShader::new_compute("shader.comp").build();
+
+        assert_eq!(shader.stage, vk::ShaderStageFlags::COMPUTE);
+        assert_eq!(shader.path, PathBuf::from("shader.comp"));
+        assert_eq!(shader.entry_name, "main");
+    }
+
+    #[test]
+    fn from_path_defaults_to_empty_stage_for_inference() {
+        let shader = HotShader::from_path("shader.glsl").build();
+
+        assert!(shader.stage.is_empty());
+        assert_eq!(shader.path, PathBuf::from("shader.glsl"));
+    }
+
+    #[test]
+    fn macro_definition_accumulates_values() {
+        let shader = HotShader::new_fragment("shader.frag")
+            .macro_definition("FOO", Some("1".to_owned()))
+            .macro_definition("BAR", None::<String>)
+            .build();
+
+        assert_eq!(
+            shader.macro_definitions,
+            Some(vec![
+                ("FOO".to_owned(), Some("1".to_owned())),
+                ("BAR".to_owned(), None),
+            ])
+        );
     }
 }

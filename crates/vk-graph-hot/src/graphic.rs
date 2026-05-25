@@ -1,4 +1,4 @@
-//! TODO
+//! Hot-reload graphic pipeline support.
 
 use {
     super::{HotPipeline, compile_shaders_and_watch, create_watcher, pipeline, shader::HotShader},
@@ -17,7 +17,7 @@ use {
     },
 };
 
-/// TODO
+/// A graphic pipeline wrapper that recompiles its shaders when source files change.
 #[derive(Debug)]
 pub struct HotGraphicPipeline {
     cache: RwLock<HotPipeline<GraphicPipeline>>,
@@ -27,7 +27,7 @@ pub struct HotGraphicPipeline {
 }
 
 impl HotGraphicPipeline {
-    /// TODO
+    /// Creates a hot-reload graphic pipeline from one or more shader files.
     pub fn create<S>(
         device: &Device,
         info: impl Into<GraphicPipelineInfo>,

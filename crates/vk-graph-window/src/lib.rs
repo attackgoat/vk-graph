@@ -1,4 +1,4 @@
-//! TODO
+//! `winit` window, event loop, and swapchain helpers for `vk-graph`.
 
 #![warn(missing_docs)]
 
@@ -45,12 +45,19 @@ pub enum FullscreenMode {
     Exclusive,
 }
 
-#[doc(hidden)]
-#[repr(C)]
-pub struct ReadOnlyWindow {
+/// A convenience wrapper that owns a `winit` event loop and a compatible `vk-graph` device.
+#[read_only::embed]
+pub struct Window {
     data: WindowData,
+
+    /// A device which is compatible with this window.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub device: Device,
-    event_loop: EventLoop<()>,
+
+    #[readonly]
+    pub(self) event_loop: EventLoop<()>,
 }
 
 impl Deref for ReadOnlyWindow {
@@ -61,35 +68,18 @@ impl Deref for ReadOnlyWindow {
     }
 }
 
-/// TODO
-#[repr(C)]
-pub struct Window {
-    data: WindowData,
-
-    /// A device which is compatible with this window.
-    ///
-    /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub device: Device,
-
-    #[cfg(not(doc))]
-    device: Device,
-
-    event_loop: EventLoop<()>,
-}
-
 impl Window {
-    /// TODO
+    /// Creates a window using the default [`WindowBuilder`] configuration.
     pub fn new() -> Result<Self, WindowError> {
         Self::builder().build()
     }
 
-    /// TODO
+    /// Creates a builder for configuring a [`Window`] before construction.
     pub fn builder() -> WindowBuilder {
         Default::default()
     }
 
-    /// TODO
+    /// Runs the application event loop and invokes `draw_fn` for each rendered frame.
     pub fn run<F>(self, draw_fn: F) -> Result<(), WindowError>
     where
         F: FnMut(FrameContext),
@@ -206,7 +196,7 @@ impl Window {
 
                                         winit::window::Fullscreen::Exclusive(video_mode)
                                     } else {
-                                        warn!("Using borderless fullscreen");
+                                        warn!("unsupported exclusive fullscreen mode: using borderless fullscreen");
 
                                         inner_size = None;
 
@@ -233,7 +223,11 @@ impl Window {
         where
             F: FnMut(FrameContext),
         {
-            fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+            fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+                if event_loop.exiting() {
+                    return;
+                }
+
                 if let Some(ActiveWindow { window, .. }) = self.active_window.as_ref() {
                     window.request_redraw();
                 }
@@ -260,7 +254,7 @@ impl Window {
 
                 let window = match event_loop.create_window(self.data.attributes.clone()) {
                     Err(err) => {
-                        warn!("Unable to create window: {err}");
+                        warn!("unable to create window: {err}");
 
                         self.error = Some(EventLoopError::Os(err).into());
                         event_loop.exit();
@@ -271,7 +265,7 @@ impl Window {
                 };
                 let swapchain = match self.create_swapchain(&window) {
                     Err(err) => {
-                        warn!("Unable to create swapchain: {err}");
+                        warn!("unable to create swapchain: {err}");
 
                         self.error = Some(err.into());
                         event_loop.exit();
@@ -306,18 +300,31 @@ impl Window {
                 if let Some(active_window) = self.active_window.as_mut() {
                     match &event {
                         WindowEvent::CloseRequested => {
+                            if event_loop.exiting() {
+                                return;
+                            }
+
                             info!("close requested");
 
                             event_loop.exit();
                         }
                         WindowEvent::RedrawRequested => {
-                            let draw = active_window.draw(&self.device, &mut self.draw_fn);
+                            if event_loop.exiting() {
+                                return;
+                            }
+
+                            match active_window.draw(&self.device, &mut self.draw_fn) {
+                                Ok(true) => {}
+                                res => {
+                                    if let Err(err) = res {
+                                        self.error = Some(WindowError::Swapchain(err));
+                                    }
+
+                                    event_loop.exit();
+                                }
+                            }
 
                             profiling::finish_frame!();
-
-                            if !draw.unwrap() {
-                                event_loop.exit();
-                            }
                         }
                         WindowEvent::Resized(size) => {
                             active_window.swapchain_resize = Some((size.width, size.height));
@@ -400,13 +407,13 @@ impl Window {
         let mut app = Application {
             active_window: None,
             data: self.data,
-            device: self.device,
+            device: self.read_only.device,
             draw_fn,
             error: None,
             primary_monitor: None,
         };
 
-        self.event_loop.run_app(&mut app)?;
+        self.read_only.event_loop.run_app(&mut app)?;
 
         if let Some(ActiveWindow {
             swapchain, window, ..
@@ -426,22 +433,13 @@ impl Window {
     }
 }
 
-#[doc(hidden)]
-impl Deref for Window {
-    type Target = ReadOnlyWindow;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
-    }
-}
-
 impl HasDisplayHandle for Window {
     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         self.event_loop.display_handle()
     }
 }
 
-/// TODO
+/// Builder for configuring and constructing a [`Window`].
 pub struct WindowBuilder {
     attributes: WindowAttributes,
     cmd_buf_count: usize,
@@ -453,7 +451,7 @@ pub struct WindowBuilder {
 }
 
 impl WindowBuilder {
-    /// TODO
+    /// Builds the window, event loop, and compatible `vk-graph` device.
     pub fn build(self) -> Result<Window, WindowError> {
         let event_loop = EventLoop::new()?;
         let device = Device::try_from_display(&event_loop, self.device_info)?;
@@ -467,8 +465,7 @@ impl WindowBuilder {
                 v_sync: self.v_sync,
                 window_mode_override: self.window_mode_override,
             },
-            device,
-            event_loop,
+            read_only: ReadOnlyWindow { device, event_loop },
         })
     }
 
@@ -487,7 +484,7 @@ impl WindowBuilder {
 
     /// Enables Vulkan graphics debugging layers.
     ///
-    /// _NOTE:_ Any valdation warnings or errors will cause the current thread to park itself after
+    /// _NOTE:_ Any validation warnings or errors will cause the current thread to park itself after
     /// describing the error using the `log` crate. This makes it easy to attach a debugger and see
     /// what is causing the issue directly.
     ///
@@ -604,13 +601,15 @@ struct WindowData {
     window_mode_override: Option<Option<FullscreenMode>>,
 }
 
-/// TODO
+/// Errors produced while creating or running a [`Window`].
 #[derive(Debug)]
 pub enum WindowError {
-    /// TODO
+    /// A Vulkan or `vk-graph` driver error occurred.
     Driver(DriverError),
-    /// TODO
+    /// `winit` failed to create or run the event loop.
     EventLoop(EventLoopError),
+    /// An window system integration or swapchain presentation error occurred.
+    Swapchain(SwapchainError),
 }
 
 impl error::Error for WindowError {
@@ -618,6 +617,7 @@ impl error::Error for WindowError {
         Some(match self {
             Self::Driver(err) => err,
             Self::EventLoop(err) => err,
+            Self::Swapchain(err) => err,
         })
     }
 }
@@ -627,6 +627,7 @@ impl fmt::Display for WindowError {
         match self {
             Self::Driver(err) => err.fmt(f),
             Self::EventLoop(err) => err.fmt(f),
+            Self::Swapchain(err) => err.fmt(f),
         }
     }
 }
@@ -640,29 +641,5 @@ impl From<DriverError> for WindowError {
 impl From<EventLoopError> for WindowError {
     fn from(err: EventLoopError) -> Self {
         Self::EventLoop(err)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use {
-        super::*,
-        std::mem::{offset_of, size_of},
-    };
-
-    #[test]
-    pub fn window_repr_c() {
-        // HACK: The readonly crate uses a private implementation and so we can't further deref it
-        // into the native object type. Because of this the ReadOnly part is manually implemented.
-        assert_eq!(size_of::<Window>(), size_of::<ReadOnlyWindow>());
-        assert_eq!(offset_of!(Window, data), offset_of!(ReadOnlyWindow, data));
-        assert_eq!(
-            offset_of!(Window, device),
-            offset_of!(ReadOnlyWindow, device)
-        );
-        assert_eq!(
-            offset_of!(Window, event_loop),
-            offset_of!(ReadOnlyWindow, event_loop)
-        );
     }
 }

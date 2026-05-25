@@ -2,9 +2,14 @@
 name = "vk-graph-egui"
 version = "0.1.0"
 authors = ["Christian Döring <christian.doering@tum.de>"]
+description = "egui renderer integration for vk-graph"
+documentation = "https://docs.rs/vk-graph-egui"
+homepage = "https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-egui"
+keywords = ["egui", "gamedev", "vulkan"]
+categories = ["game-development", "multimedia::images", "rendering::engine"]
 edition.workspace = true
 license.workspace = true
-readme.workspace = true
+readme = "README.md"
 repository.workspace = true
 
 [dependencies]

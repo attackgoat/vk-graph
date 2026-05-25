@@ -1,4 +1,4 @@
-//! TODO
+//! Hot-reload ray-trace pipeline support.
 
 use {
     super::{
@@ -20,7 +20,7 @@ use {
     },
 };
 
-/// TODO
+/// A ray-trace pipeline wrapper that recompiles its shaders when source files change.
 #[derive(Debug)]
 pub struct HotRayTracePipeline {
     cache: RwLock<HotPipeline<RayTracePipeline>>,
@@ -31,7 +31,7 @@ pub struct HotRayTracePipeline {
 }
 
 impl HotRayTracePipeline {
-    /// TODO
+    /// Creates a hot-reload ray-trace pipeline from shader files and shader groups.
     pub fn create<S>(
         device: &Device,
         info: impl Into<RayTracePipelineInfo>,

@@ -40,7 +40,7 @@ impl Node for AnyAccelerationStructureNode {
     type Resource = AccelerationStructure;
 
     fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
-        resources[self.index()].as_accel_struct().unwrap()
+        resources[self.index()].expect_accel_struct()
     }
 
     fn index(&self) -> NodeIndex {
@@ -77,7 +77,7 @@ impl Node for AnyBufferNode {
     type Resource = Buffer;
 
     fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
-        resources[self.index()].as_buffer().unwrap()
+        resources[self.index()].expect_buffer()
     }
 
     fn index(&self) -> NodeIndex {
@@ -125,7 +125,7 @@ impl Node for AnyImageNode {
     type Resource = Image;
 
     fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
-        resources[self.index()].as_image().unwrap()
+        resources[self.index()].expect_image()
     }
 
     fn index(&self) -> NodeIndex {

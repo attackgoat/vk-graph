@@ -130,7 +130,7 @@ impl<'a> Command<'a> {
     fn push_exec(&mut self, func: impl FnOnce(CommandBuffer) + Send + 'static) {
         let cmd = self.cmd_mut();
         let exec = {
-            let last_exec = cmd.execs.last_mut().unwrap();
+            let last_exec = cmd.expect_last_exec_mut();
             last_exec.func = Some(ExecutionFunction(Box::new(func)));
 
             Execution {
@@ -158,9 +158,7 @@ impl<'a> Command<'a> {
             subresource,
         };
         self.cmd_mut()
-            .execs
-            .last_mut()
-            .unwrap()
+            .expect_last_exec_mut()
             .accesses
             .entry(node_idx)
             .and_modify(|accesses| accesses.push(access))
@@ -425,7 +423,7 @@ macro_rules! view_buffer {
             {
                 let idx = self.index();
 
-                resources[idx].as_buffer().unwrap().info.into()
+                resources[idx].expect_buffer().info.into()
             }
         }
     };
@@ -447,7 +445,7 @@ macro_rules! view_image {
             {
                 let idx = self.index();
 
-                resources[idx].as_image().unwrap().info.into()
+                resources[idx].expect_image().info.into()
             }
 
             fn range(&self, resources: &[AnyResource]) -> Self::Range
@@ -485,6 +483,10 @@ impl SubresourceRange {
         } else {
             None
         }
+    }
+
+    pub(super) fn expect_image(&self) -> &vk::ImageSubresourceRange {
+        self.as_image().expect("missing image subresource")
     }
 }
 
@@ -545,6 +547,14 @@ impl ViewInfo {
             Self::Image(info) => Some(info),
             _ => None,
         }
+    }
+
+    pub(crate) fn expect_buffer(&self) -> &BufferSubresourceRange {
+        self.as_buffer().expect("missing buffer view info")
+    }
+
+    pub(crate) fn expect_image(&self) -> &ImageViewInfo {
+        self.as_image().expect("missing image view info")
     }
 }
 
@@ -681,10 +691,7 @@ mod deprecated {
         pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {
             let idx = node.index();
 
-            self.graph.resources[idx]
-                .as_buffer()
-                .unwrap()
-                .device_address()
+            self.graph.resources[idx].expect_buffer().device_address()
         }
 
         #[deprecated = "dereference info field of resource function result"]

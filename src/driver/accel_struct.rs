@@ -41,7 +41,7 @@ use std::sync::Mutex;
 ///
 /// [acceleration structure]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureKHR.html
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct AccelerationStructure {
     access: Mutex<AccessType>,
 
@@ -118,14 +118,18 @@ impl AccelerationStructure {
 
             unsafe { accel_struct_ext.create_acceleration_structure(&create_info, None) }.map_err(
                 |err| {
-                    warn!("{err}");
+                    warn!("unable to create acceleration structure: {err}");
 
                     match err {
                         vk::Result::ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS => {
+                            warn!("invalid acceleration structure opaque capture address: {err}");
                             DriverError::InvalidData
                         }
                         vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
-                        _ => DriverError::Unsupported,
+                        _ => {
+                            warn!("unsupported acceleration structure creation: {err}");
+                            DriverError::Unsupported
+                        }
                     }
                 },
             )?
@@ -185,14 +189,15 @@ impl AccelerationStructure {
     /// [_Ash_]: https://crates.io/crates/ash
     /// [_Erupt_]: https://crates.io/crates/erupt
     #[profiling::function]
-    pub fn access(&self, access: AccessType) -> AccessType {
-        #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-        let mut access_guard = self.access.lock();
+    pub fn access(&self, next_access: AccessType) -> AccessType {
+        self.with_access(|prev_access| replace(prev_access, next_access))
+    }
 
-        #[cfg(not(feature = "parking_lot"))]
-        let mut access_guard = access_guard.unwrap();
+    /// Sets the debugging name assigned to this acceleration structure.
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
 
-        replace(&mut access_guard, access)
+        self
     }
 
     /// Returns the device address of this object.
@@ -329,11 +334,15 @@ impl AccelerationStructure {
         })
     }
 
-    /// Sets the debugging name assigned to this acceleration structure.
-    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+    fn with_access<R>(&self, f: impl FnOnce(&mut AccessType) -> R) -> R {
+        let access = self.access.lock();
 
-        self
+        #[cfg(not(feature = "parking_lot"))]
+        let access = access.expect("poisoned acceleration structure access lock");
+
+        let mut access = access;
+
+        f(&mut access)
     }
 }
 

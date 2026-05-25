@@ -43,7 +43,7 @@ pub struct BitmapFont {
 }
 
 impl BitmapFont {
-    /// TODO
+    /// Creates a bitmap font renderer from decoded font metadata and page images.
     pub fn new(
         device: &Device,
         font: BMFont,
@@ -112,7 +112,7 @@ impl BitmapFont {
         (position, size)
     }
 
-    /// TODO
+    /// Prints text at the given position using the default scale factor of `1.0`.
     pub fn print(
         &mut self,
         graph: &mut Graph,
@@ -126,7 +126,7 @@ impl BitmapFont {
     }
 
     // TODO: Better API, but not sure what, probably builder-something
-    /// TODO
+    /// Prints text at the given position using a caller-specified scale factor.
     #[allow(clippy::too_many_arguments)]
     pub fn print_scale(
         &mut self,
@@ -142,7 +142,7 @@ impl BitmapFont {
     }
 
     // TODO: Better API, but not sure what, probably builder-something
-    /// TODO
+    /// Prints text with an optional scissor rectangle and caller-specified scale factor.
     #[allow(clippy::too_many_arguments)]
     pub fn print_scale_scissor(
         &mut self,
@@ -174,7 +174,7 @@ impl BitmapFont {
                 vertex_buf_len,
                 vk::BufferUsageFlags::VERTEX_BUFFER,
             ))
-            .unwrap();
+            .expect("missing bitmap font vertex buffer");
 
         let mut vertex_count = 0;
 
@@ -251,15 +251,16 @@ impl BitmapFont {
     }
 }
 
-/// TODO
+/// Color selection modes for bitmap glyph rendering.
+#[derive(Debug)]
 pub enum BitmapGlyphColor {
-    /// TODO
+    /// Render only the glyph outline color.
     Outline(Color),
 
-    /// TODO
+    /// Render only the glyph fill color.
     Solid(Color),
 
-    /// TODO
+    /// Render both glyph fill and outline colors.
     SolidOutline(Color, Color),
 }
 
@@ -318,7 +319,7 @@ impl From<[u8; 4]> for BitmapGlyphColor {
 
 pub use bmfont::CharPosition as BitmapGlyph;
 
-/// TODO
+/// Common accessors for glyph geometry and atlas placement.
 pub trait Glyph {
     fn page_height(&self) -> u32;
     fn page_width(&self) -> u32;
@@ -429,5 +430,50 @@ impl Glyph for BitmapGlyph {
     #[inline(always)]
     fn screen_y(&self) -> f32 {
         self.screen_rect.y as _
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::BitmapGlyphColor;
+
+    #[test]
+    fn glyph_color_from_f32_rgb_defaults_alpha_to_opaque() {
+        let color = BitmapGlyphColor::from([0.5, 0.25, 1.0]);
+
+        match color {
+            BitmapGlyphColor::Solid([127, 63, 255, 255]) => {}
+            other => panic!("unexpected glyph color: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn glyph_color_from_f32_rgba_clamps_values() {
+        let color = BitmapGlyphColor::from([2.0, -1.0, 0.5, 0.25]);
+
+        match color {
+            BitmapGlyphColor::Solid([255, 0, 127, 63]) => {}
+            other => panic!("unexpected glyph color: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn glyph_color_from_u8_rgb_defaults_alpha_to_opaque() {
+        let color = BitmapGlyphColor::from([1, 2, 3]);
+
+        match color {
+            BitmapGlyphColor::Solid([1, 2, 3, 255]) => {}
+            other => panic!("unexpected glyph color: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn glyph_color_from_u8_rgba_preserves_channels() {
+        let color = BitmapGlyphColor::from([1, 2, 3, 4]);
+
+        match color {
+            BitmapGlyphColor::Solid([1, 2, 3, 4]) => {}
+            other => panic!("unexpected glyph color: {other:?}"),
+        }
     }
 }

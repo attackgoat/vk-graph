@@ -203,13 +203,8 @@ impl PipelineCommand<'_, GraphicPipeline> {
         let pipeline = self
             .cmd
             .cmd()
-            .execs
-            .last()
-            .unwrap()
-            .pipeline
-            .as_ref()
-            .unwrap()
-            .unwrap_graphic()
+            .expect_last_pipeline()
+            .expect_graphic()
             .clone();
 
         self.cmd.push_exec(move |cmd_buf| {
@@ -323,7 +318,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
     pub fn set_depth_stencil(&mut self, depth_stencil: impl Into<DepthStencilInfo>) -> &mut Self {
         let depth_stencil = depth_stencil.into();
         let cmd = self.cmd.cmd_mut();
-        let exec = cmd.execs.last_mut().unwrap();
+        let exec = cmd.expect_last_exec_mut();
 
         assert!(exec.depth_stencil.is_none());
 
@@ -429,7 +424,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
     /// See [`Self::multiview`]
     pub fn set_multiview(&mut self, view_mask: u32, correlated_view_mask: u32) -> &mut Self {
         let cmd = self.cmd.cmd_mut();
-        let exec = cmd.execs.last_mut().unwrap();
+        let exec = cmd.expect_last_exec_mut();
 
         exec.correlated_view_mask = correlated_view_mask;
         exec.view_mask = view_mask;
@@ -439,7 +434,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
 
     /// See [`Self::render_area`]
     pub fn set_render_area(&mut self, area: vk::Rect2D) -> &mut Self {
-        self.cmd.cmd_mut().execs.last_mut().unwrap().render_area = Some(area);
+        self.cmd.cmd_mut().expect_last_exec_mut().render_area = Some(area);
         self
     }
 }
@@ -1624,9 +1619,7 @@ mod deprecated {
                 !self
                     .cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .color_clears
                     .contains_key(&attachment_idx),
                 "color attachment {attachment_idx} already attached via clear"
@@ -1635,9 +1628,7 @@ mod deprecated {
                 !self
                     .cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .color_loads
                     .contains_key(&attachment_idx),
                 "color attachment {attachment_idx} already attached via load"
@@ -1645,9 +1636,7 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .color_attachments
                 .insert(
                     attachment_idx,
@@ -1658,17 +1647,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_resolves
                         .get(&attachment_idx)
                         .map(|(attachment, _)| *attachment),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_attachments
                         .get(&attachment_idx)
                         .copied()
@@ -1679,17 +1664,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_stores
                         .get(&attachment_idx)
                         .copied(),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_attachments
                         .get(&attachment_idx)
                         .copied()
@@ -1731,9 +1712,7 @@ mod deprecated {
             debug_assert!(
                 self.cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .depth_stencil_clear
                     .is_none(),
                 "depth/stencil attachment already attached via clear"
@@ -1741,9 +1720,7 @@ mod deprecated {
             debug_assert!(
                 self.cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .depth_stencil_load
                     .is_none(),
                 "depth/stencil attachment already attached via load"
@@ -1751,9 +1728,7 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .depth_stencil_attachment =
                 Some(Attachment::new(image_view_info, sample_count, node_idx));
 
@@ -1761,29 +1736,17 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .depth_stencil_resolve
                         .map(|(attachment, ..)| attachment),
-                    self.cmd
-                        .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
-                        .depth_stencil_attachment
+                    self.cmd.cmd().expect_last_exec().depth_stencil_attachment
                 ),
                 "depth/stencil attachment incompatible with existing resolve"
             );
             debug_assert!(
                 Attachment::are_compatible(
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_store,
-                    self.cmd
-                        .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
-                        .depth_stencil_attachment
+                    self.cmd.cmd().expect_last_exec().depth_stencil_store,
+                    self.cmd.cmd().expect_last_exec().depth_stencil_attachment
                 ),
                 "depth/stencil attachment incompatible with existing store"
             );
@@ -1858,9 +1821,7 @@ mod deprecated {
                 !self
                     .cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .color_attachments
                     .contains_key(&attachment_idx),
                 "color attachment {attachment_idx} already attached"
@@ -1869,9 +1830,7 @@ mod deprecated {
                 !self
                     .cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .color_loads
                     .contains_key(&attachment_idx),
                 "color attachment {attachment_idx} already attached via load"
@@ -1879,9 +1838,7 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .color_clears
                 .insert(
                     attachment_idx,
@@ -1895,17 +1852,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_resolves
                         .get(&attachment_idx)
                         .map(|(attachment, _)| *attachment),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_clears
                         .get(&attachment_idx)
                         .map(|(attachment, _)| *attachment)
@@ -1916,17 +1869,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_stores
                         .get(&attachment_idx)
                         .copied(),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_clears
                         .get(&attachment_idx)
                         .map(|(attachment, _)| *attachment)
@@ -1941,9 +1890,7 @@ mod deprecated {
             if let Some(accesses) = self
                 .cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .accesses
                 .get_mut(&node_idx)
             {
@@ -1952,7 +1899,7 @@ mod deprecated {
                     subresource,
                 } in accesses
                 {
-                    let access_image_range = *subresource.as_image().unwrap();
+                    let access_image_range = *subresource.expect_image();
                     if !image_subresource_range_intersects(access_image_range, image_range) {
                         continue;
                     }
@@ -2024,9 +1971,7 @@ mod deprecated {
             debug_assert!(
                 self.cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .depth_stencil_attachment
                     .is_none(),
                 "depth/stencil attachment already attached"
@@ -2034,9 +1979,7 @@ mod deprecated {
             debug_assert!(
                 self.cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .depth_stencil_load
                     .is_none(),
                 "depth/stencil attachment already attached via load"
@@ -2044,9 +1987,7 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .depth_stencil_clear = Some((
                 Attachment::new(image_view_info, sample_count, node_idx),
                 vk::ClearDepthStencilValue { depth, stencil },
@@ -2056,16 +1997,12 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .depth_stencil_resolve
                         .map(|(attachment, ..)| attachment),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .depth_stencil_clear
                         .map(|(attachment, _)| attachment)
                 ),
@@ -2073,12 +2010,10 @@ mod deprecated {
             );
             debug_assert!(
                 Attachment::are_compatible(
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_store,
+                    self.cmd.cmd().expect_last_exec().depth_stencil_store,
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .depth_stencil_clear
                         .map(|(attachment, _)| attachment)
                 ),
@@ -2110,9 +2045,7 @@ mod deprecated {
             if let Some(accesses) = self
                 .cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .accesses
                 .get_mut(&node_idx)
             {
@@ -2121,7 +2054,7 @@ mod deprecated {
                     subresource,
                 } in accesses
                 {
-                    let access_image_range = *subresource.as_image().unwrap();
+                    let access_image_range = *subresource.expect_image();
                     if !image_subresource_range_intersects(access_image_range, image_range) {
                         continue;
                     }
@@ -2216,9 +2149,7 @@ mod deprecated {
                 !self
                     .cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .color_attachments
                     .contains_key(&attachment_idx),
                 "color attachment {attachment_idx} already attached"
@@ -2227,9 +2158,7 @@ mod deprecated {
                 !self
                     .cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .color_clears
                     .contains_key(&attachment_idx),
                 "color attachment {attachment_idx} already attached via clear"
@@ -2237,9 +2166,7 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .color_loads
                 .insert(
                     attachment_idx,
@@ -2250,17 +2177,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_resolves
                         .get(&attachment_idx)
                         .map(|(attachment, _)| *attachment),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_loads
                         .get(&attachment_idx)
                         .copied()
@@ -2271,17 +2194,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_stores
                         .get(&attachment_idx)
                         .copied(),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_loads
                         .get(&attachment_idx)
                         .copied()
@@ -2296,9 +2215,7 @@ mod deprecated {
             if let Some(accesses) = self
                 .cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .accesses
                 .get_mut(&node_idx)
             {
@@ -2307,7 +2224,7 @@ mod deprecated {
                     subresource,
                 } in accesses
                 {
-                    let access_image_range = *subresource.as_image().unwrap();
+                    let access_image_range = *subresource.expect_image();
                     if !image_subresource_range_intersects(access_image_range, image_range) {
                         continue;
                     }
@@ -2364,9 +2281,7 @@ mod deprecated {
             debug_assert!(
                 self.cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .depth_stencil_attachment
                     .is_none(),
                 "depth/stencil attachment already attached"
@@ -2374,39 +2289,30 @@ mod deprecated {
             debug_assert!(
                 self.cmd
                     .cmd()
-                    .execs
-                    .last()
-                    .unwrap()
+                    .expect_last_exec()
                     .depth_stencil_clear
                     .is_none(),
                 "depth/stencil attachment already attached via clear"
             );
 
-            self.cmd
-                .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
-                .depth_stencil_load =
+            self.cmd.cmd_mut().expect_last_exec_mut().depth_stencil_load =
                 Some(Attachment::new(image_view_info, sample_count, node_idx));
 
             debug_assert!(
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .depth_stencil_resolve
                         .map(|(attachment, ..)| attachment),
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_load
+                    self.cmd.cmd().expect_last_exec().depth_stencil_load
                 ),
                 "depth/stencil attachment load incompatible with existing resolve"
             );
             debug_assert!(
                 Attachment::are_compatible(
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_store,
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_load
+                    self.cmd.cmd().expect_last_exec().depth_stencil_store,
+                    self.cmd.cmd().expect_last_exec().depth_stencil_load
                 ),
                 "depth/stencil attachment load incompatible with existing store"
             );
@@ -2418,9 +2324,7 @@ mod deprecated {
             if let Some(accesses) = self
                 .cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .accesses
                 .get_mut(&node_idx)
             {
@@ -2429,7 +2333,7 @@ mod deprecated {
                     subresource,
                 } in accesses
                 {
-                    let access_image_range = *subresource.as_image().unwrap();
+                    let access_image_range = *subresource.expect_image();
                     if !image_subresource_range_intersects(access_image_range, image_range) {
                         continue;
                     }
@@ -2498,9 +2402,7 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .color_stores
                 .insert(
                     attachment_idx,
@@ -2511,17 +2413,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_attachments
                         .get(&attachment_idx)
                         .copied(),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_stores
                         .get(&attachment_idx)
                         .copied()
@@ -2532,17 +2430,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_clears
                         .get(&attachment_idx)
                         .map(|(attachment, _)| *attachment),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_stores
                         .get(&attachment_idx)
                         .copied()
@@ -2553,17 +2447,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_loads
                         .get(&attachment_idx)
                         .copied(),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_stores
                         .get(&attachment_idx)
                         .copied()
@@ -2578,9 +2468,7 @@ mod deprecated {
             if let Some(accesses) = self
                 .cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .accesses
                 .get_mut(&node_idx)
             {
@@ -2589,7 +2477,7 @@ mod deprecated {
                     subresource,
                 } in accesses
                 {
-                    let access_image_range = *subresource.as_image().unwrap();
+                    let access_image_range = *subresource.expect_image();
                     if !image_subresource_range_intersects(access_image_range, image_range) {
                         continue;
                     }
@@ -2645,21 +2533,14 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .depth_stencil_store =
                 Some(Attachment::new(image_view_info, sample_count, node_idx));
 
             debug_assert!(
                 Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
-                        .depth_stencil_attachment,
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_store
+                    self.cmd.cmd().expect_last_exec().depth_stencil_attachment,
+                    self.cmd.cmd().expect_last_exec().depth_stencil_store
                 ),
                 "depth/stencil attachment store incompatible with existing attachment"
             );
@@ -2667,19 +2548,17 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .depth_stencil_clear
                         .map(|(attachment, _)| attachment),
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_store
+                    self.cmd.cmd().expect_last_exec().depth_stencil_store
                 ),
                 "depth/stencil attachment store incompatible with existing clear"
             );
             debug_assert!(
                 Attachment::are_compatible(
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_load,
-                    self.cmd.cmd().execs.last().unwrap().depth_stencil_store
+                    self.cmd.cmd().expect_last_exec().depth_stencil_load,
+                    self.cmd.cmd().expect_last_exec().depth_stencil_store
                 ),
                 "depth/stencil attachment store incompatible with existing load"
             );
@@ -2709,9 +2588,7 @@ mod deprecated {
             if let Some(accesses) = self
                 .cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .accesses
                 .get_mut(&node_idx)
             {
@@ -2720,7 +2597,7 @@ mod deprecated {
                     subresource,
                 } in accesses
                 {
-                    let access_image_range = *subresource.as_image().unwrap();
+                    let access_image_range = *subresource.expect_image();
                     if !image_subresource_range_intersects(access_image_range, image_range) {
                         continue;
                     }
@@ -2817,9 +2694,7 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .color_resolves
                 .insert(
                     dst_attachment_idx,
@@ -2833,17 +2708,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_attachments
                         .get(&dst_attachment_idx)
                         .copied(),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_resolves
                         .get(&dst_attachment_idx)
                         .map(|(attachment, _)| *attachment)
@@ -2854,17 +2725,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_clears
                         .get(&dst_attachment_idx)
                         .map(|(attachment, _)| *attachment),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_resolves
                         .get(&dst_attachment_idx)
                         .map(|(attachment, _)| *attachment)
@@ -2875,17 +2742,13 @@ mod deprecated {
                 Attachment::are_compatible(
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_loads
                         .get(&dst_attachment_idx)
                         .copied(),
                     self.cmd
                         .cmd()
-                        .execs
-                        .last()
-                        .unwrap()
+                        .expect_last_exec()
                         .color_resolves
                         .get(&dst_attachment_idx)
                         .map(|(attachment, _)| *attachment)
@@ -2900,9 +2763,7 @@ mod deprecated {
             if let Some(accesses) = self
                 .cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .accesses
                 .get_mut(&node_idx)
             {
@@ -2911,7 +2772,7 @@ mod deprecated {
                     subresource,
                 } in accesses
                 {
-                    let access_image_range = *subresource.as_image().unwrap();
+                    let access_image_range = *subresource.expect_image();
                     if !image_subresource_range_intersects(access_image_range, image_range) {
                         continue;
                     }
@@ -2982,9 +2843,7 @@ mod deprecated {
 
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .depth_stencil_resolve = Some((
                 Attachment::new(image_view_info, sample_count, node_idx),
                 dst_attachment_idx,
@@ -3017,9 +2876,7 @@ mod deprecated {
             if let Some(accesses) = self
                 .cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .accesses
                 .get_mut(&node_idx)
             {
@@ -3028,7 +2885,7 @@ mod deprecated {
                     subresource,
                 } in accesses
                 {
-                    let access_image_range = *subresource.as_image().unwrap();
+                    let access_image_range = *subresource.expect_image();
                     if !image_subresource_range_intersects(access_image_range, image_range) {
                         continue;
                     }

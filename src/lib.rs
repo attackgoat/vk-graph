@@ -113,6 +113,19 @@ impl AnyResource {
             _ => return None,
         })
     }
+
+    fn expect_accel_struct(&self) -> &AccelerationStructure {
+        self.as_accel_struct()
+            .expect("missing acceleration structure resource")
+    }
+
+    fn expect_buffer(&self) -> &Buffer {
+        self.as_buffer().expect("missing buffer resource")
+    }
+
+    fn expect_image(&self) -> &Image {
+        self.as_image().expect("missing image resource")
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -145,11 +158,11 @@ impl Attachment {
         // Two attachment references are compatible if they have matching format and sample
         // count, or are both VK_ATTACHMENT_UNUSED or the pointer that would contain the
         // reference is NULL.
-        if lhs.is_none() || rhs.is_none() {
+        let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
             return true;
-        }
+        };
 
-        Self::are_identical(lhs.unwrap(), rhs.unwrap())
+        Self::are_identical(lhs, rhs)
     }
 
     fn are_identical(lhs: Self, rhs: Self) -> bool {
@@ -271,6 +284,26 @@ impl ExecutionPipeline {
         }
     }
 
+    fn expect_compute(&self) -> &ComputePipeline {
+        if let Self::Compute(pipeline) = self {
+            pipeline
+        } else {
+            panic!("missing compute pipeline")
+        }
+    }
+
+    fn expect_graphic(&self) -> &GraphicPipeline {
+        self.as_graphic().expect("missing graphic pipeline")
+    }
+
+    fn expect_ray_trace(&self) -> &RayTracePipeline {
+        if let Self::RayTrace(pipeline) = self {
+            pipeline
+        } else {
+            panic!("missing ray trace pipeline")
+        }
+    }
+
     fn layout(&self) -> vk::PipelineLayout {
         match self {
             ExecutionPipeline::Compute(pipeline) => pipeline.inner.layout,
@@ -297,11 +330,42 @@ struct CommandData {
 impl CommandData {
     fn descriptor_pools_sizes(
         &self,
-    ) -> impl Iterator<Item = &HashMap<u32, HashMap<vk::DescriptorType, u32>>> {
+    ) -> impl Iterator<Item = impl Iterator<Item = (&vk::DescriptorType, &u32)>> {
         self.execs
             .iter()
-            .flat_map(|exec| exec.pipeline.as_ref())
-            .map(|pipeline| &pipeline.descriptor_info().pool_sizes)
+            .flat_map(|exec| &exec.pipeline)
+            .map(|pipeline| {
+                pipeline
+                    .descriptor_info()
+                    .pool_sizes
+                    .values()
+                    .flat_map(HashMap::iter)
+            })
+    }
+
+    fn expect_first_exec(&self) -> &Execution {
+        self.execs.first().expect("missing command execution")
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the execution list is empty (a command always has at least one execution).
+    fn expect_last_exec(&self) -> &Execution {
+        self.execs.last().expect("missing command execution")
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the execution list is empty (a command always has at least one execution).
+    fn expect_last_exec_mut(&mut self) -> &mut Execution {
+        self.execs.last_mut().expect("missing command execution")
+    }
+
+    fn expect_last_pipeline(&self) -> &ExecutionPipeline {
+        self.expect_last_exec()
+            .pipeline
+            .as_ref()
+            .expect("missing command pipeline")
     }
 
     fn name(&self) -> &str {
@@ -879,8 +943,7 @@ impl Graph {
     pub fn into_queue(mut self) -> Queue {
         // The final execution of each pass has no function
         for cmd in &mut self.cmds {
-            debug_assert!(!cmd.execs.is_empty());
-            debug_assert!(cmd.execs.last().unwrap().func.is_none());
+            debug_assert!(cmd.expect_last_exec().func.is_none());
 
             cmd.execs.pop();
         }
@@ -1221,7 +1284,7 @@ pub(crate) mod deprecated {
             pool::{Lease, Pool},
         },
         ash::vk,
-        std::{ops::Range, sync::Arc},
+        std::{error, fmt, ops::Range, sync::Arc},
     };
 
     /// Specifies a color attachment clear value which can be used to initliaze an image.
@@ -1261,7 +1324,9 @@ pub(crate) mod deprecated {
     #[deprecated = "use Swapchain from vk_graph_window crate"]
     #[derive(Debug)]
     #[doc(hidden)]
-    pub struct Display;
+    pub struct Display {
+        swapchain_info: SwapchainInfo,
+    }
 
     impl Display {
         pub fn new(
@@ -1269,11 +1334,15 @@ pub(crate) mod deprecated {
             swapchain: Swapchain,
             info: impl Into<DisplayInfo>,
         ) -> Result<Self, DriverError> {
-            todo!()
+            let _ = device;
+            let _ = swapchain;
+            let _ = info.into();
+
+            Err(DriverError::Unsupported)
         }
 
         pub fn acquire_next_image(&mut self) -> Result<Option<SwapchainImage>, DisplayError> {
-            todo!()
+            Err(DisplayError)
         }
 
         pub fn present_image(
@@ -1283,15 +1352,20 @@ pub(crate) mod deprecated {
             swapchain_image: SwapchainImageNode,
             queue_index: u32,
         ) -> Result<(), DisplayError> {
-            todo!()
+            let _ = pool;
+            let _ = render_graph;
+            let _ = swapchain_image;
+            let _ = queue_index;
+
+            Err(DisplayError)
         }
 
         pub fn set_swapchain_info(&mut self, info: impl Into<SwapchainInfo>) {
-            todo!()
+            self.swapchain_info = info.into();
         }
 
         pub fn swapchain_info(&self) -> SwapchainInfo {
-            todo!()
+            self.swapchain_info
         }
     }
 
@@ -1299,6 +1373,14 @@ pub(crate) mod deprecated {
     #[derive(Clone, Copy, Debug, Default)]
     #[doc(hidden)]
     pub struct DisplayError;
+
+    impl fmt::Display for DisplayError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("deprecated Display API is unsupported; use vk_graph_window swapchain APIs")
+        }
+    }
+
+    impl error::Error for DisplayError {}
 
     #[deprecated = "use vk_graph_window::SwapchainInfo"]
     #[derive(Clone, Copy, Debug, Default)]
@@ -1420,7 +1502,10 @@ pub(crate) mod deprecated {
         pub fn node_device_address(&self, node: impl Node) -> vk::DeviceAddress {
             let idx = node.index();
 
-            self.resources[idx].as_buffer().unwrap().device_address()
+            self.resources[idx]
+                .as_buffer()
+                .expect("missing buffer resource")
+                .device_address()
         }
 
         #[deprecated = "dereference info field of resource function result"]
@@ -1474,7 +1559,10 @@ pub(crate) mod deprecated {
         where
             Self: Node,
         {
-            resources[self.index()].as_swapchain_image().unwrap().info
+            resources[self.index()]
+                .as_swapchain_image()
+                .expect("missing swapchain image")
+                .info
         }
     }
 

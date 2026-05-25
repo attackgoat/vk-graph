@@ -4,7 +4,7 @@ use {
     super::{DriverError, instance::Instance},
     crate::driver::device::Device,
     ash::{ext, khr, vk},
-    log::{debug, error},
+    log::{debug, error, warn},
     std::{
         collections::HashSet,
         ffi::{CStr, c_char},
@@ -141,7 +141,7 @@ impl From<vk::PhysicalDeviceIndexTypeUint8FeaturesEXT<'_>> for IndexTypeUint8Fea
 
 /// Structure which holds data about the physical hardware selected by the current device.
 #[derive(Clone)]
-#[readonly::make]
+#[read_only::cast]
 pub struct PhysicalDevice {
     /// Describes the properties of the device which relate to acceleration structures, if
     /// available.
@@ -242,15 +242,20 @@ pub struct PhysicalDevice {
 impl PhysicalDevice {
     /// Creates a physical device wrapper which reports features and properties.
     #[profiling::function]
-    pub(super) fn new(instance: Instance, handle: vk::PhysicalDevice) -> Result<Self, DriverError> {
-        if handle == vk::PhysicalDevice::null() {
+    pub(super) fn new(
+        instance: Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<Self, DriverError> {
+        if physical_device == vk::PhysicalDevice::null() {
+            warn!("invalid physical device handle: null");
+
             return Err(DriverError::InvalidData);
         }
 
         let (memory_properties, queue_families) = unsafe {
             (
-                instance.get_physical_device_memory_properties(handle),
-                instance.get_physical_device_queue_family_properties(handle),
+                instance.get_physical_device_memory_properties(physical_device),
+                instance.get_physical_device_queue_family_properties(physical_device),
             )
         };
 
@@ -284,7 +289,7 @@ impl PhysicalDevice {
             .push_next(&mut ray_query_features)
             .push_next(&mut ray_trace_features);
         unsafe {
-            get_physical_device_features2(handle, &mut features);
+            get_physical_device_features2(physical_device, &mut features);
         }
         let features_v1_0 = features.features.into();
         let features_v1_1 = features_v1_1.into();
@@ -308,7 +313,7 @@ impl PhysicalDevice {
             .push_next(&mut ray_trace_properties)
             .push_next(&mut sampler_filter_minmax_properties);
         unsafe {
-            get_physical_device_properties2(handle, &mut properties);
+            get_physical_device_properties2(physical_device, &mut properties);
         }
         let properties_v1_0: Vulkan10Properties = properties.properties.into();
         let properties_v1_1 = properties_v1_1.into();
@@ -318,9 +323,9 @@ impl PhysicalDevice {
 
         let extensions = unsafe {
             instance
-                .enumerate_device_extension_properties(handle)
+                .enumerate_device_extension_properties(physical_device)
                 .map_err(|err| {
-                    error!("Unable to enumerate device extensions {err}");
+                    error!("unable to enumerate device extensions: {err}");
 
                     DriverError::Unsupported
                 })?
@@ -332,6 +337,8 @@ impl PhysicalDevice {
             let extension_name = property.extension_name.as_ptr();
 
             if extension_name.is_null() {
+                warn!("invalid device extension name pointer: null");
+
                 return Err(DriverError::InvalidData);
             }
 
@@ -379,7 +386,7 @@ impl PhysicalDevice {
             features_v1_0,
             features_v1_1,
             features_v1_2,
-            handle,
+            handle: physical_device,
             index_type_uint8_features,
             instance,
             memory_properties,
@@ -399,7 +406,7 @@ impl PhysicalDevice {
     /// Prepares device creation information and calls the provided callback to allow an application
     /// to control the device creation process.
     ///
-    /// _Note:_  This is only useful for interoperting with other libraries as device creation is
+    /// _Note:_  This is only useful for interoperating with other libraries as device creation is
     /// normally handled by the [`Device::create_display`] and [`Device::new`]
     /// functions.
     ///
@@ -414,9 +421,11 @@ impl PhysicalDevice {
     {
         let mut enabled_ext_names = Vec::with_capacity(6);
 
+        // The swapchain extension is required for presentation support, so we enable it whenever
+        // the physical device reports support. Imported instances may already carry the required
+        // instance extensions even though vk-graph did not create them.
         if self.swapchain_ext {
             enabled_ext_names.push(khr::swapchain::NAME.as_ptr());
-            enabled_ext_names.push(khr::surface::NAME.as_ptr());
         }
 
         if self.accel_struct_properties.is_some() {
@@ -544,12 +553,16 @@ impl PhysicalDevice {
 
                     Ok(None)
                 }
-                _ => Err(DriverError::OutOfMemory),
+                Err(err) => {
+                    warn!("unable to query image format properties: {err}");
+
+                    Err(DriverError::OutOfMemory)
+                }
             }
         }
     }
 
-    /// TODO
+    /// Creates a logical [`Device`] from this selected physical device.
     pub fn try_into_device(self) -> Result<Device, DriverError> {
         Device::try_from_physical_device(self)
     }
@@ -1299,7 +1312,6 @@ impl From<vk::PhysicalDeviceFeatures> for Vulkan10Features {
 /// See
 /// [`VkPhysicalDeviceLimits`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceLimits.html)
 /// manual page.
-#[allow(missing_docs)] // TODO: Finish docs!
 #[derive(Clone, Copy, Debug)]
 pub struct Vulkan10Limits {
     /// The largest dimension (width) that is guaranteed to be supported for all images created with
@@ -1347,105 +1359,305 @@ pub struct Vulkan10Limits {
     /// [`vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER`] set in
     /// [`BufferInfo::usage`](super::buffer::BufferInfo::usage).
     pub max_texel_buffer_elements: u32,
+
+    /// The maximum range, in bytes, for a uniform buffer binding.
     pub max_uniform_buffer_range: u32,
+
+    /// The maximum range, in bytes, for a storage buffer binding.
     pub max_storage_buffer_range: u32,
+
+    /// The maximum size, in bytes, of the push constant storage available to a pipeline layout.
     pub max_push_constants_size: u32,
+
+    /// The maximum number of simultaneously active device memory allocations.
     pub max_memory_allocation_count: u32,
+
+    /// The maximum number of sampler objects that may exist at one time.
     pub max_sampler_allocation_count: u32,
+
+    /// The required granularity, in bytes, for aliasing linear and optimal resources in memory.
     pub buffer_image_granularity: vk::DeviceSize,
+
+    /// The maximum size, in bytes, of the address space available for sparse resources.
     pub sparse_address_space_size: vk::DeviceSize,
+
+    /// The maximum number of descriptor sets that can be bound simultaneously.
     pub max_bound_descriptor_sets: u32,
+
+    /// The maximum number of sampler descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_samplers: u32,
+
+    /// The maximum number of uniform buffer descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_uniform_buffers: u32,
+
+    /// The maximum number of storage buffer descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_storage_buffers: u32,
+
+    /// The maximum number of sampled image descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_sampled_images: u32,
+
+    /// The maximum number of storage image descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_storage_images: u32,
+
+    /// The maximum number of input attachment descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_input_attachments: u32,
+
+    /// The maximum total number of resources accessible from a single shader stage.
     pub max_per_stage_resources: u32,
+
+    /// The maximum number of sampler descriptors available across a single descriptor set.
     pub max_descriptor_set_samplers: u32,
+
+    /// The maximum number of uniform buffer descriptors available across a single descriptor set.
     pub max_descriptor_set_uniform_buffers: u32,
+
+    /// The maximum number of dynamic uniform buffer descriptors available across a descriptor set.
     pub max_descriptor_set_uniform_buffers_dynamic: u32,
+
+    /// The maximum number of storage buffer descriptors available across a single descriptor set.
     pub max_descriptor_set_storage_buffers: u32,
+
+    /// The maximum number of dynamic storage buffer descriptors available across a descriptor set.
     pub max_descriptor_set_storage_buffers_dynamic: u32,
+
+    /// The maximum number of sampled image descriptors available across a single descriptor set.
     pub max_descriptor_set_sampled_images: u32,
+
+    /// The maximum number of storage image descriptors available across a single descriptor set.
     pub max_descriptor_set_storage_images: u32,
+
+    /// The maximum number of input attachment descriptors available across a descriptor set.
     pub max_descriptor_set_input_attachments: u32,
+
+    /// The maximum number of vertex input attributes for a graphics pipeline.
     pub max_vertex_input_attributes: u32,
+
+    /// The maximum number of vertex input bindings for a graphics pipeline.
     pub max_vertex_input_bindings: u32,
+
+    /// The maximum offset, in bytes, allowed for a vertex input attribute.
     pub max_vertex_input_attribute_offset: u32,
+
+    /// The maximum stride, in bytes, for a vertex input binding.
     pub max_vertex_input_binding_stride: u32,
+
+    /// The maximum number of components output by the vertex stage.
     pub max_vertex_output_components: u32,
+
+    /// The maximum tessellation generation level.
     pub max_tessellation_generation_level: u32,
+
+    /// The maximum number of control points in a tessellation patch.
     pub max_tessellation_patch_size: u32,
+
+    /// The maximum number of per-vertex input components to tessellation control shaders.
     pub max_tessellation_control_per_vertex_input_components: u32,
+
+    /// The maximum number of per-vertex output components from tessellation control shaders.
     pub max_tessellation_control_per_vertex_output_components: u32,
+
+    /// The maximum number of per-patch output components from tessellation control shaders.
     pub max_tessellation_control_per_patch_output_components: u32,
+
+    /// The maximum total number of output components from tessellation control shaders.
     pub max_tessellation_control_total_output_components: u32,
+
+    /// The maximum number of input components to tessellation evaluation shaders.
     pub max_tessellation_evaluation_input_components: u32,
+
+    /// The maximum number of output components from tessellation evaluation shaders.
     pub max_tessellation_evaluation_output_components: u32,
+
+    /// The maximum number of geometry shader invocations per primitive.
     pub max_geometry_shader_invocations: u32,
+
+    /// The maximum number of input components to geometry shaders.
     pub max_geometry_input_components: u32,
+
+    /// The maximum number of output components from geometry shaders.
     pub max_geometry_output_components: u32,
+
+    /// The maximum number of vertices a geometry shader may emit.
     pub max_geometry_output_vertices: u32,
+
+    /// The maximum total number of output components from a geometry shader invocation.
     pub max_geometry_total_output_components: u32,
+
+    /// The maximum number of input components to fragment shaders.
     pub max_fragment_input_components: u32,
+
+    /// The maximum number of color attachments written by a fragment shader.
     pub max_fragment_output_attachments: u32,
+
+    /// The maximum number of dual-source attachments written by a fragment shader.
     pub max_fragment_dual_src_attachments: u32,
+
+    /// The maximum combined number of fragment shader output resources.
     pub max_fragment_combined_output_resources: u32,
+
+    /// The maximum amount of shared memory, in bytes, available to a compute workgroup.
     pub max_compute_shared_memory_size: u32,
+
+    /// The maximum workgroup counts for compute dispatch in each dimension.
     pub max_compute_work_group_count: [u32; 3],
+
+    /// The maximum total number of invocations in a single compute workgroup.
     pub max_compute_work_group_invocations: u32,
+
+    /// The maximum workgroup size for compute dispatch in each dimension.
     pub max_compute_work_group_size: [u32; 3],
+
+    /// The number of bits of sub-pixel precision in framebuffer coordinates.
     pub sub_pixel_precision_bits: u32,
+
+    /// The number of bits of sub-texel precision for image sampling.
     pub sub_texel_precision_bits: u32,
+
+    /// The number of bits of precision available for mipmap level selection.
     pub mipmap_precision_bits: u32,
+
+    /// The maximum value of an index used with indexed drawing.
     pub max_draw_indexed_index_value: u32,
+
+    /// The maximum number of draws executed by an indirect draw-count command.
     pub max_draw_indirect_count: u32,
+
+    /// The maximum absolute value of sampler LOD bias.
     pub max_sampler_lod_bias: f32,
+
+    /// The maximum sampler anisotropy level.
     pub max_sampler_anisotropy: f32,
+
+    /// The maximum number of simultaneously active viewports.
     pub max_viewports: u32,
+
+    /// The maximum viewport width and height.
     pub max_viewport_dimensions: [u32; 2],
+
+    /// The minimum and maximum supported viewport bounds.
     pub viewport_bounds_range: [f32; 2],
+
+    /// The number of bits of precision for viewport sub-pixel coordinates.
     pub viewport_sub_pixel_bits: u32,
+
+    /// The minimum alignment, in bytes, of host pointer values passed to mapping functions.
     pub min_memory_map_alignment: usize,
+
+    /// The minimum alignment, in bytes, for texel buffer offsets.
     pub min_texel_buffer_offset_alignment: vk::DeviceSize,
+
+    /// The minimum alignment, in bytes, for uniform buffer offsets.
     pub min_uniform_buffer_offset_alignment: vk::DeviceSize,
+
+    /// The minimum alignment, in bytes, for storage buffer offsets.
     pub min_storage_buffer_offset_alignment: vk::DeviceSize,
+
+    /// The minimum offset allowed for texel fetch operations.
     pub min_texel_offset: i32,
+
+    /// The maximum offset allowed for texel fetch operations.
     pub max_texel_offset: u32,
+
+    /// The minimum offset allowed for texel gather operations.
     pub min_texel_gather_offset: i32,
+
+    /// The maximum offset allowed for texel gather operations.
     pub max_texel_gather_offset: u32,
+
+    /// The minimum interpolation offset supported by the implementation.
     pub min_interpolation_offset: f32,
+
+    /// The maximum interpolation offset supported by the implementation.
     pub max_interpolation_offset: f32,
+
+    /// The number of bits of sub-pixel precision for interpolation offsets.
     pub sub_pixel_interpolation_offset_bits: u32,
+
+    /// The maximum framebuffer width.
     pub max_framebuffer_width: u32,
+
+    /// The maximum framebuffer height.
     pub max_framebuffer_height: u32,
+
+    /// The maximum number of framebuffer layers.
     pub max_framebuffer_layers: u32,
+
+    /// The sample counts supported for color framebuffer attachments.
     pub framebuffer_color_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for depth framebuffer attachments.
     pub framebuffer_depth_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for stencil framebuffer attachments.
     pub framebuffer_stencil_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for framebuffers with no attachments.
     pub framebuffer_no_attachments_sample_counts: vk::SampleCountFlags,
+
+    /// The maximum number of color attachments in a framebuffer.
     pub max_color_attachments: u32,
+
+    /// The sample counts supported for sampled color images.
     pub sampled_image_color_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for sampled integer images.
     pub sampled_image_integer_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for sampled depth images.
     pub sampled_image_depth_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for sampled stencil images.
     pub sampled_image_stencil_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for storage images.
     pub storage_image_sample_counts: vk::SampleCountFlags,
+
+    /// The maximum number of words in a sample mask.
     pub max_sample_mask_words: u32,
+
+    /// True if timestamps are supported in both graphics and compute queues.
     pub timestamp_compute_and_graphics: bool,
+
+    /// The number of nanoseconds per timestamp increment.
     pub timestamp_period: f32,
+
+    /// The maximum number of clip distances.
     pub max_clip_distances: u32,
+
+    /// The maximum number of cull distances.
     pub max_cull_distances: u32,
+
+    /// The maximum combined number of clip and cull distances.
     pub max_combined_clip_and_cull_distances: u32,
+
+    /// The number of discrete queue priorities supported by the implementation.
     pub discrete_queue_priorities: u32,
+
+    /// The supported range of point sizes.
     pub point_size_range: [f32; 2],
+
+    /// The supported range of line widths.
     pub line_width_range: [f32; 2],
+
+    /// The granularity of point-size values.
     pub point_size_granularity: f32,
+
+    /// The granularity of line-width values.
     pub line_width_granularity: f32,
+
+    /// True if line rasterization follows strict diamond-exit rules.
     pub strict_lines: bool,
+
+    /// True if standard sample locations are supported.
     pub standard_sample_locations: bool,
+
+    /// The optimal alignment, in bytes, for buffer copy source and destination offsets.
     pub optimal_buffer_copy_offset_alignment: vk::DeviceSize,
+
+    /// The optimal alignment, in bytes, for buffer copy row pitch values.
     pub optimal_buffer_copy_row_pitch_alignment: vk::DeviceSize,
+
+    /// The non-coherent atom size, in bytes, used for host cache management.
     pub non_coherent_atom_size: vk::DeviceSize,
 }
 

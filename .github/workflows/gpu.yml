@@ -1,0 +1,34 @@
+name: GPU
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: gpu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gpu:
+    name: GPU smoke and full checks
+    runs-on: [self-hosted, linux, vulkan]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install mdBook
+        run: cargo install --locked mdbook --version 0.5.3
+
+      - name: Run full checks with GPU
+        run: bin/check --allow-dirty

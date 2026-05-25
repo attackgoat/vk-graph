@@ -23,6 +23,7 @@ readme = "README.md"
 [workspace.dependencies]
 log = "0.4"
 profiling = "1.0"
+read-only = "0.1"
 vk-graph.path = ""
 vk-graph-egui.path = "crates/vk-graph-egui"
 vk-graph-fx.path = "crates/vk-graph-fx"
@@ -67,7 +68,7 @@ parking_lot = { version = "0.12", optional = true }
 paste = "1.0"
 profiling.workspace = true
 raw-window-handle = "0.6"
-readonly = "0.2"
+read-only.workspace = true
 spirq = "1.2"
 vk-sync = { version = "0.5", package = "vk-sync-fork" } # // SEE: https://github.com/gwihlidal/vk-sync-rs/pull/4 -> https://github.com/expenses/vk-sync-rs
 

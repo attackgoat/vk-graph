@@ -2,14 +2,20 @@
 name = "vk-graph-imgui"
 version = "0.1.0"
 authors = ["John Wells <john@attackgoat.com>"]
+description = "Dear ImGui renderer integration for vk-graph"
+documentation = "https://docs.rs/vk-graph-imgui"
+homepage = "https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-imgui"
+keywords = ["imgui", "gamedev", "vulkan"]
+categories = ["game-development", "multimedia::images", "rendering::engine"]
 edition.workspace = true
 license.workspace = true
-readme.workspace = true
+readme = "README.md"
 repository.workspace = true
 
 [dependencies]
 bytemuck = "1.25"
 imgui = "0.12"
 imgui-winit-support = "0.13"
+log.workspace = true
 vk-graph.workspace = true
 vk-shader-macros = "0.2"

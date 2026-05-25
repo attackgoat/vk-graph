@@ -1,4 +1,4 @@
-//! TODO
+//! Hot-reload compute pipeline support.
 
 use {
     super::{
@@ -20,7 +20,7 @@ use {
     },
 };
 
-/// TODO
+/// A compute pipeline wrapper that recompiles its shader when source files change.
 #[derive(Debug)]
 pub struct HotComputePipeline {
     cache: RwLock<HotPipeline<ComputePipeline>>,
@@ -30,7 +30,7 @@ pub struct HotComputePipeline {
 }
 
 impl HotComputePipeline {
-    /// TODO
+    /// Creates a hot-reload compute pipeline from a single shader file.
     pub fn create(
         device: &Device,
         info: impl Into<ComputePipelineInfo>,

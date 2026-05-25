@@ -1,5 +1,5 @@
 [package]
-name = "animation"
+name = "skeletal-anim"
 authors = ["John Wells <john@attackgoat.com>"]
 edition.workspace = true
 license.workspace = true

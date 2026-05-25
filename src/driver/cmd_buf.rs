@@ -13,7 +13,7 @@ use {
 
 /// Represents a Vulkan command buffer to which some work has been submitted.
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct CommandBuffer {
     /// The device which owns this command buffer resource.
     ///
@@ -43,7 +43,7 @@ pub struct CommandBuffer {
 }
 
 impl CommandBuffer {
-    /// TODO
+    /// Creates a command buffer allocation backed by a transient resettable command pool.
     #[profiling::function]
     pub fn create(device: &Device, info: CommandBufferInfo) -> Result<Self, DriverError> {
         let device = device.clone();
@@ -116,14 +116,14 @@ impl CommandBuffer {
         match res {
             Ok(status) => Ok(status),
             Err(err) if err == vk::Result::ERROR_DEVICE_LOST => {
-                error!("Device lost");
+                error!("invalid device state: lost");
 
                 Err(DriverError::InvalidData)
             }
             Err(err) => {
                 // VK_SUCCESS and VK_NOT_READY handled by get_fence_status in ash
                 // VK_ERROR_DEVICE_LOST already handled above, so no idea what happened
-                error!("{}", err);
+                error!("unable to get fence status: {err}");
 
                 Err(DriverError::InvalidData)
             }
@@ -184,7 +184,7 @@ pub struct CommandBufferInfo {
 }
 
 impl CommandBufferInfo {
-    /// TODO
+    /// Creates command buffer allocation info for the given queue family.
     pub fn new(queue_family_index: u32) -> Self {
         Self { queue_family_index }
     }
@@ -220,6 +220,6 @@ impl CommandBufferInfoBuilder {
     /// Builds a new `CommandBufferInfo`.
     #[inline(always)]
     pub fn build(self) -> CommandBufferInfo {
-        self.fallible_build().unwrap()
+        self.fallible_build().expect("invalid command buffer info")
     }
 }

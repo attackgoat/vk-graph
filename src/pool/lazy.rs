@@ -73,7 +73,7 @@ impl From<ImageInfo> for ImageKey {
 /// If requests for varying resources is common [`LazyPool::clear_images_by_info`] and other memory
 /// management functions are nessecery in order to avoid using all available device memory.
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct LazyPool {
     accel_struct_cache: HashMap<vk::AccelerationStructureTypeKHR, Cache<AccelerationStructure>>,
     buffer_cache: HashMap<(bool, vk::DeviceSize), Cache<Buffer>>,
@@ -190,7 +190,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
             let mut cache = cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             // Look for a compatible acceleration structure (big enough)
             for idx in 0..cache.len() {
@@ -227,7 +227,7 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
             let mut cache = cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             // Look for a compatible buffer (big enough and superset of usage flags)
             for idx in 0..cache.len() {
@@ -269,7 +269,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for LazyPool {
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             lease_command_buffer(&mut cache)
         }
@@ -302,7 +302,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for LazyPool {
             let mut cache = self.descriptor_pool_cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             // Look for a compatible descriptor pool (has enough sets and descriptors)
             for idx in 0..cache.len() {
@@ -352,7 +352,7 @@ impl Pool<ImageInfo, Image> for LazyPool {
             let mut cache = cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             // Look for a compatible image (superset of creation flags and usage flags)
             for idx in 0..cache.len() {
@@ -389,7 +389,7 @@ impl Pool<RenderPassInfo, RenderPass> for LazyPool {
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             cache.pop()
         }

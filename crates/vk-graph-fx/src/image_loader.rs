@@ -1,6 +1,6 @@
 use {
     super::BitmapFont,
-    anyhow::Context,
+    anyhow::{Context, bail},
     bmfont::BMFont,
     log::info,
     std::sync::Arc,
@@ -27,16 +27,16 @@ use log::warn;
 /// Describes the channels and pixel stride of an image format
 #[derive(Clone, Copy, Debug)]
 pub enum ImageFormat {
-    /// TODO
+    /// Single-channel 8-bit image data.
     R8,
 
-    /// TODO
+    /// Two-channel 8-bit image data.
     R8G8,
 
-    /// TODO
+    /// Three-channel 8-bit image data.
     R8G8B8,
 
-    /// TODO
+    /// Four-channel 8-bit image data.
     R8G8B8A8,
 }
 
@@ -51,19 +51,19 @@ impl ImageFormat {
     }
 }
 
-/// TODO
+/// Helper for decoding CPU bitmap data into `vk-graph` images.
 #[derive(Debug)]
 pub struct ImageLoader {
     pool: HashPool,
     _decode_r_rg: ComputePipeline,
     decode_rgb_rgba: ComputePipeline,
 
-    /// TODO
+    /// The device used to create temporary buffers, images, and decode pipelines.
     pub device: Device,
 }
 
 impl ImageLoader {
-    /// TODO
+    /// Creates a new image loader and its internal decode pipelines.
     pub fn new(device: &Device) -> Result<Self, DriverError> {
         Ok(Self {
             pool: HashPool::new(device),
@@ -132,7 +132,7 @@ impl ImageLoader {
         ))
     }
 
-    /// TODO
+    /// Decodes bitmap pixels into an image and uploads it through a temporary graph submission.
     #[allow(clippy::too_many_arguments)]
     pub fn decode_bitmap(
         &mut self,
@@ -170,7 +170,7 @@ impl ImageLoader {
             ImageFormat::R8 => {
                 // This format requires a conversion
                 info!("Converting R to RG");
-                todo!()
+                bail!("unsupported bitmap decode format: R8")
             }
             ImageFormat::R8G8B8 => {
                 // This format requires a conversion
@@ -261,7 +261,7 @@ impl ImageLoader {
         Ok(image)
     }
 
-    /// TODO
+    /// Decodes a linear-color bitmap into an image.
     pub fn decode_linear(
         &mut self,
         queue_family_index: u32,
@@ -282,7 +282,7 @@ impl ImageLoader {
         )
     }
 
-    /// TODO
+    /// Decodes an sRGB bitmap into an image.
     pub fn decode_srgb(
         &mut self,
         queue_family_index: u32,
@@ -303,7 +303,7 @@ impl ImageLoader {
         )
     }
 
-    /// TODO
+    /// Loads a bitmap font by decoding each supplied page image and pairing it with the font data.
     pub fn load_bitmap_font<'a>(
         &mut self,
         queue_family_index: u32,
@@ -326,5 +326,18 @@ impl ImageLoader {
             .collect::<Result<Vec<_>, _>>()?;
 
         BitmapFont::new(&self.device, font, pages)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::ImageFormat;
+
+    #[test]
+    fn image_format_stride_matches_channel_count() {
+        assert_eq!(ImageFormat::R8.stride(), 1);
+        assert_eq!(ImageFormat::R8G8.stride(), 2);
+        assert_eq!(ImageFormat::R8G8B8.stride(), 3);
+        assert_eq!(ImageFormat::R8G8B8A8.stride(), 4);
     }
 }

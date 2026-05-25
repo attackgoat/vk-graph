@@ -20,10 +20,10 @@ use {
 };
 
 #[cfg(feature = "parking_lot")]
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
 #[cfg(not(feature = "parking_lot"))]
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// Smart pointer handle to a [buffer] object.
 ///
@@ -45,7 +45,7 @@ use std::sync::Mutex;
 /// ```
 ///
 /// [buffer]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
-#[readonly::make]
+#[read_only::cast]
 pub struct Buffer {
     accesses: Mutex<BufferAccess>,
     allocation: ManuallyDrop<Allocation>,
@@ -134,48 +134,48 @@ impl Buffer {
         let allocation = {
             profiling::scope!("allocate");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = Device::allocator(&device).lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut allocator = allocator.unwrap();
-
-            allocator
-                .allocate(&AllocationCreateDesc {
-                    name: "buffer",
-                    requirements,
-                    location,
-                    linear: true, // Buffers are always linear
-                    allocation_scheme,
-                })
-                .map_err(|err| {
-                    warn!("unable to allocate buffer memory: {err}");
-
-                    unsafe {
-                        device.destroy_buffer(handle, None);
-                    }
-
-                    DriverError::from_alloc_err(err)
-                })
-                .and_then(|allocation| {
-                    if let Err(err) = unsafe {
-                        device.bind_buffer_memory(handle, allocation.memory(), allocation.offset())
-                    } {
-                        warn!("unable to bind buffer memory: {err}");
-
-                        if let Err(err) = allocator.free(allocation) {
-                            warn!("unable to free buffer allocation: {err}")
-                        }
+            Device::with_allocator(&device, |allocator| {
+                allocator
+                    .allocate(&AllocationCreateDesc {
+                        name: "buffer",
+                        requirements,
+                        location,
+                        linear: true, // Buffers are always linear
+                        allocation_scheme,
+                    })
+                    .map_err(|err| {
+                        warn!("unable to allocate buffer memory: {err}");
 
                         unsafe {
                             device.destroy_buffer(handle, None);
                         }
 
-                        Err(DriverError::OutOfMemory)
-                    } else {
-                        Ok(allocation)
-                    }
-                })
+                        DriverError::from_alloc_err(err)
+                    })
+                    .and_then(|allocation| {
+                        if let Err(err) = unsafe {
+                            device.bind_buffer_memory(
+                                handle,
+                                allocation.memory(),
+                                allocation.offset(),
+                            )
+                        } {
+                            warn!("unable to bind buffer memory: {err}");
+
+                            if let Err(err) = allocator.free(allocation) {
+                                warn!("unable to free buffer allocation: {err}")
+                            }
+
+                            unsafe {
+                                device.destroy_buffer(handle, None);
+                            }
+
+                            Err(DriverError::OutOfMemory)
+                        } else {
+                            Ok(allocation)
+                        }
+                    })
+            })
         }?;
 
         debug_assert_ne!(handle, vk::Buffer::null());
@@ -287,12 +287,7 @@ impl Buffer {
             access_range.end = self.info.size;
         }
 
-        let accesses = self.accesses.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let accesses = accesses.unwrap();
-
-        BufferAccessIter::new(accesses, access, access_range)
+        BufferAccessIter::new(self.lock_accesses(), access, access_range)
     }
 
     /// Updates a mappable buffer starting at `offset` with the data in `slice`.
@@ -369,6 +364,15 @@ impl Buffer {
         }
     }
 
+    fn lock_accesses(&self) -> MutexGuard<'_, BufferAccess> {
+        let accesses = self.accesses.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let accesses = accesses.expect("poisoned buffer access lock");
+
+        accesses
+    }
+
     /// Returns a mapped slice.
     ///
     /// # Panics
@@ -403,7 +407,10 @@ impl Buffer {
             "Buffer is not readable - create using host_read flag"
         );
 
-        &self.allocation.mapped_slice().unwrap()[0..self.info.size as usize]
+        &self
+            .allocation
+            .mapped_slice()
+            .expect("missing mapped buffer memory")[0..self.info.size as usize]
     }
 
     /// Returns a mapped mutable slice.
@@ -441,7 +448,10 @@ impl Buffer {
             "Buffer is not writable - create using host_write flag"
         );
 
-        &mut self.allocation.mapped_slice_mut().unwrap()[0..self.info.size as usize]
+        &mut self
+            .allocation
+            .mapped_slice_mut()
+            .expect("missing mapped buffer memory")[0..self.info.size as usize]
     }
 
     /// Sets the debugging name assigned to this buffer.
@@ -472,13 +482,9 @@ impl Drop for Buffer {
         {
             profiling::scope!("deallocate");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = Device::allocator(&self.device).lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut allocator = allocator.unwrap();
-
-            allocator.free(unsafe { ManuallyDrop::take(&mut self.allocation) })
+            Device::with_allocator(&self.device, |allocator| {
+                allocator.free(unsafe { ManuallyDrop::take(&mut self.allocation) })
+            })
         }
         .unwrap_or_else(|err| warn!("unable to free buffer allocation: {err}"));
 

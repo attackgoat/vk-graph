@@ -366,13 +366,15 @@ impl Sampler {
                         ),
                     None,
                 )
-                .map_err(|err| {
-                    warn!("{err}");
-
-                    match err {
-                        vk::Result::ERROR_OUT_OF_HOST_MEMORY
-                        | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DriverError::OutOfMemory,
-                        _ => DriverError::Unsupported,
+                .map_err(|err| match err {
+                    vk::Result::ERROR_OUT_OF_HOST_MEMORY
+                    | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                        warn!("unable to create sampler: {err}");
+                        DriverError::OutOfMemory
+                    }
+                    _ => {
+                        warn!("unsupported sampler creation: {err}");
+                        DriverError::Unsupported
                     }
                 })?
         };
@@ -645,15 +647,7 @@ impl SamplerInfoBuilder {
     /// Builds a new `SamplerInfo`.
     #[inline(always)]
     pub fn build(self) -> SamplerInfo {
-        let res = self.fallible_build();
-
-        #[cfg(test)]
-        let res = res.unwrap();
-
-        #[cfg(not(test))]
-        let res = unsafe { res.unwrap_unchecked() };
-
-        res
+        self.fallible_build().expect("invalid sampler info")
     }
 }
 
@@ -857,22 +851,34 @@ impl Shader {
         Self::new(vk::ShaderStageFlags::TASK_EXT, spirv)
     }
 
-    /// Creates a new tesselation control shader.
+    /// Creates a new tessellation control shader.
     ///
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tesselation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+    pub fn new_tessellation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, spirv)
     }
 
-    /// Creates a new tesselation evaluation shader.
+    #[deprecated = "use new_tessellation_ctrl function"]
+    #[doc(hidden)]
+    pub fn new_tesselation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+        Self::new_tessellation_ctrl(spirv)
+    }
+
+    /// Creates a new tessellation evaluation shader.
     ///
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tesselation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+    pub fn new_tessellation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, spirv)
+    }
+
+    #[deprecated = "use new_tessellation_eval function"]
+    #[doc(hidden)]
+    pub fn new_tesselation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+        Self::new_tessellation_eval(spirv)
     }
 
     /// Creates a new vertex shader.
@@ -1187,7 +1193,7 @@ impl Shader {
         }
 
         let entry_points = config.reflect().map_err(|err| {
-            error!("Unable to reflect spirv: {err}");
+            error!("invalid spirv reflection data: {err}");
 
             DriverError::InvalidData
         })?;
@@ -1195,7 +1201,7 @@ impl Shader {
             .into_iter()
             .find(|entry_point| entry_point.name == entry_name)
             .ok_or_else(|| {
-                error!("Entry point not found");
+                error!("invalid shader entry point: not found");
 
                 DriverError::InvalidData
             })?;
@@ -1204,64 +1210,64 @@ impl Shader {
     }
 
     #[profiling::function]
-    pub(super) fn vertex_input(&self) -> VertexInputState {
+    pub(super) fn try_vertex_input(&self) -> Result<VertexInputState, DriverError> {
         // Check for manually-specified vertex layout descriptions
         if let Some(vertex_input) = &self.vertex_input_state {
-            return vertex_input.clone();
+            return Ok(vertex_input.clone());
         }
 
-        fn scalar_format(ty: &ScalarType) -> vk::Format {
+        fn scalar_format(ty: &ScalarType) -> Option<vk::Format> {
             match *ty {
                 ScalarType::Float { bits } => match bits {
-                    u8::BITS => vk::Format::R8_SNORM,
-                    u16::BITS => vk::Format::R16_SFLOAT,
-                    u32::BITS => vk::Format::R32_SFLOAT,
-                    u64::BITS => vk::Format::R64_SFLOAT,
-                    _ => unimplemented!("{bits}-bit float"),
+                    u8::BITS => Some(vk::Format::R8_SNORM),
+                    u16::BITS => Some(vk::Format::R16_SFLOAT),
+                    u32::BITS => Some(vk::Format::R32_SFLOAT),
+                    u64::BITS => Some(vk::Format::R64_SFLOAT),
+                    _ => None,
                 },
                 ScalarType::Integer {
                     bits,
                     is_signed: false,
                 } => match bits {
-                    u8::BITS => vk::Format::R8_UINT,
-                    u16::BITS => vk::Format::R16_UINT,
-                    u32::BITS => vk::Format::R32_UINT,
-                    u64::BITS => vk::Format::R64_UINT,
-                    _ => unimplemented!("{bits}-bit unsigned integer"),
+                    u8::BITS => Some(vk::Format::R8_UINT),
+                    u16::BITS => Some(vk::Format::R16_UINT),
+                    u32::BITS => Some(vk::Format::R32_UINT),
+                    u64::BITS => Some(vk::Format::R64_UINT),
+                    _ => None,
                 },
                 ScalarType::Integer {
                     bits,
                     is_signed: true,
                 } => match bits {
-                    u8::BITS => vk::Format::R8_SINT,
-                    u16::BITS => vk::Format::R16_SINT,
-                    u32::BITS => vk::Format::R32_SINT,
-                    u64::BITS => vk::Format::R64_SINT,
-                    _ => unimplemented!("{bits}-bit signed integer"),
+                    u8::BITS => Some(vk::Format::R8_SINT),
+                    u16::BITS => Some(vk::Format::R16_SINT),
+                    u32::BITS => Some(vk::Format::R32_SINT),
+                    u64::BITS => Some(vk::Format::R64_SINT),
+                    _ => None,
                 },
-                _ => unimplemented!("{ty:?}"),
+                _ => None,
             }
         }
 
-        fn vector_format(ty: &VectorType) -> vk::Format {
+        fn vector_format(ty: &VectorType) -> Option<vk::Format> {
             match *ty {
                 VectorType {
                     scalar_ty: ScalarType::Float { bits },
                     nscalar,
                 } => match (bits, nscalar) {
-                    (u8::BITS, 2) => vk::Format::R8G8_SNORM,
-                    (u8::BITS, 3) => vk::Format::R8G8B8_SNORM,
-                    (u8::BITS, 4) => vk::Format::R8G8B8A8_SNORM,
-                    (u16::BITS, 2) => vk::Format::R16G16_SFLOAT,
-                    (u16::BITS, 3) => vk::Format::R16G16B16_SFLOAT,
-                    (u16::BITS, 4) => vk::Format::R16G16B16A16_SFLOAT,
-                    (u32::BITS, 2) => vk::Format::R32G32_SFLOAT,
-                    (u32::BITS, 3) => vk::Format::R32G32B32_SFLOAT,
-                    (u32::BITS, 4) => vk::Format::R32G32B32A32_SFLOAT,
-                    (u64::BITS, 2) => vk::Format::R64G64_SFLOAT,
-                    (u64::BITS, 3) => vk::Format::R64G64B64_SFLOAT,
-                    (u64::BITS, 4) => vk::Format::R64G64B64A64_SFLOAT,
-                    _ => unimplemented!("{bits}-bit vec{nscalar} float"),
+                    (u8::BITS, 2) => Some(vk::Format::R8G8_SNORM),
+                    (u8::BITS, 3) => Some(vk::Format::R8G8B8_SNORM),
+                    (u8::BITS, 4) => Some(vk::Format::R8G8B8A8_SNORM),
+                    (u16::BITS, 2) => Some(vk::Format::R16G16_SFLOAT),
+                    (u16::BITS, 3) => Some(vk::Format::R16G16B16_SFLOAT),
+                    (u16::BITS, 4) => Some(vk::Format::R16G16B16A16_SFLOAT),
+                    (u32::BITS, 2) => Some(vk::Format::R32G32_SFLOAT),
+                    (u32::BITS, 3) => Some(vk::Format::R32G32B32_SFLOAT),
+                    (u32::BITS, 4) => Some(vk::Format::R32G32B32A32_SFLOAT),
+                    (u64::BITS, 2) => Some(vk::Format::R64G64_SFLOAT),
+                    (u64::BITS, 3) => Some(vk::Format::R64G64B64_SFLOAT),
+                    (u64::BITS, 4) => Some(vk::Format::R64G64B64A64_SFLOAT),
+                    _ => None,
                 },
                 VectorType {
                     scalar_ty:
@@ -1271,19 +1277,19 @@ impl Shader {
                         },
                     nscalar,
                 } => match (bits, nscalar) {
-                    (u8::BITS, 2) => vk::Format::R8G8_UINT,
-                    (u8::BITS, 3) => vk::Format::R8G8B8_UINT,
-                    (u8::BITS, 4) => vk::Format::R8G8B8A8_UINT,
-                    (u16::BITS, 2) => vk::Format::R16G16_UINT,
-                    (u16::BITS, 3) => vk::Format::R16G16B16_UINT,
-                    (u16::BITS, 4) => vk::Format::R16G16B16A16_UINT,
-                    (u32::BITS, 2) => vk::Format::R32G32_UINT,
-                    (u32::BITS, 3) => vk::Format::R32G32B32_UINT,
-                    (u32::BITS, 4) => vk::Format::R32G32B32A32_UINT,
-                    (u64::BITS, 2) => vk::Format::R64G64_UINT,
-                    (u64::BITS, 3) => vk::Format::R64G64B64_UINT,
-                    (u64::BITS, 4) => vk::Format::R64G64B64A64_UINT,
-                    _ => unimplemented!("{bits}-bit vec{nscalar} unsigned integer"),
+                    (u8::BITS, 2) => Some(vk::Format::R8G8_UINT),
+                    (u8::BITS, 3) => Some(vk::Format::R8G8B8_UINT),
+                    (u8::BITS, 4) => Some(vk::Format::R8G8B8A8_UINT),
+                    (u16::BITS, 2) => Some(vk::Format::R16G16_UINT),
+                    (u16::BITS, 3) => Some(vk::Format::R16G16B16_UINT),
+                    (u16::BITS, 4) => Some(vk::Format::R16G16B16A16_UINT),
+                    (u32::BITS, 2) => Some(vk::Format::R32G32_UINT),
+                    (u32::BITS, 3) => Some(vk::Format::R32G32B32_UINT),
+                    (u32::BITS, 4) => Some(vk::Format::R32G32B32A32_UINT),
+                    (u64::BITS, 2) => Some(vk::Format::R64G64_UINT),
+                    (u64::BITS, 3) => Some(vk::Format::R64G64B64_UINT),
+                    (u64::BITS, 4) => Some(vk::Format::R64G64B64A64_UINT),
+                    _ => None,
                 },
                 VectorType {
                     scalar_ty:
@@ -1293,21 +1299,21 @@ impl Shader {
                         },
                     nscalar,
                 } => match (bits, nscalar) {
-                    (u8::BITS, 2) => vk::Format::R8G8_SINT,
-                    (u8::BITS, 3) => vk::Format::R8G8B8_SINT,
-                    (u8::BITS, 4) => vk::Format::R8G8B8A8_SINT,
-                    (u16::BITS, 2) => vk::Format::R16G16_SINT,
-                    (u16::BITS, 3) => vk::Format::R16G16B16_SINT,
-                    (u16::BITS, 4) => vk::Format::R16G16B16A16_SINT,
-                    (u32::BITS, 2) => vk::Format::R32G32_SINT,
-                    (u32::BITS, 3) => vk::Format::R32G32B32_SINT,
-                    (u32::BITS, 4) => vk::Format::R32G32B32A32_SINT,
-                    (u64::BITS, 2) => vk::Format::R64G64_SINT,
-                    (u64::BITS, 3) => vk::Format::R64G64B64_SINT,
-                    (u64::BITS, 4) => vk::Format::R64G64B64A64_SINT,
-                    _ => unimplemented!("{bits}-bit vec{nscalar} signed integer"),
+                    (u8::BITS, 2) => Some(vk::Format::R8G8_SINT),
+                    (u8::BITS, 3) => Some(vk::Format::R8G8B8_SINT),
+                    (u8::BITS, 4) => Some(vk::Format::R8G8B8A8_SINT),
+                    (u16::BITS, 2) => Some(vk::Format::R16G16_SINT),
+                    (u16::BITS, 3) => Some(vk::Format::R16G16B16_SINT),
+                    (u16::BITS, 4) => Some(vk::Format::R16G16B16A16_SINT),
+                    (u32::BITS, 2) => Some(vk::Format::R32G32_SINT),
+                    (u32::BITS, 3) => Some(vk::Format::R32G32B32_SINT),
+                    (u32::BITS, 4) => Some(vk::Format::R32G32B32A32_SINT),
+                    (u64::BITS, 2) => Some(vk::Format::R64G64_SINT),
+                    (u64::BITS, 3) => Some(vk::Format::R64G64B64_SINT),
+                    (u64::BITS, 4) => Some(vk::Format::R64G64B64A64_SINT),
+                    _ => None,
                 },
-                _ => unimplemented!("{ty:?}"),
+                _ => None,
             }
         }
 
@@ -1322,7 +1328,7 @@ impl Shader {
                 .as_ref()
                 .filter(|name| name.contains("_ibind") || name.contains("_vbind"))
                 .map(|name| {
-                    let binding = name[name.rfind("bind").unwrap()..]
+                    let binding = name[name.rfind("bind").expect("missing bind suffix")..]
                         .parse()
                         .unwrap_or_default();
                     let rate = if name.contains("_ibind") {
@@ -1346,14 +1352,21 @@ impl Shader {
 
             //trace!("{location} {:?} is {byte_stride} bytes", name);
 
+            let format = match ty {
+                Type::Scalar(ty) => scalar_format(ty),
+                Type::Vector(ty) => vector_format(ty),
+                _ => None,
+            }
+            .ok_or_else(|| {
+                warn!("unsupported reflected vertex input type: {ty:?}");
+
+                DriverError::Unsupported
+            })?;
+
             vertex_attribute_descriptions.push(vk::VertexInputAttributeDescription {
                 location,
                 binding,
-                format: match ty {
-                    Type::Scalar(ty) => scalar_format(ty),
-                    Type::Vector(ty) => vector_format(ty),
-                    _ => unimplemented!("{:?}", ty),
-                },
+                format,
                 offset: byte_stride, // Figured out below - this data is iter'd in an unknown order
             });
         }
@@ -1398,10 +1411,16 @@ impl Shader {
             });
         }
 
-        VertexInputState {
+        Ok(VertexInputState {
             vertex_attribute_descriptions,
             vertex_binding_descriptions,
-        }
+        })
+    }
+
+    #[profiling::function]
+    pub(super) fn vertex_input(&self) -> VertexInputState {
+        self.try_vertex_input()
+            .expect("unsupported reflected vertex input layout")
     }
 }
 
@@ -1436,49 +1455,12 @@ impl ShaderBuilder {
     }
 
     /// Builds a new `Shader`.
-    pub fn build(mut self) -> Shader {
-        let entry_name = self.entry_name.as_deref().unwrap_or("main");
-        let entry_point = Shader::reflect_entry_point(
-            entry_name,
-            self.spirv
-                .as_ref()
-                .map(|spirv| spirv.words())
-                .expect("spirv code must be set at initialization"),
-            self.specialization
-                .as_ref()
-                .map(|opt| opt.as_ref())
-                .unwrap_or_default(),
-        )
-        .unwrap_or_else(|_| panic!("invalid shader code for entry name \'{entry_name}\'"));
+    pub fn build(self) -> Shader {
+        let entry_name = self.entry_name.clone().unwrap_or_else(|| "main".to_owned());
 
-        if self.stage.unwrap_or_default().is_empty() {
-            self.stage = Some(match entry_point.exec_model {
-                ExecutionModel::Vertex => vk::ShaderStageFlags::VERTEX,
-                ExecutionModel::TessellationControl => vk::ShaderStageFlags::TESSELLATION_CONTROL,
-                ExecutionModel::TessellationEvaluation => {
-                    vk::ShaderStageFlags::TESSELLATION_EVALUATION
-                }
-                ExecutionModel::Geometry => vk::ShaderStageFlags::GEOMETRY,
-                ExecutionModel::Fragment => vk::ShaderStageFlags::FRAGMENT,
-                ExecutionModel::GLCompute => vk::ShaderStageFlags::COMPUTE,
-                ExecutionModel::Kernel => unimplemented!("unknown stage"),
-                ExecutionModel::TaskNV => vk::ShaderStageFlags::TASK_EXT,
-                ExecutionModel::MeshNV => vk::ShaderStageFlags::MESH_EXT,
-                ExecutionModel::RayGenerationNV => vk::ShaderStageFlags::RAYGEN_KHR,
-                ExecutionModel::IntersectionNV => vk::ShaderStageFlags::INTERSECTION_KHR,
-                ExecutionModel::AnyHitNV => vk::ShaderStageFlags::ANY_HIT_KHR,
-                ExecutionModel::ClosestHitNV => vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-                ExecutionModel::MissNV => vk::ShaderStageFlags::MISS_KHR,
-                ExecutionModel::CallableNV => vk::ShaderStageFlags::CALLABLE_KHR,
-                ExecutionModel::TaskEXT => vk::ShaderStageFlags::TASK_EXT,
-                ExecutionModel::MeshEXT => vk::ShaderStageFlags::MESH_EXT,
-            })
-        }
-
-        self.entry_point = Some(entry_point);
-
-        self.fallible_build()
-            .expect("All required fields set at initialization")
+        self.try_build().unwrap_or_else(|_| {
+            panic!("invalid or unsupported shader code for entry name '{entry_name}'")
+        })
     }
 
     /// Specifies a manually-defined image sampler.
@@ -1515,10 +1497,67 @@ impl ShaderBuilder {
 
         self.image_samplers
             .as_mut()
-            .unwrap()
+            .expect("missing image samplers")
             .insert(descriptor, info);
 
         self
+    }
+
+    /// Attempts to build a new `Shader`.
+    pub fn try_build(mut self) -> Result<Shader, DriverError> {
+        let entry_name = self.entry_name.as_deref().unwrap_or("main");
+        let entry_point = Shader::reflect_entry_point(
+            entry_name,
+            self.spirv
+                .as_ref()
+                .map(|spirv| spirv.words())
+                .expect("missing spirv code"),
+            self.specialization
+                .as_ref()
+                .map(|opt| opt.as_ref())
+                .unwrap_or_default(),
+        )
+        .map_err(|err| {
+            warn!("invalid shader reflection entry point: {err}");
+
+            DriverError::InvalidData
+        })?;
+
+        if self.stage.unwrap_or_default().is_empty() {
+            self.stage = Some(match entry_point.exec_model {
+                ExecutionModel::Vertex => vk::ShaderStageFlags::VERTEX,
+                ExecutionModel::TessellationControl => vk::ShaderStageFlags::TESSELLATION_CONTROL,
+                ExecutionModel::TessellationEvaluation => {
+                    vk::ShaderStageFlags::TESSELLATION_EVALUATION
+                }
+                ExecutionModel::Geometry => vk::ShaderStageFlags::GEOMETRY,
+                ExecutionModel::Fragment => vk::ShaderStageFlags::FRAGMENT,
+                ExecutionModel::GLCompute => vk::ShaderStageFlags::COMPUTE,
+                ExecutionModel::Kernel => {
+                    warn!("unsupported shader execution model: kernel");
+
+                    return Err(DriverError::Unsupported);
+                }
+                ExecutionModel::TaskNV => vk::ShaderStageFlags::TASK_EXT,
+                ExecutionModel::MeshNV => vk::ShaderStageFlags::MESH_EXT,
+                ExecutionModel::RayGenerationNV => vk::ShaderStageFlags::RAYGEN_KHR,
+                ExecutionModel::IntersectionNV => vk::ShaderStageFlags::INTERSECTION_KHR,
+                ExecutionModel::AnyHitNV => vk::ShaderStageFlags::ANY_HIT_KHR,
+                ExecutionModel::ClosestHitNV => vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                ExecutionModel::MissNV => vk::ShaderStageFlags::MISS_KHR,
+                ExecutionModel::CallableNV => vk::ShaderStageFlags::CALLABLE_KHR,
+                ExecutionModel::TaskEXT => vk::ShaderStageFlags::TASK_EXT,
+                ExecutionModel::MeshEXT => vk::ShaderStageFlags::MESH_EXT,
+            })
+        }
+
+        self.entry_point = Some(entry_point);
+
+        self.fallible_build().map_err(|err| {
+            warn!("invalid shader builder state: {err:?}");
+
+            DriverError::InvalidData
+        })
     }
 
     /// Specifies a manually-defined vertex input layout.

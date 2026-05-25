@@ -1,13 +1,15 @@
-//! TODO
+//! Dear ImGui renderer integration for `vk-graph`.
 
 #![warn(missing_docs)]
 
-/// TODO
+/// Common imports for applications using the ImGui integration.
 pub mod prelude {
     pub use super::{Condition, ImGui, Ui, imgui};
 }
 
 pub use imgui::{self, Condition, Ui};
+
+type DrawCmdInfo = (usize, [f32; 4], usize, usize);
 
 use {
     bytemuck::cast_slice,
@@ -16,6 +18,7 @@ use {
         winit::{event::Event, window::Window},
         {HiDpiMode, WinitPlatform},
     },
+    log::warn,
     std::{sync::Arc, time::Duration},
     vk_graph::{
         Graph,
@@ -35,7 +38,7 @@ use {
     vk_shader_macros::include_glsl,
 };
 
-/// TODO
+/// Dear ImGui renderer state backed by `vk-graph` resources.
 #[derive(Debug)]
 pub struct ImGui {
     context: Context,
@@ -44,8 +47,31 @@ pub struct ImGui {
     platform: WinitPlatform,
 }
 
+fn supported_draw_cmd(draw_cmd: DrawCmd) -> Option<DrawCmdInfo> {
+    match draw_cmd {
+        DrawCmd::Elements {
+            count,
+            cmd_params:
+                DrawCmdParams {
+                    clip_rect,
+                    idx_offset,
+                    vtx_offset,
+                    ..
+                },
+        } => Some((count, clip_rect, idx_offset, vtx_offset)),
+        DrawCmd::ResetRenderState => {
+            warn!("unsupported imgui draw command: reset render state");
+            None
+        }
+        DrawCmd::RawCallback { .. } => {
+            warn!("unsupported imgui draw command: raw callback");
+            None
+        }
+    }
+}
+
 impl ImGui {
-    /// TODO
+    /// Creates a new ImGui renderer for the given device.
     pub fn new(device: &Device) -> Self {
         let mut context = Context::create();
         let platform = WinitPlatform::new(&mut context);
@@ -59,7 +85,7 @@ impl ImGui {
                 Shader::new_fragment(include_glsl!("res/shader/imgui.frag").as_slice()),
             ],
         )
-        .unwrap();
+        .expect("invalid imgui pipeline");
 
         Self {
             context,
@@ -70,7 +96,7 @@ impl ImGui {
     }
 
     // TODO: This produces an image which is RGBA8 UNORM and has STORAGE set. *We* don't need storage here and should instead ask the user what settings to give the output image.....
-    /// TODO
+    /// Builds a frame, records the necessary draw commands, and returns the rendered image.
     pub fn draw<P>(
         &mut self,
         dt: f32,
@@ -101,7 +127,7 @@ impl ImGui {
 
         self.platform
             .prepare_frame(io, window)
-            .expect("Unable to prepare ImGui frame");
+            .expect("invalid imgui frame");
 
         // Let the caller draw the GUI
         let ui = self.context.frame();
@@ -123,12 +149,16 @@ impl ImGui {
                         | vk::ImageUsageFlags::TRANSFER_DST
                         | vk::ImageUsageFlags::TRANSFER_SRC, // TODO: Make TRANSFER_SRC an "extra flags"
                 ))
-                .unwrap();
+                .expect("missing imgui output image");
             image.name = Some("ImGui Output".to_string());
 
             image
         });
-        let font_atlas_image = graph.bind_resource(self.font_atlas_image.as_ref().unwrap());
+        let font_atlas_image = graph.bind_resource(
+            self.font_atlas_image
+                .as_ref()
+                .expect("missing imgui font atlas image"),
+        );
         let display_pos = draw_data.display_pos;
         let framebuffer_scale = draw_data.framebuffer_scale;
 
@@ -145,7 +175,7 @@ impl ImGui {
                     indices.len() as _,
                     vk::BufferUsageFlags::INDEX_BUFFER,
                 ))
-                .unwrap();
+                .expect("missing imgui index buffer");
 
             {
                 Buffer::mapped_slice_mut(&mut index_buf)[0..indices.len()].copy_from_slice(indices);
@@ -160,7 +190,7 @@ impl ImGui {
                     vertex_buf_len as _,
                     vk::BufferUsageFlags::VERTEX_BUFFER,
                 ))
-                .unwrap();
+                .expect("missing imgui vertex buffer");
 
             {
                 let vertex_buf = Buffer::mapped_slice_mut(&mut vertex_buf);
@@ -176,19 +206,7 @@ impl ImGui {
 
             let draw_cmds = draw_list
                 .commands()
-                .map(|draw_cmd| match draw_cmd {
-                    DrawCmd::Elements {
-                        count,
-                        cmd_params:
-                            DrawCmdParams {
-                                clip_rect,
-                                idx_offset,
-                                vtx_offset,
-                                ..
-                            },
-                    } => (count, clip_rect, idx_offset, vtx_offset),
-                    _ => unimplemented!(),
-                })
+                .filter_map(supported_draw_cmd)
                 .collect::<Vec<_>>();
 
             let window_width =
@@ -290,7 +308,7 @@ impl ImGui {
                 temp_buf_len as _,
                 vk::BufferUsageFlags::TRANSFER_SRC,
             ))
-            .unwrap();
+            .expect("missing imgui font atlas buffer");
 
         {
             let temp_buf = Buffer::mapped_slice_mut(&mut temp_buf);
@@ -307,12 +325,41 @@ impl ImGui {
                     | vk::ImageUsageFlags::STORAGE
                     | vk::ImageUsageFlags::TRANSFER_DST,
             ))
-            .unwrap()
+            .expect("missing imgui font atlas image")
             .debug_name("ImGui Font Atlas"),
         );
 
         graph.copy_buffer_to_image(temp_buf, image);
 
         self.font_atlas_image = Some(graph.resource(image).clone());
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::supported_draw_cmd;
+    use imgui::{DrawCmd, DrawCmdParams, TextureId};
+
+    #[test]
+    fn supported_draw_cmd_extracts_element_draws() {
+        let draw_cmd = DrawCmd::Elements {
+            count: 42,
+            cmd_params: DrawCmdParams {
+                clip_rect: [1.0, 2.0, 3.0, 4.0],
+                texture_id: TextureId::new(7),
+                vtx_offset: 5,
+                idx_offset: 6,
+            },
+        };
+
+        assert_eq!(
+            supported_draw_cmd(draw_cmd),
+            Some((42, [1.0, 2.0, 3.0, 4.0], 6, 5))
+        );
+    }
+
+    #[test]
+    fn supported_draw_cmd_skips_reset_render_state() {
+        assert_eq!(supported_draw_cmd(DrawCmd::ResetRenderState), None);
     }
 }

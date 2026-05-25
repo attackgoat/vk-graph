@@ -98,9 +98,9 @@ struct GraphicPipelineKey {
     subpass_idx: u32,
 }
 
-/// TODO
+/// Vulkan render pass state and cached framebuffer/pipeline objects for compatible attachments.
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct RenderPass {
     /// The device which owns this render pass resource.
     ///
@@ -182,7 +182,11 @@ impl RenderPass {
                 subpass.depth_stencil_resolve_attachment.map(
                     |(_, depth_resolve_mode, stencil_resolve_mode)| {
                         vk::SubpassDescriptionDepthStencilResolve::default()
-                            .depth_stencil_resolve_attachment(subpass_attachments.last().unwrap())
+                            .depth_stencil_resolve_attachment(
+                                subpass_attachments
+                                    .last()
+                                    .expect("missing subpass attachment"),
+                            )
                             .depth_resolve_mode(
                                 depth_resolve_mode.map(Into::into).unwrap_or_default(),
                             )
@@ -246,7 +250,7 @@ impl RenderPass {
             )
         }
         .map_err(|err| {
-            warn!("{err}");
+            warn!("unable to create render pass: {err}");
 
             DriverError::Unsupported
         })?;
@@ -310,7 +314,7 @@ impl RenderPass {
 
         let framebuffer =
             unsafe { self.device.create_framebuffer(&create_info, None) }.map_err(|err| {
-                warn!("{err}");
+                warn!("unable to create framebuffer: {err}");
 
                 DriverError::Unsupported
             })?;
@@ -460,7 +464,7 @@ impl Drop for RenderPass {
     }
 }
 
-/// TODO
+/// Attachment, subpass, and dependency information used to create a [`RenderPass`].
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct RenderPassInfo {
     pub(crate) attachments: Vec<AttachmentInfo>,

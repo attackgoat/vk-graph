@@ -1,7 +1,7 @@
 //! Pool which leases from a single bucket per resource type.
 
 use {
-    super::{Cache, Lease, Pool, PoolInfo, lease_command_buffer},
+    super::{Cache, Lease, Pool, PoolInfo, lease_command_buffer, with_cache},
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -43,7 +43,7 @@ use {
 /// of stored resources, however you may call [`FifoPool::clear`] or the other memory management
 /// functions at any time to discard stored resources.
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct FifoPool {
     accel_struct_cache: Cache<AccelerationStructure>,
     buffer_cache: Cache<Buffer>,
@@ -124,20 +124,20 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for FifoPool {
         {
             profiling::scope!("check cache");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut cache = self.accel_struct_cache.lock();
+            if let Some(item) = with_cache(&self.accel_struct_cache, |cache| {
+                // Look for a compatible acceleration structure (big enough and same type)
+                for idx in 0..cache.len() {
+                    let item = unsafe { cache.get_unchecked(idx) };
+                    if item.info.size >= info.size && item.info.ty == info.ty {
+                        let item = cache.swap_remove(idx);
 
-            #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
-
-            // Look for a compatible acceleration structure (big enough and same type)
-            for idx in 0..cache.len() {
-                let item = unsafe { cache.get_unchecked(idx) };
-                if item.info.size >= info.size && item.info.ty == info.ty {
-                    let item = cache.swap_remove(idx);
-
-                    return Ok(Lease::new(cache_ref, item));
+                        return Some(Lease::new(cache_ref.clone(), item));
+                    }
                 }
+
+                None
+            }) {
+                return Ok(item);
             }
         }
 
@@ -157,27 +157,27 @@ impl Pool<BufferInfo, Buffer> for FifoPool {
         {
             profiling::scope!("check cache");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut cache = self.buffer_cache.lock();
+            if let Some(item) = with_cache(&self.buffer_cache, |cache| {
+                // Look for a compatible buffer (compatible alignment, same mapping mode, big enough and
+                // superset of usage flags)
+                for idx in 0..cache.len() {
+                    let item = unsafe { cache.get_unchecked(idx) };
+                    if (item.info.dedicated & info.dedicated) == info.dedicated
+                        && item.info.host_read == info.host_read
+                        && item.info.host_write == info.host_write
+                        && item.info.alignment >= info.alignment
+                        && item.info.size >= info.size
+                        && item.info.usage.contains(info.usage)
+                    {
+                        let item = cache.swap_remove(idx);
 
-            #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
-
-            // Look for a compatible buffer (compatible alignment, same mapping mode, big enough and
-            // superset of usage flags)
-            for idx in 0..cache.len() {
-                let item = unsafe { cache.get_unchecked(idx) };
-                if (item.info.dedicated & info.dedicated) == info.dedicated
-                    && item.info.host_read == info.host_read
-                    && item.info.host_write == info.host_write
-                    && item.info.alignment >= info.alignment
-                    && item.info.size >= info.size
-                    && item.info.usage.contains(info.usage)
-                {
-                    let item = cache.swap_remove(idx);
-
-                    return Ok(Lease::new(cache_ref, item));
+                        return Some(Lease::new(cache_ref.clone(), item));
+                    }
                 }
+
+                None
+            }) {
+                return Ok(item);
             }
         }
 
@@ -200,21 +200,13 @@ impl Pool<CommandBufferInfo, CommandBuffer> for FifoPool {
             .entry(info.queue_family_index)
             .or_insert_with(PoolInfo::default_cache);
 
-        let item = {
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut cache = cache_ref.lock();
+        let item = with_cache(cache_ref, lease_command_buffer)
+            .map(Ok)
+            .unwrap_or_else(|| {
+                debug!("Creating new {}", stringify!(CommandBuffer));
 
-            #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
-
-            lease_command_buffer(&mut cache)
-        }
-        .map(Ok)
-        .unwrap_or_else(|| {
-            debug!("Creating new {}", stringify!(CommandBuffer));
-
-            CommandBuffer::create(&self.device, info)
-        })?;
+                CommandBuffer::create(&self.device, info)
+            })?;
 
         // Drop anything we were holding from the last submission
         //item.wait_until_executed()?;
@@ -234,33 +226,37 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for FifoPool {
         {
             profiling::scope!("check cache");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut cache = self.descriptor_pool_cache.lock();
+            if let Some(item) = with_cache(&self.descriptor_pool_cache, |cache| {
+                // Look for a compatible descriptor pool (has enough sets and descriptors)
+                for idx in 0..cache.len() {
+                    let item = unsafe { cache.get_unchecked(idx) };
+                    if item.info.max_sets >= info.max_sets
+                        && item.info.acceleration_structure_count
+                            >= info.acceleration_structure_count
+                        && item.info.combined_image_sampler_count
+                            >= info.combined_image_sampler_count
+                        && item.info.input_attachment_count >= info.input_attachment_count
+                        && item.info.sampled_image_count >= info.sampled_image_count
+                        && item.info.sampler_count >= info.sampler_count
+                        && item.info.storage_buffer_count >= info.storage_buffer_count
+                        && item.info.storage_buffer_dynamic_count
+                            >= info.storage_buffer_dynamic_count
+                        && item.info.storage_image_count >= info.storage_image_count
+                        && item.info.storage_texel_buffer_count >= info.storage_texel_buffer_count
+                        && item.info.uniform_buffer_count >= info.uniform_buffer_count
+                        && item.info.uniform_buffer_dynamic_count
+                            >= info.uniform_buffer_dynamic_count
+                        && item.info.uniform_texel_buffer_count >= info.uniform_texel_buffer_count
+                    {
+                        let item = cache.swap_remove(idx);
 
-            #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
-
-            // Look for a compatible descriptor pool (has enough sets and descriptors)
-            for idx in 0..cache.len() {
-                let item = unsafe { cache.get_unchecked(idx) };
-                if item.info.max_sets >= info.max_sets
-                    && item.info.acceleration_structure_count >= info.acceleration_structure_count
-                    && item.info.combined_image_sampler_count >= info.combined_image_sampler_count
-                    && item.info.input_attachment_count >= info.input_attachment_count
-                    && item.info.sampled_image_count >= info.sampled_image_count
-                    && item.info.sampler_count >= info.sampler_count
-                    && item.info.storage_buffer_count >= info.storage_buffer_count
-                    && item.info.storage_buffer_dynamic_count >= info.storage_buffer_dynamic_count
-                    && item.info.storage_image_count >= info.storage_image_count
-                    && item.info.storage_texel_buffer_count >= info.storage_texel_buffer_count
-                    && item.info.uniform_buffer_count >= info.uniform_buffer_count
-                    && item.info.uniform_buffer_dynamic_count >= info.uniform_buffer_dynamic_count
-                    && item.info.uniform_texel_buffer_count >= info.uniform_texel_buffer_count
-                {
-                    let item = cache.swap_remove(idx);
-
-                    return Ok(Lease::new(cache_ref, item));
+                        return Some(Lease::new(cache_ref.clone(), item));
+                    }
                 }
+
+                None
+            }) {
+                return Ok(item);
             }
         }
 
@@ -280,33 +276,33 @@ impl Pool<ImageInfo, Image> for FifoPool {
         {
             profiling::scope!("check cache");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut cache = self.image_cache.lock();
+            if let Some(item) = with_cache(&self.image_cache, |cache| {
+                // Look for a compatible image (same properties, superset of creation flags and usage
+                // flags)
+                for idx in 0..cache.len() {
+                    let item = unsafe { cache.get_unchecked(idx) };
+                    if item.info.array_layer_count == info.array_layer_count
+                        && item.info.dedicated == info.dedicated
+                        && item.info.depth == info.depth
+                        && item.info.fmt == info.fmt
+                        && item.info.height == info.height
+                        && item.info.mip_level_count == info.mip_level_count
+                        && item.info.sample_count == info.sample_count
+                        && item.info.tiling == info.tiling
+                        && item.info.ty == info.ty
+                        && item.info.width == info.width
+                        && item.info.flags.contains(info.flags)
+                        && item.info.usage.contains(info.usage)
+                    {
+                        let item = cache.swap_remove(idx);
 
-            #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
-
-            // Look for a compatible image (same properties, superset of creation flags and usage
-            // flags)
-            for idx in 0..cache.len() {
-                let item = unsafe { cache.get_unchecked(idx) };
-                if item.info.array_layer_count == info.array_layer_count
-                    && item.info.dedicated == info.dedicated
-                    && item.info.depth == info.depth
-                    && item.info.fmt == info.fmt
-                    && item.info.height == info.height
-                    && item.info.mip_level_count == info.mip_level_count
-                    && item.info.sample_count == info.sample_count
-                    && item.info.tiling == info.tiling
-                    && item.info.ty == info.ty
-                    && item.info.width == info.width
-                    && item.info.flags.contains(info.flags)
-                    && item.info.usage.contains(info.usage)
-                {
-                    let item = cache.swap_remove(idx);
-
-                    return Ok(Lease::new(cache_ref, item));
+                        return Some(Lease::new(cache_ref.clone(), item));
+                    }
                 }
+
+                None
+            }) {
+                return Ok(item);
             }
         }
 
@@ -329,21 +325,13 @@ impl Pool<RenderPassInfo, RenderPass> for FifoPool {
                 .entry(info.clone())
                 .or_insert_with(PoolInfo::default_cache)
         };
-        let item = {
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut cache = cache_ref.lock();
+        let item = with_cache(cache_ref, |cache| cache.pop())
+            .map(Ok)
+            .unwrap_or_else(|| {
+                debug!("Creating new {}", stringify!(RenderPass));
 
-            #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
-
-            cache.pop()
-        }
-        .map(Ok)
-        .unwrap_or_else(|| {
-            debug!("Creating new {}", stringify!(RenderPass));
-
-            RenderPass::create(&self.device, info)
-        })?;
+                RenderPass::create(&self.device, info)
+            })?;
 
         Ok(Lease::new(Arc::downgrade(cache_ref), item))
     }

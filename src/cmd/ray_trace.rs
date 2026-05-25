@@ -23,13 +23,8 @@ impl PipelineCommand<'_, RayTracePipeline> {
         let pipeline = self
             .cmd
             .cmd()
-            .execs
-            .last()
-            .unwrap()
-            .pipeline
-            .as_ref()
-            .unwrap()
-            .unwrap_ray_trace()
+            .expect_last_pipeline()
+            .expect_ray_trace()
             .clone();
 
         #[cfg(debug_assertions)]

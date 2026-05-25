@@ -4,18 +4,17 @@ use {
     super::{
         DriverError,
         instance::{Instance, InstanceInfoBuilder},
-        physical_device::PhysicalDevice,
+        physical_device::{PhysicalDevice, RayTraceProperties},
     },
-    ash::{ext, khr, vk},
+    ash::{khr, vk},
     derive_builder::{Builder, UninitializedFieldError},
     gpu_allocator::{
         AllocatorDebugSettings,
         vulkan::{Allocator, AllocatorCreateDesc},
     },
     log::{error, info, trace, warn},
-    raw_window_handle::{HasDisplayHandle, RawDisplayHandle},
+    raw_window_handle::HasDisplayHandle,
     std::{
-        ffi::CStr,
         fmt::{Debug, Formatter},
         mem::{ManuallyDrop, forget},
         ops::Deref,
@@ -32,41 +31,6 @@ use parking_lot::Mutex;
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
 
-// Copied from ash-window to change the signature
-fn enumerate_required_extensions(
-    display_handle: RawDisplayHandle,
-) -> Result<&'static [&'static CStr], DriverError> {
-    let extensions = match display_handle {
-        RawDisplayHandle::Windows(_) => {
-            const WINDOWS_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::win32_surface::NAME];
-            &WINDOWS_EXTS
-        }
-        RawDisplayHandle::Wayland(_) => {
-            const WAYLAND_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::wayland_surface::NAME];
-            &WAYLAND_EXTS
-        }
-        RawDisplayHandle::Xlib(_) => {
-            const XLIB_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::xlib_surface::NAME];
-            &XLIB_EXTS
-        }
-        RawDisplayHandle::Xcb(_) => {
-            const XCB_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::xcb_surface::NAME];
-            &XCB_EXTS
-        }
-        RawDisplayHandle::Android(_) => {
-            const ANDROID_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::android_surface::NAME];
-            &ANDROID_EXTS
-        }
-        RawDisplayHandle::AppKit(_) | RawDisplayHandle::UiKit(_) => {
-            const METAL_EXTS: [&CStr; 2] = [khr::surface::NAME, ext::metal_surface::NAME];
-            &METAL_EXTS
-        }
-        _ => return Err(DriverError::Unsupported),
-    };
-
-    Ok(extensions)
-}
-
 fn select_physical_device(
     instance: &Instance,
     mut index: usize,
@@ -75,7 +39,7 @@ fn select_physical_device(
         .into_iter()
         .collect::<Vec<_>>();
     if physical_devices.is_empty() {
-        warn!("no physical devices found");
+        warn!("unable to find physical devices");
 
         return Err(DriverError::Unsupported);
     }
@@ -90,19 +54,17 @@ fn select_physical_device(
 }
 
 /// Opaque handle to a device object.
+#[read_only::embed]
 #[derive(Clone)]
-#[repr(C)]
 pub struct Device {
-    inner: Arc<DeviceInner>,
+    #[readonly]
+    pub(self) inner: Arc<DeviceInner>,
 
     /// The physical device, which contains useful data about features, properties, and limits.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub physical_device: Box<PhysicalDevice>,
-
-    #[cfg(not(doc))]
-    physical_device: Box<PhysicalDevice>,
 }
 
 impl Device {
@@ -124,6 +86,17 @@ impl Device {
         &this.inner.allocator
     }
 
+    pub(crate) fn with_allocator<R>(this: &Self, f: impl FnOnce(&mut Allocator) -> R) -> R {
+        let allocator = Self::allocator(this).lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let allocator = allocator.expect("poisoned allocator lock");
+
+        let mut allocator = allocator;
+
+        f(&mut allocator)
+    }
+
     pub(crate) fn create_fence(this: &Self, signaled: bool) -> Result<vk::Fence, DriverError> {
         let mut flags = vk::FenceCreateFlags::empty();
 
@@ -135,7 +108,7 @@ impl Device {
         let allocation_callbacks = None;
 
         unsafe { this.create_fence(&create_info, allocation_callbacks) }.map_err(|err| {
-            warn!("{err}");
+            warn!("unable to create fence: {err}");
 
             DriverError::OutOfMemory
         })
@@ -151,7 +124,7 @@ impl Device {
         this.inner
             .accel_struct_ext
             .as_ref()
-            .expect("VK_KHR_acceleration_structure")
+            .expect("missing VK_KHR_acceleration_structure")
     }
 
     /// Helper for times when you already know that the device supports the ray tracing pipeline
@@ -164,7 +137,14 @@ impl Device {
         this.inner
             .ray_trace_ext
             .as_ref()
-            .expect("VK_KHR_ray_tracing_pipeline")
+            .expect("missing VK_KHR_ray_tracing_pipeline")
+    }
+
+    pub(crate) fn expect_ray_trace_properties(this: &Self) -> &RayTraceProperties {
+        this.physical_device
+            .ray_trace_properties
+            .as_ref()
+            .expect("missing VK_KHR_ray_tracing_pipeline")
     }
 
     /// Helper for times when you already know that the instance supports the surface extension.
@@ -173,7 +153,10 @@ impl Device {
     ///
     /// Panics if the device was not created for display window access.
     pub(crate) fn expect_surface_ext(this: &Self) -> &khr::surface::Instance {
-        this.inner.surface_ext.as_ref().expect("VK_KHR_surface")
+        this.inner
+            .surface_ext
+            .as_ref()
+            .expect("missing VK_KHR_surface")
     }
 
     /// Helper for times when you already know that the device supports the swapchain extension.
@@ -182,28 +165,32 @@ impl Device {
     ///
     /// Panics if the device was not created for display window access.
     pub(crate) fn expect_swapchain_ext(this: &Self) -> &khr::swapchain::Device {
-        this.inner.swapchain_ext.as_ref().expect("VK_KHR_swapchain")
+        this.inner
+            .swapchain_ext
+            .as_ref()
+            .expect("missing VK_KHR_swapchain")
     }
 
     pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
         this.inner.pipeline_cache
     }
 
-    /// TODO
+    /// Returns a queue handle created for the given queue family and queue index.
     ///
-    /// Panics if the indicies are invalid.
+    /// # Panics
+    ///
+    /// Panics if the queue family or queue index is invalid.
     pub fn queue(this: &Self, queue_family_index: u32, queue_index: u32) -> vk::Queue {
-        debug_assert!(
-            (queue_family_index as usize) < this.physical_device.queue_families.len(),
-            "Queue family index must be within the range of the available queues created by the device."
-        );
-        debug_assert!(
-            queue_index
-                < this.physical_device.queue_families[queue_family_index as usize].queue_count,
-            "Queue index must be within the range of the available queues created by the device."
-        );
+        let queue_family = this
+            .inner
+            .queues
+            .get(queue_family_index as usize)
+            .expect("invalid queue family index");
+        let queue = queue_family
+            .get(queue_index as usize)
+            .expect("invalid queue index");
 
-        this.inner.queues[queue_family_index as usize][queue_index as usize]
+        *queue
     }
 
     /// Loads and existing `ash` Vulkan device that may have been created by other means.
@@ -227,7 +214,7 @@ impl Device {
             allocation_sizes: Default::default(),
         })
         .map_err(|err| {
-            warn!("{err}");
+            warn!("unable to create allocator: {err}");
 
             DriverError::Unsupported
         })?;
@@ -263,51 +250,40 @@ impl Device {
         let pipeline_cache =
             unsafe { device.create_pipeline_cache(&vk::PipelineCacheCreateInfo::default(), None) }
                 .map_err(|err| {
-                    warn!("{err}");
+                    warn!("unable to create pipeline cache: {err}");
 
                     DriverError::Unsupported
                 })?;
 
         Ok(Self {
-            inner: Arc::new(DeviceInner {
-                accel_struct_ext,
-                allocator: ManuallyDrop::new(Mutex::new(allocator)),
-                device,
-                pipeline_cache,
-                queues: queues.into_boxed_slice(),
-                ray_trace_ext,
-                surface_ext,
-                swapchain_ext,
-            }),
-            physical_device: Box::new(physical_device),
+            read_only: ReadOnlyDevice {
+                inner: Arc::new(DeviceInner {
+                    accel_struct_ext,
+                    allocator: ManuallyDrop::new(Mutex::new(allocator)),
+                    device,
+                    pipeline_cache,
+                    queues: queues.into_boxed_slice(),
+                    ray_trace_ext,
+                    surface_ext,
+                    swapchain_ext,
+                }),
+                physical_device: Box::new(physical_device),
+            },
         })
     }
 
     /// Constructs a new device using the given configuration.
     #[profiling::function]
     pub fn try_from_display(
-        display_handle: impl HasDisplayHandle,
+        display: impl HasDisplayHandle,
         info: impl Into<DeviceInfo>,
     ) -> Result<Self, DriverError> {
         let DeviceInfo {
             debug,
             physical_device_index,
         } = info.into();
-        let display_handle = display_handle.display_handle().map_err(|err| {
-            warn!("unable to get display handle: {err}");
-
-            DriverError::Unsupported
-        })?;
-        let extension_names =
-            enumerate_required_extensions(display_handle.as_raw()).map_err(|err| {
-                warn!("unable to enumerate window extensions: {err}");
-
-                DriverError::Unsupported
-            })?;
-        let instance_info = InstanceInfoBuilder::default()
-            .debug(debug)
-            .extension_names(extension_names);
-        let instance = Instance::new(instance_info)?;
+        let instance_info = InstanceInfoBuilder::default().debug(debug);
+        let instance = Instance::try_from_display(display, instance_info)?;
         let physical_device = select_physical_device(&instance, physical_device_index)?;
 
         Self::try_from_physical_device(physical_device)
@@ -347,14 +323,18 @@ impl Device {
             match this.wait_for_fences(fences, true, 100) {
                 Ok(_) => return Ok(()),
                 Err(err) if err == vk::Result::ERROR_DEVICE_LOST => {
-                    error!("Device lost");
+                    error!("invalid device state: lost");
 
                     return Err(DriverError::InvalidData);
                 }
                 Err(err) if err == vk::Result::TIMEOUT => {
                     trace!("waiting...");
                 }
-                _ => return Err(DriverError::OutOfMemory),
+                Err(err) => {
+                    warn!("unable to wait for fences during polling phase: {err}");
+
+                    return Err(DriverError::OutOfMemory);
+                }
             }
 
             let started = Instant::now();
@@ -362,18 +342,22 @@ impl Device {
             match this.wait_for_fences(fences, true, u64::MAX) {
                 Ok(_) => (),
                 Err(err) if err == vk::Result::ERROR_DEVICE_LOST => {
-                    error!("Device lost");
+                    error!("invalid device state: lost");
 
                     return Err(DriverError::InvalidData);
                 }
-                _ => return Err(DriverError::OutOfMemory),
+                Err(err) => {
+                    warn!("unable to wait for fences to completion: {err}");
+
+                    return Err(DriverError::OutOfMemory);
+                }
             }
 
             let elapsed = Instant::now() - started;
             let elapsed_millis = elapsed.as_millis();
 
             if elapsed_millis > 0 {
-                warn!("waited for {} ms", elapsed_millis);
+                warn!("slow fence wait: {} ms", elapsed_millis);
             }
         }
 
@@ -387,12 +371,12 @@ impl Debug for Device {
     }
 }
 
-#[doc(hidden)]
+#[cfg(doc)]
 impl Deref for Device {
-    type Target = ReadOnlyDevice;
+    type Target = ash::Device;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
+        unreachable!()
     }
 }
 
@@ -465,15 +449,7 @@ impl DeviceInfoBuilder {
     /// Builds a new `DeviceInfo`.
     #[inline(always)]
     pub fn build(self) -> DeviceInfo {
-        let res = self.fallible_build();
-
-        #[cfg(test)]
-        let res = res.unwrap();
-
-        #[cfg(not(test))]
-        let res = unsafe { res.unwrap_unchecked() };
-
-        res
+        self.fallible_build().expect("invalid device info")
     }
 }
 
@@ -520,12 +496,16 @@ impl Drop for DeviceInner {
 }
 
 #[doc(hidden)]
-#[repr(C)]
-pub struct ReadOnlyDevice {
-    inner: Arc<DeviceInner>,
-    pub physical_device: Box<PhysicalDevice>,
+impl Clone for ReadOnlyDevice {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            physical_device: self.physical_device.clone(),
+        }
+    }
 }
 
+#[doc(hidden)]
 impl Deref for ReadOnlyDevice {
     type Target = ash::Device;
 
@@ -543,6 +523,7 @@ pub(crate) mod deprecated {
             device::{Device, DeviceInfo, DeviceInfoBuilder},
         },
         ash::vk,
+        log::warn,
         raw_window_handle::HasDisplayHandle,
         std::any::Any,
     };
@@ -584,19 +565,27 @@ pub(crate) mod deprecated {
     }
 
     impl DeviceInfo {
-        #[deprecated = "use vk_graph::driver::instance::Instance::physical_devices function"]
+        #[deprecated = "no effect; use physical_device_index or enumerate Instance::physical_devices explicitly"]
         #[doc(hidden)]
-        pub fn integrated_gpu() {}
+        pub fn integrated_gpu() {
+            warn!("invalid deprecated device selection hint: integrated_gpu has no effect");
+        }
 
-        #[deprecated = "use vk_graph::driver::instance::Instance::physical_devices function"]
+        #[deprecated = "no effect; use physical_device_index or enumerate Instance::physical_devices explicitly"]
         #[doc(hidden)]
-        pub fn discrete_gpu() {}
+        pub fn discrete_gpu() {
+            warn!("invalid deprecated device selection hint: discrete_gpu has no effect");
+        }
     }
 
     impl DeviceInfoBuilder {
-        #[deprecated = "use vk_graph::driver::instance::Instance::physical_devices function"]
+        #[deprecated = "no effect; use physical_device_index or enumerate Instance::physical_devices explicitly"]
         #[doc(hidden)]
         pub fn select_physical_device(self, _: Box<dyn Fn()>) -> Self {
+            warn!(
+                "invalid deprecated device selection callback: select_physical_device has no effect"
+            );
+
             self
         }
     }
@@ -604,25 +593,10 @@ pub(crate) mod deprecated {
 
 #[cfg(test)]
 mod test {
-    use {
-        super::*,
-        std::mem::{offset_of, size_of},
-    };
+    use super::*;
 
     type Info = DeviceInfo;
     type Builder = DeviceInfoBuilder;
-
-    #[test]
-    pub fn device_repr_c() {
-        // HACK: The readonly crate uses a private implementation and so we can't further deref it
-        // into the native object type. Because of this the ReadOnly part is manually implemented.
-        assert_eq!(size_of::<Device>(), size_of::<ReadOnlyDevice>());
-        assert_eq!(offset_of!(Device, inner), offset_of!(ReadOnlyDevice, inner));
-        assert_eq!(
-            offset_of!(Device, physical_device),
-            offset_of!(ReadOnlyDevice, physical_device),
-        );
-    }
 
     #[test]
     pub fn device_info() {

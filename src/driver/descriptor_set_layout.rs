@@ -6,7 +6,7 @@ use {
 };
 
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct DescriptorSetLayout {
     pub device: Device,
     pub handle: vk::DescriptorSetLayout,
@@ -23,7 +23,7 @@ impl DescriptorSetLayout {
             device
                 .create_descriptor_set_layout(info, None)
                 .map_err(|err| {
-                    warn!("{err}");
+                    warn!("unable to create descriptor set layout: {err}");
 
                     DriverError::Unsupported
                 })

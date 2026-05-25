@@ -120,6 +120,7 @@ pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags 
 /// See [Representation and Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
 pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
     match fmt {
+        vk::Format::UNDEFINED => 0,
         vk::Format::R4G4_UNORM_PACK8
         | vk::Format::R8_UNORM
         | vk::Format::R8_SNORM
@@ -368,10 +369,7 @@ pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
         vk::Format::G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16
         | vk::Format::G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16
         | vk::Format::G16_B16R16_2PLANE_444_UNORM => 6,
-        _ => {
-            // Remaining formats should be implemented in the future
-            unimplemented!()
-        }
+        _ => panic!("unsupported texel block size format"),
     }
 }
 
@@ -380,6 +378,7 @@ pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
 /// See [Representation and Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
 pub const fn format_texel_block_extent(vk_format: vk::Format) -> (u32, u32) {
     match vk_format {
+        vk::Format::UNDEFINED => (1, 1),
         vk::Format::R4G4_UNORM_PACK8
         | vk::Format::R8_UNORM
         | vk::Format::R8_SNORM
@@ -628,10 +627,7 @@ pub const fn format_texel_block_extent(vk_format: vk::Format) -> (u32, u32) {
         | vk::Format::PVRTC1_4BPP_SRGB_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_UNORM_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_SRGB_BLOCK_IMG => (4, 4),
-        _ => {
-            // Remaining formats should be implemented in the future
-            unimplemented!()
-        }
+        _ => panic!("unsupported texel block extent format"),
     }
 }
 
@@ -1120,7 +1116,7 @@ pub(super) const fn pipeline_stage_access_flags(
 ///
 /// Feel free to open an issue on GitHub, [here](https://github.com/attackgoat/vk-graph/issues) for
 /// help debugging the issue.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum DriverError {
     /// The input data, or referenced data, is not valid for the current state.
     InvalidData,

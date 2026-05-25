@@ -17,11 +17,11 @@ use {
     vk_shader_macros::include_glsl,
 };
 
-/// TODO
+/// Compute-based presenter for copying one or two images into a swapchain image.
 pub struct ComputePresenter([ComputePipeline; 2]);
 
 impl ComputePresenter {
-    /// TODO
+    /// Creates compute pipelines used to present images into a swapchain target.
     pub fn new(device: &Device) -> Result<Self, DriverError> {
         let pipeline1 = ComputePipeline::create(
             device,
@@ -37,7 +37,7 @@ impl ComputePresenter {
         Ok(Self([pipeline1, pipeline2]))
     }
 
-    /// TODO
+    /// Presents a single source image to the given swapchain image using a compute shader.
     pub fn present_image(
         &self,
         graph: &mut Graph,
@@ -61,7 +61,7 @@ impl ComputePresenter {
             });
     }
 
-    /// TODO
+    /// Presents two stacked source images to the given swapchain image using a compute shader.
     pub fn present_images(
         &self,
         graph: &mut Graph,
@@ -90,13 +90,13 @@ impl ComputePresenter {
     }
 }
 
-/// TODO
+/// Graphic-pipeline presenter for drawing an image into a swapchain image.
 pub struct GraphicPresenter {
     pipeline: GraphicPipeline,
 }
 
 impl GraphicPresenter {
-    /// TODO
+    /// Creates the graphic pipeline used for fullscreen image presentation.
     pub fn new(device: &Device) -> Result<Self, DriverError> {
         let pipeline = GraphicPipeline::create(
             device,
@@ -110,7 +110,7 @@ impl GraphicPresenter {
         Ok(Self { pipeline })
     }
 
-    /// TODO
+    /// Draws the given image into the swapchain image using a fullscreen graphic pass.
     pub fn present_image(
         &self,
         graph: &mut Graph,

@@ -1,5 +1,5 @@
 use {
-    anyhow::Context,
+    anyhow::{Context, bail},
     pak::PakBuf,
     shaderc::{Compiler, ShaderKind},
     simplelog::{CombinedLogger, ConfigBuilder, LevelFilter, WriteLogger},
@@ -66,7 +66,7 @@ fn compile_shader(
             {
                 "frag" => ShaderKind::Fragment,
                 "vert" => ShaderKind::Vertex,
-                _ => unimplemented!(),
+                ext => bail!("unsupported shader extension: {ext}"),
             },
             &source_path.to_string_lossy(),
             "main",

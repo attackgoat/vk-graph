@@ -14,25 +14,9 @@ use {
 
 // TODO: This needs to track completed command buffers and not constantly create semaphores
 
-#[doc(hidden)]
-#[repr(C)]
-pub struct ReadOnlySwapchainImage {
-    image: Image,
-    pub index: u32,
-}
-
-#[doc(hidden)]
-impl Deref for ReadOnlySwapchainImage {
-    type Target = Image;
-
-    fn deref(&self) -> &Self::Target {
-        &self.image
-    }
-}
-
 /// Provides the ability to present rendering results to a [`Surface`].
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct Swapchain {
     /// The native Vulkan resource handle of this swapchain.
     ///
@@ -72,8 +56,43 @@ impl Swapchain {
         })
     }
 
-    /// Gets the next available swapchain image which should be rendered to and then presented using
-    /// [`present_image`][Self::present_image].
+    /// Acquires the next available swapchain image for rendering.
+    ///
+    /// The returned [`SwapchainImage`] should be rendered to and then presented using
+    /// [`present_image`][Self::present_image]. Each call returns a unique image from the
+    /// swapchain's image ring buffer; the caller must not render to the same image concurrently.
+    ///
+    /// # Parameters
+    ///
+    /// * `timeout` — Maximum time to wait in nanoseconds before the operation times out.
+    ///   Pass [`u64::MAX`] to wait indefinitely. A short timeout may return
+    ///   [`SwapchainError::Suboptimal`] without acquiring an image.
+    /// * `acquired` — A semaphore that will be signaled when the acquired image is ready
+    ///   for use. The caller must wait on this semaphore before submitting commands that
+    ///   write to the returned image.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SwapchainError::Suboptimal`] if the swapchain no longer matches the
+    /// surface properties (e.g. after a window resize). The caller should typically
+    /// recreate any framebuffer-sized resources and try again next frame.
+    ///
+    /// Returns [`SwapchainError::SurfaceLost`] if the underlying surface has been
+    /// destroyed. The swapchain and surface must be recreated.
+    ///
+    /// Returns [`SwapchainError::DeviceLost`] if the Vulkan device has been lost.
+    /// The application must destroy and recreate the device.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the acquired image index is out of bounds of the internal image array
+    /// (this indicates a driver or swapchain consistency bug).
+    ///
+    /// # Retry behavior
+    ///
+    /// Internally this method retries once on transient errors
+    /// (`TIMEOUT`, `NOT_READY`, `OUT_OF_DATE_KHR`, `FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT`).
+    /// Between retries the swapchain is recreated if the current state is suboptimal.
     #[profiling::function]
     pub fn acquire_next_image(
         &mut self,
@@ -176,22 +195,24 @@ impl Swapchain {
 
     #[profiling::function]
     fn destroy(device: &Device, swapchain: &mut vk::SwapchainKHR) {
-        if *swapchain != vk::SwapchainKHR::null() {
-            // wait for device to be finished with swapchain before destroying it.
-            // This avoid crashes when resizing windows
-            #[cfg(target_os = "macos")]
-            if let Err(err) = unsafe { device.device_wait_idle() } {
-                warn!("device_wait_idle() failed: {err}");
-            }
-
-            let swapchain_ext = Device::expect_swapchain_ext(device);
-
-            unsafe {
-                swapchain_ext.destroy_swapchain(*swapchain, None);
-            }
-
-            *swapchain = vk::SwapchainKHR::null();
+        if *swapchain == vk::SwapchainKHR::null() {
+            return;
         }
+
+        // wait for device to be finished with swapchain before destroying it.
+        // This avoid crashes when resizing windows
+        #[cfg(target_os = "macos")]
+        if let Err(err) = unsafe { device.device_wait_idle() } {
+            warn!("device_wait_idle() failed: {err}");
+        }
+
+        let swapchain_ext = Device::expect_swapchain_ext(device);
+
+        unsafe {
+            swapchain_ext.destroy_swapchain(*swapchain, None);
+        }
+
+        *swapchain = vk::SwapchainKHR::null();
     }
 
     /// Presents an image which has been previously acquired using
@@ -233,7 +254,7 @@ impl Swapchain {
                     // Probably:
                     // VK_ERROR_OUT_OF_HOST_MEMORY
                     // VK_ERROR_OUT_OF_DEVICE_MEMORY
-                    warn!("{err}");
+                    warn!("unable to destroy retired swapchain resources cleanly: {err}");
                 }
             }
         }
@@ -271,6 +292,11 @@ impl Swapchain {
         };
 
         if surface_width * surface_height == 0 {
+            warn!(
+                "invalid surface extent: computed {}x{}",
+                surface_width, surface_height
+            );
+
             return Err(DriverError::Unsupported);
         }
 
@@ -303,18 +329,28 @@ impl Swapchain {
             .image_array_layers(1);
         let swapchain = unsafe { swapchain_ext.create_swapchain(&swapchain_create_info, None) }
             .map_err(|err| {
-                warn!("{err}");
+                warn!("unable to create swapchain: {err}");
 
                 DriverError::Unsupported
             })?;
 
         let images =
             unsafe { swapchain_ext.get_swapchain_images(swapchain) }.map_err(|err| match err {
-                vk::Result::INCOMPLETE => DriverError::InvalidData,
+                vk::Result::INCOMPLETE => {
+                    warn!("invalid swapchain image enumeration: incomplete");
+
+                    DriverError::InvalidData
+                }
                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                    warn!("unable to get swapchain images: {err}");
+
                     DriverError::OutOfMemory
                 }
-                _ => DriverError::Unsupported,
+                _ => {
+                    warn!("unable to get swapchain images: {err}");
+
+                    DriverError::Unsupported
+                }
             })?;
         let images = images
             .into_iter()
@@ -335,8 +371,10 @@ impl Swapchain {
                 image.name = Some(format!("swapchain{image_idx}"));
 
                 Ok(SwapchainImage {
-                    image,
-                    index: image_idx,
+                    read_only: ReadOnlySwapchainImage {
+                        image,
+                        index: image_idx,
+                    },
                 })
             })
             .collect::<Result<Box<_>, _>>()?;
@@ -461,70 +499,32 @@ pub enum SwapchainError {
 
 /// An opaque type representing a swapchain image.
 #[derive(Debug)]
-#[repr(C)]
+#[read_only::embed]
 pub struct SwapchainImage {
-    /// The device which owns this image resource.
-    ///
-    /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub device: Device,
-
-    /// The native Vulkan resource handle of this image.
-    ///
-    /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub handle: vk::Image,
-
+    #[readonly]
     image: Image,
 
-    /// The index of this swapchain among the other swapchain images.
-    ///
-    /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    /// The swapchain image index.
+    #[readonly]
     pub index: u32,
-
-    #[cfg(not(doc))]
-    index: u32,
-
-    /// Information used to create this resource.
-    ///
-    /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub info: ImageInfo,
-
-    /// A name for debugging purposes.
-    ///
-    /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub name: Option<String>,
 }
 
 impl Clone for SwapchainImage {
     fn clone(&self) -> Self {
-        let Self { image, index } = self;
-
         Self {
-            image: image.clone_swapchain(),
-            index: *index,
+            read_only: ReadOnlySwapchainImage {
+                image: self.image.clone_swapchain(),
+                index: self.index,
+            },
         }
     }
 }
 
-#[cfg(not(doc))]
-impl Deref for SwapchainImage {
-    type Target = ReadOnlySwapchainImage;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
-    }
-}
-
-#[cfg(doc)]
-impl Deref for SwapchainImage {
+impl Deref for ReadOnlySwapchainImage {
     type Target = Image;
 
     fn deref(&self) -> &Self::Target {
-        unreachable!()
+        &self.image
     }
 }
 
@@ -547,9 +547,8 @@ pub struct SwapchainInfo {
     #[builder(default = "2")]
     pub min_image_count: u32,
 
-    /// `vk::PresentModeKHR` Determines timing and queueing with which frames are actually displayed to the user.
-    /// `present_modes` is a set of these modes ordered by preference. If the first mode is not available it will fall
-    /// back to the next, etc...    
+    /// `vk::PresentModeKHR` determines timing and queueing with which frames are actually displayed
+    /// to the user.
     ///
     /// `vk::PresentModeKHR::FIFO` - Presentation frames are kept in a First-In-First-Out queue approximately 3 frames
     /// long. Every vertical blanking period, the presentation engine will pop a frame off the queue to display. If
@@ -582,7 +581,7 @@ pub struct SwapchainInfo {
     /// present the same frame again until the next vblank.
     ///
     /// When a present command is executed on the GPU, the frame will be put into the queue.
-    /// If there was already a frame in the queue, the new frame will _replace_ the old frame
+    /// If there was already a frame in the queue, the new frame will _replace_ the old frame.
     /// on the queue.
     ///
     /// * **Tearing**: No tearing will be observed.
@@ -596,7 +595,7 @@ pub struct SwapchainInfo {
     /// The initial width of the surface.
     pub width: u32,
 
-    /// NOTE: This field does not do anything, use the new one
+    /// NOTE: This field does not do anything, use the new one.
     #[builder(default)]
     #[builder_field_attr(deprecated = "use min_image_count field")]
     #[builder_setter_attr(deprecated = "use min_image_count field")]
@@ -655,7 +654,7 @@ impl SwapchainInfoBuilder {
     ///
     /// # Panics
     ///
-    /// If any of the following values have not been set this function will panic:
+    /// If any of the following values have not been set this function will panic.
     ///
     /// * `width`
     /// * `height`
@@ -694,31 +693,10 @@ mod deprecated {
 
 #[cfg(test)]
 mod test {
-    use {
-        super::*,
-        std::mem::{offset_of, size_of},
-    };
+    use super::*;
 
     type Info = SwapchainInfo;
     type Builder = SwapchainInfoBuilder;
-
-    #[test]
-    pub fn swapchain_image_repr_c() {
-        // HACK: The readonly crate uses a private implementation and so we can't further deref it
-        // into the native object type. Because of this the ReadOnly part is manually implemented.
-        assert_eq!(
-            size_of::<SwapchainImage>(),
-            size_of::<ReadOnlySwapchainImage>()
-        );
-        assert_eq!(
-            offset_of!(SwapchainImage, index),
-            offset_of!(ReadOnlySwapchainImage, index),
-        );
-        assert_eq!(
-            offset_of!(SwapchainImage, image),
-            offset_of!(ReadOnlySwapchainImage, image),
-        );
-    }
 
     #[test]
     pub fn swapchain_info() {

@@ -13,7 +13,7 @@ use {
 };
 
 /// Smart pointer handle to a [`vk::SurfaceKHR`] object.
-#[readonly::make]
+#[read_only::cast]
 pub struct Surface {
     /// The device which owns this surface resource.
     ///
@@ -37,8 +37,11 @@ impl Surface {
                 self.handle,
             )
         }
-        .inspect_err(|err| warn!("unable to get surface capabilities: {err}"))
-        .or(Err(DriverError::Unsupported))
+        .map_err(|err| {
+            warn!("unable to get surface capabilities: {err}");
+
+            DriverError::Unsupported
+        })
     }
 
     /// Create a surface from a raw window display handle.
@@ -53,12 +56,12 @@ impl Surface {
         let device = device.clone();
 
         let display_handle = display.display_handle().map_err(|err| {
-            warn!("{err}");
+            warn!("unable to get display handle: {err}");
 
             DriverError::Unsupported
         })?;
         let window_handle = window.window_handle().map_err(|err| {
-            warn!("{err}");
+            warn!("unable to get window handle: {err}");
 
             DriverError::Unsupported
         })?;
@@ -129,8 +132,11 @@ impl Surface {
         let surface = self.handle;
 
         unsafe { surface_ext.get_physical_device_surface_present_modes(physical_device, surface) }
-            .inspect_err(|err| warn!("unable to get surface present modes: {err}"))
-            .or(Err(DriverError::Unsupported))
+            .map_err(|err| {
+                warn!("unable to get surface present modes: {err}");
+
+                DriverError::Unsupported
+            })
     }
 
     /// Helper function to automatically select the best sRGB format, if one is available.
@@ -189,5 +195,75 @@ impl Eq for Surface {}
 impl PartialEq for Surface {
     fn eq(&self, other: &Self) -> bool {
         self.handle == other.handle
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Surface;
+    use ash::vk;
+
+    #[test]
+    fn linear_prefers_known_unorm_formats() {
+        let formats = [
+            vk::SurfaceFormatKHR {
+                format: vk::Format::R8G8B8A8_SRGB,
+                ..Default::default()
+            },
+            vk::SurfaceFormatKHR {
+                format: vk::Format::R8G8B8A8_UNORM,
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            Surface::linear(&formats).unwrap().format,
+            vk::Format::R8G8B8A8_UNORM
+        );
+    }
+
+    #[test]
+    fn linear_or_default_falls_back_to_first_format() {
+        let formats = [vk::SurfaceFormatKHR {
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            ..Default::default()
+        }];
+
+        assert_eq!(
+            Surface::linear_or_default(&formats).format,
+            vk::Format::R16G16B16A16_SFLOAT
+        );
+    }
+
+    #[test]
+    fn srgb_prefers_known_srgb_formats() {
+        let formats = [
+            vk::SurfaceFormatKHR {
+                color_space: vk::ColorSpaceKHR::DISPLAY_P3_NONLINEAR_EXT,
+                format: vk::Format::B8G8R8A8_SRGB,
+            },
+            vk::SurfaceFormatKHR {
+                color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                format: vk::Format::R8G8B8A8_SRGB,
+            },
+        ];
+
+        assert_eq!(
+            Surface::srgb(&formats).unwrap().format,
+            vk::Format::R8G8B8A8_SRGB
+        );
+    }
+
+    #[test]
+    fn srgb_or_default_falls_back_to_first_format() {
+        let formats = [vk::SurfaceFormatKHR {
+            color_space: vk::ColorSpaceKHR::DISPLAY_P3_NONLINEAR_EXT,
+            format: vk::Format::R16G16B16A16_SFLOAT,
+        }];
+
+        assert_eq!(
+            Surface::srgb_or_default(&formats).format,
+            vk::Format::R16G16B16A16_SFLOAT
+        );
     }
 }

@@ -2,21 +2,21 @@
 
 use {
     super::{DriverError, physical_device::PhysicalDevice},
-    ash::{ext, vk},
+    ash::{ext, khr, vk, vk::Handle},
     derive_builder::{Builder, UninitializedFieldError},
     log::{debug, error, trace, warn},
+    raw_window_handle::{HasDisplayHandle, RawDisplayHandle},
     std::{
         error::Error,
         ffi::CStr,
         fmt::{Debug, Display, Formatter},
         ops::Deref,
-        os::raw::c_char,
         sync::Arc,
         thread::panicking,
     },
 };
 
-#[cfg(feature = "loaded")]
+#[cfg(any(not(target_os = "macos"), feature = "loaded"))]
 use {
     log::{Level, Metadata, info, logger},
     std::{
@@ -27,101 +27,145 @@ use {
     },
 };
 
+#[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+const SKIP_VALIDATION_PARK_ENV: &str = "VK_GRAPH_SKIP_VALIDATION_PARK";
+
 #[cfg(target_os = "macos")]
 use std::env::set_var;
 
-#[cfg(feature = "loaded")]
-unsafe extern "system" fn vulkan_debug_callback(
-    _flags: vk::DebugReportFlagsEXT,
-    _obj_type: vk::DebugReportObjectTypeEXT,
-    _src_obj: u64,
-    _location: usize,
-    _msg_code: i32,
-    _layer_prefix: *const c_char,
-    message: *const c_char,
+#[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+unsafe extern "system" fn debug_callback(
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
+    callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
     _user_data: *mut c_void,
-) -> u32 {
+) -> vk::Bool32 {
     if panicking() {
         return vk::FALSE;
     }
 
-    assert!(!message.is_null());
+    assert!(!callback_data.is_null());
 
-    let mut found_null = false;
-    for i in 0..u16::MAX as _ {
-        if unsafe { *message.add(i) } == 0 {
-            found_null = true;
-            break;
+    let callback_data = unsafe { &*callback_data };
+    let message = if callback_data.p_message.is_null() {
+        "<missing Vulkan validation message>"
+    } else {
+        unsafe { CStr::from_ptr(callback_data.p_message) }
+            .to_str()
+            .unwrap_or("<invalid Vulkan validation message>")
+    };
+
+    if !callback_data.p_message_id_name.is_null() {
+        let vuid = unsafe { CStr::from_ptr(callback_data.p_message_id_name) }
+            .to_str()
+            .unwrap_or("<invalid Vulkan validation message ID name>");
+        if vuid != "Loader Message" {
+            debug!("{vuid}");
         }
+    };
+
+    let is_error = message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR);
+    if is_error {
+        error!("{message}");
+    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
+        warn!("{message}");
+    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::INFO) {
+        info!("{message}");
+    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE) {
+        debug!("{message}");
     }
 
-    assert!(found_null);
+    if !is_error {
+        return vk::FALSE;
+    }
 
-    let message = unsafe { CStr::from_ptr(message) }.to_str().unwrap();
-
-    if message.starts_with("Validation Warning: [ UNASSIGNED-BestPractices-pipeline-stage-flags ]")
+    if !logger().enabled(&Metadata::builder().level(Level::Debug).build())
+        || var("RUST_LOG")
+            .map(|rust_log| rust_log.is_empty())
+            .unwrap_or(true)
     {
-        // vk_sync uses vk::PipelineStageFlags::ALL_COMMANDS with AccessType::NOTHING and others
-        warn!("{}", message);
-    } else {
-        let prefix = "Validation Error: [ ";
-
-        let (vuid, message) = if message.starts_with(prefix) {
-            let (vuid, message) = message
-                .trim_start_matches(prefix)
-                .split_once(" ]")
-                .unwrap_or_default();
-            let message = message.split(" | ").nth(2).unwrap_or(message);
-
-            (Some(vuid.trim()), message)
-        } else {
-            (None, message)
-        };
-
-        if let Some(vuid) = vuid {
-            info!("{vuid}");
-        }
-
-        error!("🆘 {message}");
-
-        if !logger().enabled(&Metadata::builder().level(Level::Debug).build())
-            || var("RUST_LOG")
-                .map(|rust_log| rust_log.is_empty())
-                .unwrap_or(true)
-        {
-            eprintln!(
-                "note: run with `RUST_LOG=trace` environment variable to display more information"
-            );
-            eprintln!("note: see https://github.com/rust-lang/log#in-executables");
-            abort()
-        }
-
-        if current().name() != Some("main") {
-            warn!("executing on a child thread!")
-        }
-
-        debug!(
-            "🛑 PARKING THREAD `{}` -> attach debugger to pid {}!",
-            current().name().unwrap_or_default(),
-            id()
+        eprintln!(
+            "note: run with `RUST_LOG=trace` environment variable to display more information"
         );
+        eprintln!("note: see https://github.com/rust-lang/log#in-executables");
+        abort()
+    }
 
+    if current().name() != Some("main") {
+        warn!("invalid validation callback thread: child thread")
+    }
+
+    if var(SKIP_VALIDATION_PARK_ENV)
+        .map(|value| !matches!(value.as_str(), "" | "0" | "false" | "False" | "FALSE"))
+        .unwrap_or(false)
+    {
+        warn!(
+            "validation callback park skipped by {SKIP_VALIDATION_PARK_ENV}; execution will continue"
+        );
         logger().flush();
 
-        park();
+        return vk::FALSE;
     }
 
+    debug!(
+        "parking validation callback thread `{}` for debugger attach to pid {}",
+        current().name().unwrap_or_default(),
+        id()
+    );
+
+    logger().flush();
+    park();
+
     vk::FALSE
+}
+
+// Copied from ash-window to change the signature.
+fn enumerate_required_extensions(
+    display_handle: RawDisplayHandle,
+) -> Result<&'static [&'static CStr], DriverError> {
+    let extensions = match display_handle {
+        RawDisplayHandle::Windows(_) => {
+            const WINDOWS_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::win32_surface::NAME];
+            &WINDOWS_EXTS
+        }
+        RawDisplayHandle::Wayland(_) => {
+            const WAYLAND_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::wayland_surface::NAME];
+            &WAYLAND_EXTS
+        }
+        RawDisplayHandle::Xlib(_) => {
+            const XLIB_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::xlib_surface::NAME];
+            &XLIB_EXTS
+        }
+        RawDisplayHandle::Xcb(_) => {
+            const XCB_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::xcb_surface::NAME];
+            &XCB_EXTS
+        }
+        RawDisplayHandle::Android(_) => {
+            const ANDROID_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::android_surface::NAME];
+            &ANDROID_EXTS
+        }
+        RawDisplayHandle::AppKit(_) | RawDisplayHandle::UiKit(_) => {
+            const METAL_EXTS: [&CStr; 2] = [khr::surface::NAME, ext::metal_surface::NAME];
+            &METAL_EXTS
+        }
+        _ => {
+            warn!("unsupported display handle type: {display_handle:?}");
+
+            return Err(DriverError::Unsupported);
+        }
+    };
+
+    Ok(extensions)
 }
 
 /// Vulkan API version.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum ApiVersion {
-    /// Version 1.2
+    /// Version `1.2`.
     #[default]
     Vulkan12,
 
-    /// Version 1.3
+    /// Version `1.3`.
     Vulkan13,
 }
 
@@ -131,14 +175,14 @@ impl ApiVersion {
         Self::try_from(version)
     }
 
-    /// Vulkan API major version number component. Ex: vX.0.0-0
+    /// Vulkan API major version number component. Ex: `vX.0.0-0`.
     ///
     /// Always one.
     pub fn major(self) -> u32 {
         1
     }
 
-    /// Vulkan API minor version number component. Ex: v0.X.0-0
+    /// Vulkan API minor version number component. Ex: `v0.X.0-0`.
     pub fn minor(self) -> u32 {
         match self {
             Self::Vulkan12 => 2,
@@ -146,7 +190,7 @@ impl ApiVersion {
         }
     }
 
-    /// Vulkan API minor version number component. Ex: v0.0.X-0
+    /// Vulkan API minor version number component. Ex: `v0.0.X-0`.
     ///
     /// Always zero.
     pub fn patch(self) -> u32 {
@@ -158,7 +202,7 @@ impl ApiVersion {
         self.into()
     }
 
-    /// Vulkan API variant version number component. Ex: v0.0.0-X
+    /// Vulkan API variant version number component. Ex: `v0.0.0-X`.
     ///
     /// Always zero.
     pub fn variant(self) -> u32 {
@@ -202,39 +246,74 @@ impl TryFrom<u32> for ApiVersion {
 ///
 /// Creating an Instance initializes the Vulkan library and allows the application to pass
 /// information about itself to the implementation.
-#[derive(Clone)]
-#[repr(C)]
+#[read_only::embed]
+#[allow(private_interfaces)]
 pub struct Instance {
     /// The ash entrypoint.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub entry: ash::Entry,
-
-    #[cfg(not(doc))]
-    entry: ash::Entry,
 
     /// Information used to create this resource.
     ///
     /// _Note:_ This field is read-only.
-    #[cfg(doc)]
+    #[readonly]
     pub info: InstanceInfo,
 
-    #[cfg(not(doc))]
-    info: InstanceInfo,
+    #[readonly]
+    pub(self) inner: Arc<InstanceInner>,
+}
 
-    inner: Arc<InstanceInner>,
+impl Clone for Instance {
+    fn clone(&self) -> Self {
+        Self {
+            read_only: ReadOnlyInstance {
+                entry: self.entry.clone(),
+                info: self.info,
+                inner: self.inner.clone(),
+            },
+        }
+    }
 }
 
 impl Instance {
-    /// The most recent supported version of Vulkan
+    /// The most recent supported version of Vulkan.
     pub const LATEST_API_VERSION: ApiVersion = ApiVersion::Vulkan13;
 
     /// Creates a new Vulkan instance.
+    ///
+    /// This constructor is intended for headless or manually managed setups. It does not infer or
+    /// enable display platform surface extensions. Use [`Self::try_from_display`] when the
+    /// resulting instance must be capable of later surface creation.
     #[profiling::function]
     pub fn new(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
-        let info = info.into();
+        Self::create(info.into(), &[])
+    }
 
+    /// Creates a new Vulkan instance with the platform surface extensions required by the provided
+    /// display handle.
+    #[profiling::function]
+    pub fn try_from_display(
+        display: impl HasDisplayHandle,
+        info: impl Into<InstanceInfo>,
+    ) -> Result<Self, DriverError> {
+        let display_handle = display.display_handle().map_err(|err| {
+            warn!("unable to get display handle: {err}");
+
+            DriverError::Unsupported
+        })?;
+        let extension_names =
+            enumerate_required_extensions(display_handle.as_raw()).map_err(|err| {
+                warn!("unable to enumerate display extensions: {err}");
+
+                DriverError::Unsupported
+            })?;
+
+        Self::create(info.into(), extension_names)
+    }
+
+    fn create(info: InstanceInfo, extension_names: &[&'static CStr]) -> Result<Self, DriverError> {
         // Required to enable non-uniform descriptor indexing (bindless)
         #[cfg(target_os = "macos")]
         unsafe {
@@ -245,7 +324,7 @@ impl Instance {
         #[cfg(feature = "loaded")]
         let entry = unsafe {
             ash::Entry::load().map_err(|err| {
-                error!("Vulkan driver not found: {err}");
+                error!("unable to load Vulkan driver: {err}");
 
                 DriverError::Unsupported
             })?
@@ -262,7 +341,7 @@ impl Instance {
             let entry = ash_molten::load();
         };
 
-        let mut extension_names = Vec::with_capacity(16);
+        let mut extension_names = extension_names.to_vec();
         extension_names.extend(info.extension_names);
 
         if info.debug {
@@ -296,10 +375,8 @@ impl Instance {
             .map(CStr::as_ptr)
             .collect::<Box<_>>();
 
-        let app_desc = vk::ApplicationInfo::default().api_version(match info.api_version {
-            ApiVersion::Vulkan12 => vk::API_VERSION_1_2,
-            ApiVersion::Vulkan13 => vk::API_VERSION_1_3,
-        });
+        let app_desc =
+            vk::ApplicationInfo::default().api_version(info.api_version.to_vk_api_version());
         let instance_desc = vk::InstanceCreateInfo::default()
             .application_info(&app_desc)
             .enabled_layer_names(&layer_name_ptrs)
@@ -309,6 +386,28 @@ impl Instance {
         // to be set.
         #[cfg(all(target_os = "macos", feature = "loaded"))]
         let instance_desc = instance_desc.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+
+        #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+        let mut debug_create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+            .message_severity(
+                vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+                    | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                    | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                    | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+            )
+            .message_type(
+                vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                    | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                    | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+            )
+            .pfn_user_callback(Some(debug_callback));
+
+        #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+        let instance_desc = if info.debug {
+            instance_desc.push_next(&mut debug_create_info)
+        } else {
+            instance_desc
+        };
 
         let instance = unsafe {
             entry.create_instance(&instance_desc, None).map_err(|_| {
@@ -328,7 +427,7 @@ impl Instance {
                     debug!("Layer: {:?}", layer_name);
                 }
 
-                for extension_name in &extension_names {
+                for extension_name in extension_names {
                     debug!("Extension: {:?}", extension_name);
                 }
 
@@ -339,45 +438,38 @@ impl Instance {
         trace!("created a Vulkan instance");
 
         #[cfg(all(target_os = "macos", not(feature = "loaded")))]
-        let (debug_loader, debug_callback, debug_utils) = (None, None, None);
+        let debug_utils = None;
 
         #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
-        let (debug_loader, debug_callback, debug_utils) = if info.debug {
-            let debug_info = vk::DebugReportCallbackCreateInfoEXT {
-                flags: vk::DebugReportFlagsEXT::ERROR
-                    | vk::DebugReportFlagsEXT::WARNING
-                    | vk::DebugReportFlagsEXT::PERFORMANCE_WARNING,
-                pfn_callback: Some(vulkan_debug_callback),
-                ..Default::default()
-            };
-
-            #[allow(deprecated)]
-            let debug_loader = ext::debug_report::Instance::new(&entry, &instance);
-
-            let debug_callback = unsafe {
-                #[allow(deprecated)]
-                debug_loader
-                    .create_debug_report_callback(&debug_info, None)
-                    .unwrap()
-            };
-
+        let debug_utils = if info.debug {
             let debug_utils = ext::debug_utils::Instance::new(&entry, &instance);
+            let debug_messenger =
+                unsafe { debug_utils.create_debug_utils_messenger(&debug_create_info, None) }
+                    .map_err(|err| {
+                        unsafe {
+                            instance.destroy_instance(None);
+                        }
 
-            (Some(debug_loader), Some(debug_callback), Some(debug_utils))
+                        error!("unable to create debug utils messenger: {err}");
+
+                        DriverError::Unsupported
+                    })?;
+
+            Some((debug_utils, debug_messenger))
         } else {
-            (None, None, None)
+            None
         };
 
         Ok(Self {
-            entry,
-            info,
-            inner: Arc::new(InstanceInner {
-                debug_callback,
-                _debug_loader: debug_loader,
-                debug_utils,
-                instance,
-                instance_created: true,
-            }),
+            read_only: ReadOnlyInstance {
+                entry,
+                info,
+                inner: Arc::new(InstanceInner {
+                    debug_utils,
+                    instance,
+                    instance_created: true,
+                }),
+            },
         })
     }
 
@@ -388,6 +480,8 @@ impl Instance {
     #[profiling::function]
     pub fn from_entry(entry: ash::Entry, instance: vk::Instance) -> Result<Self, DriverError> {
         if instance == vk::Instance::null() {
+            warn!("invalid VkInstance handle: null");
+
             return Err(DriverError::InvalidData);
         }
 
@@ -415,28 +509,24 @@ impl Instance {
         let instance = unsafe { ash::Instance::load(entry.static_fn(), instance) };
 
         Ok(Self {
-            entry,
-            info: InstanceInfo {
-                api_version,
-                ..Default::default()
+            read_only: ReadOnlyInstance {
+                entry,
+                info: InstanceInfo {
+                    api_version,
+                    ..Default::default()
+                },
+                inner: Arc::new(InstanceInner {
+                    debug_utils: None,
+                    instance,
+                    instance_created: false,
+                }),
             },
-            inner: Arc::new(InstanceInner {
-                debug_callback: None,
-                _debug_loader: None,
-                debug_utils: None,
-                instance,
-                instance_created: false,
-            }),
         })
     }
 
     #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
     fn debug_extension_names() -> impl IntoIterator<Item = &'static CStr> {
-        vec![
-            #[allow(deprecated)]
-            ext::debug_report::NAME,
-            ext::debug_utils::NAME,
-        ]
+        vec![ext::debug_utils::NAME]
     }
 
     #[cfg(all(target_os = "macos", not(feature = "loaded")))]
@@ -489,7 +579,11 @@ impl Instance {
                     DriverError::OutOfMemory
                 }
                 vk::Result::ERROR_VALIDATION_FAILED_EXT => DriverError::InvalidData,
-                _ => DriverError::Unsupported,
+                _ => {
+                    warn!("unexpected enumerate_physical_devices error: {err}");
+
+                    DriverError::Unsupported
+                }
             }
         })?;
 
@@ -525,15 +619,6 @@ impl Debug for Instance {
     }
 }
 
-#[doc(hidden)]
-impl Deref for Instance {
-    type Target = ReadOnlyInstance;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
-    }
-}
-
 /// Information used to create an [`Instance`] instance.
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[builder(
@@ -542,7 +627,7 @@ impl Deref for Instance {
     pattern = "owned"
 )]
 pub struct InstanceInfo {
-    /// The Vulkan API version to target
+    /// The Vulkan API version to target.
     #[builder(default = "ApiVersion::Vulkan13")]
     pub api_version: ApiVersion,
 
@@ -550,6 +635,9 @@ pub struct InstanceInfo {
     ///
     /// This requires a Vulkan SDK installation and will cause validation errors to introduce
     /// panics as they happen.
+    ///
+    /// Set `VK_GRAPH_SKIP_VALIDATION_PARK=1` to keep logging validation errors without parking the
+    /// callback thread for debugger attach.
     ///
     /// _NOTE:_ Consider turning OFF debug if you discover an unknown issue. Often the validation
     /// layers will throw an error before other layers can provide additional context such as the
@@ -562,7 +650,7 @@ pub struct InstanceInfo {
     #[builder(default)]
     pub debug: bool,
 
-    /// Required Vulkan instance extension names to load
+    /// Required Vulkan instance extension names to load.
     #[builder(default)]
     pub extension_names: &'static [&'static CStr],
 }
@@ -593,7 +681,7 @@ impl InstanceInfoBuilder {
     /// Builds a new `InstanceInfo`.
     #[inline(always)]
     pub fn build(self) -> InstanceInfo {
-        self.fallible_build().unwrap()
+        self.fallible_build().expect("invalid instance info")
     }
 }
 
@@ -604,14 +692,7 @@ impl From<InstanceInfoBuilder> for InstanceInfo {
 }
 
 struct InstanceInner {
-    debug_callback: Option<vk::DebugReportCallbackEXT>,
-
-    #[allow(deprecated)] // TODO: Remove? Look into this....
-    _debug_loader: Option<ext::debug_report::Instance>,
-
-    #[allow(dead_code)]
-    debug_utils: Option<ext::debug_utils::Instance>,
-
+    debug_utils: Option<(ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
     instance: ash::Instance,
     instance_created: bool,
 }
@@ -624,14 +705,19 @@ impl Drop for InstanceInner {
         }
 
         unsafe {
-            #[allow(deprecated)]
-            if let Some(debug_loader) = &self._debug_loader {
-                let debug_callback = self.debug_callback.unwrap();
-                debug_loader.destroy_debug_report_callback(debug_callback, None);
+            if let Some((debug_utils, debug_messenger)) = self.debug_utils.take() {
+                trace!("destroy debug_utils_messenger {}", debug_messenger.as_raw());
+                debug_utils.destroy_debug_utils_messenger(debug_messenger, None);
+                trace!(
+                    "destroy debug_utils_messenger {} DONE",
+                    debug_messenger.as_raw()
+                );
             }
 
             if self.instance_created {
+                trace!("destroy instance {}", self.instance.handle().as_raw());
                 self.instance.destroy_instance(None);
+                self.instance_created = false;
             }
         }
     }
@@ -669,13 +755,6 @@ impl Display for ParseApiVersionError {
 impl Error for ParseApiVersionError {}
 
 #[doc(hidden)]
-#[repr(C)]
-pub struct ReadOnlyInstance {
-    pub entry: ash::Entry,
-    pub info: InstanceInfo,
-    inner: Arc<InstanceInner>,
-}
-
 #[doc(hidden)]
 impl Deref for ReadOnlyInstance {
     type Target = ash::Instance;
@@ -687,27 +766,29 @@ impl Deref for ReadOnlyInstance {
 
 #[cfg(test)]
 mod test {
-    use {
-        super::*,
-        std::mem::{offset_of, size_of},
-    };
+    use super::*;
 
     #[test]
-    pub fn instance_repr_c() {
-        // HACK: The readonly crate uses a private implementation and so we can't further deref it
-        // into the native object type. Because of this the ReadOnly part is manually implemented.
-        assert_eq!(size_of::<Instance>(), size_of::<ReadOnlyInstance>());
+    pub fn api_versions_match() {
         assert_eq!(
-            offset_of!(Instance, entry),
-            offset_of!(ReadOnlyInstance, entry),
+            ApiVersion::Vulkan12.to_vk_api_version(),
+            vk::API_VERSION_1_2
         );
         assert_eq!(
-            offset_of!(Instance, info),
-            offset_of!(ReadOnlyInstance, info),
+            ApiVersion::Vulkan13.to_vk_api_version(),
+            vk::API_VERSION_1_3
+        );
+    }
+
+    #[test]
+    pub fn api_versions_from() {
+        assert_eq!(
+            ApiVersion::try_parse_vk_api_version(vk::API_VERSION_1_2).unwrap(),
+            ApiVersion::Vulkan12
         );
         assert_eq!(
-            offset_of!(Instance, inner),
-            offset_of!(ReadOnlyInstance, inner),
+            ApiVersion::try_parse_vk_api_version(vk::API_VERSION_1_3).unwrap(),
+            ApiVersion::Vulkan13
         );
     }
 }

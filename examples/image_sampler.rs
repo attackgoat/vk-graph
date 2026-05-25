@@ -1,6 +1,7 @@
 mod profile_with_puffin;
 
 use {
+    anyhow::bail,
     ash::vk,
     clap::Parser,
     hassle_rs::compile_hlsl,
@@ -133,7 +134,7 @@ fn create_pipeline(
             //     .as_slice(),
             // )
 
-            todo!()
+            bail!("unsupported example mode: hlsl with separate image samplers")
         }
         (true, false) => {
             // HLSL combined image sampler: include_glsl uses shaderc which does not support this, so

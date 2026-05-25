@@ -7,7 +7,7 @@ Based on shaderc. Feel free to submit PRs for other compilers.
 
 ## Quick Start
 
-See the [example code](examples/README.md), 
+See the [example code](examples/README.md) for complete GLSL and HLSL hot-reload examples.
 
 ## Basic usage
 
@@ -23,6 +23,6 @@ There are a few options available when creating a `HotShader` instance, which is
 regular `Shader` instances. These options allow you to set compilation settings such as optimization
 level and warnings-as-errors, among other things.
 
-## More infomation
+## More information
 
 Run `cargo doc --open` to view detailed API documentation and find available compilation options.

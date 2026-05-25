@@ -39,7 +39,7 @@ use std::sync::Mutex;
 /// If requests for varying resources is common [`HashPool::clear_images_by_info`] and other memory
 /// management functions are nessecery in order to avoid using all available device memory.
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct HashPool {
     acceleration_structure_cache: HashMap<AccelerationStructureInfo, Cache<AccelerationStructure>>,
     buffer_cache: HashMap<BufferInfo, Cache<Buffer>>,
@@ -156,7 +156,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             lease_command_buffer(&mut cache)
         }
@@ -189,7 +189,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for HashPool {
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             cache.pop()
         }
@@ -220,7 +220,7 @@ impl Pool<RenderPassInfo, RenderPass> for HashPool {
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             cache.pop()
         }
@@ -251,7 +251,7 @@ macro_rules! lease {
                         let mut cache = cache_ref.lock();
 
                         #[cfg(not(feature = "parking_lot"))]
-                        let mut cache = cache.unwrap();
+                        let mut cache = cache.expect("poisoned cache lock");
 
                         cache.pop()
                     }

@@ -171,7 +171,7 @@ impl From<BlendInfo> for vk::PipelineColorBlendAttachmentState {
 impl BlendInfoBuilder {
     /// Builds a new `BlendMode`.
     pub fn build(self) -> BlendInfo {
-        self.fallible_build().unwrap()
+        self.fallible_build().expect("invalid blend info")
     }
 }
 
@@ -274,9 +274,15 @@ impl DepthStencilInfo {
         stencil_test: false,
     };
 
-    /// TODO
-    pub fn build() -> DepthStencilInfoBuilder {
+    /// Creates a default `DepthStencilInfoBuilder`.
+    pub fn builder() -> DepthStencilInfoBuilder {
         Default::default()
+    }
+
+    #[deprecated = "use builder function"]
+    #[doc(hidden)]
+    pub fn build() -> DepthStencilInfoBuilder {
+        Self::builder()
     }
 
     /// Converts a `DepthStencilInfo` into a `DepthStencilInfoBuilder`.
@@ -313,7 +319,7 @@ impl From<DepthStencilInfo> for vk::PipelineDepthStencilStateCreateInfo<'_> {
 impl DepthStencilInfoBuilder {
     /// Builds a new `DepthStencilInfo`.
     pub fn build(self) -> DepthStencilInfo {
-        self.fallible_build().unwrap()
+        self.fallible_build().expect("invalid depth stencil info")
     }
 }
 
@@ -323,7 +329,7 @@ impl DepthStencilInfoBuilder {
 ///
 /// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
 #[derive(Clone, Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct GraphicPipeline {
     pub(crate) inner: Arc<GraphicPipelineInner>,
 }
@@ -383,8 +389,8 @@ impl GraphicPipeline {
         let vertex_input = shaders
             .iter()
             .find(|shader| shader.stage == vk::ShaderStageFlags::VERTEX)
-            .expect("vertex shader not found")
-            .vertex_input();
+            .expect("missing vertex shader")
+            .try_vertex_input()?;
 
         // Check for proper stages because vulkan may not complain but this is bad
         let has_fragment_stage = shaders
@@ -434,7 +440,7 @@ impl GraphicPipeline {
             let (input, write) = shaders
                 .iter()
                 .find(|shader| shader.stage == vk::ShaderStageFlags::FRAGMENT)
-                .expect("fragment shader not found")
+                .expect("missing fragment shader")
                 .attachments();
             let (input, write) = (
                 input
@@ -466,7 +472,7 @@ impl GraphicPipeline {
                     None,
                 )
                 .map_err(|err| {
-                    warn!("{err}");
+                    warn!("unable to create graphic pipeline layout: {err}");
 
                     DriverError::Unsupported
                 })?;
@@ -479,14 +485,14 @@ impl GraphicPipeline {
                             None,
                         )
                         .map_err(|err| {
-                            warn!("{err}");
+                            warn!("unable to create graphic shader module: {err}");
 
                             DriverError::Unsupported
                         })?;
                     let shader_stage = ShaderStage {
                         flags: shader.stage,
                         module: shader_module,
-                        name: CString::new(shader.entry_name.as_str()).unwrap(),
+                        name: CString::new(shader.entry_name.as_str()).expect("invalid entry name"),
                         specialization: shader.specialization,
                     };
 
@@ -736,15 +742,8 @@ impl GraphicPipelineInfoBuilder {
     /// Builds a new `GraphicPipelineInfo`.
     #[inline(always)]
     pub fn build(self) -> GraphicPipelineInfo {
-        let res = self.fallible_build();
-
-        #[cfg(test)]
-        let res = res.unwrap();
-
-        #[cfg(not(test))]
-        let res = unsafe { res.unwrap_unchecked() };
-
-        res
+        self.fallible_build()
+            .expect("invalid graphic pipeline info")
     }
 }
 

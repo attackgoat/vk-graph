@@ -20,10 +20,10 @@ use {
 };
 
 #[cfg(feature = "parking_lot")]
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
 #[cfg(not(feature = "parking_lot"))]
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 #[cfg(debug_assertions)]
 fn assert_aspect_mask_supported(aspect_mask: vk::ImageAspectFlags) {
@@ -84,7 +84,7 @@ pub(crate) fn image_subresource_range_intersects(
 /// ```
 ///
 /// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
-#[readonly::make]
+#[read_only::cast]
 pub struct Image {
     accesses: Mutex<ImageAccess<AccessType>>,
     allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
@@ -172,48 +172,48 @@ impl Image {
         let allocation = {
             profiling::scope!("allocate");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = Device::allocator(&device).lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut allocator = allocator.unwrap();
-
-            allocator
-                .allocate(&AllocationCreateDesc {
-                    name: "image",
-                    requirements,
-                    location: MemoryLocation::GpuOnly,
-                    linear: false,
-                    allocation_scheme,
-                })
-                .map_err(|err| {
-                    warn!("unable to allocate image memory: {err}");
-
-                    unsafe {
-                        device.destroy_image(handle, None);
-                    }
-
-                    DriverError::from_alloc_err(err)
-                })
-                .and_then(|allocation| {
-                    if let Err(err) = unsafe {
-                        device.bind_image_memory(handle, allocation.memory(), allocation.offset())
-                    } {
-                        warn!("unable to bind image memory: {err}");
-
-                        if let Err(err) = allocator.free(allocation) {
-                            warn!("unable to free image allocation: {err}")
-                        }
+            Device::with_allocator(&device, |allocator| {
+                allocator
+                    .allocate(&AllocationCreateDesc {
+                        name: "image",
+                        requirements,
+                        location: MemoryLocation::GpuOnly,
+                        linear: false,
+                        allocation_scheme,
+                    })
+                    .map_err(|err| {
+                        warn!("unable to allocate image memory: {err}");
 
                         unsafe {
                             device.destroy_image(handle, None);
                         }
 
-                        Err(DriverError::OutOfMemory)
-                    } else {
-                        Ok(allocation)
-                    }
-                })
+                        DriverError::from_alloc_err(err)
+                    })
+                    .and_then(|allocation| {
+                        if let Err(err) = unsafe {
+                            device.bind_image_memory(
+                                handle,
+                                allocation.memory(),
+                                allocation.offset(),
+                            )
+                        } {
+                            warn!("unable to bind image memory: {err}");
+
+                            if let Err(err) = allocator.free(allocation) {
+                                warn!("unable to free image allocation: {err}")
+                            }
+
+                            unsafe {
+                                device.destroy_image(handle, None);
+                            }
+
+                            Err(DriverError::OutOfMemory)
+                        } else {
+                            Ok(allocation)
+                        }
+                    })
+            })
         }?;
 
         debug_assert_ne!(handle, vk::Image::null());
@@ -305,12 +305,7 @@ impl Image {
             access_range.base_mip_level + access_range.level_count <= self.info.mip_level_count
         );
 
-        let accesses = self.accesses.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let accesses = accesses.unwrap();
-
-        ImageAccessIter::new(accesses, access, access_range)
+        ImageAccessIter::new(self.lock_accesses(), access, access_range)
     }
 
     #[profiling::function]
@@ -318,13 +313,7 @@ impl Image {
         debug_assert!(self.allocation.is_none());
 
         // Moves the image view cache from the current instance to the clone!
-        #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-        let mut image_view_cache = self.image_view_cache.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let mut image_view_cache = image_view_cache.unwrap();
-
-        let image_view_cache = take(&mut *image_view_cache);
+        let image_view_cache = self.with_image_view_cache(take);
 
         // Does NOT copy over the image accesses!
         // Force previous access to general to wait for presentation
@@ -341,18 +330,20 @@ impl Image {
         }
     }
 
+    /// Sets the debugging name assigned to this image.
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
+
+    /// Drops the given allocation, all views, and the handle.
     #[profiling::function]
     fn drop_allocation(&self, allocation: Allocation) {
         {
             profiling::scope!("views");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut image_view_cache = self.image_view_cache.lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut image_view_cache = image_view_cache.unwrap();
-
-            image_view_cache.clear();
+            self.with_image_view_cache(|cache| cache.clear());
         }
 
         unsafe {
@@ -362,13 +353,7 @@ impl Image {
         {
             profiling::scope!("deallocate");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = Device::allocator(&self.device).lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut allocator = allocator.unwrap();
-
-            allocator.free(allocation)
+            Device::with_allocator(&self.device, |allocator| allocator.free(allocation))
         }
         .unwrap_or_else(|err| warn!("unable to free image allocation: {err}"));
     }
@@ -399,29 +384,41 @@ impl Image {
         }
     }
 
-    #[profiling::function]
-    pub(crate) fn view(&self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
-        #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-        let mut image_view_cache = self.image_view_cache.lock();
+    fn lock_accesses(&self) -> MutexGuard<'_, ImageAccess<AccessType>> {
+        let accesses = self.accesses.lock();
 
         #[cfg(not(feature = "parking_lot"))]
-        let mut image_view_cache = image_view_cache.unwrap();
+        let accesses = accesses.expect("poisoned image access lock");
 
-        Ok(match image_view_cache.entry(info) {
-            Entry::Occupied(entry) => entry.get().image_view,
-            Entry::Vacant(entry) => {
-                entry
-                    .insert(ImageView::create(&self.device, info, self.handle)?)
-                    .image_view
-            }
+        accesses
+    }
+
+    #[profiling::function]
+    pub(crate) fn view(&self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
+        self.with_image_view_cache(|cache| {
+            Ok(match cache.entry(info) {
+                Entry::Occupied(entry) => entry.get().image_view,
+                Entry::Vacant(entry) => {
+                    entry
+                        .insert(ImageView::create(&self.device, info, self.handle)?)
+                        .image_view
+                }
+            })
         })
     }
 
-    /// Sets the debugging name assigned to this image.
-    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+    fn with_image_view_cache<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<ImageViewInfo, ImageView>) -> R,
+    ) -> R {
+        let cache = self.image_view_cache.lock();
 
-        self
+        #[cfg(not(feature = "parking_lot"))]
+        let cache = cache.expect("poisoned image view lock");
+
+        let mut cache = cache;
+
+        f(&mut cache)
     }
 }
 
@@ -1023,7 +1020,7 @@ impl ImageView {
 
         let image_view =
             unsafe { device.create_image_view(&create_info, None) }.map_err(|err| {
-                warn!("{err}");
+                warn!("unable to create image view: {err}");
 
                 DriverError::Unsupported
             })?;
@@ -1130,7 +1127,14 @@ impl ImageViewInfo {
 
 impl From<ImageInfo> for ImageViewInfo {
     fn from(info: ImageInfo) -> Self {
-        Self {
+        Self::from_image_info(info).expect("unsupported image type for image view info")
+    }
+}
+
+impl ImageViewInfo {
+    /// Creates an image view description from image creation info.
+    pub fn from_image_info(info: ImageInfo) -> Result<Self, DriverError> {
+        Ok(Self {
             array_layer_count: info.array_layer_count,
             aspect_mask: format_aspect_mask(info.fmt),
             base_array_layer: 0,
@@ -1154,9 +1158,16 @@ impl From<ImageInfo> for ImageViewInfo {
                 }
                 (vk::ImageType::TYPE_2D, _) => vk::ImageViewType::TYPE_2D_ARRAY,
                 (vk::ImageType::TYPE_3D, _) => vk::ImageViewType::TYPE_3D,
-                _ => unimplemented!(),
+                _ => {
+                    warn!(
+                        "invalid image view source info: image type {:?} with {} array layers",
+                        info.ty, info.array_layer_count
+                    );
+
+                    return Err(DriverError::InvalidData);
+                }
             },
-        }
+        })
     }
 }
 

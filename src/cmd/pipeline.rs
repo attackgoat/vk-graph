@@ -32,11 +32,11 @@ macro_rules! pipeline {
                 fn bind_cmd(self, mut cmd: Command<'a>) -> Self::Command {
                     {
                         let cmd = cmd.cmd_mut();
-                        if cmd.execs.last().unwrap().pipeline.is_some() {
+                        if cmd.expect_last_exec().pipeline.is_some() {
                             cmd.execs.push(Default::default());
                         }
 
-                        cmd.execs.last_mut().unwrap().pipeline
+                        cmd.expect_last_exec_mut().pipeline
                             = Some(ExecutionPipeline::$name(self));
                     }
 
@@ -53,11 +53,11 @@ macro_rules! pipeline {
                 fn bind_cmd(self, mut cmd: Command<'a>) -> Self::Command {
                     {
                         let cmd = cmd.cmd_mut();
-                        if cmd.execs.last().unwrap().pipeline.is_some() {
+                        if cmd.expect_last_exec().pipeline.is_some() {
                             cmd.execs.push(Default::default());
                         }
 
-                        cmd.execs.last_mut().unwrap().pipeline
+                        cmd.expect_last_exec_mut().pipeline
                             = Some(ExecutionPipeline::$name(self.clone()));
                     }
 
@@ -223,9 +223,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         assert!(
             self.cmd
                 .cmd_mut()
-                .execs
-                .last_mut()
-                .unwrap()
+                .expect_last_exec_mut()
                 .bindings
                 .insert(descriptor, (node_idx, subresource.into()))
                 .is_none(),
@@ -348,6 +346,7 @@ mod deprecated {
             ViewType: From<<N as Subresource>::Info>,
             <N as Subresource>::Info: Copy + From<<N as Info>::Type>,
             <N as Subresource>::Range: From<<N as Subresource>::Info>,
+            SubresourceRange: From<N::Range>,
         {
             let view_info = Subresource::info(&node, &self.cmd.graph.resources);
 
@@ -364,9 +363,10 @@ mod deprecated {
             view_info: impl Into<N::Info>,
         ) -> Self
         where
-            N: Subresource,
+            N: Node + Subresource,
             <N as Subresource>::Info: Copy + Into<ViewType>,
             <N as Subresource>::Range: From<<N as Subresource>::Info>,
+            SubresourceRange: From<N::Range>,
         {
             let view_info = view_info.into();
             let subresource = <N as Subresource>::Range::from(view_info);
@@ -377,7 +377,7 @@ mod deprecated {
         #[deprecated = "use shader_subresource_access function"]
         #[doc(hidden)]
         pub fn access_descriptor_subrange<N>(
-            self,
+            mut self,
             descriptor: impl Into<Descriptor>,
             node: N,
             access: AccessType,
@@ -385,10 +385,31 @@ mod deprecated {
             subresource: impl Into<N::Range>,
         ) -> Self
         where
-            N: Subresource,
+            N: Node + Subresource,
             <N as Subresource>::Info: Into<ViewType>,
+            SubresourceRange: From<N::Range>,
         {
-            unimplemented!()
+            let descriptor = descriptor.into();
+            let view_info = view_info.into();
+            let node_idx = node.index();
+
+            self.cmd.push_subresource_access(
+                node,
+                SubresourceRange::from(subresource.into()),
+                access,
+            );
+
+            assert!(
+                self.cmd
+                    .cmd_mut()
+                    .expect_last_exec_mut()
+                    .bindings
+                    .insert(descriptor, (node_idx, view_info.into()))
+                    .is_none(),
+                "descriptor {descriptor:?} has already been bound"
+            );
+
+            self
         }
 
         #[deprecated = "use resource_access function"]
@@ -447,8 +468,7 @@ mod deprecated {
             let idx = node.index();
 
             self.cmd.graph.resources[idx]
-                .as_buffer()
-                .unwrap()
+                .expect_buffer()
                 .device_address()
         }
 

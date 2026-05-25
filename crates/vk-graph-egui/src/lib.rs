@@ -1,4 +1,4 @@
-//! TODO
+//! `egui` renderer integration for `vk-graph`.
 
 #![warn(missing_docs)]
 
@@ -26,9 +26,9 @@ use {
     vk_shader_macros::include_glsl,
 };
 
-/// TODO
+/// Immediate-mode GUI integration for rendering `egui` output with `vk-graph`.
 pub struct Egui {
-    /// TODO
+    /// The shared `egui` context used to build and retain UI state.
     pub ctx: egui::Context,
 
     egui_winit: egui_winit::State,
@@ -40,7 +40,7 @@ pub struct Egui {
 }
 
 impl Egui {
-    /// TODO
+    /// Creates a new `egui` renderer for the given device and display target.
     pub fn new(device: &Device, display_target: &dyn HasDisplayHandle) -> Self {
         let ppl = GraphicPipeline::create(
             device,
@@ -64,7 +64,7 @@ impl Egui {
                 Shader::new_fragment(include_glsl!("shaders/egui.frag").as_slice()),
             ],
         )
-        .unwrap();
+        .expect("invalid egui pipeline");
 
         let ctx = egui::Context::default();
         let max_texture_side = Some(
@@ -120,17 +120,14 @@ impl Egui {
                             (pixels.len() * delta.image.bytes_per_pixel()) as u64,
                             vk::BufferUsageFlags::TRANSFER_SRC,
                         ))
-                        .unwrap();
+                        .expect("missing egui texture upload buffer");
                     buf.copy_from_slice(0, cast_slice(&pixels));
                     graph.bind_resource(buf)
                 };
 
                 if let Some(pos) = delta.pos {
-                    let image = graph.bind_resource(
-                        self.textures
-                            .remove(id)
-                            .expect("Tried updating undefined texture."),
-                    );
+                    let image =
+                        graph.bind_resource(self.textures.remove(id).expect("missing texture"));
 
                     graph.copy_buffer_to_image_region(
                         tmp_buf,
@@ -167,7 +164,7 @@ impl Egui {
                                 vk::Format::R8G8B8A8_UNORM,
                                 vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
                             ))
-                            .unwrap(),
+                            .expect("missing egui texture image"),
                     );
 
                     graph.copy_buffer_to_image(tmp_buf, image);
@@ -233,7 +230,9 @@ impl Egui {
                     if mesh.vertices.is_empty() || mesh.indices.is_empty() {
                         continue;
                     }
-                    let texture = bound_tex.get(&mesh.texture_id).unwrap();
+                    let texture = bound_tex
+                        .get(&mesh.texture_id)
+                        .expect("missing egui mesh texture");
 
                     let idx_buf = {
                         let mut buf = self
@@ -242,7 +241,7 @@ impl Egui {
                                 (mesh.indices.len() * 4) as u64,
                                 vk::BufferUsageFlags::INDEX_BUFFER,
                             ))
-                            .unwrap();
+                            .expect("missing egui index buffer");
                         buf.copy_from_slice(0, cast_slice(&mesh.indices));
                         buf
                     };
@@ -256,7 +255,7 @@ impl Egui {
                                     as u64,
                                 vk::BufferUsageFlags::VERTEX_BUFFER,
                             ))
-                            .unwrap();
+                            .expect("missing egui vertex buffer");
                         buf.copy_from_slice(0, cast_slice(&mesh.vertices));
                         buf
                     };
@@ -313,7 +312,7 @@ impl Egui {
         }
     }
 
-    /// TODO
+    /// Runs one `egui` frame, updates textures, and records draw commands into `graph`.
     pub fn run(
         &mut self,
         window: &Window,
@@ -346,7 +345,7 @@ impl Egui {
         self.unbind_and_free(bound_tex, graph, &deltas);
     }
 
-    /// TODO
+    /// Registers a user-provided image so it can be referenced from `egui`.
     pub fn register_texture(&mut self, tex: impl Into<AnyImageNode>) -> egui::TextureId {
         let id = egui::TextureId::User(self.next_tex_id);
         self.next_tex_id += 1;

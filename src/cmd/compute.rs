@@ -23,13 +23,8 @@ impl PipelineCommand<'_, ComputePipeline> {
         let pipeline = self
             .cmd
             .cmd()
-            .execs
-            .last()
-            .unwrap()
-            .pipeline
-            .as_ref()
-            .unwrap()
-            .unwrap_compute()
+            .expect_last_pipeline()
+            .expect_compute()
             .clone();
 
         self.cmd.push_exec(move |cmd_buf| {

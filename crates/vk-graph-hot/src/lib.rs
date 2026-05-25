@@ -1,4 +1,4 @@
-//! TODO
+//! Shader hot-reload support for `vk-graph` pipelines.
 
 #![warn(missing_docs)]
 
@@ -93,7 +93,7 @@ fn compile_shader(
         PathBuf::new(),
     )
     .map_err(|err| {
-        error!("Unable to process shader file: {err}");
+        error!("unable to process shader file: {err}");
 
         Error::new(ErrorKind::InvalidData, err)
     })?
@@ -104,7 +104,7 @@ fn compile_shader(
 
     static COMPILER: OnceLock<Compiler> = OnceLock::new();
     let spirv_code = COMPILER
-        .get_or_init(|| Compiler::new().expect("Unable to initialize shaderc"))
+        .get_or_init(|| Compiler::new().expect("invalid shaderc compiler"))
         .compile_into_spirv(
             &source_code,
             shader_kind,
@@ -166,7 +166,7 @@ fn create_watcher(has_changes: &Arc<AtomicBool>) -> RecommendedWatcher {
             has_changes.store(true, Ordering::Relaxed);
         }
     })
-    .unwrap()
+    .expect("invalid shader watcher")
 }
 
 fn guess_shader_kind(path: impl AsRef<Path>) -> ShaderKind {
@@ -210,6 +210,51 @@ fn guess_shader_source_language(path: impl AsRef<Path>) -> Option<SourceLanguage
     }
 }
 
+#[cfg(test)]
+mod test {
+    use super::{guess_shader_kind, guess_shader_source_language};
+    use shaderc::{ShaderKind, SourceLanguage};
+
+    #[test]
+    fn guess_shader_kind_from_known_extensions() {
+        assert_eq!(guess_shader_kind("shader.comp"), ShaderKind::Compute);
+        assert_eq!(guess_shader_kind("shader.vert"), ShaderKind::Vertex);
+        assert_eq!(guess_shader_kind("shader.frag"), ShaderKind::Fragment);
+        assert_eq!(guess_shader_kind("shader.rgen"), ShaderKind::RayGeneration);
+    }
+
+    #[test]
+    fn guess_shader_kind_defaults_to_infer_from_source() {
+        assert_eq!(
+            guess_shader_kind("shader.unknown"),
+            ShaderKind::InferFromSource
+        );
+        assert_eq!(guess_shader_kind("shader"), ShaderKind::InferFromSource);
+    }
+
+    #[test]
+    fn guess_shader_source_language_from_known_extensions() {
+        assert_eq!(
+            guess_shader_source_language("shader.comp"),
+            Some(SourceLanguage::GLSL)
+        );
+        assert_eq!(
+            guess_shader_source_language("shader.glsl"),
+            Some(SourceLanguage::GLSL)
+        );
+        assert_eq!(
+            guess_shader_source_language("shader.hlsl"),
+            Some(SourceLanguage::HLSL)
+        );
+    }
+
+    #[test]
+    fn guess_shader_source_language_returns_none_for_unknown_extensions() {
+        assert_eq!(guess_shader_source_language("shader.spv"), None);
+        assert_eq!(guess_shader_source_language("shader"), None);
+    }
+}
+
 macro_rules! pipeline {
     ($name:ident) => {
         ::paste::paste! {
@@ -217,13 +262,13 @@ macro_rules! pipeline {
                 fn cache(&self) -> ::std::sync::RwLockReadGuard<'_, HotPipeline<[<$name Pipeline>]>> {
                     self.cache
                         .read()
-                        .unwrap()
+                        .expect("poisoned hot pipeline lock")
                 }
 
                 fn cache_mut(&self) -> ::std::sync::RwLockWriteGuard<'_, HotPipeline<[<$name Pipeline>]>> {
                     self.cache
                         .write()
-                        .unwrap()
+                        .expect("poisoned hot pipeline lock")
                 }
             }
 

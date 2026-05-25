@@ -394,7 +394,7 @@ impl Transition {
     }
 }
 
-/// TODO
+/// Cache and lazily create transition compute pipelines on demand.
 pub struct TransitionPipeline {
     cache: HashPool,
     device: Device, // TODO REMOVE
@@ -402,7 +402,7 @@ pub struct TransitionPipeline {
 }
 
 impl TransitionPipeline {
-    /// TODO
+    /// Creates an empty transition pipeline cache for the given device.
     pub fn new(device: &Device) -> Self {
         let cache = HashPool::new(device);
         let device = device.clone();
@@ -415,7 +415,7 @@ impl TransitionPipeline {
         }
     }
 
-    /// TODO
+    /// Applies a transition between two images and returns a leased destination image.
     pub fn apply(
         &mut self,
         graph: &mut Graph,
@@ -439,14 +439,18 @@ impl TransitionPipeline {
                 | vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::TRANSFER_SRC,
         );
-        let dest_image = graph.bind_resource(self.cache.lease_resource(dest_info).unwrap());
+        let dest_image = graph.bind_resource(
+            self.cache
+                .lease_resource(dest_info)
+                .expect("missing transition image"),
+        );
 
         self.apply_to(graph, a_image, b_image, dest_image, transition, progress);
 
         dest_image
     }
 
-    /// TODO
+    /// Applies a transition between two images into an existing destination image.
     pub fn apply_to(
         &mut self,
         graph: &mut Graph,
@@ -747,7 +751,7 @@ impl TransitionPipeline {
                     }
                 }),
             )
-            .unwrap()
+            .expect("invalid transition pipeline")
         })
     }
 }

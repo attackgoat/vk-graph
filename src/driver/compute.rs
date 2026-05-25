@@ -87,11 +87,12 @@ impl ComputePipeline {
                     None,
                 )
                 .map_err(|err| {
-                    warn!("{err}");
+                    warn!("unable to create compute shader module: {err}");
 
                     DriverError::Unsupported
                 })?;
-            let entry_name = CString::new(shader.entry_name.as_bytes()).unwrap();
+            let entry_name =
+                CString::new(shader.entry_name.as_bytes()).expect("invalid entry name");
             let mut stage_create_info = vk::PipelineShaderStageCreateInfo::default()
                 .module(shader_module)
                 .stage(shader.stage)
@@ -113,7 +114,7 @@ impl ComputePipeline {
             let layout = device
                 .create_pipeline_layout(&layout_info, None)
                 .map_err(|err| {
-                    warn!("{err}");
+                    warn!("unable to create compute pipeline layout: {err}");
 
                     device.destroy_shader_module(shader_module, None);
 
@@ -129,7 +130,7 @@ impl ComputePipeline {
                     None,
                 )
                 .map_err(|(_, err)| {
-                    warn!("{err}");
+                    warn!("unable to create compute pipeline: {err}");
 
                     device.destroy_shader_module(shader_module, None);
 
@@ -284,15 +285,8 @@ impl ComputePipelineInfoBuilder {
     /// Builds a new `ComputePipelineInfo`.
     #[inline(always)]
     pub fn build(self) -> ComputePipelineInfo {
-        let res = self.fallible_build();
-
-        #[cfg(test)]
-        let res = res.unwrap();
-
-        #[cfg(not(test))]
-        let res = unsafe { res.unwrap_unchecked() };
-
-        res
+        self.fallible_build()
+            .expect("invalid compute pipeline info")
     }
 }
 

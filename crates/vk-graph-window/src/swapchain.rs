@@ -35,7 +35,7 @@ fn create_semaphore(device: &ash::Device) -> Result<vk::Semaphore, DriverError> 
     let allocation_callbacks = None;
 
     unsafe { device.create_semaphore(&create_info, allocation_callbacks) }.map_err(|err| {
-        warn!("{err}");
+        warn!("unable to create semaphore: {err}");
 
         DriverError::OutOfMemory
     })
@@ -49,13 +49,23 @@ const fn image_access_layout(access: AccessType) -> ImageLayout {
     }
 }
 
-#[doc(hidden)]
-#[repr(C)]
-pub struct ReadOnlySwapchain {
+/// A physical display interface.
+#[read_only::embed]
+pub struct Swapchain {
     exec_idx: usize,
     execs: Box<[Execution]>,
     image_execs: Vec<usize>,
+
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub info: SwapchainInfo,
+
+    /// The swapchain which supports this display.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub swapchain: swapchain::Swapchain,
 }
 
@@ -65,32 +75,6 @@ impl Deref for ReadOnlySwapchain {
     fn deref(&self) -> &Self::Target {
         &self.swapchain
     }
-}
-
-/// A physical display interface.
-#[repr(C)]
-pub struct Swapchain {
-    exec_idx: usize,
-    execs: Box<[Execution]>,
-    image_execs: Vec<usize>,
-
-    /// Information used to create this resource.
-    ///
-    /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub info: SwapchainInfo,
-
-    #[cfg(not(doc))]
-    info: SwapchainInfo,
-
-    /// The swapchain which supports this display.
-    ///
-    /// _Note:_ This field is read-only.
-    #[cfg(doc)]
-    pub swapchain: swapchain::Swapchain,
-
-    #[cfg(not(doc))]
-    swapchain: swapchain::Swapchain,
 }
 
 impl Swapchain {
@@ -125,13 +109,48 @@ impl Swapchain {
             exec_idx: info.command_buffer_count,
             execs,
             image_execs: Default::default(),
-            info,
-            swapchain,
+            read_only: ReadOnlySwapchain { info, swapchain },
         })
     }
 
-    /// Gets the next available swapchain image which should be rendered to and then presented using
-    /// [`present_image`][Self::present_image].
+    /// Acquires the next available swapchain image for rendering.
+    ///
+    /// This is a high-level wrapper around
+    /// [`Swapchain::acquire_next_image`](vk_graph::driver::swapchain::Swapchain::acquire_next_image)
+    /// that manages the internal execution slot, fence, and semaphore lifecycle automatically.
+    ///
+    /// The returned [`SwapchainImage`] (if `Some`) has already had its acquire semaphore
+    /// submitted to the associated queue for this frame. The caller should record and
+    /// submit rendering commands that depend on this image in the current frame's graph.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(image))` — An image was acquired and may be rendered to.
+    /// * `Ok(None)` — The swapchain is suboptimal (e.g. the window was resized).
+    ///   Render nothing for this frame and call [`acquire_next_image`][Self::acquire_next_image]
+    ///   again next frame.
+    /// * `Err(SwapchainError::DeviceLost)` — The Vulkan device has been lost.
+    /// * `Err(SwapchainError::Driver(_))` — The surface was lost or another
+    ///   unrecoverable driver error occurred.
+    ///
+    /// # Internal behavior
+    ///
+    /// Each call advances to the next internal execution slot (round-robin across
+    /// a fixed number of submissions in flight). Before acquiring, the method waits
+    /// on the fence for the previous submission in that slot, ensuring at most one
+    /// in-flight submission per slot. It then calls the core
+    /// [`acquire_next_image`](vk_graph::driver::swapchain::Swapchain::acquire_next_image)
+    /// with an infinite timeout ([`u64::MAX`]) and the slot's acquire semaphore.
+    ///
+    /// After successful acquisition the slot index is recorded against the returned
+    /// image index so that future waits are correctly associated with the right
+    /// submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(None)` instead of [`SwapchainError::Suboptimal`]; the window-level
+    /// API collapses suboptimal into a non-error signal so the draw loop can skip
+    /// the frame gracefully.
     pub fn acquire_next_image(&mut self) -> Result<Option<SwapchainImage>, SwapchainError> {
         self.exec_idx += 1;
         self.exec_idx %= self.execs.len();
@@ -157,6 +176,7 @@ impl Swapchain {
         }
 
         let acquire_next_image = self
+            .read_only
             .swapchain
             .acquire_next_image(u64::MAX, exec.swapchain_acquired);
 
@@ -168,6 +188,7 @@ impl Swapchain {
             Err(swapchain::SwapchainError::DeviceLost) => Err(SwapchainError::DeviceLost),
             Err(swapchain::SwapchainError::Suboptimal) => return Ok(None),
             Err(swapchain::SwapchainError::SurfaceLost) => {
+                warn!("invalid swapchain surface state: surface lost");
                 Err(SwapchainError::Driver(DriverError::InvalidData))
             }
             Ok(swapchain_image) => Ok(swapchain_image),
@@ -277,7 +298,7 @@ impl Swapchain {
         {
             let queue = Device::queue(
                 &exec.cmd_buf.device,
-                self.info.queue_family_index,
+                self.read_only.info.queue_family_index,
                 queue_index,
             );
 
@@ -318,10 +339,10 @@ impl Swapchain {
 
         let swapchain_image = queue.resource(swapchain_image).clone();
 
-        self.swapchain.present_image(
+        self.read_only.swapchain.present_image(
             swapchain_image,
             slice::from_ref(&exec.swapchain_rendered),
-            self.info.queue_family_index,
+            self.read_only.info.queue_family_index,
             queue_index,
         );
 
@@ -338,27 +359,18 @@ impl Swapchain {
     pub fn set_info(&mut self, info: impl Into<swapchain::SwapchainInfo>) {
         let info = info.into();
 
-        self.swapchain.set_info(info);
-        self.info.height = info.height;
-        self.info.min_image_count = info.min_image_count;
-        self.info.present_mode = info.present_mode;
-        self.info.surface = info.surface;
-        self.info.width = info.width;
+        self.read_only.swapchain.set_info(info);
+        self.read_only.info.height = info.height;
+        self.read_only.info.min_image_count = info.min_image_count;
+        self.read_only.info.present_mode = info.present_mode;
+        self.read_only.info.surface = info.surface;
+        self.read_only.info.width = info.width;
     }
 }
 
 impl Debug for Swapchain {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Swapchain")
-    }
-}
-
-#[doc(hidden)]
-impl Deref for Swapchain {
-    type Target = ReadOnlySwapchain;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(self as *const Self as *const Self::Target) }
     }
 }
 
@@ -401,12 +413,12 @@ impl Drop for Swapchain {
 }
 
 /// Describes error conditions relating to physical displays.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum SwapchainError {
-    /// Unrecoverable device error; must destroy this device and display and start a new one
+    /// Unrecoverable device error; must destroy this device and display and start a new one.
     DeviceLost,
 
-    /// Recoverable driver error
+    /// Recoverable driver error.
     Driver(DriverError),
 }
 
@@ -455,9 +467,8 @@ pub struct SwapchainInfo {
     #[builder(default = "2")]
     pub min_image_count: u32,
 
-    /// `vk::PresentModeKHR` Determines timing and queueing with which frames are actually displayed to the user.
-    /// `present_modes` is a set of these modes ordered by preference. If the first mode is not available it will fall
-    /// back to the next, etc...    
+    /// `vk::PresentModeKHR` determines timing and queueing with which frames are actually displayed
+    /// to the user.
     ///
     /// `vk::PresentModeKHR::FIFO` - Presentation frames are kept in a First-In-First-Out queue approximately 3 frames
     /// long. Every vertical blanking period, the presentation engine will pop a frame off the queue to display. If
@@ -490,7 +501,7 @@ pub struct SwapchainInfo {
     /// present the same frame again until the next vblank.
     ///
     /// When a present command is executed on the GPU, the frame will be put into the queue.
-    /// If there was already a frame in the queue, the new frame will _replace_ the old frame
+    /// If there was already a frame in the queue, the new frame will _replace_ the old frame.
     /// on the queue.
     ///
     /// * **Tearing**: No tearing will be observed.
@@ -567,7 +578,7 @@ impl SwapchainInfoBuilder {
     ///
     /// # Panics
     ///
-    /// If any of the following values have not been set this function will panic:
+    /// If any of the following values have not been set this function will panic.
     ///
     /// * `command_buffer_count`
     /// * `width`
@@ -607,10 +618,7 @@ struct Execution {
 
 #[cfg(test)]
 mod test {
-    use {
-        super::*,
-        std::mem::{offset_of, size_of},
-    };
+    use super::*;
 
     type Info = SwapchainInfo;
     type Builder = SwapchainInfoBuilder;
@@ -693,32 +701,5 @@ mod test {
             .height(1)
             .surface(vk::SurfaceFormatKHR::default())
             .build();
-    }
-
-    #[test]
-    pub fn swapchain_repr_c() {
-        // HACK: The readonly crate uses a private implementation and so we can't further deref it
-        // into the native object type. Because of this the ReadOnly part is manually implemented.
-        assert_eq!(size_of::<Swapchain>(), size_of::<ReadOnlySwapchain>());
-        assert_eq!(
-            offset_of!(Swapchain, exec_idx),
-            offset_of!(ReadOnlySwapchain, exec_idx),
-        );
-        assert_eq!(
-            offset_of!(Swapchain, execs),
-            offset_of!(ReadOnlySwapchain, execs),
-        );
-        assert_eq!(
-            offset_of!(Swapchain, image_execs),
-            offset_of!(ReadOnlySwapchain, image_execs),
-        );
-        assert_eq!(
-            offset_of!(Swapchain, info),
-            offset_of!(ReadOnlySwapchain, info),
-        );
-        assert_eq!(
-            offset_of!(Swapchain, swapchain),
-            offset_of!(ReadOnlySwapchain, swapchain),
-        );
     }
 }

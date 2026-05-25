@@ -1,4 +1,5 @@
 name: Deploy Book
+
 on:
   push:
     branches:
@@ -8,11 +9,16 @@ on:
       - "bin/**"
       - "examples/**"
 
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
-      contents: write  # To push a branch 
+      contents: read
       pages: write  # To push to a GitHub Pages site
       id-token: write # To update the deployment status
     steps:
@@ -20,13 +26,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install latest mdbook
-        run: |
-          tag=$(curl 'https://api.github.com/repos/rust-lang/mdbook/releases/latest' | jq -r '.tag_name')
-          url="https://github.com/rust-lang/mdbook/releases/download/${tag}/mdbook-${tag}-x86_64-unknown-linux-gnu.tar.gz"
-          mkdir mdbook
-          curl -sSL $url | tar -xz --directory=./mdbook
-          echo `pwd`/mdbook >> $GITHUB_PATH
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install mdBook
+        run: cargo install --locked mdbook --version 0.5.3
 
       - name: Build Book
         run: |

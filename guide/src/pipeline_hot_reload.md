@@ -14,7 +14,7 @@ hot = ["dep:vk-graph-hot"]
 
 [dependencies]
 vk-graph = "{{ crate.version }}"
-vk-graph-hot = { version = "{{ crate.version }}", optional = true }
+vk-graph-hot = { version = "{{ vk-graph-hot.version }}", optional = true }
 ```
 
 ```rust

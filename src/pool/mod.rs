@@ -137,6 +137,17 @@ fn lease_command_buffer(cache: &mut Vec<CommandBuffer>) -> Option<CommandBuffer>
     None
 }
 
+fn with_cache<T, R>(cache: &Cache<T>, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
+    let cache = cache.lock();
+
+    #[cfg(not(feature = "parking_lot"))]
+    let cache = cache.expect("poisoned cache lock");
+
+    let mut cache = cache;
+
+    f(&mut cache)
+}
+
 /// Holds a leased resource and implements `Drop` in order to return the resource.
 ///
 /// This simple wrapper type implements only the `AsRef`, `AsMut`, `Deref` and `DerefMut` traits
@@ -211,17 +222,13 @@ impl<T> Drop for Lease<T> {
         // If the pool cache has been dropped we must manually drop the item, otherwise it goes back
         // into the pool.
         if let Some(cache) = self.cache_ref.upgrade() {
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut cache = cache.lock();
+            with_cache(&cache, |cache| {
+                if cache.len() >= cache.capacity() {
+                    cache.pop();
+                }
 
-            #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
-
-            if cache.len() == cache.capacity() {
-                cache.pop();
-            }
-
-            cache.push(unsafe { ManuallyDrop::take(&mut self.item) });
+                cache.push(unsafe { ManuallyDrop::take(&mut self.item) });
+            });
         } else {
             unsafe {
                 ManuallyDrop::drop(&mut self.item);
@@ -375,8 +382,7 @@ impl From<usize> for PoolInfo {
 impl PoolInfoBuilder {
     /// Builds a new `PoolInfo`.
     pub fn build(self) -> PoolInfo {
-        self.fallible_build()
-            .expect("All required fields set at initialization")
+        self.fallible_build().expect("invalid pool info")
     }
 }
 

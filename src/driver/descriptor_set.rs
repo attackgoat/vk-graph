@@ -1,4 +1,4 @@
-//! TODO
+//! Descriptor pool allocation helpers used by pipeline execution.
 
 use {
     super::{DescriptorSetLayout, DriverError, device::Device},
@@ -7,9 +7,9 @@ use {
     std::{ops::Deref, slice, thread::panicking},
 };
 
-/// TODO
+/// Descriptor pool resource used to allocate descriptor sets for pipeline execution.
 #[derive(Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct DescriptorPool {
     /// The device which owns this descriptor pool resource.
     ///
@@ -151,7 +151,7 @@ impl DescriptorPool {
             )
         }
         .map_err(|err| {
-            warn!("{err}");
+            warn!("unable to create descriptor pool: {err}");
 
             DriverError::Unsupported
         })?;
@@ -169,7 +169,7 @@ impl DescriptorPool {
     ) -> Result<DescriptorSet, DriverError> {
         Ok(Self::allocate_descriptor_sets(this, layout, 1)?
             .next()
-            .unwrap())
+            .expect("missing descriptor set"))
     }
 
     #[profiling::function]
@@ -189,7 +189,7 @@ impl DescriptorPool {
                 .map_err(|err| {
                     use {DriverError::*, vk::Result as vk};
 
-                    warn!("{err}");
+                    warn!("unable to allocate descriptor sets: {err}");
 
                     match err {
                         e if e == vk::ERROR_FRAGMENTED_POOL => InvalidData,
@@ -222,7 +222,7 @@ impl Drop for DescriptorPool {
     }
 }
 
-/// TODO
+/// Descriptor counts and limits used to create a [`DescriptorPool`].
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct DescriptorPoolInfo {
     pub(crate) acceleration_structure_count: u32,

@@ -24,7 +24,7 @@ use {
     ash::vk,
     log::{
         Level::{Debug, Trace},
-        debug, log_enabled, trace,
+        debug, log_enabled, trace, warn,
     },
     std::{
         cell::RefCell,
@@ -131,7 +131,9 @@ impl AccessCache {
                 {
                     self.accesses[pass_start + node_idx] = true;
 
-                    if nodes[node_idx] && is_read_access(accesses.first().unwrap().access) {
+                    if nodes[node_idx]
+                        && is_read_access(accesses.first().expect("missing resource access").access)
+                    {
                         self.reads[pass_start + read_count] = node_idx;
                         nodes[node_idx] = false;
                         read_count += 1;
@@ -171,6 +173,15 @@ struct PhysicalPass {
     descriptor_pool: Option<Lease<DescriptorPool>>,
     exec_descriptor_sets: HashMap<usize, Vec<DescriptorSet>>,
     render_pass: Option<Lease<RenderPass>>,
+}
+
+impl PhysicalPass {
+    /// # Panics
+    ///
+    /// Panics if the physical pass has no render pass.
+    fn expect_render_pass_mut(&mut self) -> &mut Lease<RenderPass> {
+        self.render_pass.as_mut().expect("missing render pass")
+    }
 }
 
 impl Drop for PhysicalPass {
@@ -399,6 +410,15 @@ impl Queue {
         }
     }
 
+    fn expect_attachment_image<'a>(
+        bindings: &'a [AnyResource],
+        attachment: &Attachment,
+    ) -> &'a Image {
+        bindings[attachment.target]
+            .as_image()
+            .expect("invalid attachment target image")
+    }
+
     #[profiling::function]
     fn begin_render_pass(
         cmd_buf: &CommandBuffer,
@@ -409,7 +429,7 @@ impl Queue {
     ) -> Result<(), DriverError> {
         trace!("  begin render pass");
 
-        let render_pass = physical_pass.render_pass.as_mut().unwrap();
+        let render_pass = physical_pass.expect_render_pass_mut();
         let attachment_count = render_pass.info.attachments.len();
 
         let mut attachments = Vec::with_capacity(attachment_count);
@@ -446,7 +466,7 @@ impl Queue {
                             },
                         };
 
-                        let image = bindings[attachment.target].as_image().unwrap();
+                        let image = Self::expect_attachment_image(bindings, attachment);
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -474,7 +494,7 @@ impl Queue {
                         .view_formats
                         .binary_search(&attachment.format)
                     {
-                        let image = bindings[attachment.target].as_image().unwrap();
+                        let image = Self::expect_attachment_image(bindings, attachment);
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -500,7 +520,7 @@ impl Queue {
                             depth_stencil: *clear_value,
                         };
 
-                        let image = bindings[attachment.target].as_image().unwrap();
+                        let image = Self::expect_attachment_image(bindings, attachment);
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -526,7 +546,7 @@ impl Queue {
                         .view_formats
                         .binary_search(&attachment.format)
                     {
-                        let image = bindings[attachment.target].as_image().unwrap();
+                        let image = Self::expect_attachment_image(bindings, &attachment);
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -550,7 +570,7 @@ impl Queue {
                         .view_formats
                         .binary_search(&attachment.format)
                     {
-                        let image = bindings[attachment.target].as_image().unwrap();
+                        let image = Self::expect_attachment_image(bindings, &attachment);
 
                         attachment_image.flags = image.info.flags;
                         attachment_image.usage = image.info.usage;
@@ -660,7 +680,7 @@ impl Queue {
         let pipeline = match pipeline {
             ExecutionPipeline::Compute(pipeline) => pipeline.handle(),
             ExecutionPipeline::Graphic(pipeline) => RenderPass::pipeline_handle(
-                physical_pass.render_pass.as_mut().unwrap(),
+                physical_pass.expect_render_pass_mut(),
                 pipeline,
                 depth_stencil,
                 exec_idx as _,
@@ -717,51 +737,56 @@ impl Queue {
         };
 
         // Find the total count of descriptors per type (there may be multiple pipelines!)
-        for pool_sizes in pass.descriptor_pools_sizes() {
-            for pool_size in pool_sizes.values() {
-                for (&descriptor_ty, &descriptor_count) in pool_size {
-                    debug_assert_ne!(descriptor_count, 0);
+        for pool_size in pass.descriptor_pools_sizes() {
+            for (&descriptor_ty, &descriptor_count) in pool_size {
+                debug_assert_ne!(descriptor_count, 0);
 
-                    match descriptor_ty {
-                        vk::DescriptorType::ACCELERATION_STRUCTURE_KHR => {
-                            info.acceleration_structure_count += descriptor_count;
-                        }
-                        vk::DescriptorType::COMBINED_IMAGE_SAMPLER => {
-                            info.combined_image_sampler_count += descriptor_count;
-                        }
-                        vk::DescriptorType::INPUT_ATTACHMENT => {
-                            info.input_attachment_count += descriptor_count;
-                        }
-                        vk::DescriptorType::SAMPLED_IMAGE => {
-                            info.sampled_image_count += descriptor_count;
-                        }
-                        vk::DescriptorType::SAMPLER => {
-                            info.sampler_count += descriptor_count;
-                        }
-                        vk::DescriptorType::STORAGE_BUFFER => {
-                            info.storage_buffer_count += descriptor_count;
-                        }
-                        vk::DescriptorType::STORAGE_BUFFER_DYNAMIC => {
-                            info.storage_buffer_dynamic_count += descriptor_count;
-                        }
-                        vk::DescriptorType::STORAGE_IMAGE => {
-                            info.storage_image_count += descriptor_count;
-                        }
-                        vk::DescriptorType::STORAGE_TEXEL_BUFFER => {
-                            info.storage_texel_buffer_count += descriptor_count;
-                        }
-                        vk::DescriptorType::UNIFORM_BUFFER => {
-                            info.uniform_buffer_count += descriptor_count;
-                        }
-                        vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC => {
-                            info.uniform_buffer_dynamic_count += descriptor_count;
-                        }
-                        vk::DescriptorType::UNIFORM_TEXEL_BUFFER => {
-                            info.uniform_texel_buffer_count += descriptor_count;
-                        }
-                        _ => unimplemented!("{descriptor_ty:?}"),
-                    };
-                }
+                match descriptor_ty {
+                    vk::DescriptorType::ACCELERATION_STRUCTURE_KHR => {
+                        info.acceleration_structure_count += descriptor_count;
+                    }
+                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER => {
+                        info.combined_image_sampler_count += descriptor_count;
+                    }
+                    vk::DescriptorType::INPUT_ATTACHMENT => {
+                        info.input_attachment_count += descriptor_count;
+                    }
+                    vk::DescriptorType::SAMPLED_IMAGE => {
+                        info.sampled_image_count += descriptor_count;
+                    }
+                    vk::DescriptorType::SAMPLER => {
+                        info.sampler_count += descriptor_count;
+                    }
+                    vk::DescriptorType::STORAGE_BUFFER => {
+                        info.storage_buffer_count += descriptor_count;
+                    }
+                    vk::DescriptorType::STORAGE_BUFFER_DYNAMIC => {
+                        info.storage_buffer_dynamic_count += descriptor_count;
+                    }
+                    vk::DescriptorType::STORAGE_IMAGE => {
+                        info.storage_image_count += descriptor_count;
+                    }
+                    vk::DescriptorType::STORAGE_TEXEL_BUFFER => {
+                        info.storage_texel_buffer_count += descriptor_count;
+                    }
+                    vk::DescriptorType::UNIFORM_BUFFER => {
+                        info.uniform_buffer_count += descriptor_count;
+                    }
+                    vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC => {
+                        info.uniform_buffer_dynamic_count += descriptor_count;
+                    }
+                    vk::DescriptorType::UNIFORM_TEXEL_BUFFER => {
+                        info.uniform_texel_buffer_count += descriptor_count;
+                    }
+                    _ => {
+                        warn!(
+                            "unsupported descriptor type {descriptor_ty:?} while sizing descriptor pool for pass \"{}\"",
+                            pass.name()
+                        );
+
+                        return Err(DriverError::Unsupported);
+                    }
+                };
             }
         }
 
@@ -1026,7 +1051,9 @@ impl Queue {
                 if !depth_stencil_resolve_set
                     && let Some((resolved_attachment, ..)) = exec.depth_stencil_resolve
                 {
-                    let attachment = attachments.last_mut().unwrap();
+                    let attachment = attachments
+                        .last_mut()
+                        .expect("missing depth stencil resolve attachment");
                     attachment.fmt = resolved_attachment.format;
                     attachment.sample_count = resolved_attachment.sample_count;
                     attachment.final_layout = if resolved_attachment
@@ -1062,8 +1089,8 @@ impl Queue {
             let pipeline = exec
                 .pipeline
                 .as_ref()
-                .map(|pipeline| pipeline.unwrap_graphic())
-                .unwrap();
+                .expect("missing graphic pipeline")
+                .expect_graphic();
             let mut subpass_info = SubpassInfo::with_capacity(attachment_count);
 
             // Add input attachments
@@ -1078,7 +1105,7 @@ impl Queue {
                     .get(attachment_idx)
                     .or_else(|| exec.color_loads.get(attachment_idx))
                     .or_else(|| exec.color_stores.get(attachment_idx))
-                    .expect("subpass input attachment index not attached, loaded, or stored");
+                    .expect("missing input attachment");
                 let is_random_access = exec.color_stores.contains_key(attachment_idx);
                 subpass_info.input_attachments.push(AttachmentRef {
                     attachment: *attachment_idx,
@@ -1214,8 +1241,9 @@ impl Queue {
                 for (exec_idx, exec) in pass.execs.iter().enumerate() {
                     // Check accesses
                     'accesses: for (node_idx, accesses) in exec.accesses.iter() {
-                        let (mut curr_stages, mut curr_access) =
-                            pipeline_stage_access_flags(accesses.first().unwrap().access);
+                        let (mut curr_stages, mut curr_access) = pipeline_stage_access_flags(
+                            accesses.first().expect("missing resource access").access,
+                        );
                         if curr_stages.contains(vk::PipelineStageFlags::ALL_COMMANDS) {
                             curr_stages |= vk::PipelineStageFlags::ALL_GRAPHICS;
                             curr_stages &= !vk::PipelineStageFlags::ALL_COMMANDS;
@@ -1711,13 +1739,18 @@ impl Queue {
             // starts with input we just blow up b/c we can't provide it, or at least shouldn't.
             debug_assert!(!pass.execs.is_empty());
             debug_assert!(
-                pass.execs[0].pipeline.is_none()
-                    || !pass.execs[0].pipeline.as_ref().unwrap().is_graphic()
-                    || pass.execs[0]
+                pass.expect_first_exec().pipeline.is_none()
+                    || !pass
+                        .expect_first_exec()
                         .pipeline
                         .as_ref()
-                        .unwrap()
-                        .unwrap_graphic()
+                        .is_some_and(|pipeline| pipeline.is_graphic())
+                    || pass
+                        .expect_first_exec()
+                        .pipeline
+                        .as_ref()
+                        .expect("missing graphic pipeline")
+                        .expect_graphic()
                         .inner
                         .descriptor_info
                         .pool_sizes
@@ -1728,7 +1761,8 @@ impl Queue {
             );
 
             // Also the renderpass may just be None if the pass contained no graphic ops.
-            let render_pass = if pass.execs[0]
+            let render_pass = if pass
+                .expect_first_exec()
                 .pipeline
                 .as_ref()
                 .map(|pipeline| pipeline.is_graphic())
@@ -1767,13 +1801,17 @@ impl Queue {
             // debug!("attempting to merge {} passes", schedule.len(),);
 
             while idx < schedule.len() {
-                let mut pass = passes[schedule[idx]].take().unwrap();
+                let mut pass = passes[schedule[idx]]
+                    .take()
+                    .expect("missing scheduled pass");
 
                 // Find candidates
                 let start = idx + 1;
                 let mut end = start;
                 while end < schedule.len() {
-                    let other = passes[schedule[end]].as_ref().unwrap();
+                    let other = passes[schedule[end]]
+                        .as_ref()
+                        .expect("missing scheduled pass");
 
                     debug!(
                         "attempting to merge [{idx}: {}] with [{end}: {}]",
@@ -1803,7 +1841,9 @@ impl Queue {
                     let mut name_additional = 0;
                     let mut execs_additional = 0;
                     for idx in start..end {
-                        let other = passes[schedule[idx]].as_ref().unwrap();
+                        let other = passes[schedule[idx]]
+                            .as_ref()
+                            .expect("missing scheduled pass");
                         name_additional += other.name().len() + 3;
                         execs_additional += other.execs.len();
                     }
@@ -1813,7 +1853,9 @@ impl Queue {
                 }
 
                 for idx in start..end {
-                    let mut other = passes[schedule[idx]].take().unwrap();
+                    let mut other = passes[schedule[idx]]
+                        .take()
+                        .expect("missing scheduled pass");
                     name.push_str(" + ");
                     name.push_str(other.name());
                     pass.execs.append(&mut other.execs);
@@ -1948,7 +1990,7 @@ impl Queue {
 
                         let prev_access = AccelerationStructure::access(
                             accel_struct,
-                            accesses.last().unwrap().access,
+                            accesses.last().expect("missing resource access").access,
                         );
 
                         tls.next_accesses.extend(
@@ -2415,7 +2457,7 @@ impl Queue {
                 let render_area = is_graphic.then(|| {
                     pass.execs[exec_idx]
                         .render_area
-                        .unwrap_or(render_area.unwrap())
+                        .unwrap_or(render_area.expect("missing render area"))
                 });
 
                 let exec = &mut pass.execs[exec_idx];
@@ -2434,7 +2476,7 @@ impl Queue {
                     )?;
 
                     if is_graphic {
-                        let render_area = render_area.unwrap();
+                        let render_area = render_area.expect("missing render area");
 
                         // In this case we set the viewport and scissor for the user
                         Self::set_viewport(
@@ -2476,7 +2518,7 @@ impl Queue {
                 {
                     profiling::scope!("Execute callback");
 
-                    let exec_func = exec.func.take().unwrap().0;
+                    let exec_func = exec.func.take().expect("missing command function").0;
                     exec_func(crate::cmd::CommandBuffer::new(
                         cmd_buf,
                         &self.graph.resources,
@@ -2509,7 +2551,10 @@ impl Queue {
                     if pass_idx == schedule_idx {
                         // This was a scheduled pass - store it!
 
-                        cmd_buf.drop_after_executed((pass, self.physical_passes.pop().unwrap()));
+                        cmd_buf.drop_after_executed((
+                            pass,
+                            self.physical_passes.pop().expect("missing physical pass"),
+                        ));
                         break;
                     } else {
                         debug_assert!(pass_idx > schedule_idx);
@@ -2534,7 +2579,7 @@ impl Queue {
     fn render_extent(bindings: &[AnyResource], pass: &CommandData) -> vk::Extent2D {
         // set_render_area was not specified so we're going to guess using the minimum common
         // attachment extents
-        let first_exec = pass.execs.first().unwrap();
+        let first_exec = pass.expect_first_exec();
 
         // We must be able to find the render area because render passes require at least one
         // image to be attached
@@ -2554,7 +2599,7 @@ impl Queue {
             .chain(first_exec.depth_stencil_load)
             .chain(first_exec.depth_stencil_store)
             .map(|attachment| {
-                let info = bindings[attachment.target].as_image().unwrap().info;
+                let info = Self::expect_attachment_image(bindings, &attachment).info;
 
                 (
                     info.width >> attachment.base_mip_level,
@@ -3009,7 +3054,7 @@ impl Queue {
                 let descriptor_type = descriptor_info.descriptor_type();
                 let bound_node = &bindings[*node_idx];
                 if let Some(image) = bound_node.as_image() {
-                    let mut image_view_info = *view_info.as_image().unwrap();
+                    let mut image_view_info = *view_info.expect_image();
 
                     // Handle default views which did not specify a particaular aspect
                     if image_view_info.aspect_mask.is_empty() {
@@ -3039,7 +3084,17 @@ impl Queue {
                             }
                         }
                         vk::DescriptorType::STORAGE_IMAGE => vk::ImageLayout::GENERAL,
-                        _ => unimplemented!("{descriptor_type:?}"),
+                        _ => {
+                            warn!(
+                                "invalid image descriptor type {descriptor_type:?} at binding {}.{}[{}] in pass \"{}\"",
+                                descriptor_set_idx,
+                                dst_binding,
+                                binding_offset,
+                                pass.name()
+                            );
+
+                            return Err(DriverError::InvalidData);
+                        }
                     };
 
                     if binding_offset == 0 {
@@ -3054,7 +3109,11 @@ impl Queue {
                             },
                         });
                     } else {
-                        tls.image_writes.last_mut().unwrap().write.descriptor_count += 1;
+                        tls.image_writes
+                            .last_mut()
+                            .expect("missing image descriptor write")
+                            .write
+                            .descriptor_count += 1;
                     }
 
                     tls.image_infos.push(
@@ -3063,7 +3122,7 @@ impl Queue {
                             .image_view(image_view),
                     );
                 } else if let Some(buffer) = bound_node.as_buffer() {
-                    let buffer_view_info = view_info.as_buffer().unwrap();
+                    let buffer_view_info = view_info.expect_buffer();
 
                     if binding_offset == 0 {
                         tls.buffer_writes.push(IndexWrite {
@@ -3077,7 +3136,11 @@ impl Queue {
                             },
                         });
                     } else {
-                        tls.buffer_writes.last_mut().unwrap().write.descriptor_count += 1;
+                        tls.buffer_writes
+                            .last_mut()
+                            .expect("missing buffer descriptor write")
+                            .write
+                            .descriptor_count += 1;
                     }
 
                     tls.buffer_infos.push(
@@ -3099,7 +3162,7 @@ impl Queue {
                     } else {
                         tls.accel_struct_writes
                             .last_mut()
-                            .unwrap()
+                            .expect("missing acceleration structure descriptor write")
                             .write
                             .descriptor_count += 1;
                     }
@@ -3109,7 +3172,15 @@ impl Queue {
                             .acceleration_structures(std::slice::from_ref(&accel_struct.handle)),
                     );
                 } else {
-                    unimplemented!();
+                    warn!(
+                        "invalid bound resource kind at descriptor {}.{}[{}] in pass \"{}\"",
+                        descriptor_set_idx,
+                        dst_binding,
+                        binding_offset,
+                        pass.name()
+                    );
+
+                    return Err(DriverError::InvalidData);
                 }
             }
 
@@ -3145,10 +3216,12 @@ impl Queue {
                                         })
                                 })
                                 .expect("input attachment not written");
-                            let late = &write_exec.accesses[&attachment.target].last().unwrap();
-                            let image_range = late.subresource.as_image().unwrap();
+                            let late = &write_exec.accesses[&attachment.target]
+                                .last()
+                                .expect("missing input attachment access");
+                            let image_range = late.subresource.expect_image();
                             let image_binding = &bindings[attachment.target];
-                            let image = image_binding.as_image().unwrap();
+                            let image = image_binding.expect_image();
                             let image_view_info = attachment
                                 .image_view_info(image.info)
                                 .into_builder()

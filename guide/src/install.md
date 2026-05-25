@@ -17,11 +17,9 @@ available.
 
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
-- **`profile_with_`** — Use the specified profiling backend
-    - ...**`puffin`**
-    - ...**`optick`**
-    - ...**`superluminal`**
-    - ...**`tracy`**
+- **`profile-with-*`** — Use the specified profiling backend:
+  `profile-with-puffin`, `profile-with-optick`, `profile-with-superluminal`, or
+  `profile-with-tracy`
 
 ## Required Development Packages
 
@@ -34,7 +32,7 @@ _Mac OS (10.15 or later)_:
 - `brew install cmake ossp-uuid`
 
 _Windows_:
-- TODO
+- Install the Vulkan SDK and the current Visual Studio C++ build tools.
 
 ## Vulkan SDK
 

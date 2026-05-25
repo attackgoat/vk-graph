@@ -9,11 +9,7 @@ use {
             device::{Device, DeviceInfo},
             image::ImageInfo,
         },
-        pool::{
-            Pool as _,
-            cache::Cache,
-            hash::HashPool,
-        },
+        pool::{Pool as _, cache::Cache, hash::HashPool},
     },
 };
 

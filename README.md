@@ -21,7 +21,7 @@ vk-graph = "0.14"
 ## Overview
 
 _vk-graph_ supports desktop, mobile, and AR/VR platforms in headless, windowed, or full-screen
-modes. An [accessory crate]((crates/vk-graph-window/README.md)) is provided for `winit` support:
+modes. An [accessory crate](crates/vk-graph-window/README.md) is provided for `winit` support:
 
 ```rust
 use vk_graph_window::{Window, WindowError};
@@ -59,7 +59,7 @@ graph
     .bind_pipeline(&gfx_pipeline)
     .shader_resource_access(0, prev_image, AccessType::FragmentShaderReadColorInputAttachment)
     .shader_resource_access(1, some_image, AccessType::FragmentShaderReadOther)
-    .shader_resource_access(3, fire_buffer, Access::FragmentShaderReadUniformBuffer)
+    .shader_resource_access(3, fire_buffer, AccessType::FragmentShaderReadUniformBuffer)
     .color_attachment_image(0, swapchain_image, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
     .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::DontCare)
     .record_cmd_buf(move |cmd_buf| {
@@ -79,11 +79,9 @@ available.
 
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
-- **`profile_with_`** — Use the specified profiling backend
-    - ...**`puffin`**
-    - ...**`optick`**
-    - ...**`superluminal`**
-    - ...**`tracy`**
+- **`profile-with-*`** — Use the specified profiling backend:
+  `profile-with-puffin`, `profile-with-optick`, `profile-with-superluminal`, or
+  `profile-with-tracy`
 
 <br>
 
@@ -116,7 +114,7 @@ DEBUG vk_graph::driver::physical_device > extension "VK_KHR_acceleration_structu
 
 ## Performance Profiling
 
-This crates uses [`profiling`](https://crates.io/crates/profiling) and supports multiple profiling
+This crate uses [`profiling`](https://crates.io/crates/profiling) and supports multiple profiling
 providers. When not in use profiling has zero cost.
 
 To enable profiling, compile with one of the `profile-with-*` features enabled and initialize the

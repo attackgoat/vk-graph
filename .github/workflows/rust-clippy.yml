@@ -7,7 +7,7 @@
 # More details at https://github.com/rust-lang/rust-clippy 
 # and https://rust-lang.github.io/rust-clippy/
 
-name: rust-clippy analyze
+name: Clippy SARIF
 
 on:
   push:
@@ -18,37 +18,47 @@ on:
   schedule:
     - cron: '24 22 * * 3'
 
+concurrency:
+  group: clippy-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust-clippy-analyze:
     name: Run rust-clippy analyzing
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af #@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
           components: clippy
-          override: true
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Install required cargo
-        run: cargo install clippy-sarif sarif-fmt
+        run: |
+          cargo install --locked clippy-sarif --version 0.8.0
+          cargo install --locked sarif-fmt --version 0.8.0
 
       - name: Run rust-clippy
-        run:
-          cargo clippy
-          --all-features
-          --message-format=json | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
-        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --all-features --all-targets --workspace --message-format=json \
+            | clippy-sarif \
+            | tee rust-clippy-results.sarif \
+            | sarif-fmt
 
       - name: Upload analysis results to GitHub
-        uses: github/codeql-action/upload-sarif@v1
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: rust-clippy-results.sarif
           wait-for-processing: true

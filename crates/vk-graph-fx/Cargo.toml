@@ -2,14 +2,14 @@
 name = "vk-graph-fx"
 version = "0.1.0"
 authors = ["John Wells <john@attackgoat.com>"]
-documentation = "https://docs.rs/vk-graph"
-homepage = "https://github.com/attackgoat/vk-graph/crates/vk-graph-fx"
+documentation = "https://docs.rs/vk-graph-fx"
+homepage = "https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-fx"
 keywords = ["gamedev", "vulkan"]
 categories = ["game-development", "multimedia::images", "rendering::engine"]
 description = "A bunch of pre-built utilities that are helpful when using vk-graph"
 edition.workspace = true
 license.workspace = true
-readme.workspace = true
+readme = "README.md"
 repository.workspace = true
 
 [features]

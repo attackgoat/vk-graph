@@ -12,7 +12,7 @@ This section lists the absolute minimum requirements you must understand and pra
 involved with this project. If you fail to uphold the spirit of these rules you will not have any
 access to make changes within this project and you may be banned entirely.
 
-## Licesnsing Requirements
+## Licensing Requirements
 
 All contributions, ideas, issues, or other efforts you expend on this project must be provided
 using the existing MIT or Apache 2.0 license agreements applied to this project. This means that
@@ -24,12 +24,12 @@ retain no ownership or control after contribution.
 
 All code must:
 
-- Be modern Rust code (currently 2021 edition, latest stable compiler) _or_ GLSL.
+- Be modern Rust code (currently 2024 edition, latest stable compiler) _or_ GLSL.
 - Pass `cargo fmt` and `cargo clippy` (debug and release) with no warnings
 - Support required platforms: Linux, Mac, Windows
 - Use only `crates.io`-published crates
 
-### Recommentations
+### Recommendations
 
 All code should:
 

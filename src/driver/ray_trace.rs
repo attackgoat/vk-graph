@@ -23,7 +23,7 @@ use {
 ///
 /// Also contains information about the object.
 #[derive(Clone, Debug)]
-#[readonly::make]
+#[read_only::cast]
 pub struct RayTracePipeline {
     pub(crate) inner: Arc<RayTracePipelineInner>,
 }
@@ -92,6 +92,8 @@ impl RayTracePipeline {
         S: Into<Shader>,
     {
         if device.physical_device.ray_trace_properties.is_none() {
+            warn!("unsupported ray trace pipeline creation: missing ray trace properties");
+
             return Err(DriverError::Unsupported);
         }
 
@@ -138,7 +140,7 @@ impl RayTracePipeline {
                     None,
                 )
                 .map_err(|err| {
-                    warn!("{err}");
+                    warn!("unable to create ray trace pipeline layout: {err}");
 
                     DriverError::Unsupported
                 })?;
@@ -147,7 +149,7 @@ impl RayTracePipeline {
                 .map(|shader| CString::new(shader.entry_name.as_str()))
                 .collect::<Result<_, _>>()
                 .map_err(|err| {
-                    warn!("{err}");
+                    warn!("invalid ray trace shader entry name: {err}");
 
                     DriverError::InvalidData
                 })?;
@@ -165,7 +167,7 @@ impl RayTracePipeline {
                         None,
                     )
                     .map_err(|err| {
-                        warn!("{err}");
+                        warn!("unable to create ray trace shader module: {err}");
 
                         device.destroy_pipeline_layout(layout, None);
 
@@ -197,36 +199,30 @@ impl RayTracePipeline {
             }
 
             let ray_trace_ext = Device::expect_ray_trace_ext(device);
-            let handle = ray_trace_ext.create_ray_tracing_pipelines(
-                vk::DeferredOperationKHR::null(),
-                Device::pipeline_cache(device),
-                &[vk::RayTracingPipelineCreateInfoKHR::default()
-                    .stages(&shader_stages)
-                    .groups(&shader_groups)
-                    .max_pipeline_ray_recursion_depth(
-                        info.max_ray_recursion_depth.min(
-                            device
-                                .physical_device
-                                .ray_trace_properties
-                                .as_ref()
-                                .unwrap()
-                                .max_ray_recursion_depth,
-                        ),
-                    )
-                    .layout(layout)
-                    .dynamic_state(
-                        &vk::PipelineDynamicStateCreateInfo::default()
-                            .dynamic_states(&dynamic_states),
-                    )],
-                None,
-            );
+            let handle =
+                ray_trace_ext.create_ray_tracing_pipelines(
+                    vk::DeferredOperationKHR::null(),
+                    Device::pipeline_cache(device),
+                    &[vk::RayTracingPipelineCreateInfoKHR::default()
+                        .stages(&shader_stages)
+                        .groups(&shader_groups)
+                        .max_pipeline_ray_recursion_depth(info.max_ray_recursion_depth.min(
+                            Device::expect_ray_trace_properties(device).max_ray_recursion_depth,
+                        ))
+                        .layout(layout)
+                        .dynamic_state(
+                            &vk::PipelineDynamicStateCreateInfo::default()
+                                .dynamic_states(&dynamic_states),
+                        )],
+                    None,
+                );
 
             for shader_module in shader_modules.iter().copied() {
                 device.destroy_shader_module(shader_module, None);
             }
 
             let handle = handle.map_err(|(pipelines, err)| {
-                warn!("{err}");
+                warn!("unable to create ray trace pipeline: {err}");
 
                 for pipeline in pipelines {
                     device.destroy_pipeline(pipeline, None);
@@ -239,11 +235,7 @@ impl RayTracePipeline {
             let &RayTraceProperties {
                 shader_group_handle_size,
                 ..
-            } = device
-                .physical_device
-                .ray_trace_properties
-                .as_ref()
-                .unwrap();
+            } = Device::expect_ray_trace_properties(device);
 
             let push_constants = merge_push_constant_ranges(&push_constants).into_boxed_slice();
 
@@ -306,13 +298,7 @@ impl RayTracePipeline {
         let &RayTraceProperties {
             shader_group_handle_size,
             ..
-        } = self
-            .inner
-            .device
-            .physical_device
-            .ray_trace_properties
-            .as_ref()
-            .unwrap();
+        } = Device::expect_ray_trace_properties(&self.inner.device);
         let start = idx * shader_group_handle_size as usize;
         let end = start + shader_group_handle_size as usize;
 
@@ -482,7 +468,8 @@ impl RayTracePipelineInfoBuilder {
     /// Builds a new `RayTracePipelineInfo`.
     #[inline(always)]
     pub fn build(self) -> RayTracePipelineInfo {
-        self.fallible_build().unwrap()
+        self.fallible_build()
+            .expect("invalid ray trace pipeline info")
     }
 }
 
