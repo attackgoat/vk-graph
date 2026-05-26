@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - vk-graph # TEMP
+      - vk-graph
     paths-ignore:
       - "bin/**"
       - "examples/**"
@@ -19,16 +19,29 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pages: write  # To push to a GitHub Pages site
-      id-token: write # To update the deployment status
+      pages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Install mdBook
         run: cargo install --locked mdbook --version 0.5.3
@@ -44,7 +57,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: 'guide/book'
+          path: guide/book
 
       - name: Deploy to GitHub Pages
         id: deployment
