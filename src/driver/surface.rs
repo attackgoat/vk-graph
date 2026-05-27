@@ -1,7 +1,7 @@
 //! Native platform window surface types.
 
 use {
-    super::{DriverError, device::Device},
+    super::{DriverError, device::Device, instance::Instance},
     ash::vk,
     ash_window::create_surface,
     log::warn,
@@ -68,7 +68,7 @@ impl Surface {
 
         let handle = unsafe {
             create_surface(
-                &device.physical_device.instance.entry,
+                Instance::entry(&device.physical_device.instance),
                 &device.physical_device.instance,
                 display_handle.as_raw(),
                 window_handle.as_raw(),

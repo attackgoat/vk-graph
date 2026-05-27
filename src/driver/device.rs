@@ -228,7 +228,8 @@ impl Device {
         }
 
         let surface_ext = physical_device.swapchain_ext.then(|| {
-            khr::surface::Instance::new(&physical_device.instance.entry, &physical_device.instance)
+            let entry = Instance::entry(&physical_device.instance);
+            khr::surface::Instance::new(entry, &physical_device.instance)
         });
         let swapchain_ext = physical_device
             .swapchain_ext

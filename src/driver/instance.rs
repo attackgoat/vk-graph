@@ -273,12 +273,6 @@ impl TryFrom<u32> for ApiVersion {
 #[read_only::embed]
 #[allow(private_interfaces)]
 pub struct Instance {
-    /// The ash entrypoint.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub entry: ash::Entry,
-
     /// Information used to create this resource.
     ///
     /// _Note:_ This field is read-only.
@@ -299,7 +293,6 @@ impl Clone for Instance {
     fn clone(&self) -> Self {
         Self {
             read_only: ReadOnlyInstance {
-                entry: self.entry.clone(),
                 info: self.info,
                 surface_ext: self.surface_ext,
                 inner: self.inner.clone(),
@@ -488,16 +481,21 @@ impl Instance {
 
         Ok(Self {
             read_only: ReadOnlyInstance {
-                entry,
                 info,
                 inner: Arc::new(InstanceInner {
                     debug_utils,
+                    entry,
                     instance,
                     instance_created: true,
                 }),
                 surface_ext,
             },
         })
+    }
+
+    /// The ash entrypoint used to load Vulkan instance functions.
+    pub fn entry(this: &Self) -> &ash::Entry {
+        &this.inner.entry
     }
 
     #[deprecated = "use try_from_entry"]
@@ -634,13 +632,13 @@ impl Instance {
 
         Ok(Self {
             read_only: ReadOnlyInstance {
-                entry,
                 info: InstanceInfo {
                     api_version,
                     ..Default::default()
                 },
                 inner: Arc::new(InstanceInner {
                     debug_utils: None,
+                    entry,
                     instance,
                     instance_created: false,
                 }),
@@ -730,6 +728,7 @@ impl From<InstanceInfoBuilder> for InstanceInfo {
 
 struct InstanceInner {
     debug_utils: Option<(ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
+    entry: ash::Entry,
     instance: ash::Instance,
     instance_created: bool,
 }
