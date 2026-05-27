@@ -1,6 +1,6 @@
 # Graphics
 
-Graphic commands are recorded after binding a [`GraphicPipeline`] and declaring attachments such as
+Graphic commands are recorded after binding a `GraphicPipeline` and declaring attachments such as
 `color_attachment_image` or `depth_stencil_attachment_image`.
 
 ## Available Commands

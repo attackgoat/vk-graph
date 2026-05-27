@@ -1,6 +1,7 @@
 //! `winit` window, event loop, and swapchain helpers for `vk-graph`.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 mod frame;
 pub mod swapchain;

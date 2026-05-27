@@ -1,6 +1,7 @@
 //! Dear ImGui renderer integration for `vk-graph`.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 /// Common imports for applications using the ImGui integration.
 pub mod prelude {

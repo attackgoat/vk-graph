@@ -11,7 +11,8 @@ For an overview, including installation and typical usage, see the
 
 */
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod cmd;
 pub mod driver;

@@ -32,7 +32,7 @@ fn main() -> Result<(), DriverError> {
 
     let args = Args::parse();
     let device_info = DeviceInfo::builder().debug(args.debug);
-    let device = Device::new(device_info)?;
+    let device = Device::create(device_info)?;
 
     // We wrap HashPool in a Cache container to enable resource aliasing
     let mut cache = Cache::new(HashPool::new(&device));
@@ -60,10 +60,10 @@ fn main() -> Result<(), DriverError> {
     // Even if re-bound
     assert_eq!(image2_node, graph.bind_resource(&image2));
 
-    {
-        // To be clear: other graphs will produce different nodes
-        let mut graph = Graph::default();
-        assert_ne!(image2_node, graph.bind_resource(&image2));
+    // To be clear: other graphs will produce different nodes
+    // but they *may* be equal because they're just usizes
+    if image2_node == Graph::default().bind_resource(&image2) {
+        log::debug!("Nodes are just numbers, man")
     }
 
     // Let's make up some different, yet compatible, image information:

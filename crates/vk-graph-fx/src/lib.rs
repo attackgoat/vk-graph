@@ -1,6 +1,7 @@
 //! Reusable effects and rendering utilities built on top of `vk-graph`.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 mod bitmap_font;
 mod image_loader;

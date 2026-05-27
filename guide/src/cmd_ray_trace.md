@@ -3,7 +3,7 @@
 Ray tracing work in `vk-graph` usually has two phases:
 
 - Build or update acceleration structures with a general command buffer
-- Bind a [`RayTracePipeline`] and issue `trace_rays` or `trace_rays_indirect`
+- Bind a `RayTracePipeline` and issue `trace_rays` or `trace_rays_indirect`
 
 ## Available Commands
 

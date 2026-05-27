@@ -1,6 +1,7 @@
 //! Shader hot-reload support for `vk-graph` pipelines.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 mod compute;
 mod graphic;

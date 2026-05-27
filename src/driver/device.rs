@@ -68,33 +68,28 @@ pub struct Device {
 }
 
 impl Device {
-    /// Constructs a new device using the given configuration.
-    #[profiling::function]
+    #[deprecated = "use create"]
+    #[doc(hidden)]
     pub fn new(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
+        Self::create(info)
+    }
+
+    /// Constructs a new device using the given configuration.
+    ///
+    /// This constructor is intended for headless or manually managed setups. It does not infer or
+    /// enable display platform surface extensions. Use [`Self::try_from_display`] when the
+    /// resulting device must be capable of later surface creation.
+    #[profiling::function]
+    pub fn create(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
         let DeviceInfo {
             debug,
             physical_device_index,
         } = info.into();
         let instance_info = InstanceInfoBuilder::default().debug(debug);
-        let instance = Instance::new(instance_info)?;
+        let instance = Instance::create(instance_info)?;
         let physical_device = select_physical_device(&instance, physical_device_index)?;
 
         Self::try_from_physical_device(physical_device)
-    }
-
-    pub(crate) fn allocator(this: &Self) -> &Mutex<Allocator> {
-        &this.inner.allocator
-    }
-
-    pub(crate) fn with_allocator<R>(this: &Self, f: impl FnOnce(&mut Allocator) -> R) -> R {
-        let allocator = Self::allocator(this).lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let allocator = allocator.expect("poisoned allocator lock");
-
-        let mut allocator = allocator;
-
-        f(&mut allocator)
     }
 
     pub(crate) fn create_fence(this: &Self, signaled: bool) -> Result<vk::Fence, DriverError> {
@@ -362,6 +357,17 @@ impl Device {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn with_allocator<R>(this: &Self, f: impl FnOnce(&mut Allocator) -> R) -> R {
+        let allocator = this.inner.allocator.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let allocator = allocator.expect("poisoned allocator lock");
+
+        let mut allocator = allocator;
+
+        f(&mut allocator)
     }
 }
 

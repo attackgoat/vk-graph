@@ -321,7 +321,7 @@ impl PhysicalDevice {
         let depth_stencil_resolve_properties = depth_stencil_resolve_properties.into();
         let sampler_filter_minmax_properties = sampler_filter_minmax_properties.into();
 
-        let extensions = unsafe {
+        let extension_properties = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device)
                 .map_err(|err| {
@@ -333,8 +333,8 @@ impl PhysicalDevice {
 
         debug!("physical device: {}", &properties_v1_0.device_name);
 
-        for property in &extensions {
-            let extension_name = property.extension_name.as_ptr();
+        for prop in &extension_properties {
+            let extension_name = prop.extension_name.as_ptr();
 
             if extension_name.is_null() {
                 warn!("invalid device extension name pointer: null");
@@ -344,22 +344,22 @@ impl PhysicalDevice {
 
             let extension_name = unsafe { CStr::from_ptr(extension_name) };
 
-            debug!("extension {:?} v{}", extension_name, property.spec_version);
+            debug!("extension {:?} v{}", extension_name, prop.spec_version);
         }
 
         // Check for supported extensions
-        let extensions = extensions
+        let extension_names = extension_properties
             .iter()
-            .map(|property| property.extension_name.as_ptr())
+            .map(|prop| prop.extension_name.as_ptr())
             .filter(|extension_name| !extension_name.is_null())
             .map(|extension_name| unsafe { CStr::from_ptr(extension_name) })
             .collect::<HashSet<_>>();
-        let supports_accel_struct = extensions.contains(khr::acceleration_structure::NAME)
-            && extensions.contains(khr::deferred_host_operations::NAME);
-        let supports_index_type_uint8 = extensions.contains(ext::index_type_uint8::NAME);
-        let supports_ray_query = extensions.contains(khr::ray_query::NAME);
-        let supports_ray_trace = extensions.contains(khr::ray_tracing_pipeline::NAME);
-        let swapchain_ext = extensions.contains(khr::swapchain::NAME);
+        let supports_accel_struct = extension_names.contains(khr::acceleration_structure::NAME)
+            && extension_names.contains(khr::deferred_host_operations::NAME);
+        let supports_index_type_uint8 = extension_names.contains(ext::index_type_uint8::NAME);
+        let supports_ray_query = extension_names.contains(khr::ray_query::NAME);
+        let supports_ray_trace = extension_names.contains(khr::ray_tracing_pipeline::NAME);
+        let swapchain_ext = extension_names.contains(khr::swapchain::NAME) && instance.surface_ext;
 
         // Gather optional features and properties of the physical device
         let index_type_uint8_features = if supports_index_type_uint8 {

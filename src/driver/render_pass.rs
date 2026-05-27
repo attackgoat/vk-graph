@@ -127,7 +127,6 @@ pub struct RenderPass {
 impl RenderPass {
     #[profiling::function]
     pub(crate) fn create(device: &Device, info: RenderPassInfo) -> Result<Self, DriverError> {
-        //trace!("create: \n{:#?}", &info);
         trace!("create");
 
         let device = device.clone();
@@ -182,11 +181,6 @@ impl RenderPass {
                 subpass.depth_stencil_resolve_attachment.map(
                     |(_, depth_resolve_mode, stencil_resolve_mode)| {
                         vk::SubpassDescriptionDepthStencilResolve::default()
-                            .depth_stencil_resolve_attachment(
-                                subpass_attachments
-                                    .last()
-                                    .expect("missing subpass attachment"),
-                            )
                             .depth_resolve_mode(
                                 depth_resolve_mode.map(Into::into).unwrap_or_default(),
                             )
@@ -227,6 +221,9 @@ impl RenderPass {
             }
 
             if let Some(depth_stencil_resolve) = depth_stencil_resolve {
+                *depth_stencil_resolve = depth_stencil_resolve.depth_stencil_resolve_attachment(
+                    &subpass_attachments[depth_stencil_resolve_idx],
+                );
                 desc = desc.push_next(depth_stencil_resolve);
             }
 

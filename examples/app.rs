@@ -48,9 +48,16 @@ impl ApplicationHandler for Application {
         let surface_formats = Surface::formats(&surface).unwrap();
         let surface_format = Surface::linear_or_default(&surface_formats);
         let window_size = window.inner_size();
+        let present_mode = Surface::present_modes(&surface)
+            .unwrap()
+            .first()
+            .copied()
+            .unwrap();
         let swapchain = Swapchain::new(
             surface,
-            SwapchainInfo::new(window_size.width, window_size.height, surface_format),
+            SwapchainInfo::new(window_size.width, window_size.height, surface_format)
+                .into_builder()
+                .present_mode(present_mode),
         )
         .unwrap();
 

@@ -3199,21 +3199,49 @@ impl Queue {
                         {
                             let is_random_access = exec.color_stores.contains_key(&attachment_idx)
                                 || exec.color_resolves.contains_key(&attachment_idx);
+                            let current_attachment = exec
+                                .color_attachments
+                                .get(&attachment_idx)
+                                .copied()
+                                .or_else(|| {
+                                    exec.color_clears
+                                        .get(&attachment_idx)
+                                        .map(|(attachment, _)| *attachment)
+                                })
+                                .or_else(|| exec.color_loads.get(&attachment_idx).copied())
+                                .or_else(|| exec.color_stores.get(&attachment_idx).copied())
+                                .or_else(|| {
+                                    exec.color_resolves
+                                        .get(&attachment_idx)
+                                        .map(|(attachment, _)| *attachment)
+                                })
+                                .expect("missing input attachment target");
                             let (attachment, write_exec) = pass.execs[0..exec_idx]
                                 .iter()
                                 .rev()
                                 .find_map(|exec| {
-                                    exec.color_stores
+                                    exec.color_attachments
                                         .get(&attachment_idx)
                                         .copied()
-                                        .map(|attachment| (attachment, exec))
+                                        .or_else(|| {
+                                            exec.color_clears
+                                                .get(&attachment_idx)
+                                                .map(|(attachment, _)| *attachment)
+                                        })
+                                        .or_else(|| exec.color_loads.get(&attachment_idx).copied())
+                                        .or_else(|| exec.color_stores.get(&attachment_idx).copied())
                                         .or_else(|| {
                                             exec.color_resolves.get(&attachment_idx).map(
-                                                |(resolved_attachment, _)| {
-                                                    (*resolved_attachment, exec)
-                                                },
+                                                |(resolved_attachment, _)| *resolved_attachment,
                                             )
                                         })
+                                        .filter(|attachment| {
+                                            Attachment::are_compatible(
+                                                Some(current_attachment),
+                                                Some(*attachment),
+                                            )
+                                        })
+                                        .map(|attachment| (attachment, exec))
                                 })
                                 .expect("input attachment not written");
                             let late = &write_exec.accesses[&attachment.target]

@@ -50,18 +50,19 @@ fi
 
 # Rust code checks
 run "format check" cargo fmt --all --check
-run "workspace target check" cargo check --all-targets --workspace
-run "workspace target check (parking_lot)" cargo check --all-targets --workspace --features parking_lot
-run "workspace clippy" cargo clippy --all-targets --workspace
-run "workspace clippy (parking_lot)" cargo clippy --all-targets --workspace --features parking_lot
-run "workspace tests" cargo test --all-targets --workspace
+run "workspace target check" env RUSTFLAGS="-D warnings" cargo check --all-targets --workspace
+run "workspace target check (parking_lot)" env RUSTFLAGS="-D warnings" cargo check --all-targets --workspace --features parking_lot
+run "workspace clippy" cargo clippy --all-targets --workspace -- -D warnings
+run "workspace clippy (parking_lot)" cargo clippy --all-targets --workspace --features parking_lot -- -D warnings
+run "workspace tests" env RUSTFLAGS="-D warnings" cargo test --all-targets --workspace
 
 if [ "$RUN_GPU" -eq 1 ]; then
-    run "gpu smoke tests" cargo test --test gpu_smoke cpu_readback -- --ignored --exact --test-threads=1
+    run "gpu smoke tests" env RUSTFLAGS="-D warnings" cargo test --test gpu_smoke cpu_readback -- --ignored --exact --test-threads=1
 fi
 
-run "workspace doctests" cargo test --workspace --doc
-run "guide hot doctests" cargo test -p guide --features hot
+run "workspace doctests" env RUSTFLAGS="-D warnings" cargo test --workspace --doc
+run "workspace docs" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+run "guide hot doctests" env RUSTFLAGS="-D warnings" cargo test -p guide --features hot
 
 # Build guide book
 install_mdbook

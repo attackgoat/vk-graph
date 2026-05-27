@@ -21,7 +21,7 @@ fn main() -> Result<(), DriverError> {
     // For this example we create a headless device, but the same thing works using a window
     let args = Args::parse();
     let device_info = DeviceInfo::builder().debug(args.debug);
-    let device = Device::new(device_info)?;
+    let device = Device::create(device_info)?;
 
     let mut graph = Graph::default();
 

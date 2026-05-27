@@ -308,8 +308,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         let image_view_info = image_view_info.into();
 
         #[allow(deprecated)]
-        self.set_attach_color_as(color_attachment, image, image_view_info)
-            .set_resolve_color_as(msaa_attachment, color_attachment, image, image_view_info);
+        self.set_resolve_color_as(msaa_attachment, color_attachment, image, image_view_info);
 
         self
     }
@@ -409,14 +408,13 @@ impl PipelineCommand<'_, GraphicPipeline> {
         let image_view_info = image_view_info.into();
 
         #[allow(deprecated)]
-        self.set_attach_depth_stencil_as(image, image_view_info)
-            .set_resolve_depth_stencil_as(
-                depth_stencil_attachment,
-                image,
-                image_view_info,
-                depth_mode,
-                stencil_mode,
-            );
+        self.set_resolve_depth_stencil_as(
+            depth_stencil_attachment,
+            image,
+            image_view_info,
+            depth_mode,
+            stencil_mode,
+        );
 
         self
     }

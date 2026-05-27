@@ -32,7 +32,7 @@ fn main() -> Result<(), DriverError> {
 
     let args = Args::parse();
     let device_info = DeviceInfo::builder().debug(args.debug);
-    let device = Device::new(device_info)?;
+    let device = Device::create(device_info)?;
 
     let mut graph = Graph::default();
 

@@ -148,7 +148,7 @@ impl Swapchain {
     ///
     /// # Errors
     ///
-    /// Returns `Ok(None)` instead of [`SwapchainError::Suboptimal`]; the window-level
+    /// Returns `Ok(None)` instead of surfacing a suboptimal-state error; the window-level
     /// API collapses suboptimal into a non-error signal so the draw loop can skip
     /// the frame gracefully.
     pub fn acquire_next_image(&mut self) -> Result<Option<SwapchainImage>, SwapchainError> {

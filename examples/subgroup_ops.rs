@@ -44,7 +44,7 @@ fn main() -> Result<(), DriverError> {
 
     let args = Args::parse();
     let device_info = DeviceInfo::builder().debug(args.debug);
-    let device = Device::new(device_info)?;
+    let device = Device::create(device_info)?;
     let Vulkan11Properties {
         subgroup_size,
         subgroup_supported_operations,

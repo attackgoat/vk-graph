@@ -1,6 +1,6 @@
 # Computing
 
-Compute commands are recorded after binding a [`ComputePipeline`]. They are typically paired with
+Compute commands are recorded after binding a `ComputePipeline`. They are typically paired with
 `shader_resource_access` for storage buffers or images, and `resource_access` for indirect argument
 buffers.
 

@@ -501,10 +501,15 @@ pub enum SwapchainError {
 #[derive(Debug)]
 #[read_only::embed]
 pub struct SwapchainImage {
+    /// The underlying image resource.
+    ///
+    /// _Note:_ This field is read-only.
     #[readonly]
     image: Image,
 
     /// The swapchain image index.
+    ///
+    /// _Note:_ This field is read-only.
     #[readonly]
     pub index: u32,
 }

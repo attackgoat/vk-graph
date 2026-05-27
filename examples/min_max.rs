@@ -36,7 +36,7 @@ fn main() -> Result<(), DriverError> {
     let mut graph = Graph::default();
     let args = Args::parse();
     let device_info = DeviceInfo::builder().debug(args.debug);
-    let device = Device::new(device_info)?;
+    let device = Device::create(device_info)?;
     let size = 4;
 
     // The 4x4 depth image will have pixels that look like this:

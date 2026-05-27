@@ -119,34 +119,38 @@ unsafe extern "system" fn debug_callback(
     vk::FALSE
 }
 
-// Copied from ash-window to change the signature.
-fn enumerate_required_extensions(
+#[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+fn debug_extension_names() -> &'static [&'static CStr] {
+    &[ext::debug_utils::NAME]
+}
+
+#[cfg(all(target_os = "macos", not(feature = "loaded")))]
+fn debug_extension_names() -> &'static [&'static CStr] {
+    &[]
+}
+
+#[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+fn debug_layer_names() -> &'static [&'static CStr] {
+    &[c"VK_LAYER_KHRONOS_validation"]
+}
+
+#[cfg(all(target_os = "macos", not(feature = "loaded")))]
+fn debug_layer_names() -> &'static [&'static CStr] {
+    &[]
+}
+
+// Copied from ash_window::enumerate_required_extensions to change the signature.
+fn display_extension_names(
     display_handle: RawDisplayHandle,
 ) -> Result<&'static [&'static CStr], DriverError> {
     let extensions = match display_handle {
-        RawDisplayHandle::Windows(_) => {
-            const WINDOWS_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::win32_surface::NAME];
-            &WINDOWS_EXTS
-        }
-        RawDisplayHandle::Wayland(_) => {
-            const WAYLAND_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::wayland_surface::NAME];
-            &WAYLAND_EXTS
-        }
-        RawDisplayHandle::Xlib(_) => {
-            const XLIB_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::xlib_surface::NAME];
-            &XLIB_EXTS
-        }
-        RawDisplayHandle::Xcb(_) => {
-            const XCB_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::xcb_surface::NAME];
-            &XCB_EXTS
-        }
-        RawDisplayHandle::Android(_) => {
-            const ANDROID_EXTS: [&CStr; 2] = [khr::surface::NAME, khr::android_surface::NAME];
-            &ANDROID_EXTS
-        }
+        RawDisplayHandle::Windows(_) => &[khr::surface::NAME, khr::win32_surface::NAME],
+        RawDisplayHandle::Wayland(_) => &[khr::surface::NAME, khr::wayland_surface::NAME],
+        RawDisplayHandle::Xlib(_) => &[khr::surface::NAME, khr::xlib_surface::NAME],
+        RawDisplayHandle::Xcb(_) => &[khr::surface::NAME, khr::xcb_surface::NAME],
+        RawDisplayHandle::Android(_) => &[khr::surface::NAME, khr::android_surface::NAME],
         RawDisplayHandle::AppKit(_) | RawDisplayHandle::UiKit(_) => {
-            const METAL_EXTS: [&CStr; 2] = [khr::surface::NAME, ext::metal_surface::NAME];
-            &METAL_EXTS
+            &[khr::surface::NAME, ext::metal_surface::NAME]
         }
         _ => {
             warn!("unsupported display handle type: {display_handle:?}");
@@ -156,6 +160,26 @@ fn enumerate_required_extensions(
     };
 
     Ok(extensions)
+}
+
+// Estimates surface extension support.
+//
+// Imported instances do not expose their enabled extension list, so we infer support by
+// checking that the VK_KHR_surface entry points resolve for this instance handle.
+fn has_surface_ext(entry: &ash::Entry, instance: vk::Instance) -> bool {
+    [
+        c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+        c"vkGetPhysicalDeviceSurfaceFormatsKHR",
+        c"vkGetPhysicalDeviceSurfacePresentModesKHR",
+        c"vkGetPhysicalDeviceSurfaceSupportKHR",
+        c"vkDestroySurfaceKHR",
+    ]
+    .into_iter()
+    .all(|name| unsafe {
+        entry
+            .get_instance_proc_addr(instance, name.as_ptr())
+            .is_some()
+    })
 }
 
 /// Vulkan API version.
@@ -263,6 +287,12 @@ pub struct Instance {
 
     #[readonly]
     pub(self) inner: Arc<InstanceInner>,
+
+    /// True if `VK_KHR_surface` is enabled on this instance.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub surface_ext: bool,
 }
 
 impl Clone for Instance {
@@ -271,6 +301,7 @@ impl Clone for Instance {
             read_only: ReadOnlyInstance {
                 entry: self.entry.clone(),
                 info: self.info,
+                surface_ext: self.surface_ext,
                 inner: self.inner.clone(),
             },
         }
@@ -281,39 +312,26 @@ impl Instance {
     /// The most recent supported version of Vulkan.
     pub const LATEST_API_VERSION: ApiVersion = ApiVersion::Vulkan13;
 
+    #[deprecated = "use create"]
+    #[doc(hidden)]
+    pub fn new(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
+        Self::create(info)
+    }
+
     /// Creates a new Vulkan instance.
     ///
     /// This constructor is intended for headless or manually managed setups. It does not infer or
     /// enable display platform surface extensions. Use [`Self::try_from_display`] when the
     /// resulting instance must be capable of later surface creation.
     #[profiling::function]
-    pub fn new(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
-        Self::create(info.into(), &[])
+    pub fn create(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
+        Self::create_with_extension_names(info.into(), &[])
     }
 
-    /// Creates a new Vulkan instance with the platform surface extensions required by the provided
-    /// display handle.
-    #[profiling::function]
-    pub fn try_from_display(
-        display: impl HasDisplayHandle,
-        info: impl Into<InstanceInfo>,
+    fn create_with_extension_names(
+        info: InstanceInfo,
+        extra_extension_names: &[&CStr],
     ) -> Result<Self, DriverError> {
-        let display_handle = display.display_handle().map_err(|err| {
-            warn!("unable to get display handle: {err}");
-
-            DriverError::Unsupported
-        })?;
-        let extension_names =
-            enumerate_required_extensions(display_handle.as_raw()).map_err(|err| {
-                warn!("unable to enumerate display extensions: {err}");
-
-                DriverError::Unsupported
-            })?;
-
-        Self::create(info.into(), extension_names)
-    }
-
-    fn create(info: InstanceInfo, extension_names: &[&'static CStr]) -> Result<Self, DriverError> {
         // Required to enable non-uniform descriptor indexing (bindless)
         #[cfg(target_os = "macos")]
         unsafe {
@@ -341,11 +359,15 @@ impl Instance {
             let entry = ash_molten::load();
         };
 
-        let mut extension_names = extension_names.to_vec();
-        extension_names.extend(info.extension_names);
+        let mut extension_names = info
+            .extension_names
+            .iter()
+            .chain(extra_extension_names)
+            .copied()
+            .collect::<Vec<_>>();
 
         if info.debug {
-            extension_names.extend(Self::debug_extension_names());
+            extension_names.extend(debug_extension_names());
         }
 
         // If linking dynamically on MacOS, we require a few additional extensions.
@@ -353,9 +375,13 @@ impl Instance {
         // https://vulkan.lunarg.com/doc/view/latest/mac/getting_started.html
         #[cfg(all(target_os = "macos", feature = "loaded"))]
         {
-            extension_names.push(ash::khr::get_physical_device_properties2::NAME);
-            extension_names.push(ash::khr::portability_enumeration::NAME);
+            extension_names.extend(&[
+                ash::khr::get_physical_device_properties2::NAME,
+                ash::khr::portability_enumeration::NAME,
+            ]);
         }
+
+        let surface_ext = extension_names.contains(&khr::surface::NAME);
 
         let extension_name_ptrs = extension_names
             .iter()
@@ -363,10 +389,10 @@ impl Instance {
             .map(CStr::as_ptr)
             .collect::<Box<_>>();
 
-        let mut layer_names = Vec::with_capacity(1);
+        let mut layer_names = Vec::with_capacity(info.debug as _);
 
         if info.debug {
-            layer_names.extend(Self::debug_layer_names());
+            layer_names.extend(debug_layer_names());
         }
 
         let layer_name_ptrs = layer_names
@@ -469,79 +495,15 @@ impl Instance {
                     instance,
                     instance_created: true,
                 }),
+                surface_ext,
             },
         })
     }
 
-    /// Loads an existing Vulkan instance that may have been created by other means.
-    ///
-    /// This is useful when you want to use a Vulkan instance created by some other library, such
-    /// as OpenXR.
-    #[profiling::function]
+    #[deprecated = "use try_from_entry"]
+    #[doc(hidden)]
     pub fn from_entry(entry: ash::Entry, instance: vk::Instance) -> Result<Self, DriverError> {
-        if instance == vk::Instance::null() {
-            warn!("invalid VkInstance handle: null");
-
-            return Err(DriverError::InvalidData);
-        }
-
-        let api_version = unsafe { entry.try_enumerate_instance_version() }
-            .map_err(|err| match err {
-                vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
-                vk::Result::ERROR_VALIDATION_FAILED_EXT => DriverError::InvalidData,
-                err => {
-                    error!("unable to enumerate instance version: {err}");
-
-                    DriverError::Unsupported
-                }
-            })?
-            .unwrap_or_else(|| {
-                // The implementation *should* provide a version. If it does not we just send it.
-                Self::LATEST_API_VERSION.to_vk_api_version()
-            })
-            .try_into()
-            .map_err(|err| {
-                warn!("unsupported instance: {err}");
-
-                DriverError::Unsupported
-            })?;
-
-        let instance = unsafe { ash::Instance::load(entry.static_fn(), instance) };
-
-        Ok(Self {
-            read_only: ReadOnlyInstance {
-                entry,
-                info: InstanceInfo {
-                    api_version,
-                    ..Default::default()
-                },
-                inner: Arc::new(InstanceInner {
-                    debug_utils: None,
-                    instance,
-                    instance_created: false,
-                }),
-            },
-        })
-    }
-
-    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
-    fn debug_extension_names() -> impl IntoIterator<Item = &'static CStr> {
-        vec![ext::debug_utils::NAME]
-    }
-
-    #[cfg(all(target_os = "macos", not(feature = "loaded")))]
-    fn debug_extension_names() -> impl IntoIterator<Item = &'static CStr> {
-        vec![]
-    }
-
-    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
-    fn debug_layer_names() -> impl IntoIterator<Item = &'static CStr> {
-        vec![c"VK_LAYER_KHRONOS_validation"]
-    }
-
-    #[cfg(all(target_os = "macos", not(feature = "loaded")))]
-    fn debug_layer_names() -> Vec<&'static CStr> {
-        vec![]
+        Self::try_from_entry(entry, instance)
     }
 
     /// Returns a wrapper structure for a physical device of this instance.
@@ -610,6 +572,81 @@ impl Instance {
                     .is_ok()
                 })
             }))
+    }
+
+    /// Creates a new Vulkan instance with the platform surface extensions required by the provided
+    /// display handle.
+    #[profiling::function]
+    pub fn try_from_display(
+        display: impl HasDisplayHandle,
+        info: impl Into<InstanceInfo>,
+    ) -> Result<Self, DriverError> {
+        let display_handle = display.display_handle().map_err(|err| {
+            warn!("unable to get display handle: {err}");
+
+            DriverError::Unsupported
+        })?;
+        let display_extension_names =
+            display_extension_names(display_handle.as_raw()).map_err(|err| {
+                warn!("unable to enumerate display extensions: {err}");
+
+                DriverError::Unsupported
+            })?;
+
+        Self::create_with_extension_names(info.into(), display_extension_names)
+    }
+
+    /// Loads an existing Vulkan instance that may have been created by other means.
+    ///
+    /// This is useful when you want to use a Vulkan instance created by some other library, such
+    /// as OpenXR.
+    #[profiling::function]
+    pub fn try_from_entry(entry: ash::Entry, instance: vk::Instance) -> Result<Self, DriverError> {
+        if instance == vk::Instance::null() {
+            warn!("invalid VkInstance handle: null");
+
+            return Err(DriverError::InvalidData);
+        }
+
+        let api_version = unsafe { entry.try_enumerate_instance_version() }
+            .map_err(|err| match err {
+                vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                vk::Result::ERROR_VALIDATION_FAILED_EXT => DriverError::InvalidData,
+                err => {
+                    error!("unable to enumerate instance version: {err}");
+
+                    DriverError::Unsupported
+                }
+            })?
+            .unwrap_or_else(|| {
+                // The implementation *should* provide a version. If it does not we just send it.
+                Self::LATEST_API_VERSION.to_vk_api_version()
+            })
+            .try_into()
+            .map_err(|err| {
+                warn!("unsupported instance: {err}");
+
+                DriverError::Unsupported
+            })?;
+        let surface_ext = has_surface_ext(&entry, instance);
+
+        let instance = unsafe { ash::Instance::load(entry.static_fn(), instance) };
+
+        Ok(Self {
+            read_only: ReadOnlyInstance {
+                entry,
+                info: InstanceInfo {
+                    api_version,
+                    ..Default::default()
+                },
+                inner: Arc::new(InstanceInner {
+                    debug_utils: None,
+                    instance,
+                    instance_created: false,
+                }),
+                surface_ext,
+            },
+        })
     }
 }
 
@@ -754,7 +791,6 @@ impl Display for ParseApiVersionError {
 
 impl Error for ParseApiVersionError {}
 
-#[doc(hidden)]
 #[doc(hidden)]
 impl Deref for ReadOnlyInstance {
     type Target = ash::Instance;
