@@ -5,7 +5,7 @@ use {
     bytemuck::{bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3},
-    std::sync::Arc,
+    std::{sync::Arc, time::Instant},
     vk_graph::{
         Graph,
         cmd::{LoadOp, StoreOp},
@@ -71,9 +71,16 @@ fn main() -> anyhow::Result<()> {
     let pbr = create_pbr_pipeline(&window.device);
     let funky_shape = create_funky_shape(&window.device, &mut pool)?;
 
-    let mut t = 0.0;
+    let mut angle = 0.0;
+    let mut prev_frame_at = Instant::now();
+
     window.run(|frame| {
-        t += 0.016;
+        let now = Instant::now();
+
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
+        angle += dt.as_secs_f32();
 
         let index_buf = frame.graph.bind_resource(&funky_shape.index_buf);
         let vertex_buf = frame.graph.bind_resource(&funky_shape.vertex_buf);
@@ -90,7 +97,7 @@ fn main() -> anyhow::Result<()> {
         );
 
         let camera = camera(frame.width, frame.height);
-        let model = Mat4::from_rotation_y(t * 0.4);
+        let model = Mat4::from_rotation_y(angle);
         let obj_pos = Vec3::ZERO;
         let material = GOLD;
 

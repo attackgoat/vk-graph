@@ -125,15 +125,30 @@ impl Surface {
         Self::linear(formats).unwrap_or_else(|| formats.first().copied().unwrap_or_default())
     }
 
+    /// Returns `true` if the given queue family supports presentation on this surface.
+    pub fn physical_device_support(&self, queue_family_index: u32) -> Result<bool, DriverError> {
+        let surface_ext = Device::expect_surface_ext(&self.device);
+
+        unsafe {
+            surface_ext.get_physical_device_surface_support(self.device.physical_device.handle, queue_family_index, self.handle)
+        }.map_err(|err| {
+            warn!("unable to get physical device support: {err}");
+
+            match err {
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY |vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                vk::Result::ERROR_SURFACE_LOST_KHR => DriverError::InvalidData,
+                _ => DriverError::Unsupported
+            }
+        })
+    }
+
     /// Query supported presentation modes.
     pub fn present_modes(&self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
-        let physical_device = self.device.physical_device.handle;
         let surface_ext = Device::expect_surface_ext(&self.device);
-        let surface = self.handle;
 
-        unsafe { surface_ext.get_physical_device_surface_present_modes(physical_device, surface) }
+        unsafe { surface_ext.get_physical_device_surface_present_modes(self.device.physical_device.handle, self.handle) }
             .map_err(|err| {
-                warn!("unable to get surface present modes: {err}");
+                warn!("unable to get present modes: {err}");
 
                 DriverError::Unsupported
             })

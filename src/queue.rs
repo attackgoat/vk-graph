@@ -2879,42 +2879,34 @@ impl Queue {
 
         cmd_buf.wait_until_executed()?;
 
-        unsafe {
-            cmd_buf
-                .device
-                .begin_command_buffer(
-                    cmd_buf.handle,
+        Device::begin_command_buffer(&cmd_buf
+                .device,  cmd_buf.handle,
                     &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .map_err(|_| DriverError::OutOfMemory)?;
-        }
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),)?;
 
         self.submit_cmd_buf(pool, &mut cmd_buf)?;
 
-        let queue = Device::queue(&cmd_buf.device, queue_family_index, queue_index);
+        Device::with_queue(&cmd_buf.device, queue_family_index, queue_index, |queue| {
+            Device::end_command_buffer(&cmd_buf.device, cmd_buf.handle)?;
 
-        unsafe {
-            cmd_buf
-                .device
-                .end_command_buffer(cmd_buf.handle)
-                .map_err(|_| DriverError::OutOfMemory)?;
-            cmd_buf
-                .device
-                .reset_fences(slice::from_ref(&cmd_buf.fence))
-                .map_err(|_| DriverError::OutOfMemory)?;
-            cmd_buf
-                .device
-                .queue_submit(
-                    queue,
-                    slice::from_ref(
-                        &vk::SubmitInfo::default()
-                            .command_buffers(slice::from_ref(&cmd_buf.handle)),
-                    ),
-                    cmd_buf.fence,
-                )
-                .map_err(|_| DriverError::OutOfMemory)?;
-        }
+            unsafe {
+                cmd_buf
+                    .device
+                    .reset_fences(slice::from_ref(&cmd_buf.fence))
+                    .map_err(|_| DriverError::OutOfMemory)?;
+            }
+
+            Device::queue_submit(
+                &cmd_buf.device,
+                queue,
+                slice::from_ref(
+                    &vk::SubmitInfo::default().command_buffers(slice::from_ref(&cmd_buf.handle)),
+                ),
+                cmd_buf.fence,
+            )?;
+
+            Ok(())
+        })?;
 
         // This graph contains references to buffers, images, and other resources which must be kept
         // alive until this graph execution completes on the GPU. Once those references are dropped

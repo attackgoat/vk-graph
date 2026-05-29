@@ -6,13 +6,31 @@ use {
         device::Device,
         image::{Image, ImageInfo},
     },
-    ash::vk,
+    ash::vk::{self, Handle},
     derive_builder::{Builder, UninitializedFieldError},
     log::{debug, info, trace, warn},
     std::{mem::replace, ops::Deref, slice, thread::panicking},
 };
 
-// TODO: This needs to track completed command buffers and not constantly create semaphores
+#[derive(Debug)]
+struct QueueFamilySignal {
+    cmd_pool: vk::CommandPool,
+    queue_signals: Box<[QueueSignal]>,
+}
+
+#[derive(Debug)]
+struct QueueSignal {
+    cmd_buf: vk::CommandBuffer,
+    fence: vk::Fence,
+    queued: bool,
+}
+
+#[derive(Debug, Default)]
+struct QueueSwapchain {
+    handle: vk::SwapchainKHR,
+    queue_family_index: u32,
+    queue_index: u32,
+}
 
 /// Provides the ability to present rendering results to a [`Surface`].
 #[derive(Debug)]
@@ -23,7 +41,6 @@ pub struct Swapchain {
     /// _Note:_ This field is read-only.
     pub handle: vk::SwapchainKHR,
 
-    handle_prev: vk::SwapchainKHR,
     images: Box<[SwapchainImage]>,
 
     /// Information used to create this resource.
@@ -31,6 +48,9 @@ pub struct Swapchain {
     /// _Note:_ This field is read-only.
     pub info: SwapchainInfo,
 
+    prev_queue: (u32, u32),
+    prev_swapchain: QueueSwapchain,
+    queue_family_signals: Box<[QueueFamilySignal]>,
     suboptimal: bool,
 
     /// The surface which supports this swapchain.
@@ -46,11 +66,81 @@ impl Swapchain {
     pub fn new(surface: Surface, info: impl Into<SwapchainInfo>) -> Result<Self, DriverError> {
         let info = info.into();
 
+        let device = &surface.device;
+        let queue_families = surface.device.physical_device.queue_families.iter();
+        let mut queue_family_signals = Vec::with_capacity(queue_families.len());
+
+        for (idx, queue_family) in queue_families.enumerate() {
+            let cmd_pool_info = vk::CommandPoolCreateInfo::default().queue_family_index(idx as _);
+            if !surface.physical_device_support(cmd_pool_info.queue_family_index)? {
+                continue;
+            }
+
+            let cmd_pool = unsafe {
+                device
+                    .create_command_pool(&cmd_pool_info, None)
+                    .map_err(|err| {
+                        warn!("unable to create command pool: {err}");
+
+                        match err {
+                            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                            | vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                            _ => DriverError::Unsupported,
+                        }
+                    })?
+            };
+            let cmd_bufs = unsafe {
+                device
+                    .allocate_command_buffers(
+                        &vk::CommandBufferAllocateInfo::default()
+                            .command_buffer_count(queue_family.queue_count)
+                            .command_pool(cmd_pool)
+                            .level(vk::CommandBufferLevel::PRIMARY),
+                    )
+                    .map_err(|err| {
+                        warn!("unable to allocate command buffer: {err}");
+
+                        match err {
+                            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                            | vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                            _ => DriverError::Unsupported,
+                        }
+                    })?
+            };
+
+            let mut queue_signals = Vec::with_capacity(queue_family.queue_count as _);
+
+            for cmd_buf in cmd_bufs {
+                Device::begin_command_buffer(
+                    device,
+                    cmd_buf,
+                    &vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE),
+                )?;
+                Device::end_command_buffer(device, cmd_buf)?;
+
+                let queued = false;
+                let fence = Device::create_fence(device, queued)?;
+                queue_signals.push(QueueSignal {
+                    cmd_buf,
+                    fence,
+                    queued,
+                });
+            }
+
+            queue_family_signals.push(QueueFamilySignal {
+                cmd_pool,
+                queue_signals: queue_signals.into_boxed_slice(),
+            });
+        }
+
         Ok(Swapchain {
+            handle: Default::default(),
             images: Default::default(),
-            handle: vk::SwapchainKHR::null(),
-            handle_prev: vk::SwapchainKHR::null(),
             info,
+            prev_queue: Default::default(),
+            prev_swapchain: Default::default(),
+            queue_family_signals: queue_family_signals.into_boxed_slice(),
             suboptimal: true,
             surface,
         })
@@ -194,8 +284,8 @@ impl Swapchain {
     }
 
     #[profiling::function]
-    fn destroy(device: &Device, swapchain: &mut vk::SwapchainKHR) {
-        if *swapchain == vk::SwapchainKHR::null() {
+    fn destroy(device: &Device, handle: &mut vk::SwapchainKHR) {
+        if *handle == vk::SwapchainKHR::null() {
             return;
         }
 
@@ -209,10 +299,10 @@ impl Swapchain {
         let swapchain_ext = Device::expect_swapchain_ext(device);
 
         unsafe {
-            swapchain_ext.destroy_swapchain(*swapchain, None);
+            swapchain_ext.destroy_swapchain(*handle, None);
         }
 
-        *swapchain = vk::SwapchainKHR::null();
+        *handle = vk::SwapchainKHR::null();
     }
 
     /// Presents an image which has been previously acquired using
@@ -224,55 +314,93 @@ impl Swapchain {
         wait_semaphores: &[vk::Semaphore],
         queue_family_index: u32,
         queue_index: u32,
-    ) {
-        let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(wait_semaphores)
-            .swapchains(slice::from_ref(&self.handle))
-            .image_indices(slice::from_ref(&image.index));
+    ) -> Result<(), DriverError> {
+        let device = &self.surface.device;
+        let queue_signal = &mut self.queue_family_signals[queue_family_index as usize]
+            .queue_signals[queue_index as usize];
 
-        let swapchain_ext = Device::expect_swapchain_ext(&self.surface.device);
+        let swapchain_ext = Device::expect_swapchain_ext(device);
 
-        unsafe {
-            match swapchain_ext.queue_present(
-                Device::queue(&self.surface.device, queue_family_index, queue_index),
-                &present_info,
-            ) {
-                Ok(_) => {
-                    Self::destroy(&self.surface.device, &mut self.handle_prev);
-                }
-                Err(err)
-                    if err == vk::Result::ERROR_DEVICE_LOST
-                        || err == vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT
-                        || err == vk::Result::ERROR_OUT_OF_DATE_KHR
-                        || err == vk::Result::ERROR_SURFACE_LOST_KHR
-                        || err == vk::Result::SUBOPTIMAL_KHR =>
-                {
-                    // Handled in the next frame
-                    self.suboptimal = true;
-                }
-                Err(err) => {
-                    // Probably:
-                    // VK_ERROR_OUT_OF_HOST_MEMORY
-                    // VK_ERROR_OUT_OF_DEVICE_MEMORY
-                    warn!("unable to destroy retired swapchain resources cleanly: {err}");
+        Device::with_queue(device, queue_family_index, queue_index, |queue| {
+            unsafe {
+                match swapchain_ext.queue_present(
+                    queue,
+                    &vk::PresentInfoKHR::default()
+                        .wait_semaphores(wait_semaphores)
+                        .swapchains(slice::from_ref(&self.handle))
+                        .image_indices(slice::from_ref(&image.index)),
+                ) {
+                    Ok(suboptimal) => self.suboptimal = suboptimal,
+                    Err(err)
+                        if err == vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT
+                            || err == vk::Result::ERROR_OUT_OF_DATE_KHR
+                            || err == vk::Result::SUBOPTIMAL_KHR =>
+                    {
+                        self.suboptimal = true
+                    }
+                    Err(err)
+                        if err == vk::Result::ERROR_DEVICE_LOST
+                            || err == vk::Result::ERROR_SURFACE_LOST_KHR =>
+                    {
+                        info!("skipping present: {err}");
+
+                        self.suboptimal = true;
+                    }
+                    Err(err) => {
+                        // Probably:
+                        // VK_ERROR_OUT_OF_HOST_MEMORY
+                        // VK_ERROR_OUT_OF_DEVICE_MEMORY
+                        warn!("failed to present: {err}");
+
+                        self.suboptimal = true;
+                    }
                 }
             }
+
+            if queue_signal.queued {
+                Device::wait_for_fence(device, &queue_signal.fence)?;
+                Device::reset_fences(device, slice::from_ref(&queue_signal.fence))?;
+            }
+
+            Device::queue_submit(
+                device,
+                queue,
+                &[vk::SubmitInfo::default()
+                    .command_buffers(slice::from_ref(&queue_signal.cmd_buf))],
+                queue_signal.fence,
+            )?;
+            queue_signal.queued = true;
+
+            Ok(())
+        })?;
+
+        if !self.prev_swapchain.handle.is_null() {
+            let QueueSignal { fence, queued, .. } = &mut self.queue_family_signals
+                [self.prev_swapchain.queue_family_index as usize]
+                .queue_signals[self.prev_swapchain.queue_index as usize];
+            Device::wait_for_fence(device, &*fence)?;
+            Device::reset_fences(device, slice::from_ref(&*fence))?;
+            *queued = false;
+
+            Self::destroy(device, &mut self.prev_swapchain.handle);
         }
 
         let image_idx = image.index as usize;
         self.images[image_idx] = image;
+
+        self.prev_queue = (queue_family_index, queue_index);
+
+        Ok(())
     }
 
     #[profiling::function]
     fn recreate(&mut self) -> Result<(), DriverError> {
-        Self::destroy(&self.surface.device, &mut self.handle_prev);
+        self.wait_for_all_signals()?;
+        Self::destroy(&self.surface.device, &mut self.prev_swapchain.handle);
 
         let surface_caps = Surface::capabilities(&self.surface)?;
-
         let min_image_count = Self::clamp_min_image_count(self.info.min_image_count, surface_caps);
-
         let image_usage = self.supported_surface_usage(surface_caps.supported_usage_flags)?;
-
         let (surface_width, surface_height) = match surface_caps.current_extent.width {
             std::u32::MAX => (
                 // TODO: Maybe handle this case with aspect-correct clamping?
@@ -382,7 +510,9 @@ impl Swapchain {
         self.info.height = surface_height;
         self.info.width = surface_width;
         self.images = images;
-        self.handle_prev = self.handle;
+        self.prev_swapchain.handle = self.handle;
+        self.prev_swapchain.queue_family_index = self.prev_queue.0;
+        self.prev_swapchain.queue_index = self.prev_queue.1;
         self.handle = swapchain;
         self.suboptimal = false;
 
@@ -462,6 +592,36 @@ impl Swapchain {
 
         Ok(res)
     }
+
+    /// Waits for all tracked per-queue fences to become signaled and resets their state.
+    fn wait_for_all_signals(&mut self) -> Result<(), DriverError> {
+        let fences = self
+            .queue_family_signals
+            .iter()
+            .flat_map(|queue_family| {
+                queue_family
+                    .queue_signals
+                    .iter()
+                    .filter_map(|queue| queue.queued.then_some(queue.fence))
+            })
+            .collect::<Box<_>>();
+        if fences.is_empty() {
+            return Ok(());
+        }
+
+        let device = &self.surface.device;
+
+        Device::wait_for_fences(device, &fences)?;
+        Device::reset_fences(device, &fences)?;
+
+        for queue_family in &mut self.queue_family_signals {
+            for queue in &mut queue_family.queue_signals {
+                queue.queued = false;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Drop for Swapchain {
@@ -471,8 +631,30 @@ impl Drop for Swapchain {
             return;
         }
 
-        Self::destroy(&self.surface.device, &mut self.handle_prev);
-        Self::destroy(&self.surface.device, &mut self.handle);
+        if let Err(err) = self.wait_for_all_signals() {
+            warn!("unable to wait for swapchain signals: {err}");
+        }
+
+        let device = &self.surface.device;
+
+        Self::destroy(device, &mut self.handle);
+        Self::destroy(device, &mut self.prev_swapchain.handle);
+
+        for queue_family in &self.queue_family_signals {
+            let mut cmd_bufs = Vec::with_capacity(queue_family.queue_signals.len());
+            for queue in &queue_family.queue_signals {
+                cmd_bufs.push(queue.cmd_buf);
+
+                unsafe {
+                    device.destroy_fence(queue.fence, None);
+                }
+            }
+
+            unsafe {
+                device.free_command_buffers(queue_family.cmd_pool, &cmd_bufs);
+                device.destroy_command_pool(queue_family.cmd_pool, None);
+            }
+        }
     }
 }
 

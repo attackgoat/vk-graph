@@ -58,23 +58,27 @@ fn main() -> anyhow::Result<()> {
 
     // Hold some app state which is displayed/mutated by imgui each frame
     let mut curr_transition_idx = 0;
-    let mut start_time = Instant::now();
+    let mut started_at = Instant::now();
+    let mut prev_frame_at = started_at;
 
     window.run(|frame| {
-        // Update the demo "state"
         let now = Instant::now();
-        let elapsed = (now - start_time).as_secs_f32();
-        let progress = if elapsed > 4.0 {
-            start_time = now;
-            0.0
-        } else if elapsed > 3.0 {
-            1.0 - (elapsed - 3.0)
-        } else if elapsed > 2.0 {
-            1.0
-        } else if elapsed > 1.0 {
-            elapsed - 1.0
-        } else {
-            0.0
+
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
+        let elapsed = now - started_at;
+
+        // Update the demo "state"
+        let progress = match elapsed.as_secs_f32() {
+            t if t > 4.0 => {
+                started_at = now;
+                0.0
+            }
+            t if t > 3.0 => 1.0 - (t - 3.0),
+            t if t > 2.0 => 1.0,
+            t if t > 1.0 => t - 1.0,
+            _ => 0.0,
         };
 
         // Bind images so we can graph them
@@ -88,7 +92,7 @@ fn main() -> anyhow::Result<()> {
 
         // Draw UI: TODO: Sliders and value setters? That would be fun.
         let gui_image = imgui.draw(
-            0.016,
+            dt.as_secs_f32(),
             frame.events,
             frame.window,
             &mut pool,

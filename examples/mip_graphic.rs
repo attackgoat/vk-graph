@@ -78,6 +78,11 @@ fn main() -> Result<(), WindowError> {
 
         for mip_level in 0..mip_level_count {
             let stripe_x = mip_level * stripe_width;
+            let load_op = if mip_level == 0 {
+                LoadOp::CLEAR_BLACK_ALPHA_ZERO
+            } else {
+                LoadOp::Load
+            };
             cmd = cmd
                 .shader_subresource_access(
                     0,
@@ -89,7 +94,7 @@ fn main() -> Result<(), WindowError> {
                         .mip_level_count(1),
                     AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
+                .color_attachment_image(0, frame.swapchain_image, load_op, StoreOp::Store)
                 .render_area(vk::Rect2D {
                     offset: vk::Offset2D {
                         x: stripe_x as _,

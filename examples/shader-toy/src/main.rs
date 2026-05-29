@@ -176,6 +176,7 @@ fn main() -> anyhow::Result<()> {
     graph.into_queue().submit(&mut cache, 0, 0)?;
 
     let started_at = Instant::now();
+    let mut prev_frame_at = started_at;
     let mut count = 0i32;
     let framebuffer_info = framebuffer_image_binding.as_ref().unwrap().info;
     let flowers_image_info = flowers_image_binding.as_ref().unwrap().info;
@@ -184,8 +185,13 @@ fn main() -> anyhow::Result<()> {
 
     window
         .run(|frame| {
+            let now = Instant::now();
+
             // Update the stuff any shader toy shader would want to know each frame
-            let elapsed = Instant::now() - started_at;
+            let dt = now - prev_frame_at;
+            prev_frame_at = now;
+
+            let elapsed = now - started_at;
 
             count += 1;
 
@@ -231,7 +237,7 @@ fn main() -> anyhow::Result<()> {
                 date: [1970.0, 1.0, 1.0, elapsed.as_secs_f32()],
                 mouse: [0.0, 0.0, 0.0, 0.0],
                 time: elapsed.as_secs_f32(),
-                time_delta: 0.016,
+                time_delta: dt.as_secs_f32(),
                 frame: count,
                 sample_rate: 44100.0,
                 channel_time: [

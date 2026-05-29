@@ -163,9 +163,9 @@ impl ImGui {
         let display_pos = draw_data.display_pos;
         let framebuffer_scale = draw_data.framebuffer_scale;
 
-        if draw_data.draw_lists_count() == 0 {
-            graph.clear_color_image(image, [0f32; 4]);
+        graph.clear_color_image(image, [0f32; 4]);
 
+        if draw_data.draw_lists_count() == 0 {
             return image;
         }
 

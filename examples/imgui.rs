@@ -3,6 +3,7 @@ mod profile_with_puffin;
 use {
     ash::vk,
     clap::Parser,
+    std::time::Instant,
     vk_graph::{
         driver::image::ImageInfo,
         pool::{Pool as _, lazy::LazyPool},
@@ -31,8 +32,13 @@ fn main() -> Result<(), WindowError> {
     // Some example state to make the demo more interesting
     let mut value = 0;
     let choices = ["test test this is 1", "test test this is 2"];
+    let mut prev_frame_at = Instant::now();
 
     window.run(|frame| {
+        let now = Instant::now();
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
         // Lease and clear an image as a stand-in for some real game or program output
         let app_image = frame.graph.bind_resource(
             pool.lease_resource(ImageInfo::image_2d(
@@ -51,7 +57,7 @@ fn main() -> Result<(), WindowError> {
 
         // Use the draw function callback to do some fun meant-for-debug-mode GUI stuff
         let gui_image = imgui.draw(
-            0.016,
+            dt.as_secs_f32(),
             frame.events,
             frame.window,
             &mut pool,

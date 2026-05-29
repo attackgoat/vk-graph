@@ -74,6 +74,29 @@ impl Device {
         Self::create(info)
     }
 
+    /// Begins recording a command buffer on this device.
+    ///
+    /// This is a thin wrapper around [`ash::Device::begin_command_buffer`] that maps Vulkan errors
+    /// to [`DriverError`] variants.
+    pub fn begin_command_buffer(
+        this: &Self,
+        cmd_buf: vk::CommandBuffer,
+        begin_info: &vk::CommandBufferBeginInfo,
+    ) -> Result<(), DriverError> {
+        unsafe {
+            this.begin_command_buffer(cmd_buf, begin_info)
+                .map_err(|err| {
+                    warn!("unable to begin command buffer: {err}");
+
+                    match err {
+                        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                        | vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                        _ => DriverError::Unsupported,
+                    }
+                })
+        }
+    }
+
     /// Constructs a new device using the given configuration.
     ///
     /// This constructor is intended for headless or manually managed setups. It does not infer or
@@ -109,6 +132,25 @@ impl Device {
         })
     }
 
+    /// Ends recording a command buffer on this device.
+    ///
+    /// This is a thin wrapper around [`ash::Device::end_command_buffer`] that maps Vulkan errors
+    /// to [`DriverError`] variants.
+    pub fn end_command_buffer(this: &Self, cmd_buf: vk::CommandBuffer) -> Result<(), DriverError> {
+        unsafe {
+            this.end_command_buffer(cmd_buf).map_err(|err| {
+                warn!("unable to end command buffer: {err}");
+
+                match err {
+                    vk::Result::ERROR_INVALID_VIDEO_STD_PARAMETERS_KHR => DriverError::InvalidData,
+                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                    | vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                    _ => DriverError::Unsupported,
+                }
+            })
+        }
+    }
+
     /// Helper for times when you already know that the device supports the acceleration
     /// structure extension.
     ///
@@ -135,6 +177,12 @@ impl Device {
             .expect("missing VK_KHR_ray_tracing_pipeline")
     }
 
+    /// Helper for times when you already know that the device supports the ray tracing pipeline
+    /// extension.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [Self.physical_device.ray_trace_properties] is `None`.
     pub(crate) fn expect_ray_trace_properties(this: &Self) -> &RayTraceProperties {
         this.physical_device
             .ray_trace_properties
@@ -170,22 +218,39 @@ impl Device {
         this.inner.pipeline_cache
     }
 
-    /// Returns a queue handle created for the given queue family and queue index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the queue family or queue index is invalid.
-    pub fn queue(this: &Self, queue_family_index: u32, queue_index: u32) -> vk::Queue {
-        let queue_family = this
-            .inner
-            .queues
-            .get(queue_family_index as usize)
-            .expect("invalid queue family index");
-        let queue = queue_family
-            .get(queue_index as usize)
-            .expect("invalid queue index");
+    /// Submits command buffers to a queue, optionally signaling a fence.
+    pub fn queue_submit(
+        this: &Self,
+        queue: vk::Queue,
+        submits: &[vk::SubmitInfo],
+        fence: vk::Fence,
+    ) -> Result<(), DriverError> {
+        unsafe {
+            this.queue_submit(queue, submits, fence).map_err(|err| {
+                warn!("unable to queue submits: {err}");
 
-        *queue
+                match err {
+                    vk::Result::ERROR_DEVICE_LOST => DriverError::InvalidData,
+                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                    | vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                    _ => DriverError::Unsupported,
+                }
+            })
+        }
+    }
+
+    /// Resets one or more fences to the unsignaled state.
+    pub fn reset_fences(this: &Self, fences: &[vk::Fence]) -> Result<(), DriverError> {
+        unsafe {
+            this.reset_fences(fences).map_err(|err| {
+                warn!("unable to reset fences: {err}");
+
+                match err {
+                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DriverError::OutOfMemory,
+                    _ => DriverError::Unsupported,
+                }
+            })
+        }
     }
 
     /// Loads and existing `ash` Vulkan device that may have been created by other means.
@@ -220,8 +285,9 @@ impl Device {
             let mut queue_family = Vec::with_capacity(properties.queue_count as _);
 
             for queue_index in 0..properties.queue_count {
-                queue_family
-                    .push(unsafe { device.get_device_queue(queue_family_index as _, queue_index) });
+                queue_family.push(Mutex::new(unsafe {
+                    device.get_device_queue(queue_family_index as _, queue_index)
+                }));
             }
 
             queues.push(queue_family.into_boxed_slice());
@@ -370,6 +436,39 @@ impl Device {
 
         f(&mut allocator)
     }
+
+    /// Provides locked access to a device queue.
+    ///
+    /// Acquires the mutex for the queue at the given family and index, calls `f` with the
+    /// [`vk::Queue`], and releases the mutex after `f` returns.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `queue_family_index` or `queue_index` is out of range for this device.
+    pub fn with_queue<R>(
+        this: &Self,
+        queue_family_index: u32,
+        queue_index: u32,
+        f: impl FnOnce(vk::Queue) -> R,
+    ) -> R {
+        let queue_family = this
+            .inner
+            .queues
+            .get(queue_family_index as usize)
+            .expect("invalid queue family index");
+        let queue = queue_family
+            .get(queue_index as usize)
+            .expect("invalid queue index");
+        let queue_lock = queue.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let queue = *queue_lock.expect("poisoned queue lock");
+
+        #[cfg(feature = "parking_lot")]
+        let queue = *queue_lock;
+
+        f(queue)
+    }
 }
 
 impl Debug for Device {
@@ -465,7 +564,7 @@ struct DeviceInner {
     allocator: ManuallyDrop<Mutex<Allocator>>,
     device: ash::Device,
     pipeline_cache: vk::PipelineCache,
-    pub queues: Box<[Box<[vk::Queue]>]>,
+    queues: Box<[Box<[Mutex<vk::Queue>]>]>,
     ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
     surface_ext: Option<khr::surface::Instance>,
     swapchain_ext: Option<khr::swapchain::Device>,

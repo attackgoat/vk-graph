@@ -98,7 +98,6 @@ impl Swapchain {
 
             execs.push(Execution {
                 cmd_buf,
-                queue: None,
                 swapchain_acquired,
                 swapchain_rendered,
             });
@@ -156,24 +155,11 @@ impl Swapchain {
         self.exec_idx %= self.execs.len();
         let exec = &mut self.execs[self.exec_idx];
 
-        if exec.queue.is_some() {
-            exec.cmd_buf.wait_until_executed().inspect_err(|err| {
-                warn!("unable to wait for swapchain fence: {err}");
-            })?;
+        exec.cmd_buf.wait_until_executed().inspect_err(|err| {
+            warn!("unable to wait for swapchain fence: {err}");
+        })?;
 
-            exec.queue = None;
-        }
-
-        unsafe {
-            exec.cmd_buf
-                .device
-                .reset_fences(slice::from_ref(&exec.cmd_buf.fence))
-                .map_err(|err| {
-                    warn!("unable to reset swapchain fence: {err}");
-
-                    DriverError::InvalidData
-                })?;
-        }
+        Device::reset_fences(&exec.cmd_buf.device, slice::from_ref(&exec.cmd_buf.fence))?;
 
         let acquire_next_image = self
             .read_only
@@ -230,20 +216,16 @@ impl Swapchain {
         let exec_idx = self.image_execs[image_idx as usize];
         let exec = &mut self.execs[exec_idx];
 
-        debug_assert!(exec.queue.is_none());
+        debug_assert!(!exec.cmd_buf.has_executed().unwrap());
 
         let started = Instant::now();
 
-        unsafe {
-            exec.cmd_buf
-                .device
-                .begin_command_buffer(
-                    exec.cmd_buf.handle,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .map_err(|_| ())?;
-        }
+        Device::begin_command_buffer(
+            &exec.cmd_buf.device,
+            exec.cmd_buf.handle,
+            &vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        )?;
 
         // queue.record_node_dependencies(&mut *self.pool, cmd_buf, swapchain_image)?;
         queue.submit_resource(swapchain_image, pool, &mut exec.cmd_buf)?;
@@ -295,44 +277,26 @@ impl Swapchain {
         // things so we do them last
         queue.submit_cmd_buf(pool, &mut exec.cmd_buf)?;
 
-        {
-            let queue = Device::queue(
-                &exec.cmd_buf.device,
-                self.read_only.info.queue_family_index,
-                queue_index,
-            );
-
-            unsafe {
-                exec.cmd_buf
-                    .device
-                    .end_command_buffer(exec.cmd_buf.handle)
-                    .map_err(|err| {
-                        warn!("unable to end display command buffer: {err}");
-
-                        DriverError::InvalidData
-                    })?;
-                exec.cmd_buf
-                    .device
-                    .queue_submit(
-                        queue,
-                        slice::from_ref(
-                            &vk::SubmitInfo::default()
-                                .command_buffers(slice::from_ref(&exec.cmd_buf.handle))
-                                .wait_semaphores(slice::from_ref(&exec.swapchain_acquired))
-                                .wait_dst_stage_mask(slice::from_ref(&wait_dst_stage_mask))
-                                .signal_semaphores(slice::from_ref(&exec.swapchain_rendered)),
-                        ),
-                        exec.cmd_buf.fence,
-                    )
-                    .map_err(|err| {
-                        warn!("unable to submit display command buffer: {err}");
-
-                        DriverError::InvalidData
-                    })?
-            }
-
-            exec.queue = Some(queue);
-        }
+        Device::with_queue(
+            &exec.cmd_buf.device,
+            self.read_only.info.queue_family_index,
+            queue_index,
+            |queue| {
+                Device::end_command_buffer(&exec.cmd_buf.device, exec.cmd_buf.handle)?;
+                Device::queue_submit(
+                    &exec.cmd_buf.device,
+                    queue,
+                    slice::from_ref(
+                        &vk::SubmitInfo::default()
+                            .command_buffers(slice::from_ref(&exec.cmd_buf.handle))
+                            .wait_semaphores(slice::from_ref(&exec.swapchain_acquired))
+                            .wait_dst_stage_mask(slice::from_ref(&wait_dst_stage_mask))
+                            .signal_semaphores(slice::from_ref(&exec.swapchain_rendered)),
+                    ),
+                    exec.cmd_buf.fence,
+                )
+            },
+        )?;
 
         let elapsed = Instant::now() - started;
         trace!("🔜🔜🔜 vkQueueSubmit took {} μs", elapsed.as_micros(),);
@@ -344,7 +308,7 @@ impl Swapchain {
             slice::from_ref(&exec.swapchain_rendered),
             self.read_only.info.queue_family_index,
             queue_index,
-        );
+        )?;
 
         // Store the resolved graph because it contains bindings, leases, and other shared resources
         // that need to be kept alive until the fence is waited upon.
@@ -388,14 +352,12 @@ impl Drop for Swapchain {
         }
 
         for batch in &mut self.execs {
-            if let Some(queue) = batch.queue {
-                // Wait for presentation to stop
-                let present = unsafe { batch.cmd_buf.device.queue_wait_idle(queue) };
-                if present.is_err() {
-                    warn!("unable to wait for queue");
+            // Wait for presentation to stop
+            let present = batch.cmd_buf.wait_until_executed();
+            if present.is_err() {
+                warn!("unable to wait for queue");
 
-                    continue;
-                }
+                continue;
             }
 
             unsafe {
@@ -611,7 +573,6 @@ impl From<UninitializedFieldError> for SwapchainInfoBuilderError {
 
 struct Execution {
     cmd_buf: CommandBuffer,
-    queue: Option<vk::Queue>,
     swapchain_acquired: vk::Semaphore,
     swapchain_rendered: vk::Semaphore,
 }

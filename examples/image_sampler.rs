@@ -1,13 +1,14 @@
 mod profile_with_puffin;
 
 use {
-    anyhow::bail,
     ash::vk,
     clap::Parser,
     hassle_rs::compile_hlsl,
+    log::info,
     std::{
         path::{Path, PathBuf},
         sync::Arc,
+        time::Instant,
     },
     vk_graph::{
         Graph,
@@ -62,20 +63,35 @@ fn main() -> anyhow::Result<()> {
         .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE);
 
     // Image samplers are part of the shader pipeline and so we will create three pipelines total
-    let pipelines = [edge_edge, border_edge_black, edge_border_white]
+    let pipeline_modes = [
+        ("edge_edge", edge_edge),
+        ("border_edge_black", border_edge_black),
+        ("edge_border_white", edge_border_white),
+    ];
+    let pipelines = pipeline_modes
         .into_iter()
-        .map(|sampler_info| create_pipeline(&window.device, sampler_info))
+        .map(|(_, sampler_info)| create_pipeline(&window.device, sampler_info))
         .collect::<Result<Box<_>, _>>()?;
+    let pipeline_names = pipeline_modes.map(|(name, _)| name);
     let mut pipeline_index = 0;
     let mut pipeline_time = 0.0;
+    let mut prev_frame_at = Instant::now();
+
+    info!("active sampler mode: {}", pipeline_names[pipeline_index]);
 
     window.run(|frame| {
+        let now = Instant::now();
+
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
         // Periodically change the active pipeline index
-        pipeline_time += 0.016;
-        if pipeline_time > 2.0 {
+        pipeline_time += dt.as_secs_f32();
+        if pipeline_time > 5.0 {
             pipeline_time = 0.0;
             pipeline_index += 1;
             pipeline_index %= pipelines.len();
+            info!("active sampler mode: {}", pipeline_names[pipeline_index]);
         }
 
         // Draw gulf.jpg using the active pipeline
@@ -108,33 +124,32 @@ fn create_pipeline(
     let mut frag_shader = match (args.hlsl, args.separate) {
         (true, true) => {
             // HLSL separate image sampler
-            // Shader::new_fragment(
-            //     glsl!(
-            //         kind: frag,
+            Shader::new_fragment(
+                compile_hlsl(
+                    "fragment.hlsl",
+                    r#"
+                    struct FullscreenVertexOutput
+                    {
+                        float4 position : SV_Position;
+                        [[vk::location(0)]] float2 uv : TEXCOORD0;
+                    };
 
-            //         r#"
-            //     struct FullscreenVertexOutput
-            //     {
-            //         float4 position : SV_Position;
-            //         [[vk::location(0)]] float2 uv : TEXCOORD0;
-            //     };
+                    [[vk::binding(0, 0)]] Texture2D<float4> screenTexture : register(t0);
+                    [[vk::binding(1, 0)]] SamplerState textureSampler : register(s1);
 
-            //     [[vk::binding(0, 0)]] Texture2D screenTexture : register(t0);
-            //     [[vk::binding(1, 0)]] SamplerState textureSampler : register(s0);
-
-            //     float4 main(FullscreenVertexOutput input)
-            //         : SV_Target
-            //     {
-            //         return screenTexture.Sample(textureSampler, input.uv);
-            //     }
-            //     "#,
-            //         frag,
-            //         hlsl
-            //     )
-            //     .as_slice(),
-            // )
-
-            bail!("unsupported example mode: hlsl with separate image samplers")
+                    float4 main(FullscreenVertexOutput input)
+                        : SV_Target
+                    {
+                        return screenTexture.Sample(textureSampler, input.uv);
+                    }
+                    "#,
+                    "main",
+                    "ps_5_0",
+                    &["-spirv"],
+                    &[],
+                )?
+                .as_slice(),
+            )
         }
         (true, false) => {
             // HLSL combined image sampler: include_glsl uses shaderc which does not support this, so

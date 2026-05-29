@@ -62,7 +62,10 @@ impl CommandBuffer {
         .map_err(|err| {
             warn!("unable to create command pool: {err}");
 
-            DriverError::Unsupported
+            match err {
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY |vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                _ => DriverError::Unsupported
+            }
         })?;
 
         let handle = unsafe {
@@ -76,7 +79,10 @@ impl CommandBuffer {
         .map_err(|err| {
             warn!("unable to allocate command buffer: {err}");
 
-            DriverError::Unsupported
+            match err {
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY |vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                _ => DriverError::Unsupported
+            }
         })?[0];
 
         let fence = Device::create_fence(&device, false)?;

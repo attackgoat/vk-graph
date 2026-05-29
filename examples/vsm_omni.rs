@@ -12,6 +12,7 @@ use {
         fs::{metadata, write},
         path::{Path, PathBuf},
         sync::Arc,
+        time::Instant,
     },
     tobj::{GPU_LOAD_OPTIONS, load_obj},
     vk_graph::{
@@ -117,7 +118,12 @@ fn main() -> anyhow::Result<()> {
     let mut pool = FifoPool::new(&window.device);
 
     let mut elapsed = 0.0;
+    let mut prev_frame_at = Instant::now();
     window.run(|frame| {
+        let now = Instant::now();
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
         input.step_with_window_events(
             &frame
                 .events
@@ -134,10 +140,7 @@ fn main() -> anyhow::Result<()> {
 
         // Hold spacebar to stop the light
         if !input.key_held(KeyCode::Space) {
-            elapsed += input
-                .delta_time()
-                .map(|dt| dt.as_secs_f32())
-                .unwrap_or(0.016);
+            elapsed += dt.as_secs_f32();
         }
 
         // Hit F11 to enable borderless fullscreen

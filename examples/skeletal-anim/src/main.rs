@@ -56,10 +56,16 @@ fn main() -> Result<(), WindowError> {
     let mut run = Animation::load(&character, &mut pak, "animated_characters_3/run")?;
 
     let mut pool = LazyPool::new(device);
-    let started = Instant::now();
+    let started_at = Instant::now();
+    let mut prev_frame_at = started_at;
 
     window.run(|frame| {
-        let elapsed = (Instant::now() - started).as_secs_f32();
+        let now = Instant::now();
+
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
+        let elapsed = now - started_at;
 
         let index_buf = frame.graph.bind_resource(&character.index_buf);
         let vertex_buf = frame.graph.bind_resource(&character.vertex_buf);
@@ -73,14 +79,15 @@ fn main() -> Result<(), WindowError> {
             .unwrap(),
         );
 
-        let texture = frame
-            .graph
-            .bind_resource(match (elapsed / 2.0).rem_euclid(4.0) {
-                t if t < 1.0 => &human_female,
-                t if t < 2.0 => &human_male,
-                t if t < 3.0 => &zombie_female,
-                _ => &zombie_male,
-            });
+        let texture =
+            frame
+                .graph
+                .bind_resource(match (elapsed.as_secs_f32() / 2.0).rem_euclid(4.0) {
+                    t if t < 1.0 => &human_female,
+                    t if t < 2.0 => &human_male,
+                    t if t < 3.0 => &zombie_female,
+                    _ => &zombie_male,
+                });
 
         let camera_buf = frame.graph.bind_resource({
             let position = Vec3::ONE * 3.0;
@@ -108,11 +115,11 @@ fn main() -> Result<(), WindowError> {
         });
 
         let animation_buf = frame.graph.bind_resource({
-            let animation = match (elapsed / 4.0).rem_euclid(2.0) {
+            let animation = match (elapsed.as_secs_f32() / 4.0).rem_euclid(2.0) {
                 t if t < 1.0 => &mut run,
                 _ => &mut idle,
             };
-            let joints = animation.update(0.016);
+            let joints = animation.update(dt.as_secs_f32());
             let mut buf = pool
                 .lease_resource(BufferInfo::host_mem(
                     size_of_val(joints) as _,

@@ -7,7 +7,7 @@ use {
     half::f16,
     std::{mem::size_of, sync::Arc},
     vk_graph::{
-        cmd::{LoadOp, StoreOp},
+        cmd::{ClearColorValue, LoadOp, StoreOp},
         driver::{
             DriverError,
             buffer::Buffer,
@@ -91,19 +91,29 @@ fn main() -> anyhow::Result<()> {
     };
 
     window.run(|mut frame| {
-        draw_triangle(&mut frame, &f32_pipeline, &f32_vertex_buf);
+        draw_triangle(
+            &mut frame,
+            &f32_pipeline,
+            &f32_vertex_buf,
+            LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+        );
 
         if let Some(f64_pipeline) = &f64_pipeline {
-            draw_triangle(&mut frame, f64_pipeline, &f64_vertex_buf);
+            draw_triangle(&mut frame, f64_pipeline, &f64_vertex_buf, LoadOp::Load);
         } else if let Some(f16_pipeline) = &f16_pipeline {
-            draw_triangle(&mut frame, f16_pipeline, &f16_vertex_buf);
+            draw_triangle(&mut frame, f16_pipeline, &f16_vertex_buf, LoadOp::Load);
         }
     })?;
 
     Ok(())
 }
 
-fn draw_triangle(frame: &mut FrameContext, pipeline: &GraphicPipeline, vertex_buf: &Arc<Buffer>) {
+fn draw_triangle(
+    frame: &mut FrameContext,
+    pipeline: &GraphicPipeline,
+    vertex_buf: &Arc<Buffer>,
+    load: LoadOp<ClearColorValue>,
+) {
     let vertex_buf = frame.graph.bind_resource(vertex_buf);
 
     frame
@@ -111,7 +121,7 @@ fn draw_triangle(frame: &mut FrameContext, pipeline: &GraphicPipeline, vertex_bu
         .begin_cmd()
         .debug_name("Triangle")
         .bind_pipeline(pipeline)
-        .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
+        .color_attachment_image(0, frame.swapchain_image, load, StoreOp::Store)
         .resource_access(vertex_buf, AccessType::VertexBuffer)
         .record_cmd_buf(move |cmd_buf| {
             cmd_buf

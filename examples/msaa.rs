@@ -6,7 +6,7 @@ use {
     clap::Parser,
     glam::{Mat4, Vec3},
     log::warn,
-    std::{mem::size_of, sync::Arc},
+    std::{mem::size_of, sync::Arc, time::Instant},
     vk_graph::{
         cmd::{LoadOp, StoreOp},
         driver::{
@@ -47,8 +47,13 @@ fn main() -> anyhow::Result<()> {
     let mut pool = FifoPool::new(&window.device);
 
     let mut angle = 0f32;
+    let mut prev_frame_at = Instant::now();
 
     window.run(|frame| {
+        let now = Instant::now();
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
         input.step_with_window_events(
             &frame
                 .events
@@ -66,11 +71,7 @@ fn main() -> anyhow::Result<()> {
         // Hold the tab key to render in non-multisample mode
         let will_render_msaa = !input.key_held(KeyCode::Tab) && sample_count != SampleCount::Type1;
 
-        angle += input
-            .delta_time()
-            .map(|dt| dt.as_secs_f32())
-            .unwrap_or(0.016)
-            * 0.1;
+        angle += dt.as_secs_f32() * 0.1;
         let world_transform = Mat4::from_rotation_x(angle)
             * Mat4::from_rotation_y(angle * 0.61)
             * Mat4::from_rotation_z(angle * 0.22);

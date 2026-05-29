@@ -13,6 +13,7 @@ use {
         mem::size_of,
         path::{Path, PathBuf},
         sync::Arc,
+        time::Instant,
     },
     tobj::{GPU_LOAD_OPTIONS, load_obj},
     vk_graph::{
@@ -61,9 +62,14 @@ fn main() -> anyhow::Result<()> {
     let gfx_pipeline = create_pipeline(&window.device)?;
 
     let mut angle = 0f32;
+    let mut prev_frame_at = Instant::now();
 
     window.run(|frame| {
-        angle += 0.016;
+        let now = Instant::now();
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
+        angle += dt.as_secs_f32();
 
         let scene_tlas = create_tlas(frame.device, &mut pool, frame.graph, &scene_blas).unwrap();
 
