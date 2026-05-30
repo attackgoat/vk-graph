@@ -25,7 +25,7 @@ use {
 /// `DerefMut`.
 ///
 /// **_NOTE:_** You must call the resource-specific alias methods (e.g. `image_alias(..)`)
-/// to use resource aliasing as regular `lease_resource(..)` calls will not inspect or return
+/// to use resource aliasing as regular `resource(..)` calls will not inspect or return
 /// aliased resources.
 ///
 /// # Details
@@ -64,8 +64,8 @@ macro_rules! lease_pass_through {
     ($info:ident => $item:ident) => {
         paste::paste! {
             impl<T> Pool<$info, $item> for Cache<T> where T: Pool<$info, $item> {
-                fn lease_resource(&mut self, info: $info) -> Result<Lease<$item>, DriverError> {
-                    self.pool.lease_resource(info)
+                fn resource(&mut self, info: $info) -> Result<Lease<$item>, DriverError> {
+                    self.pool.resource(info)
                 }
             }
         }
@@ -106,7 +106,7 @@ where
 
         debug!("Leasing new {}", stringify!(AccelerationStructure));
 
-        let item = Arc::new(self.pool.lease_resource(info)?);
+        let item = Arc::new(self.pool.resource(info)?);
         self.accel_structs.push((info, Arc::downgrade(&item)));
 
         Ok(item)
@@ -145,7 +145,7 @@ where
 
         debug!("Leasing new {}", stringify!(Buffer));
 
-        let item = Arc::new(self.pool.lease_resource(info)?);
+        let item = Arc::new(self.pool.resource(info)?);
         self.buffers.push((info, Arc::downgrade(&item)));
 
         Ok(item)
@@ -190,7 +190,7 @@ where
 
         debug!("Leasing new {}", stringify!(Image));
 
-        let item = Arc::new(self.pool.lease_resource(info)?);
+        let item = Arc::new(self.pool.resource(info)?);
         self.images.push((info, Arc::downgrade(&item)));
 
         Ok(item)

@@ -1,5 +1,11 @@
 # Resources
 
+API docs: [`Graph::bind_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.bind_resource),
+[`Graph::resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.resource),
+[`Node`](https://docs.rs/vk-graph/latest/vk_graph/node/trait.Node.html),
+[`Pool`](https://docs.rs/vk-graph/latest/vk_graph/pool/trait.Pool.html),
+[`Cache`](https://docs.rs/vk-graph/latest/vk_graph/pool/cache/struct.Cache.html).
+
 > [!CAUTION]
 > All pipelines and resources (_buffers, images, and acceleration structures_) used in a `Graph`
 > must have been created using the same `Device`.
@@ -54,7 +60,8 @@ The `Lease<T>` type otherwise acts identically to an owned resource.
 
 ## Aliased Resources
 
-Resource aliasing is available using the `AliasWrapper` and any `Pool`.
+Resource aliasing is available using [`Cache`](https://docs.rs/vk-graph/latest/vk_graph/pool/cache/struct.Cache.html)
+and any `Pool`.
 
 Aliased resources allow extremely optimized programs to ensure minimal resources during complex
 graphs.

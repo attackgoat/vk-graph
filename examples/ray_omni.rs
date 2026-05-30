@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
         let model_mesh_vertex_buf = frame.graph.bind_resource(&model_mesh.vertex_buf);
 
         let depth_image = frame.graph.bind_resource(
-            pool.lease_resource(ImageInfo::image_2d(
+            pool.resource(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 depth_fmt,
@@ -89,7 +89,7 @@ fn main() -> anyhow::Result<()> {
         );
         let camera_buf = frame.graph.bind_resource({
             let mut buf = pool
-                .lease_resource(BufferInfo::host_mem(
+                .resource(BufferInfo::host_mem(
                     size_of::<Camera>() as _,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 ))
@@ -241,7 +241,7 @@ fn create_blas(
         cmd.set_resource_access(vertex_buf, AccessType::AccelerationStructureBuildRead);
     }
 
-    pass.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
+    cmd.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
         .record_cmd(move |cmd| {
             cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
@@ -395,8 +395,8 @@ fn create_tlas(
     )])
     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
     let size = AccelerationStructure::size_of(device, &info);
-    let tlas = graph
-        .bind_resource(pool.lease_resource(AccelerationStructureInfo::tlas(size.create_size))?);
+    let tlas =
+        graph.bind_resource(pool.resource(AccelerationStructureInfo::tlas(size.create_size))?);
 
     let accel_struct_scratch_offset_alignment = device
         .physical_device
@@ -406,7 +406,7 @@ fn create_tlas(
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
     let scratch_buf = graph.bind_resource(
-        pool.lease_resource(
+        pool.resource(
             BufferInfo::device_mem(
                 size.build_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,

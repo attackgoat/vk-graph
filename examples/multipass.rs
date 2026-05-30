@@ -86,7 +86,7 @@ fn main() -> anyhow::Result<()> {
         let vertex_buf = frame.graph.bind_resource(&funky_shape.vertex_buf);
 
         let depth_stencil = frame.graph.bind_resource(
-            pool.lease_resource(ImageInfo::image_2d(
+            pool.resource(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 depth_stencil_format,
@@ -226,7 +226,7 @@ fn bind_camera_buf(
     model: Mat4,
 ) -> BufferLeaseNode {
     let mut buf = pool
-        .lease_resource(BufferInfo::host_mem(
+        .resource(BufferInfo::host_mem(
             204,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
         ))
@@ -238,7 +238,7 @@ fn bind_camera_buf(
 
 fn bind_light_buf(graph: &mut Graph, pool: &mut LazyPool) -> BufferLeaseNode {
     let mut buf = pool
-        .lease_resource(BufferInfo::host_mem(
+        .resource(BufferInfo::host_mem(
             64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
         ))

@@ -817,7 +817,7 @@ impl Submission {
 
         // debug!("{:#?}", info);
 
-        Ok(Some(pool.lease_resource(info)?))
+        Ok(Some(pool.resource(info)?))
     }
 
     #[profiling::function]
@@ -1680,7 +1680,7 @@ impl Submission {
 
         // trace!("{:#?}", info);
 
-        pool.lease_resource(RenderPassInfo {
+        pool.resource(RenderPassInfo {
             attachments,
             dependencies,
             subpasses,
@@ -2873,7 +2873,7 @@ impl Submission {
     {
         trace!("submit");
 
-        let mut cmd = pool.lease_resource(CommandBufferInfo::new(queue_family_index as _))?;
+        let mut cmd = pool.resource(CommandBufferInfo::new(queue_family_index as _))?;
 
         cmd.wait_until_executed()?;
 

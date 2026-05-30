@@ -124,7 +124,7 @@ fn main() -> anyhow::Result<()> {
 
     window.run(|frame| {
         let image_node = frame.graph.bind_resource(
-            pool.lease_resource(ImageInfo::image_2d(
+            pool.resource(ImageInfo::image_2d(
                 320,
                 200,
                 vk::Format::R8G8B8A8_UNORM,

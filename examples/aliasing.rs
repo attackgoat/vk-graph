@@ -23,7 +23,7 @@ use {
 /// Acceleration structures, buffers and images may be "aliased" by different parts of any one or
 /// more graphs. The process involves wrapping any pool type (FifoPool, LazyPool, HashPool)
 /// in a Cache container. Cache offers `accel_struct`, `buffer` and `image` functions which operate
-/// exactly the same as a regular pool lease_resource(..) except that the result is wrapped in an
+/// exactly the same as a regular pool resource(..) except that the result is wrapped in an
 /// Arc<>.
 ///
 /// Cache derefs to the base pool type and so leasing may be used normally too.
@@ -79,7 +79,7 @@ fn main() -> Result<(), DriverError> {
     assert_eq!(image1_node, image3_node);
 
     // Using the same information for a new LEASE will generate an entirely different image!!
-    let image4_node = graph.bind_resource(cache.lease_resource(image_info)?);
+    let image4_node = graph.bind_resource(cache.resource(image_info)?);
     assert_ne!(image1_node, image4_node);
 
     Ok(())

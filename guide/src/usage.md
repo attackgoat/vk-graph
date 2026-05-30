@@ -2,6 +2,13 @@
 
 `vk-graph` acts as a safe builder-pattern for the Vulkan API.
 
+API docs: [`Graph`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html),
+[`Device`](https://docs.rs/vk-graph/latest/vk_graph/driver/device/struct.Device.html),
+[`Graph::begin_cmd`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.begin_cmd),
+[`Graph::bind_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.bind_resource),
+[`Graph::resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.resource),
+[`Graph::into_submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.into_submission).
+
 Typical usage contains:
 
 ```rust
@@ -78,7 +85,7 @@ let important_image = Image::create(device, dedicated_info)?;
 # Ok(()) }
 ```
 
-Resources may be bound to a graph as `usize` handles referred to as _"nodes"_:
+Resources may be bound to a graph as typed node handles referred to as _"nodes"_:
 
 ```rust
 # use vk_graph::Graph;

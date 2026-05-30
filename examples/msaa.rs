@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
             * Mat4::from_rotation_z(angle * 0.22);
 
         let mut scene_uniform_buf = pool
-            .lease_resource(BufferInfo::host_mem(
+            .resource(BufferInfo::host_mem(
                 size_of::<SceneUniformBuffer>() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))
@@ -115,7 +115,7 @@ fn main() -> anyhow::Result<()> {
 
         if will_render_msaa {
             let msaa_color_image = cmd.bind_resource(
-                pool.lease_resource(
+                pool.resource(
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
@@ -129,7 +129,7 @@ fn main() -> anyhow::Result<()> {
                 .unwrap(),
             );
             let msaa_depth_image = cmd.bind_resource(
-                pool.lease_resource(
+                pool.resource(
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
@@ -158,7 +158,7 @@ fn main() -> anyhow::Result<()> {
             );
         } else {
             let noaa_depth_image = cmd.bind_resource(
-                pool.lease_resource(ImageInfo::image_2d(
+                pool.resource(ImageInfo::image_2d(
                     frame.width,
                     frame.height,
                     depth_format,

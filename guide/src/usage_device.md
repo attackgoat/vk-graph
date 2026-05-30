@@ -3,6 +3,10 @@
 Most Vulkan operations occur within the context of a logical device, provided by
 `Device` (_a smart pointer for `ash::Device`_).
 
+API docs: [`Device::create`](https://docs.rs/vk-graph/latest/vk_graph/driver/device/struct.Device.html#method.create),
+[`Device::try_from_ash_device`](https://docs.rs/vk-graph/latest/vk_graph/driver/device/struct.Device.html#method.try_from_ash_device),
+[`Device::try_from_display`](https://docs.rs/vk-graph/latest/vk_graph/driver/device/struct.Device.html#method.try_from_display).
+
 > [!WARNING]
 > Vulkan has no global state and does not share resources between devices by default.
 >
@@ -19,7 +23,7 @@ production-ready code used to create a device:
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # fn test() -> Result<(), DriverError> {
 let info = DeviceInfo::default();
-let device = Device::new(info)?;
+let device = Device::create(info)?;
 
 assert_eq!(device.physical_device.instance.info.debug, false);
 # Ok(()) }

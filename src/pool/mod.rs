@@ -35,7 +35,7 @@
 //! let mut pool = LazyPool::new(&device);
 //!
 //! let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
-//! let my_image = pool.lease_resource(info)?;
+//! let my_image = pool.resource(info)?;
 //!
 //! assert!(my_image.info.usage.contains(vk::ImageUsageFlags::STORAGE));
 //! # Ok(()) }
@@ -236,14 +236,14 @@ impl<T> Drop for Lease<T> {
 
 /// Allows leasing of resources using driver information structures.
 pub trait Pool<I, T> {
-    #[deprecated = "use lease_resource function"]
+    #[deprecated = "use resource function"]
     #[doc(hidden)]
     fn lease(&mut self, info: I) -> Result<Lease<T>, DriverError> {
-        self.lease_resource(info)
+        self.resource(info)
     }
 
     /// Lease a resource.
-    fn lease_resource(&mut self, info: I) -> Result<Lease<T>, DriverError>;
+    fn resource(&mut self, info: I) -> Result<Lease<T>, DriverError>;
 }
 
 // Enable leasing items using their info builder type for convenience
@@ -251,10 +251,10 @@ macro_rules! lease_builder {
     ($info:ident => $item:ident) => {
         paste::paste! {
             impl<T> Pool<[<$info Builder>], $item> for T where T: Pool<$info, $item> {
-                fn lease_resource(&mut self, builder: [<$info Builder>]) -> Result<Lease<$item>, DriverError> {
+                fn resource(&mut self, builder: [<$info Builder>]) -> Result<Lease<$item>, DriverError> {
                     let info = builder.build();
 
-                    self.lease_resource(info)
+                    self.resource(info)
                 }
             }
         }

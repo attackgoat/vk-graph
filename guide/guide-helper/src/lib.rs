@@ -66,6 +66,12 @@ impl Preprocessor for GuideHelper {
         );
         insert_vulkan_sdk_version(&mut book);
 
+        // mdBook renders the raw `#` lines literally, but compile-only example
+        // lines should still keep those lines available for doctests.
+        if _ctx.renderer == "html" {
+            hide_hidden_lines(&mut book);
+        }
+
         let mut ok = true;
         book.for_each_chapter_mut(|ch| {
             ok &= !ch.content.contains("{{");
@@ -170,6 +176,64 @@ fn insert_vulkan_sdk_version(book: &mut Book) {
     });
 }
 
+fn hide_hidden_lines(book: &mut Book) {
+    book.for_each_chapter_mut(|ch| {
+        ch.content = hide_hidden_lines_in_markdown(&ch.content);
+    });
+}
+
+fn hide_hidden_lines_in_markdown(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_fence = false;
+    let mut hide_lines = false;
+
+    for line in input.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+
+        if let Some(fence) = trimmed.strip_prefix("```") {
+            if in_fence {
+                in_fence = false;
+                hide_lines = false;
+            } else {
+                in_fence = true;
+                hide_lines = should_hide_lines_in_fence(fence);
+            }
+
+            out.push_str(line);
+            continue;
+        }
+
+        if hide_lines && is_rustdoc_hidden_line(line) {
+            continue;
+        }
+
+        out.push_str(line);
+    }
+
+    out
+}
+
+fn is_rustdoc_hidden_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let Some(rest) = trimmed.strip_prefix('#') else {
+        return false;
+    };
+
+    matches!(rest.chars().next(), None | Some(' ' | '\t'))
+}
+
+fn should_hide_lines_in_fence(info: &str) -> bool {
+    let info = info.trim();
+
+    if info.is_empty() {
+        return true;
+    }
+
+    let lang = info.split(',').map(str::trim).next().unwrap_or_default();
+
+    !matches!(lang, "text" | "plain" | "plaintext" | "md" | "markdown")
+}
+
 fn vulkan_sdk_version_for_ash(major: u64, minor: u64) -> &'static str {
     match (major, minor) {
         (0, 38) => LATEST_KNOWN_VULKAN_SDK_VERSION,
@@ -193,5 +257,16 @@ mod test {
     #[should_panic(expected = "unknown ash version; update Vulkan SDK guide mapping")]
     fn unknown_ash_version_panics() {
         let _ = vulkan_sdk_version_for_ash(0, 99);
+    }
+
+    #[test]
+    fn hidden_lines_are_removed_from_code_fences() {
+        let input = "```rust\n# use vk_graph::Graph;\nlet graph = Graph::new();\n# let _ = graph;\n```\n\n```text\n# keep this line\n```\n\n```toml\n# Cargo.toml\n[dependencies]\n```\n\n```bash\n# See: \"Shader Compilation\"\nrun-example\n```\n";
+        let output = hide_hidden_lines_in_markdown(input);
+
+        assert_eq!(
+            output,
+            "```rust\nlet graph = Graph::new();\n```\n\n```text\n# keep this line\n```\n\n```toml\n[dependencies]\n```\n\n```bash\nrun-example\n```\n"
+        );
     }
 }

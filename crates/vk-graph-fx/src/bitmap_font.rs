@@ -170,7 +170,7 @@ impl BitmapFont {
         let vertex_buf_len = 120 * text.chars().count() as vk::DeviceSize;
         let mut vertex_buf = self
             .pool
-            .lease_resource(BufferInfo::host_mem(
+            .resource(BufferInfo::host_mem(
                 vertex_buf_len,
                 vk::BufferUsageFlags::VERTEX_BUFFER,
             ))

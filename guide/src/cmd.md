@@ -2,6 +2,10 @@
 
 `vk-graph` exposes two styles of commands:
 
+API docs: [`Graph::begin_cmd`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.begin_cmd),
+[`Command::record_cmd`](https://docs.rs/vk-graph/latest/vk_graph/cmd/struct.Command.html#method.record_cmd),
+[`Graph::into_submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.into_submission).
+
 - Built-in graph commands such as `copy_buffer`, `clear_color_image`, and `update_buffer`
 - Explicit command-buffer recording through `begin_cmd().record_cmd(...)`
 
@@ -37,7 +41,7 @@ copy other resources as part of the same graph:
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 
 let staging = Buffer::create(
@@ -112,7 +116,7 @@ too broad.
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 
 let src = graph.bind_resource(Buffer::create(

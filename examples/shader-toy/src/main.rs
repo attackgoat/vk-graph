@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
     let mut graph = Graph::default();
     let blank_image = graph.bind_resource(
         cache
-            .lease_resource(ImageInfo::image_2d(
+            .resource(ImageInfo::image_2d(
                 8,
                 8,
                 vk::Format::R8G8B8A8_SRGB,
@@ -139,7 +139,7 @@ fn main() -> anyhow::Result<()> {
     let (width, height) = (1280, 720);
     let framebuffer_image = graph.bind_resource(
         cache
-            .lease_resource(ImageInfo::image_2d(
+            .resource(ImageInfo::image_2d(
                 width,
                 height,
                 vk::Format::R8G8B8A8_SRGB,
@@ -152,7 +152,7 @@ fn main() -> anyhow::Result<()> {
     );
     let temp_image = graph.bind_resource(
         cache
-            .lease_resource(ImageInfo::image_2d(
+            .resource(ImageInfo::image_2d(
                 width,
                 height,
                 vk::Format::R8G8B8A8_SRGB,

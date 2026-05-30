@@ -4,6 +4,11 @@ Compute commands are recorded after binding a `ComputePipeline`. They are typica
 `shader_resource_access` for storage buffers or images, and `resource_access` for indirect argument
 buffers.
 
+API docs: [`ComputeCommandRef::dispatch`](https://docs.rs/vk-graph/latest/vk_graph/cmd/compute/struct.ComputeCommandRef.html#method.dispatch),
+[`ComputeCommandRef::dispatch_base`](https://docs.rs/vk-graph/latest/vk_graph/cmd/compute/struct.ComputeCommandRef.html#method.dispatch_base),
+[`ComputeCommandRef::dispatch_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/compute/struct.ComputeCommandRef.html#method.dispatch_indirect),
+[`ComputeCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/compute/struct.ComputeCommandRef.html#method.push_constants).
+
 ## Available Commands
 
 Command | Typical use
@@ -11,6 +16,7 @@ Command | Typical use
 `dispatch` | Launch workgroups directly from CPU-provided dimensions
 `dispatch_base` | Launch workgroups with a non-zero base workgroup ID
 `dispatch_indirect` | Read dispatch dimensions from a buffer on the device
+`push_constants` | Update small pipeline constants without a buffer upload
 
 ## Direct Dispatch
 
@@ -25,7 +31,7 @@ Command | Typical use
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 
 let output = graph.bind_resource(Buffer::create(
@@ -67,7 +73,7 @@ non-zero `gl_WorkGroupID` origin.
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 
 let output = graph.bind_resource(Buffer::create(
@@ -104,7 +110,7 @@ then consumes those parameters without CPU intervention.
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 let output = graph.bind_resource(Buffer::create(
     &device,
@@ -129,6 +135,36 @@ graph
     .shader_resource_access(0, output, AccessType::ComputeShaderWrite)
     .record_cmd(move |cmd| {
         cmd.dispatch_indirect(args_buffer, 0);
+    });
+# Ok(()) }
+```
+
+## Push Constants
+
+Use [`ComputeCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/compute/struct.ComputeCommandRef.html#method.push_constants)
+for small values that change often, such as frame indices, dispatch parameters,
+or other compact state.
+
+```no_run
+# use vk_graph::Graph;
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
+# use vk_graph::driver::shader::Shader;
+# fn main() -> Result<(), DriverError> {
+# let device = Device::create(DeviceInfo::default())?;
+# let pipeline = ComputePipeline::create(
+#     &device,
+#     ComputePipelineInfo::default(),
+#     Shader::new_compute([0u8; 4].as_slice()),
+# )?;
+# let mut graph = Graph::default();
+graph
+    .begin_cmd()
+    .bind_pipeline(&pipeline)
+    .record_cmd(move |cmd| {
+        cmd.push_constants(0, &[42])
+            .dispatch(1, 1, 1);
     });
 # Ok(()) }
 ```

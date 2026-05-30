@@ -1,9 +1,14 @@
 # Threading Behavior
 
-`vk-graph` is intended to provide scalable performance when used on multiple host threads. All
-commands support being called concurrently from multiple threads, but resources are defined to be
-externally synchronized. This means that the caller must guarantee that no more than one thread is
-submitting a resource at a given time.
+`vk-graph` is intended to provide scalable performance when used on multiple host threads.
+Resources are externally synchronized, and mutable graph-building APIs such as `Graph::begin_cmd`
+require exclusive access to the `Graph` itself.
+
+API docs: [`Submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html),
+[`Submission::queue_submit`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_submit),
+[`Submission::queue_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_resource),
+[`Submission::queue_resource_dependencies`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_resource_dependencies),
+[`CommandBuffer::has_executed`](https://docs.rs/vk-graph/latest/vk_graph/driver/cmd_buf/struct.CommandBuffer.html#method.has_executed).
 
 More precisely, `vk-graph` stores the most recent access type of each subresource of a resource. As
 commands are submitted to the Vulkan implementation queue, the internal state of these resources is
@@ -11,13 +16,13 @@ updated.
 
 Resource state is updated during the following function calls:
 
-- `Submission::submit`
-- `Submission::submit_resource`
-- `Submission::submit_resource_dependencies`
+- `Submission::queue_submit`
+- `Submission::queue_resource`
+- `Submission::queue_resource_dependencies`
 
 > [!CAUTION]
-> Do not call any `Submission` queue function accessing buffers, images, or acceleration structures
-> currently being submitted on other threads.
+> Do not call any `Submission` queue function that accesses buffers, images, or acceleration
+> structures currently being submitted on other threads.
 
 ## Execution
 
@@ -39,13 +44,14 @@ For example, there is no race condition or thread contention caused by using the
 two threads.[^threads] In fact, there is no runtime overhead at all from this.
 
 Additionally, it is safe to build `Graph` instances, bind resources, record command buffers, and
-call `Graph::into_submission` at *any* time on *any* thread.
+call `Graph::into_submission` at *any* time on *any* thread, as long as each `Graph` instance is not
+mutably shared across threads at the same time.
 
 These patterns are safe:
 - Build `Graph` and `Send` to another thread for submission
 - Build `Graph` and `Drop` it without submission
 - `Send` resources to other threads _or_ share as `Arc<T>`
-- `Clone` device or pipelines and `Send` to other threads
+- `Clone` devices or pipelines and `Send` them to other threads
 
 ## Risky Patterns
 

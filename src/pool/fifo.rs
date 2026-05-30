@@ -115,7 +115,7 @@ impl FifoPool {
 
 impl Pool<AccelerationStructureInfo, AccelerationStructure> for FifoPool {
     #[profiling::function]
-    fn lease_resource(
+    fn resource(
         &mut self,
         info: AccelerationStructureInfo,
     ) -> Result<Lease<AccelerationStructure>, DriverError> {
@@ -151,7 +151,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for FifoPool {
 
 impl Pool<BufferInfo, Buffer> for FifoPool {
     #[profiling::function]
-    fn lease_resource(&mut self, info: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
+    fn resource(&mut self, info: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
         let cache_ref = Arc::downgrade(&self.buffer_cache);
 
         {
@@ -191,10 +191,7 @@ impl Pool<BufferInfo, Buffer> for FifoPool {
 
 impl Pool<CommandBufferInfo, CommandBuffer> for FifoPool {
     #[profiling::function]
-    fn lease_resource(
-        &mut self,
-        info: CommandBufferInfo,
-    ) -> Result<Lease<CommandBuffer>, DriverError> {
+    fn resource(&mut self, info: CommandBufferInfo) -> Result<Lease<CommandBuffer>, DriverError> {
         let cache_ref = self
             .command_buffer_cache
             .entry(info.queue_family_index)
@@ -217,10 +214,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for FifoPool {
 
 impl Pool<DescriptorPoolInfo, DescriptorPool> for FifoPool {
     #[profiling::function]
-    fn lease_resource(
-        &mut self,
-        info: DescriptorPoolInfo,
-    ) -> Result<Lease<DescriptorPool>, DriverError> {
+    fn resource(&mut self, info: DescriptorPoolInfo) -> Result<Lease<DescriptorPool>, DriverError> {
         let cache_ref = Arc::downgrade(&self.descriptor_pool_cache);
 
         {
@@ -270,7 +264,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for FifoPool {
 
 impl Pool<ImageInfo, Image> for FifoPool {
     #[profiling::function]
-    fn lease_resource(&mut self, info: ImageInfo) -> Result<Lease<Image>, DriverError> {
+    fn resource(&mut self, info: ImageInfo) -> Result<Lease<Image>, DriverError> {
         let cache_ref = Arc::downgrade(&self.image_cache);
 
         {
@@ -316,7 +310,7 @@ impl Pool<ImageInfo, Image> for FifoPool {
 
 impl Pool<RenderPassInfo, RenderPass> for FifoPool {
     #[profiling::function]
-    fn lease_resource(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
+    fn resource(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
         let cache_ref = if let Some(cache) = self.render_pass_cache.get(&info) {
             cache
         } else {

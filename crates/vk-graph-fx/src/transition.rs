@@ -441,7 +441,7 @@ impl TransitionPipeline {
         );
         let dest_image = graph.bind_resource(
             self.cache
-                .lease_resource(dest_info)
+                .resource(dest_info)
                 .expect("missing transition image"),
         );
 

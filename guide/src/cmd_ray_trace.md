@@ -5,6 +5,11 @@ Ray tracing work in `vk-graph` usually has two phases:
 - Build or update acceleration structures with a general command buffer
 - Bind a `RayTracePipeline` and issue `trace_rays` or `trace_rays_indirect`
 
+API docs: [`RayTraceCommandRef::build_accel_struct`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.build_accel_struct),
+[`RayTraceCommandRef::trace_rays`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.trace_rays),
+[`RayTraceCommandRef::trace_rays_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.trace_rays_indirect),
+[`RayTraceCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.push_constants).
+
 ## Available Commands
 
 Command | Typical use
@@ -16,6 +21,7 @@ Command | Typical use
 `trace_rays_indirect` | Launch rays with dimensions read from device memory
 `update_accel_struct` | Refit or rebuild an existing structure in-place
 `update_accel_struct_indirect` | Device-driven in-place update path
+`push_constants` | Update small pipeline constants without a buffer upload
 
 ## Building Acceleration Structures
 
@@ -31,7 +37,7 @@ command buffer.
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 
 let blas = graph.bind_resource(AccelerationStructure::create(
@@ -81,7 +87,7 @@ issue `trace_rays`.
 # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 let output = graph.bind_resource(Image::create(
     &device,
@@ -121,6 +127,55 @@ graph
 # Ok(()) }
 ```
 
+## Push Constants
+
+Use [`RayTraceCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.push_constants)
+for small ray tracing state such as frame counters or camera parameters.
+
+```no_run
+# use vk_graph::driver::{ash::vk, DriverError};
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+# use vk_graph::driver::shader::Shader;
+# use vk_graph::Graph;
+# fn main() -> Result<(), DriverError> {
+# let device = Device::create(DeviceInfo::default())?;
+# let pipeline = RayTracePipeline::create(
+#     &device,
+#     RayTracePipelineInfo::default(),
+#     [Shader::new_ray_gen([0u8; 4].as_slice())],
+#     [RayTraceShaderGroup::new_general(0)],
+# )?;
+# let output = Image::create(
+#     &device,
+#     ImageInfo::image_2d(
+#         1280,
+#         720,
+#         vk::Format::R16G16B16A16_SFLOAT,
+#         vk::ImageUsageFlags::STORAGE,
+#     ),
+# )?;
+# let mut graph = Graph::default();
+# let output = graph.bind_resource(output);
+graph
+    .begin_cmd()
+    .bind_pipeline(&pipeline)
+    .record_cmd(move |cmd| {
+        cmd.push_constants(0, &[42])
+            .trace_rays(
+                &vk::StridedDeviceAddressRegionKHR::default(),
+                &vk::StridedDeviceAddressRegionKHR::default(),
+                &vk::StridedDeviceAddressRegionKHR::default(),
+                &vk::StridedDeviceAddressRegionKHR::default(),
+                1280,
+                720,
+                1,
+            );
+    });
+# Ok(()) }
+```
+
 ## Dynamic Stack Size And Indirect Trace
 
 Use `set_stack_size` only when the pipeline was created with `dynamic_stack_size(true)`. Combine it
@@ -137,7 +192,7 @@ buffer.
 # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 let output = graph.bind_resource(Image::create(
     &device,

@@ -3,7 +3,13 @@
 Command buffers may update a very small data cache which shaders may read during execution using
 push constants.
 
-It is recommended to target 128 bytes as the maximum push constant data size.
+The Vulkan minimum is `128` bytes, but many devices expose a larger limit.
+Check [`PhysicalDeviceLimits::max_push_constants_size`](https://docs.rs/vk-graph/latest/vk_graph/driver/physical_device/struct.PhysicalDeviceLimits.html#structfield.max_push_constants_size)
+and keep the payload small.
+
+API docs: [`ComputeCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/compute/struct.ComputeCommandRef.html#method.push_constants),
+[`GraphicCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.push_constants),
+[`RayTraceCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.push_constants).
 
 ```glsl
 // render_mesh.glsl

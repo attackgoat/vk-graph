@@ -274,7 +274,7 @@ fn main() -> anyhow::Result<()> {
 
         let mut graph = Graph::default();
         let depth_image = graph.bind_resource(
-            pool.lease_resource(ImageInfo::image_2d_array(
+            pool.resource(ImageInfo::image_2d_array(
                 resolution.width,
                 resolution.height,
                 2,
@@ -297,7 +297,7 @@ fn main() -> anyhow::Result<()> {
         let camera_buf = {
             let cameras = [CameraBuffer::new(views[0]), CameraBuffer::new(views[1])];
             let data = cast_slice(&cameras);
-            let mut buf = pool.lease_resource(BufferInfo::host_mem(
+            let mut buf = pool.resource(BufferInfo::host_mem(
                 data.len() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
@@ -336,7 +336,7 @@ fn main() -> anyhow::Result<()> {
         let light_buf = {
             let light = LightBuffer::new(light_position);
             let data = bytes_of(&light);
-            let mut buf = pool.lease_resource(BufferInfo::host_mem(
+            let mut buf = pool.resource(BufferInfo::host_mem(
                 data.len() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;

@@ -3,6 +3,11 @@
 Graphic commands are recorded after binding a `GraphicPipeline` and declaring attachments such as
 `color_attachment_image` or `depth_stencil_attachment_image`.
 
+API docs: [`GraphicCommandRef::draw`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.draw),
+[`GraphicCommandRef::draw_indexed`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.draw_indexed),
+[`GraphicCommandRef::draw_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.draw_indirect),
+[`GraphicCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.push_constants).
+
 ## Available Commands
 
 Command | Typical use
@@ -17,6 +22,7 @@ Command | Typical use
 `draw_indirect_count` | GPU-driven non-indexed draws with a count buffer
 `set_scissor` | Restrict drawing to one or more rectangles
 `set_viewport` | Override the default viewport dynamically
+`push_constants` | Update small pipeline constants without a buffer upload
 
 ## Direct Draws
 
@@ -34,7 +40,7 @@ The most common pattern is to bind vertex and index buffers, then issue `draw` o
 # use vk_graph::driver::image::{Image, ImageInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 
 let color = graph.bind_resource(Image::create(
@@ -101,7 +107,7 @@ Override them when a pass renders only part of the target.
 # use vk_graph::driver::image::{Image, ImageInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 let color = graph.bind_resource(Image::create(
     &device,
@@ -173,7 +179,7 @@ onto the GPU.
 # use vk_graph::driver::image::{Image, ImageInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
-# let device = Device::new(DeviceInfo::default())?;
+# let device = Device::create(DeviceInfo::default())?;
 let mut graph = Graph::default();
 let color = graph.bind_resource(Image::create(
     &device,
@@ -244,6 +250,51 @@ graph
                 16,
                 size_of::<vk::DrawIndexedIndirectCommand>() as u32,
             );
+    });
+# Ok(()) }
+```
+
+## Push Constants
+
+Use [`GraphicCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.push_constants)
+for compact per-draw state that fits within the device's push-constant limit.
+
+```no_run
+# use vk_graph::cmd::{LoadOp, StoreOp};
+# use vk_graph::driver::{ash::vk, DriverError};
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+# use vk_graph::driver::image::{Image, ImageInfo};
+# use vk_graph::driver::shader::Shader;
+# use vk_graph::Graph;
+# fn main() -> Result<(), DriverError> {
+# let device = Device::create(DeviceInfo::default())?;
+# let pipeline = GraphicPipeline::create(
+#     &device,
+#     GraphicPipelineInfo::default(),
+#     [
+#         Shader::new_vertex([0u8; 4].as_slice()),
+#         Shader::new_fragment([0u8; 4].as_slice()),
+#     ],
+# )?;
+# let image = Image::create(
+#     &device,
+#     ImageInfo::image_2d(
+#         32,
+#         32,
+#         vk::Format::R8G8B8A8_UNORM,
+#         vk::ImageUsageFlags::COLOR_ATTACHMENT,
+#     ),
+# )?;
+# let mut graph = Graph::default();
+# let image = graph.bind_resource(image);
+graph
+    .begin_cmd()
+    .bind_pipeline(&pipeline)
+    .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+    .record_cmd(move |cmd| {
+        cmd.push_constants(0, &[42])
+            .draw(3, 1, 0, 0);
     });
 # Ok(()) }
 ```
