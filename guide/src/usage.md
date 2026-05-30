@@ -264,7 +264,7 @@ graph, but they may do so manually:
 # ) -> Result<(), DriverError> {
 // NOTE: This will stall! Use the async functions to check periodically instead
 graph
-    .into_queue()
+    .into_submission()
     .submit(&mut LazyPool::new(device), 0, 0)?
     .wait_until_executed()?;
 # Ok(()) }

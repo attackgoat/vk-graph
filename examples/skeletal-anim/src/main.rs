@@ -215,8 +215,8 @@ fn load_texture(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Arc<Imag
         let buffer = graph.bind_resource(&buffer);
         graph.copy_buffer_to_image(buffer, image);
         graph
-            .into_queue()
-            .submit(&mut HashPool::new(device), 0, 0)?;
+            .into_submission()
+            .queue_submit(&mut HashPool::new(device), 0, 0)?;
     }
 
     Ok(image)
@@ -465,8 +465,8 @@ impl Model {
                 .copy_buffer(index_staging_buf, index_buf)
                 .copy_buffer(vertex_staging_buf, vertex_buf);
             graph
-                .into_queue()
-                .submit(&mut HashPool::new(device), 0, 0)?;
+                .into_submission()
+                .queue_submit(&mut HashPool::new(device), 0, 0)?;
         }
 
         Ok(Model {

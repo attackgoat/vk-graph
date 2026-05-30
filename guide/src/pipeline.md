@@ -31,7 +31,7 @@ borrow of a pipeline to when beginning a command.
 
 ## Commands
 
-A graph command is the smallest unit which the `Queue` type will schedule for execution.
+A graph command is the smallest unit which the `Submission` type will schedule for execution.
 
 Calls to `Graph::begin_cmd` (and, optionally `Graph::end_cmd`) define a single graph command which
 will execute in physical order as recorded. During graph command recording you may change pipelines,

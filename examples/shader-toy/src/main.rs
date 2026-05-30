@@ -173,7 +173,7 @@ fn main() -> anyhow::Result<()> {
     let mut blank_image_binding = Some(graph.resource(blank_image).clone());
     let mut temp_image_binding = Some(graph.resource(temp_image).clone());
 
-    graph.into_queue().submit(&mut cache, 0, 0)?;
+    graph.into_submission().queue_submit(&mut cache, 0, 0)?;
 
     let started_at = Instant::now();
     let mut prev_frame_at = started_at;

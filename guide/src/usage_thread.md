@@ -11,21 +11,21 @@ updated.
 
 Resource state is updated during the following function calls:
 
-- `Queue::submit`
-- `Queue::submit_resource`
-- `Queue::submit_resource_dependencies`
+- `Submission::submit`
+- `Submission::submit_resource`
+- `Submission::submit_resource_dependencies`
 
 > [!CAUTION]
-> Do not call any `Queue` submission function accessing buffers, images, or acceleration structures
+> Do not call any `Submission` queue function accessing buffers, images, or acceleration structures
 > currently being submitted on other threads.
 
 ## Execution
 
-The provided `Queue` submission functions are designed to support a typical swapchain-based
+The provided `Submission` queue functions are designed to support a typical swapchain-based
 workflow:
-1. Submit all commands the swapchain depends on
+1. Queue all commands the swapchain depends on
 1. Acquire swapchain
-1. Submit swapchain commands
+1. Queue swapchain commands
 1. Present swapchain
 1. Submit any final unrelated commands
 
@@ -39,7 +39,7 @@ For example, there is no race condition or thread contention caused by using the
 two threads.[^threads] In fact, there is no runtime overhead at all from this.
 
 Additionally, it is safe to build `Graph` instances, bind resources, record command buffers, and
-call `Graph::into_queue` at *any* time on *any* thread.
+call `Graph::into_submission` at *any* time on *any* thread.
 
 These patterns are safe:
 - Build `Graph` and `Send` to another thread for submission
@@ -51,7 +51,7 @@ These patterns are safe:
 
 Host-mappable buffers require extra understanding to use properly.
 
-The contents of a buffer are undefined from the time of submission until that `Queue` has been
+The contents of a buffer are undefined from the time of submission until that `Submission` has been
 fully executed, as indicated by `CommandBuffer::has_executed`. This means that you should not call
 `Buffer::mapped_slice` during any submission or execution accessing that memory.
 

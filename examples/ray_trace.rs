@@ -753,7 +753,7 @@ fn main() -> anyhow::Result<()> {
                 });
         }
 
-        graph.into_queue().submit(&mut cache, 0, 0)?;
+        graph.into_submission().queue_submit(&mut cache, 0, 0)?;
     }
 
     // ------------------------------------------------------------------------------------------ //

@@ -198,12 +198,12 @@ impl Drop for PhysicalPass {
 /// <http://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/>
 /// <https://github.com/EmbarkStudios/kajiya>
 #[derive(Debug)]
-pub struct Queue {
+pub struct Submission {
     graph: Graph,
     physical_passes: Vec<PhysicalPass>,
 }
 
-impl Queue {
+impl Submission {
     pub(super) fn new(graph: Graph) -> Self {
         let physical_passes = Vec::with_capacity(graph.cmds.len());
 
@@ -2862,7 +2862,7 @@ impl Queue {
 
     /// Submits the remaining commands stored in this instance.
     #[profiling::function]
-    pub fn submit<P>(
+    pub fn queue_submit<P>(
         mut self,
         pool: &mut P,
         queue_family_index: u32,
@@ -2951,7 +2951,7 @@ impl Queue {
 
     /// Records any pending render graph passes that the given node requires.
     #[profiling::function]
-    pub fn submit_resource<P>(
+    pub fn queue_resource<P>(
         &mut self,
         resource_node: impl Node,
         pool: &mut P,
@@ -2979,7 +2979,7 @@ impl Queue {
     /// the graph, but only on top of the existing optimizations. This only matters if you are pulling
     /// multiple images out and you care - in that case pull the "most important" image first.
     #[profiling::function]
-    pub fn submit_resource_dependencies<P>(
+    pub fn queue_resource_dependencies<P>(
         &mut self,
         resource_node: impl Node,
         pool: &mut P,
@@ -3321,9 +3321,9 @@ impl Queue {
     }
 }
 
-impl From<Graph> for Queue {
+impl From<Graph> for Submission {
     fn from(val: Graph) -> Self {
-        val.into_queue()
+        val.into_submission()
     }
 }
 
@@ -3337,7 +3337,7 @@ struct Schedule {
 #[allow(unused)]
 mod derecated {
     use crate::{
-        Node, Queue,
+        Node, Submission,
         driver::{
             DriverError,
             cmd_buf::CommandBuffer,
@@ -3347,7 +3347,7 @@ mod derecated {
         pool::Pool,
     };
 
-    impl Queue {
+    impl Submission {
         #[deprecated = "use is_submitted function"]
         #[doc(hidden)]
         pub fn is_resolved(&self) -> bool {
@@ -3365,7 +3365,7 @@ mod derecated {
         where
             P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
         {
-            self.submit_resource(node, pool, cmd_buf)
+            self.queue_resource(node, pool, cmd_buf)
         }
 
         #[deprecated = "use submit_resource function"]
@@ -3379,7 +3379,7 @@ mod derecated {
         where
             P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
         {
-            self.submit_resource_dependencies(node, pool, cmd_buf)
+            self.queue_resource_dependencies(node, pool, cmd_buf)
         }
     }
 }

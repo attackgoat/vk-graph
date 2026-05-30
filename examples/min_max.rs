@@ -65,8 +65,8 @@ fn main() -> Result<(), DriverError> {
     let max_result_buf = copy_image_to_buffer(&device, &mut graph, max_reduced_image)?;
 
     graph
-        .into_queue()
-        .submit(&mut HashPool::new(&device), 0, 0)?
+        .into_submission()
+        .queue_submit(&mut HashPool::new(&device), 0, 0)?
         .wait_until_executed()?;
 
     // For each image we have reduced each 2x2 pixel group into the min/max values of each group

@@ -161,8 +161,8 @@ fn main() -> Result<(), DriverError> {
     let depth_pixel = graph.resource(depth_pixel).clone();
 
     graph
-        .into_queue()
-        .submit(&mut HashPool::new(&device), 0, 0)?
+        .into_submission()
+        .queue_submit(&mut HashPool::new(&device), 0, 0)?
         .wait_until_executed()?;
 
     let depth_pixel = f32::from_ne_bytes(Buffer::mapped_slice(&depth_pixel).try_into().unwrap());

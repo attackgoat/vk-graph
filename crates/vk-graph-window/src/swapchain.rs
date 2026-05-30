@@ -203,8 +203,8 @@ impl Swapchain {
     {
         trace!("present_image");
 
-        let mut queue = graph.into_queue();
-        let wait_dst_stage_mask = queue.node_stages(swapchain_image);
+        let mut submission = graph.into_submission();
+        let wait_dst_stage_mask = submission.node_stages(swapchain_image);
 
         // The swapchain should have been written to, otherwise it would be noise and that's a panic
         assert!(
@@ -212,7 +212,7 @@ impl Swapchain {
             "uninitialized swapchain image: write something each frame!",
         );
 
-        let image_idx = queue.resource(swapchain_image).index;
+        let image_idx = submission.resource(swapchain_image).index;
         let exec_idx = self.image_execs[image_idx as usize];
         let exec = &mut self.execs[exec_idx];
 
@@ -227,11 +227,11 @@ impl Swapchain {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
 
-        // queue.record_node_dependencies(&mut *self.pool, cmd_buf, swapchain_image)?;
-        queue.submit_resource(swapchain_image, pool, &mut exec.cmd_buf)?;
+        // submission.record_node_dependencies(&mut *self.pool, cmd_buf, swapchain_image)?;
+        submission.queue_resource(swapchain_image, pool, &mut exec.cmd_buf)?;
 
         {
-            let swapchain_image = queue.resource(swapchain_image);
+            let swapchain_image = submission.resource(swapchain_image);
             for (access, range) in Image::access(
                 swapchain_image,
                 AccessType::Present,
@@ -275,7 +275,7 @@ impl Swapchain {
         // before present which use nodes that are unused in the remainder of the graph.
         // These operations are still important, but they don't need to wait for any of the above
         // things so we do them last
-        queue.submit_cmd_buf(pool, &mut exec.cmd_buf)?;
+        submission.submit_cmd_buf(pool, &mut exec.cmd_buf)?;
 
         Device::with_queue(
             &exec.cmd_buf.device,
@@ -301,7 +301,7 @@ impl Swapchain {
         let elapsed = Instant::now() - started;
         trace!("🔜🔜🔜 vkQueueSubmit took {} μs", elapsed.as_micros(),);
 
-        let swapchain_image = queue.resource(swapchain_image).clone();
+        let swapchain_image = submission.resource(swapchain_image).clone();
 
         self.read_only.swapchain.present_image(
             swapchain_image,
@@ -312,7 +312,7 @@ impl Swapchain {
 
         // Store the resolved graph because it contains bindings, leases, and other shared resources
         // that need to be kept alive until the fence is waited upon.
-        exec.cmd_buf.drop_after_executed(queue);
+        exec.cmd_buf.drop_after_executed(submission);
 
         Ok(())
     }

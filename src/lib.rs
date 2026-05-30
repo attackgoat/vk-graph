@@ -19,7 +19,7 @@ pub mod driver;
 pub mod node;
 pub mod pool;
 
-mod queue;
+mod submission;
 
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ use crate::{
     pool::Lease,
 };
 
-pub use self::queue::Queue;
+pub use self::submission::Submission;
 
 #[allow(deprecated)]
 pub use self::deprecated::{Display, DisplayInfo, DisplayInfoBuilder};
@@ -941,7 +941,7 @@ impl Graph {
     /// Finalizes the graph and provides an object with functions for submitting the resulting
     /// commands.
     #[profiling::function]
-    pub fn into_queue(mut self) -> Queue {
+    pub fn into_submission(mut self) -> Submission {
         // The final execution of each pass has no function
         for cmd in &mut self.cmds {
             debug_assert!(cmd.expect_last_exec().func.is_none());
@@ -949,7 +949,7 @@ impl Graph {
             cmd.execs.pop();
         }
 
-        Queue::new(self)
+        Submission::new(self)
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
@@ -1255,8 +1255,8 @@ pub mod graph {
     #[deprecated = "use vk_graph::Graph"]
     pub type RenderGraph = crate::Graph;
 
-    #[deprecated = "use vk_graph::Queue"]
-    pub type Resolver = crate::Queue;
+    #[deprecated = "use vk_graph::Submission"]
+    pub type Resolver = crate::Submission;
 }
 
 #[allow(deprecated)]
@@ -1518,10 +1518,10 @@ pub(crate) mod deprecated {
             node.info(&self.resources)
         }
 
-        #[deprecated = "use into_queue function"]
+        #[deprecated = "use into_submission function"]
         #[doc(hidden)]
         pub fn resolve(self) -> crate::graph::Resolver {
-            self.into_queue()
+            self.into_submission()
         }
 
         #[deprecated = "use resource and clone functions"]

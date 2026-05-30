@@ -406,7 +406,7 @@ fn main() -> anyhow::Result<()> {
                 });
         }
 
-        graph.into_queue().submit(&mut pool, 0, 0)?;
+        graph.into_submission().queue_submit(&mut pool, 0, 0)?;
     }
 
     // ------------------------------------------------------------------------------------------ //

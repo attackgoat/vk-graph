@@ -226,8 +226,8 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
 
     // Submits to the GPU but does not wait for anything to be finished
     graph
-        .into_queue()
-        .submit(&mut LazyPool::new(device), queue_family_index, 0)
+        .into_submission()
+        .queue_submit(&mut LazyPool::new(device), queue_family_index, 0)
         .map(|_| ())
 }
 

@@ -284,8 +284,8 @@ fn read_image(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Arc<Ima
         )?);
         graph.copy_buffer_to_image(image_buf, image);
         graph
-            .into_queue()
-            .submit(&mut HashPool::new(device), 0, 0)?;
+            .into_submission()
+            .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
         // Note: There is no need to call wait_until_executed() here
     }

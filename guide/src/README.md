@@ -22,11 +22,11 @@ Driver
 Graph
   : _Builder-pattern for Vulkan commands_
 
-Queue
+Submission
   : _Automated graph execution_
 
 A `Graph` is data built dynamically by your program every frame. Once complete, the graph is
-optimized into a `Queue` which may be used to submit commands to the Vulkan implementation.
+optimized into a `Submission` which may be used to submit commands to the Vulkan implementation.
 
 The overhead of building and submitting each graph is typically a few hundred microseconds.
 
