@@ -158,7 +158,7 @@ fn main() -> Result<(), WindowError> {
                 LoadOp::CLEAR_ZERO_STENCIL_ZERO,
                 StoreOp::DontCare,
             )
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)

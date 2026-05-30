@@ -2519,7 +2519,7 @@ impl Submission {
                     profiling::scope!("Execute callback");
 
                     let exec_func = exec.func.take().expect("missing command function").0;
-                    exec_func(crate::cmd::CommandBuffer::new(
+                    exec_func(crate::cmd::CommandRef::new(
                         cmd_buf,
                         &self.graph.resources,
                         #[cfg(debug_assertions)]

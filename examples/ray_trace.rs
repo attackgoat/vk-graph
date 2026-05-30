@@ -713,7 +713,7 @@ fn main() -> anyhow::Result<()> {
                 .resource_access(vertex_node, AccessType::AccelerationStructureBuildRead)
                 .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
                 .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_cmd_buf(move |cmd_buf| {
+                .record_cmd(move |cmd_buf| {
                     cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                         blas_node,
                         scratch_data,
@@ -744,7 +744,7 @@ fn main() -> anyhow::Result<()> {
                 .resource_access(instance_node, AccessType::AccelerationStructureBuildRead)
                 .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
                 .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_cmd_buf(move |cmd_buf| {
+                .record_cmd(move |cmd_buf| {
                     cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                         tlas_node,
                         scratch_addr,
@@ -900,7 +900,7 @@ fn main() -> anyhow::Result<()> {
                 AccessType::RayTracingShaderReadOther,
             )
             .shader_resource_access(6, material_buf_node, AccessType::RayTracingShaderReadOther)
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 cmd_buf.trace_rays(
                     &sbt_rgen,
                     &sbt_miss,

@@ -48,7 +48,7 @@ graph
     .begin_cmd()
     .resource_access(some_buffer, AccessType::TransferRead)
     .resource_access(some_image, AccessType::TransferWrite)
-    .record_cmd_buf(|cmd_buf| {
+    .record_cmd(|cmd_buf| {
         // we are synchronized!
         // You may:
         //  - Read some_buffer
@@ -74,12 +74,12 @@ graph
     .begin_cmd()
     .resource_access(buffer, AccessType::TransferRead)
     .resource_access(image, AccessType::TransferWrite)
-    .record_cmd_buf(|cmd_buf| {
+    .record_cmd(|cmd_buf| {
         // Safe to copy buffer to image
     })
     .resource_access(image, AccessType::TransferRead)
     .resource_access(buffer, AccessType::TransferWrite)
-    .record_cmd_buf(|cmd_buf| {
+    .record_cmd(|cmd_buf| {
         // Safe to copy image to buffer
     });
 # Ok(()) }
@@ -131,7 +131,7 @@ graph
         include_bytes!("clear_image.spv").as_slice(),
     )?)
     .shader_resource_access(42, image, AccessType::ComputeShaderWrite)
-    .record_cmd_buf(|cmd_buf| {
+    .record_cmd(|cmd_buf| {
         cmd_buf.dispatch(32, 32, 1);
     });
 # Ok(()) }
@@ -167,7 +167,7 @@ graph
         include_bytes!("clear_image.spv").as_slice(),
     )?)
     .shader_subresource_access(42, image, info, AccessType::ComputeShaderWrite)
-    .record_cmd_buf(|cmd_buf| {
+    .record_cmd(|cmd_buf| {
         cmd_buf.dispatch(32, 32, 1);
     });
 # Ok(()) }

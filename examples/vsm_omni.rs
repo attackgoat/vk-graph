@@ -288,7 +288,7 @@ fn main() -> anyhow::Result<()> {
                     LoadOp::CLEAR_BLACK_ALPHA_ZERO,
                     StoreOp::Store,
                 )
-                .record_cmd_buf(move |cmd_buf| {
+                .record_cmd(move |cmd_buf| {
                     cmd_buf
                         .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
@@ -328,7 +328,7 @@ fn main() -> anyhow::Result<()> {
                         LoadOp::clear_rgba(light.range, light.range, 0.0, 0.0),
                         StoreOp::Store,
                     )
-                    .record_cmd_buf(move |cmd_buf| {
+                    .record_cmd(move |cmd_buf| {
                         cmd_buf
                             .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
                             .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
@@ -386,7 +386,7 @@ fn main() -> anyhow::Result<()> {
                             LoadOp::clear_rgba(light.range, light.range, 0.0, 0.0),
                             StoreOp::Store,
                         )
-                        .record_cmd_buf(move |cmd_buf| {
+                        .record_cmd(move |cmd_buf| {
                             cmd_buf
                                 .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
                                 .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
@@ -415,7 +415,7 @@ fn main() -> anyhow::Result<()> {
                             AccessType::ComputeShaderReadOther,
                         )
                         .shader_resource_access(1, temp_image, AccessType::ComputeShaderWrite)
-                        .record_cmd_buf(move |cmd_buf| {
+                        .record_cmd(move |cmd_buf| {
                             cmd_buf.dispatch(1, CUBEMAP_SIZE, 6);
                         })
                         .end_cmd()
@@ -428,7 +428,7 @@ fn main() -> anyhow::Result<()> {
                             shadow_faces_node,
                             AccessType::ComputeShaderWrite,
                         )
-                        .record_cmd_buf(move |cmd_buf| {
+                        .record_cmd(move |cmd_buf| {
                             cmd_buf.dispatch(CUBEMAP_SIZE, 1, 6);
                         });
                 }
@@ -474,7 +474,7 @@ fn main() -> anyhow::Result<()> {
                     LoadOp::CLEAR_BLACK_ALPHA_ZERO,
                     StoreOp::Store,
                 )
-                .record_cmd_buf(move |cmd_buf| {
+                .record_cmd(move |cmd_buf| {
                     cmd_buf
                         .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)

@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
                 LoadOp::CLEAR_ZERO_STENCIL_ZERO,
                 StoreOp::Store,
             )
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)
@@ -166,7 +166,7 @@ fn main() -> anyhow::Result<()> {
             .resource_access(vertex_buf, AccessType::VertexBuffer)
             .depth_stencil_attachment_image(depth_stencil, LoadOp::Load, StoreOp::Store)
             .color_attachment_image(0, frame.swapchain_image, LoadOp::DontCare, StoreOp::Store)
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)
@@ -190,7 +190,7 @@ fn main() -> anyhow::Result<()> {
             .depth_stencil(read)
             .depth_stencil_attachment_image(depth_stencil, LoadOp::Load, StoreOp::DontCare)
             .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 cmd_buf.draw(6, 1, 0, 0);
             });
     })?;

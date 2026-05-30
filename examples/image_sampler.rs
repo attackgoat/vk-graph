@@ -107,7 +107,7 @@ fn main() -> anyhow::Result<()> {
                 AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
             )
             .color_attachment_image(0, frame.swapchain_image, LoadOp::DontCare, StoreOp::Store)
-            .record_cmd_buf(|cmd_buf| {
+            .record_cmd(|cmd_buf| {
                 cmd_buf.draw(3, 1, 0, 0);
             });
     })?;

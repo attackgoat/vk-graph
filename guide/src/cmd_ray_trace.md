@@ -50,7 +50,7 @@ graph
     .begin_cmd()
     .resource_access(scratch, AccessType::AccelerationStructureBufferWrite)
     .resource_access(blas, AccessType::AccelerationStructureBuildWrite)
-    .record_cmd_buf(move |cmd_buf| {
+    .record_cmd(move |cmd_buf| {
         let scratch_addr = cmd_buf.resource(scratch).device_address();
         let build_info: AccelerationStructureGeometryInfo<(
             AccelerationStructureGeometry,
@@ -115,7 +115,7 @@ graph
     .begin_cmd()
     .bind_pipeline(&pipeline)
     .shader_resource_access(0, output, AccessType::General)
-    .record_cmd_buf(move |cmd_buf| {
+    .record_cmd(move |cmd_buf| {
         cmd_buf.trace_rays(&raygen_sbt, &miss_sbt, &hit_sbt, &callable_sbt, 1280, 720, 1);
     });
 # Ok(()) }
@@ -178,7 +178,7 @@ graph
     .bind_pipeline(&pipeline)
     .resource_access(args, AccessType::IndirectBuffer)
     .shader_resource_access(0, output, AccessType::General)
-    .record_cmd_buf(move |cmd_buf| {
+    .record_cmd(move |cmd_buf| {
         cmd_buf
             .set_stack_size(4096)
             .trace_rays_indirect(

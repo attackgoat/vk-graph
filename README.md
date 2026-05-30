@@ -62,7 +62,7 @@ graph
     .shader_resource_access(3, fire_buffer, AccessType::FragmentShaderReadUniformBuffer)
     .color_attachment_image(0, swapchain_image, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
     .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::DontCare)
-    .record_cmd_buf(move |cmd_buf| {
+    .record_cmd(move |cmd_buf| {
         cmd_buf
             .push_constants(some_u8_slice)
             .draw(6, 1, 0, 0);

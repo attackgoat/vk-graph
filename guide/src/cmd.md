@@ -3,7 +3,7 @@
 `vk-graph` exposes two styles of commands:
 
 - Built-in graph commands such as `copy_buffer`, `clear_color_image`, and `update_buffer`
-- Explicit command-buffer recording through `begin_cmd().record_cmd_buf(...)`
+- Explicit command-buffer recording through `begin_cmd().record_cmd(...)`
 
 The built-in commands are the easiest place to start. They automatically describe the required
 transfer access and insert the synchronization they need.

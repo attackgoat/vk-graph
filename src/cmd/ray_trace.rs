@@ -1,5 +1,5 @@
 use {
-    super::{PipelineCommand, cmd_buf::CommandBuffer},
+    super::{PipelineCommand, cmd_ref::CommandRef},
     crate::driver::{device::Device, ray_trace::RayTracePipeline},
     ash::vk,
     std::ops::Deref,
@@ -7,19 +7,16 @@ use {
 
 impl PipelineCommand<'_, RayTracePipeline> {
     /// Begin recording a ray trace pipeline command buffer.
-    pub fn record_cmd_buf(
+    pub fn record_cmd(
         mut self,
-        func: impl FnOnce(RayTraceCommandBuffer<'_>) + Send + 'static,
+        func: impl FnOnce(RayTraceCommandRef<'_>) + Send + 'static,
     ) -> Self {
-        self.record_cmd_buf_mut(func);
+        self.record_cmd_mut(func);
         self
     }
 
     /// Begin recording a ray trace pipeline command buffer.
-    pub fn record_cmd_buf_mut(
-        &mut self,
-        func: impl FnOnce(RayTraceCommandBuffer<'_>) + Send + 'static,
-    ) {
+    pub fn record_cmd_mut(&mut self, func: impl FnOnce(RayTraceCommandRef<'_>) + Send + 'static) {
         let pipeline = self
             .cmd
             .cmd()
@@ -31,7 +28,7 @@ impl PipelineCommand<'_, RayTracePipeline> {
         let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
         self.cmd.push_exec(move |cmd_buf| {
-            func(RayTraceCommandBuffer {
+            func(RayTraceCommandRef {
                 cmd_buf,
 
                 #[cfg(debug_assertions)]
@@ -47,7 +44,7 @@ impl PipelineCommand<'_, RayTracePipeline> {
 ///
 /// This structure provides a strongly-typed set of methods which allow ray trace shader code to be
 /// executed. An instance is provided to the closure argument of
-/// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`RayTracePipeline`] to
+/// [`PipelineCommand::record_cmd`] which may be accessed by binding a [`RayTracePipeline`] to
 /// a command.
 ///
 /// # Examples
@@ -73,13 +70,13 @@ impl PipelineCommand<'_, RayTracePipeline> {
 /// my_graph.begin_cmd()
 ///         .debug_name("my ray trace command")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
-///         .record_cmd_buf(move |cmd_buf| {
+///         .record_cmd(move |cmd_buf| {
 ///             // During this closure we have access to the ray trace functions!
 ///         });
 /// # Ok(()) }
 /// ```
-pub struct RayTraceCommandBuffer<'a> {
-    cmd_buf: CommandBuffer<'a>,
+pub struct RayTraceCommandRef<'a> {
+    cmd_buf: CommandRef<'a>,
 
     #[cfg(debug_assertions)]
     dynamic_stack_size: bool,
@@ -87,7 +84,7 @@ pub struct RayTraceCommandBuffer<'a> {
     pipeline: RayTracePipeline,
 }
 
-impl RayTraceCommandBuffer<'_> {
+impl RayTraceCommandRef<'_> {
     /// Updates push constants.
     ///
     /// Push constants represent a high speed path to modify constant data in pipelines that is
@@ -148,7 +145,7 @@ impl RayTraceCommandBuffer<'_> {
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_cmd_buf(move |cmd_buf| {
+    ///         .record_cmd(move |cmd_buf| {
     ///             cmd_buf.push_constants(0, &[0xcb])
     ///                    .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
@@ -225,7 +222,7 @@ impl RayTraceCommandBuffer<'_> {
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_cmd_buf(move |cmd_buf| {
+    ///         .record_cmd(move |cmd_buf| {
     ///             cmd_buf.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
@@ -297,8 +294,8 @@ impl RayTraceCommandBuffer<'_> {
     }
 }
 
-impl<'a> Deref for RayTraceCommandBuffer<'a> {
-    type Target = CommandBuffer<'a>;
+impl<'a> Deref for RayTraceCommandRef<'a> {
+    type Target = CommandRef<'a>;
 
     fn deref(&self) -> &Self::Target {
         &self.cmd_buf
@@ -311,15 +308,15 @@ mod deprecated {
         crate::{
             Node,
             cmd::{
-                Descriptor, PipelineCommand, Subresource, SubresourceRange, ViewInfo,
-                ray_trace::RayTraceCommandBuffer,
+                Binding, PipelineCommand, Subresource, SubresourceRange, ViewInfo,
+                ray_trace::RayTraceCommandRef,
             },
             driver::ray_trace::RayTracePipeline,
         },
         vk_sync::AccessType,
     };
 
-    impl RayTraceCommandBuffer<'_> {
+    impl RayTraceCommandRef<'_> {
         #[deprecated = "use push_constants function"]
         #[doc(hidden)]
         pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
@@ -330,7 +327,7 @@ mod deprecated {
     impl PipelineCommand<'_, RayTracePipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer"]
         #[doc(hidden)]
-        pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        pub fn read_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
         where
             N: Node + Subresource,
             N::Info: Copy,
@@ -348,7 +345,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn read_descriptor_as<N>(
             self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             node_view: impl Into<N::Info>,
         ) -> Self
@@ -366,20 +363,20 @@ mod deprecated {
             )
         }
 
-        #[deprecated = "use record_cmd_buf function"]
+        #[deprecated = "use record_cmd function"]
         #[doc(hidden)]
         pub fn record_ray_trace(
             self,
-            func: impl FnOnce(RayTraceCommandBuffer<'_>, ()) + Send + 'static,
+            func: impl FnOnce(RayTraceCommandRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd_buf(|cmd_buf| {
+            self.record_cmd(|cmd_buf| {
                 func(cmd_buf, ());
             })
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]
         #[doc(hidden)]
-        pub fn write_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        pub fn write_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
         where
             N: Node + Subresource,
             N::Info: Copy,
@@ -393,7 +390,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn write_descriptor_as<N>(
             self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             node_view: impl Into<N::Info>,
         ) -> Self

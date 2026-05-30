@@ -226,7 +226,7 @@ impl ImageLoader {
                     .bind_pipeline(&self.decode_rgb_rgba)
                     .shader_resource_access(0, pixel_buf, AccessType::ComputeShaderReadOther)
                     .shader_resource_access(1, temp_image, AccessType::ComputeShaderWrite)
-                    .record_cmd_buf(move |cmd_buf| {
+                    .record_cmd(move |cmd_buf| {
                         cmd_buf
                             .push_constants(0, &(pixel_buf_stride >> 2).to_ne_bytes())
                             .dispatch(dispatch_x, dispatch_y, 1);

@@ -167,7 +167,7 @@ graph
     .begin_cmd()
     .resource_access(image, AccessType::TransferRead)
     .resource_access(buffer, AccessType::TransferWrite)
-    .record_cmd_buf(move |cmd_buf| {
+    .record_cmd(move |cmd_buf| {
         // Borrow resources from nodes we move into the closure
         let buffer = cmd_buf.resource(buffer);
         let image = cmd_buf.resource(image);
@@ -236,7 +236,7 @@ graph
     .begin_cmd()
     .bind_pipeline(&pipeline)
     .shader_resource_access(0, image, AccessType::ComputeShaderWrite)
-    .record_cmd_buf(|cmd_buf| {
+    .record_cmd(|cmd_buf| {
         cmd_buf.dispatch(320, 200, 1);
     });
 # Ok(()) }
@@ -265,7 +265,7 @@ graph, but they may do so manually:
 // NOTE: This will stall! Use the async functions to check periodically instead
 graph
     .into_submission()
-    .submit(&mut LazyPool::new(device), 0, 0)?
+    .queue_submit(&mut LazyPool::new(device), 0, 0)?
     .wait_until_executed()?;
 # Ok(()) }
 ```

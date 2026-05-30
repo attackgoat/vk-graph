@@ -1,20 +1,20 @@
 //! Strongly-typed [`Graph`] commands.
 
-mod cmd_buf;
+mod cmd_ref;
 mod compute;
 mod graphic;
 mod pipeline;
 mod ray_trace;
 
 pub use self::{
-    cmd_buf::{
-        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandBuffer,
+    cmd_ref::{
+        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
         UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
-    compute::ComputeCommandBuffer,
-    graphic::{ClearColorValue, GraphicCommandBuffer, LoadOp, StoreOp},
+    compute::ComputeCommandRef,
+    graphic::{ClearColorValue, GraphicCommandRef, LoadOp, StoreOp},
     pipeline::{Pipeline, PipelineCommand},
-    ray_trace::RayTraceCommandBuffer,
+    ray_trace::RayTraceCommandRef,
 };
 
 use {
@@ -50,7 +50,7 @@ pub(crate) type DescriptorSetIndex = u32;
 /// 1. Bind resources ([`Self::bind_resource`])
 /// 1. Declare resource accesses ([`Self::resource_access`])
 /// 1. Record general-purpose command buffers or acceleration structure operations
-///    ([`Self::record_cmd_buf`])
+///    ([`Self::record_cmd`])
 /// 1. Bind shader pipelines ([`Self::bind_pipeline`])
 ///
 /// When bound, a shader pipeline consumes the `Command` and returns a [`PipelineCommand`] which
@@ -127,7 +127,7 @@ impl<'a> Command<'a> {
         self.graph
     }
 
-    fn push_exec(&mut self, func: impl FnOnce(CommandBuffer) + Send + 'static) {
+    fn push_exec(&mut self, func: impl FnOnce(CommandRef) + Send + 'static) {
         let cmd = self.cmd_mut();
         let exec = {
             let last_exec = cmd.expect_last_exec_mut();
@@ -172,8 +172,8 @@ impl<'a> Command<'a> {
     ///
     /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
     /// code and interfaces.
-    pub fn record_cmd_buf(mut self, func: impl FnOnce(CommandBuffer<'_>) + Send + 'static) -> Self {
-        self.record_cmd_buf_mut(func);
+    pub fn record_cmd(mut self, func: impl FnOnce(CommandRef<'_>) + Send + 'static) -> Self {
+        self.record_cmd_mut(func);
         self
     }
 
@@ -184,7 +184,7 @@ impl<'a> Command<'a> {
     ///
     /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
     /// code and interfaces.
-    pub fn record_cmd_buf_mut(&mut self, func: impl FnOnce(CommandBuffer<'_>) + Send + 'static) {
+    pub fn record_cmd_mut(&mut self, func: impl FnOnce(CommandRef<'_>) + Send + 'static) {
         self.push_exec(move |cmd_buf| {
             func(cmd_buf);
         });
@@ -296,7 +296,7 @@ impl<'a> Command<'a> {
 /// - `(42, [8])` for the same binding, but the 8th element
 /// - `(0, 42, [8])` same as the previous example
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Descriptor {
+pub struct Binding {
     /// The value of the descriptor binding decoration applied to the variable.
     pub binding: u32,
 
@@ -307,7 +307,7 @@ pub struct Descriptor {
     pub set: u32,
 }
 
-impl Descriptor {
+impl Binding {
     pub(super) fn into_tuple(self) -> (DescriptorSetIndex, BindingIndex, BindingOffset) {
         (self.set, self.binding, self.offset)
     }
@@ -318,7 +318,7 @@ impl Descriptor {
     }
 }
 
-impl From<BindingIndex> for Descriptor {
+impl From<BindingIndex> for Binding {
     fn from(binding: BindingIndex) -> Self {
         Self {
             binding,
@@ -328,7 +328,7 @@ impl From<BindingIndex> for Descriptor {
     }
 }
 
-impl From<(DescriptorSetIndex, BindingIndex)> for Descriptor {
+impl From<(DescriptorSetIndex, BindingIndex)> for Binding {
     fn from((set, binding): (DescriptorSetIndex, BindingIndex)) -> Self {
         Self {
             binding,
@@ -338,7 +338,7 @@ impl From<(DescriptorSetIndex, BindingIndex)> for Descriptor {
     }
 }
 
-impl From<(BindingIndex, [BindingOffset; 1])> for Descriptor {
+impl From<(BindingIndex, [BindingOffset; 1])> for Binding {
     fn from((binding, [offset]): (BindingIndex, [BindingOffset; 1])) -> Self {
         Self {
             binding,
@@ -348,7 +348,7 @@ impl From<(BindingIndex, [BindingOffset; 1])> for Descriptor {
     }
 }
 
-impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Descriptor {
+impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Binding {
     fn from(
         (set, binding, [offset]): (DescriptorSetIndex, BindingIndex, [BindingOffset; 1]),
     ) -> Self {
@@ -591,7 +591,7 @@ mod deprecated {
     use {
         crate::{
             Graph, Node, Resource,
-            cmd::{Command, CommandBuffer, Subresource, SubresourceRange},
+            cmd::{Command, CommandRef, Subresource, SubresourceRange},
             deprecated::Info,
         },
         ash::vk,
@@ -703,11 +703,11 @@ mod deprecated {
             node.info(&self.graph.resources)
         }
 
-        #[deprecated = "use record_cmd_buf function"]
+        #[deprecated = "use record_cmd function"]
         #[doc(hidden)]
         pub fn record_acceleration(
             mut self,
-            func: impl FnOnce(CommandBuffer<'_>, ()) + Send + 'static,
+            func: impl FnOnce(CommandRef<'_>, ()) + Send + 'static,
         ) -> Self {
             self.push_exec(|cmd_buf| {
                 func(cmd_buf, ());

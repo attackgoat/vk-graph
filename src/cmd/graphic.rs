@@ -1,5 +1,5 @@
 use {
-    super::{AttachmentIndex, cmd_buf::CommandBuffer, pipeline::PipelineCommand},
+    super::{AttachmentIndex, cmd_ref::CommandRef, pipeline::PipelineCommand},
     crate::{
         driver::{
             graphic::{DepthStencilInfo, GraphicPipeline},
@@ -187,19 +187,13 @@ impl PipelineCommand<'_, GraphicPipeline> {
     }
 
     /// Begin recording a graphics pipeline command buffer.
-    pub fn record_cmd_buf(
-        mut self,
-        func: impl FnOnce(GraphicCommandBuffer<'_>) + Send + 'static,
-    ) -> Self {
-        self.record_cmd_buf_mut(func);
+    pub fn record_cmd(mut self, func: impl FnOnce(GraphicCommandRef<'_>) + Send + 'static) -> Self {
+        self.record_cmd_mut(func);
         self
     }
 
     /// Begin recording a graphics pipeline command buffer.
-    pub fn record_cmd_buf_mut(
-        &mut self,
-        func: impl FnOnce(GraphicCommandBuffer<'_>) + Send + 'static,
-    ) {
+    pub fn record_cmd_mut(&mut self, func: impl FnOnce(GraphicCommandRef<'_>) + Send + 'static) {
         let pipeline = self
             .cmd
             .cmd()
@@ -208,7 +202,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
             .clone();
 
         self.cmd.push_exec(move |cmd_buf| {
-            func(GraphicCommandBuffer { cmd_buf, pipeline });
+            func(GraphicCommandRef { cmd_buf, pipeline });
         });
     }
 
@@ -543,7 +537,7 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 ///
 /// This structure provides a strongly-typed set of methods which allow raster graphics shader code
 /// to be executed. An instance is provided to the closure argument of
-/// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`GraphicPipeline`] to a
+/// [`PipelineCommand::record_cmd`] which may be accessed by binding a [`GraphicPipeline`] to a
 /// command.
 ///
 /// # Examples
@@ -575,18 +569,18 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 ///     .debug_name("my draw command")
 ///     .bind_pipeline(&my_graphic_pipeline)
 ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
-///     .record_cmd_buf(move |cmd_buf| {
+///     .record_cmd(move |cmd_buf| {
 ///         // During this closure we have access to the drawing functions!
 ///         cmd_buf.draw(3, 1, 0, 0);
 ///     });
 /// # Ok(()) }
 /// ```
-pub struct GraphicCommandBuffer<'a> {
-    cmd_buf: CommandBuffer<'a>,
+pub struct GraphicCommandRef<'a> {
+    cmd_buf: CommandRef<'a>,
     pipeline: GraphicPipeline,
 }
 
-impl GraphicCommandBuffer<'_> {
+impl GraphicCommandRef<'_> {
     /// Bind an index buffer to the current command.
     ///
     /// `offset` is the starting offset in bytes within `buffer` used in index buffer address
@@ -630,7 +624,7 @@ impl GraphicCommandBuffer<'_> {
     ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
-    ///     .record_cmd_buf(move |cmd_buf| {
+    ///     .record_cmd(move |cmd_buf| {
     ///         cmd_buf
     ///             .bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
@@ -698,7 +692,7 @@ impl GraphicCommandBuffer<'_> {
     ///     .bind_pipeline(&my_graphic_pipeline)
     ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
-    ///     .record_cmd_buf(move |cmd_buf| {
+    ///     .record_cmd(move |cmd_buf| {
     ///         cmd_buf
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///             .draw(42, 1, 0, 0);
@@ -901,7 +895,7 @@ impl GraphicCommandBuffer<'_> {
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
     ///     .resource_access(buf_node, AccessType::IndirectBuffer)
-    ///     .record_cmd_buf(move |cmd_buf| {
+    ///     .record_cmd(move |cmd_buf| {
     ///         cmd_buf
     ///             .bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
@@ -1098,7 +1092,7 @@ impl GraphicCommandBuffer<'_> {
     ///     .debug_name("draw a quad")
     ///     .bind_pipeline(&my_graphic_pipeline)
     ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
-    ///     .record_cmd_buf(move |cmd_buf| {
+    ///     .record_cmd(move |cmd_buf| {
     ///         cmd_buf
     ///             .push_constants(0, &[42])
     ///             .draw(6, 1, 0, 0);
@@ -1149,8 +1143,8 @@ impl GraphicCommandBuffer<'_> {
     }
 }
 
-impl<'a> Deref for GraphicCommandBuffer<'a> {
-    type Target = CommandBuffer<'a>;
+impl<'a> Deref for GraphicCommandRef<'a> {
+    type Target = CommandRef<'a>;
 
     fn deref(&self) -> &Self::Target {
         &self.cmd_buf
@@ -1234,8 +1228,8 @@ mod deprecated {
         crate::{
             Attachment, Node, SubresourceAccess,
             cmd::{
-                AttachmentIndex, ClearColorValue, Descriptor, PipelineCommand, Subresource,
-                SubresourceRange, ViewInfo, graphic::GraphicCommandBuffer,
+                AttachmentIndex, Binding, ClearColorValue, PipelineCommand, Subresource,
+                SubresourceRange, ViewInfo, graphic::GraphicCommandRef,
             },
             driver::{
                 graphic::GraphicPipeline,
@@ -1251,7 +1245,7 @@ mod deprecated {
         vk_sync::AccessType,
     };
 
-    impl GraphicCommandBuffer<'_> {
+    impl GraphicCommandRef<'_> {
         #[deprecated = "use push_constants function"]
         #[doc(hidden)]
         pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
@@ -2949,7 +2943,7 @@ mod deprecated {
     impl PipelineCommand<'_, GraphicPipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer"]
         #[doc(hidden)]
-        pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        pub fn read_descriptor<N>(self, binding: impl Into<Binding>, node: N) -> Self
         where
             N: Node + Subresource,
             N::Info: Copy,
@@ -2957,7 +2951,7 @@ mod deprecated {
             ViewInfo: From<N::Info>,
         {
             self.shader_resource_access(
-                descriptor,
+                binding,
                 node,
                 AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
             )
@@ -2967,7 +2961,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn read_descriptor_as<N>(
             self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             node_view: impl Into<N::Info>,
         ) -> Self
@@ -2985,20 +2979,20 @@ mod deprecated {
             )
         }
 
-        #[deprecated = "use record_cmd_buf function"]
+        #[deprecated = "use record_cmd function"]
         #[doc(hidden)]
         pub fn record_subpass(
             self,
-            func: impl FnOnce(GraphicCommandBuffer<'_>, ()) + Send + 'static,
+            func: impl FnOnce(GraphicCommandRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd_buf(|cmd_buf| {
+            self.record_cmd(|cmd_buf| {
                 func(cmd_buf, ());
             })
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]
         #[doc(hidden)]
-        pub fn write_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        pub fn write_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
         where
             N: Node + Subresource,
             N::Info: Copy,
@@ -3012,7 +3006,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn write_descriptor_as<N>(
             self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             node_view: impl Into<N::Info>,
         ) -> Self

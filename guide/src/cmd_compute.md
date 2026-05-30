@@ -47,7 +47,7 @@ graph
     .debug_name("prefix sum")
     .bind_pipeline(&pipeline)
     .shader_resource_access(0, output, AccessType::ComputeShaderWrite)
-    .record_cmd_buf(move |cmd_buf| {
+    .record_cmd(move |cmd_buf| {
         cmd_buf.dispatch(64, 1, 1);
     });
 # Ok(()) }
@@ -84,7 +84,7 @@ graph
     .begin_cmd()
     .bind_pipeline(&pipeline)
     .shader_resource_access(0, output, AccessType::ComputeShaderWrite)
-    .record_cmd_buf(move |cmd_buf| {
+    .record_cmd(move |cmd_buf| {
         cmd_buf.dispatch_base(4, 2, 0, 16, 8, 1);
     });
 # Ok(()) }
@@ -127,7 +127,7 @@ graph
     .bind_pipeline(&pipeline)
     .resource_access(args_buffer, AccessType::IndirectBuffer)
     .shader_resource_access(0, output, AccessType::ComputeShaderWrite)
-    .record_cmd_buf(move |cmd_buf| {
+    .record_cmd(move |cmd_buf| {
         cmd_buf.dispatch_indirect(args_buffer, 0);
     });
 # Ok(()) }

@@ -182,7 +182,7 @@ fn main() -> anyhow::Result<()> {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf| {
+        cmd.record_cmd(move |cmd_buf| {
             cmd_buf
                 .bind_vertex_buffer(0, cube_vertex_buf, 0)
                 .push_constants(0, bytes_of(&world_transform))

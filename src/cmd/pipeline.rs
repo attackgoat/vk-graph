@@ -1,6 +1,6 @@
 use {
     super::{
-        AccessType, Command, Descriptor, Graph, Node, Resource, Subresource, SubresourceRange,
+        AccessType, Binding, Command, Graph, Node, Resource, Subresource, SubresourceRange,
         ViewInfo,
     },
     crate::{
@@ -170,13 +170,13 @@ impl<'c, T> PipelineCommand<'c, T> {
     }
 
     /// Informs the command that the next recorded command buffer will read or write the `resource_node`
-    /// at the specified shader `descriptor` using `access`.
+    /// at the specified shader `binding` using `access`.
     ///
     /// An access function must be called for `resource_node` before it is used within a
     /// `record_`-function.
     pub fn set_shader_resource_access<N>(
         &mut self,
-        descriptor: impl Into<Descriptor>,
+        binding: impl Into<Binding>,
         resource_node: N,
         access: AccessType,
     ) -> &mut Self
@@ -188,18 +188,18 @@ impl<'c, T> PipelineCommand<'c, T> {
     {
         let subresource = resource_node.info(&self.cmd.graph.resources);
 
-        self.set_shader_subresource_access(descriptor, resource_node, subresource, access)
+        self.set_shader_subresource_access(binding, resource_node, subresource, access)
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
-    /// `resource_node` at the specified shader `descriptor` using `access`. The resource will be
+    /// `resource_node` at the specified shader `binding` using `access`. The resource will be
     /// interpreted using `view_info`.
     ///
     /// An access function must be called for `resource_node` before it is used within a
     /// `record_`-function.
     pub fn set_shader_subresource_access<N>(
         &mut self,
-        descriptor: impl Into<Descriptor>,
+        binding: impl Into<Binding>,
         resource_node: N,
         subresource: impl Into<N::Info>,
         access: AccessType,
@@ -210,7 +210,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
     {
-        let descriptor = descriptor.into();
+        let binding = binding.into();
         let subresource = subresource.into();
         let node_idx = resource_node.index();
 
@@ -225,9 +225,9 @@ impl<'c, T> PipelineCommand<'c, T> {
                 .cmd_mut()
                 .expect_last_exec_mut()
                 .bindings
-                .insert(descriptor, (node_idx, subresource.into()))
+                .insert(binding, (node_idx, subresource.into()))
                 .is_none(),
-            "descriptor {descriptor:?} has already been bound"
+            "binding {binding:?} has already been bound"
         );
 
         self
@@ -254,13 +254,13 @@ impl<'c, T> PipelineCommand<'c, T> {
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
-    /// `resource_node` at the specified shader `descriptor` using `access`.
+    /// `resource_node` at the specified shader `binding` using `access`.
     ///
     /// An access function must be called for `resource_node` before it is used within a
     /// `record_`-function.
     pub fn shader_resource_access<N>(
         mut self,
-        descriptor: impl Into<Descriptor>,
+        binding: impl Into<Binding>,
         resource_node: N,
         access: AccessType,
     ) -> Self
@@ -270,19 +270,19 @@ impl<'c, T> PipelineCommand<'c, T> {
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
     {
-        self.set_shader_resource_access(descriptor, resource_node, access);
+        self.set_shader_resource_access(binding, resource_node, access);
         self
     }
 
     /// Informs the command that the next recorded command buffer will read or write the
-    /// `resource_node` at the specified shader `descriptor` using `access`. The resource will be
+    /// `resource_node` at the specified shader `binding` using `access`. The resource will be
     /// interpreted using `view_info`.
     ///
     /// An access function must be called for `resource_node` before it is used within a
     /// `record_`-function.
     pub fn shader_subresource_access<N>(
         mut self,
-        descriptor: impl Into<Descriptor>,
+        binding: impl Into<Binding>,
         resource_node: N,
         subresource: impl Into<N::Info>,
         access: AccessType,
@@ -293,7 +293,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         SubresourceRange: From<N::Info>,
         ViewInfo: From<N::Info>,
     {
-        self.set_shader_subresource_access(descriptor, resource_node, subresource, access);
+        self.set_shader_subresource_access(binding, resource_node, subresource, access);
         self
     }
 
@@ -324,7 +324,7 @@ mod deprecated {
     use {
         crate::{
             Graph, Node, Resource,
-            cmd::{Descriptor, PipelineCommand, Subresource, SubresourceRange, ViewInfo},
+            cmd::{Binding, PipelineCommand, Subresource, SubresourceRange, ViewInfo},
             deprecated::Info,
             graph::pass_ref::ViewType,
         },
@@ -337,7 +337,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn access_descriptor<N>(
             self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             access: AccessType,
         ) -> Self
@@ -357,7 +357,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn access_descriptor_as<N>(
             self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             access: AccessType,
             view_info: impl Into<N::Info>,
@@ -378,7 +378,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn access_descriptor_subrange<N>(
             mut self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             access: AccessType,
             view_info: impl Into<N::Info>,

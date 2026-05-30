@@ -1,5 +1,5 @@
 use {
-    super::{cmd_buf::CommandBuffer, pipeline::PipelineCommand},
+    super::{cmd_ref::CommandRef, pipeline::PipelineCommand},
     crate::{driver::compute::ComputePipeline, node::AnyBufferNode},
     ash::vk,
     std::ops::Deref,
@@ -7,19 +7,13 @@ use {
 
 impl PipelineCommand<'_, ComputePipeline> {
     /// Begin recording a compute pipeline command buffer.
-    pub fn record_cmd_buf(
-        mut self,
-        func: impl FnOnce(ComputeCommandBuffer<'_>) + Send + 'static,
-    ) -> Self {
-        self.record_cmd_buf_mut(func);
+    pub fn record_cmd(mut self, func: impl FnOnce(ComputeCommandRef<'_>) + Send + 'static) -> Self {
+        self.record_cmd_mut(func);
         self
     }
 
     /// Begin recording a compute pipeline command buffer.
-    pub fn record_cmd_buf_mut(
-        &mut self,
-        func: impl FnOnce(ComputeCommandBuffer<'_>) + Send + 'static,
-    ) {
+    pub fn record_cmd_mut(&mut self, func: impl FnOnce(ComputeCommandRef<'_>) + Send + 'static) {
         let pipeline = self
             .cmd
             .cmd()
@@ -28,7 +22,7 @@ impl PipelineCommand<'_, ComputePipeline> {
             .clone();
 
         self.cmd.push_exec(move |cmd_buf| {
-            func(ComputeCommandBuffer { cmd_buf, pipeline });
+            func(ComputeCommandRef { cmd_buf, pipeline });
         });
     }
 }
@@ -37,7 +31,7 @@ impl PipelineCommand<'_, ComputePipeline> {
 ///
 /// This structure provides a strongly-typed set of methods which allow compute shader code to be
 /// executed. An instance is provided to the closure argument of
-/// [`PipelineCommand::record_cmd_buf`] which may be accessed by binding a [`ComputePipeline`] to a
+/// [`PipelineCommand::record_cmd`] which may be accessed by binding a [`ComputePipeline`] to a
 /// command.
 ///
 /// # Examples
@@ -60,18 +54,18 @@ impl PipelineCommand<'_, ComputePipeline> {
 /// my_graph
 ///     .begin_cmd()
 ///     .bind_pipeline(&my_compute_pipeline)
-///     .record_cmd_buf(move |cmd_buf| {
+///     .record_cmd(move |cmd_buf| {
 ///         // During this closure we have access to the compute functions!
 ///         cmd_buf.dispatch(64, 1, 1);
 ///     });
 /// # Ok(()) }
 /// ```
-pub struct ComputeCommandBuffer<'a> {
-    cmd_buf: CommandBuffer<'a>,
+pub struct ComputeCommandRef<'a> {
+    cmd_buf: CommandRef<'a>,
     pipeline: ComputePipeline,
 }
 
-impl ComputeCommandBuffer<'_> {
+impl ComputeCommandRef<'_> {
     /// [Dispatch] compute work items.
     ///
     /// When the command is executed, a global workgroup consisting of
@@ -118,7 +112,7 @@ impl ComputeCommandBuffer<'_> {
     ///     .debug_name("fill my_buf_node with data")
     ///     .bind_pipeline(&my_compute_pipeline)
     ///     .shader_resource_access(0, my_buf_node, AccessType::ComputeShaderWrite)
-    ///     .record_cmd_buf(move |cmd_buf| {
+    ///     .record_cmd(move |cmd_buf| {
     ///         cmd_buf.dispatch(128, 64, 32);
     ///     });
     /// # Ok(()) }
@@ -223,7 +217,7 @@ impl ComputeCommandBuffer<'_> {
     ///     .bind_pipeline(&my_compute_pipeline)
     ///     .resource_access(args_buf, AccessType::IndirectBuffer)
     ///     .shader_resource_access(0, my_buf_node, AccessType::ComputeShaderWrite)
-    ///     .record_cmd_buf(move |cmd_buf| {
+    ///     .record_cmd(move |cmd_buf| {
     ///         cmd_buf.dispatch_indirect(args_buf, 0);
     ///     });
     /// # Ok(()) }
@@ -305,7 +299,7 @@ impl ComputeCommandBuffer<'_> {
     ///     .begin_cmd()
     ///     .debug_name("compute the ultimate question")
     ///     .bind_pipeline(&my_compute_pipeline)
-    ///     .record_cmd_buf(move |cmd_buf| {
+    ///     .record_cmd(move |cmd_buf| {
     ///         cmd_buf
     ///             .push_constants(0, &[42])
     ///             .dispatch(1, 1, 1);
@@ -327,8 +321,8 @@ impl ComputeCommandBuffer<'_> {
     }
 }
 
-impl<'a> Deref for ComputeCommandBuffer<'a> {
-    type Target = CommandBuffer<'a>;
+impl<'a> Deref for ComputeCommandRef<'a> {
+    type Target = CommandRef<'a>;
 
     fn deref(&self) -> &Self::Target {
         &self.cmd_buf
@@ -341,8 +335,8 @@ mod deprecated {
         crate::{
             Node,
             cmd::{
-                Descriptor, PipelineCommand, Subresource, SubresourceRange, ViewInfo,
-                compute::ComputeCommandBuffer,
+                Binding, PipelineCommand, Subresource, SubresourceRange, ViewInfo,
+                compute::ComputeCommandRef,
             },
             driver::compute::ComputePipeline,
         },
@@ -350,7 +344,7 @@ mod deprecated {
         vk_sync::AccessType,
     };
 
-    impl ComputeCommandBuffer<'_> {
+    impl ComputeCommandRef<'_> {
         #[deprecated = "use push_constants function"]
         #[doc(hidden)]
         pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
@@ -361,7 +355,7 @@ mod deprecated {
     impl PipelineCommand<'_, ComputePipeline> {
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderReadOther"]
         #[doc(hidden)]
-        pub fn read_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        pub fn read_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
         where
             N: Node + Subresource,
             N::Info: Copy,
@@ -375,7 +369,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn read_descriptor_as<N>(
             self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             node_view: impl Into<N::Info>,
         ) -> Self
@@ -393,18 +387,18 @@ mod deprecated {
             )
         }
 
-        #[deprecated = "use record_cmd_buf function"]
+        #[deprecated = "use record_cmd function"]
         #[doc(hidden)]
         pub fn record_compute(
             self,
-            func: impl FnOnce(ComputeCommandBuffer<'_>, ()) + Send + 'static,
+            func: impl FnOnce(ComputeCommandRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd_buf(|cmd_buf| func(cmd_buf, ()))
+            self.record_cmd(|cmd_buf| func(cmd_buf, ()))
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderWrite"]
         #[doc(hidden)]
-        pub fn write_descriptor<N>(self, descriptor: impl Into<Descriptor>, node: N) -> Self
+        pub fn write_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
         where
             N: Node + Subresource,
             N::Info: Copy,
@@ -418,7 +412,7 @@ mod deprecated {
         #[doc(hidden)]
         pub fn write_descriptor_as<N>(
             self,
-            descriptor: impl Into<Descriptor>,
+            descriptor: impl Into<Binding>,
             node: N,
             node_view: impl Into<N::Info>,
         ) -> Self

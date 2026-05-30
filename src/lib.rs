@@ -24,7 +24,7 @@ mod submission;
 use std::sync::Arc;
 
 use crate::{
-    cmd::{ClearColorValue, CommandBuffer},
+    cmd::{ClearColorValue, CommandRef},
     driver::{
         accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
         swapchain::SwapchainImage,
@@ -39,7 +39,7 @@ pub use self::deprecated::{Display, DisplayInfo, DisplayInfoBuilder};
 
 use {
     self::{
-        cmd::{AttachmentIndex, Command, Descriptor, SubresourceAccess, ViewInfo},
+        cmd::{AttachmentIndex, Binding, Command, SubresourceAccess, ViewInfo},
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
             AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode,
@@ -67,7 +67,7 @@ use {
     vk_sync::AccessType,
 };
 
-type ExecFn = Box<dyn FnOnce(CommandBuffer) + Send>;
+type ExecFn = Box<dyn FnOnce(CommandRef) + Send>;
 type NodeIndex = usize;
 
 #[derive(Debug)]
@@ -193,7 +193,7 @@ impl Attachment {
 #[derive(Default)]
 struct Execution {
     accesses: HashMap<NodeIndex, Vec<SubresourceAccess>>,
-    bindings: BTreeMap<Descriptor, (NodeIndex, ViewInfo)>,
+    bindings: BTreeMap<Binding, (NodeIndex, ViewInfo)>,
 
     correlated_view_mask: u32,
     depth_stencil: Option<DepthStencilInfo>,
@@ -482,7 +482,7 @@ impl Graph {
             cmd.set_subresource_access(dst, dst_region, AccessType::TransferWrite);
         }
 
-        cmd.record_cmd_buf(move |cmd_buf| {
+        cmd.record_cmd(move |cmd_buf| {
             let src_image = cmd_buf.resource(src).handle;
             let dst_image = cmd_buf.resource(dst).handle;
 
@@ -515,7 +515,7 @@ impl Graph {
         self.begin_cmd()
             .debug_name("clear color")
             .subresource_access(image, image_view, AccessType::TransferWrite)
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 let image = cmd_buf.resource(image);
 
                 unsafe {
@@ -545,7 +545,7 @@ impl Graph {
         self.begin_cmd()
             .debug_name("clear depth/stencil")
             .subresource_access(image, image_view, AccessType::TransferWrite)
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 let image = cmd_buf.resource(image);
 
                 unsafe {
@@ -629,7 +629,7 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf| {
+        cmd.record_cmd(move |cmd_buf| {
             let src = cmd_buf.resource(src);
             let dst = cmd_buf.resource(dst);
 
@@ -710,7 +710,7 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf| {
+        cmd.record_cmd(move |cmd_buf| {
             let src = cmd_buf.resource(src);
             let dst = cmd_buf.resource(dst);
 
@@ -792,7 +792,7 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf| {
+        cmd.record_cmd(move |cmd_buf| {
             let src = cmd_buf.resource(src);
             let dst = cmd_buf.resource(dst);
 
@@ -877,7 +877,7 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd_buf(move |cmd_buf| {
+        cmd.record_cmd(move |cmd_buf| {
             let src = cmd_buf.resource(src);
             let dst = cmd_buf.resource(dst);
 
@@ -906,7 +906,7 @@ impl Graph {
         self.begin_cmd()
             .debug_name("fill buffer")
             .subresource_access(buffer, region.clone(), AccessType::TransferWrite)
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 let buffer = cmd_buf.resource(buffer);
 
                 unsafe {
@@ -986,7 +986,7 @@ impl Graph {
         self.begin_cmd()
             .debug_name("update buffer")
             .subresource_access(buffer, offset..data_end, AccessType::TransferWrite)
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 let buffer = cmd_buf.resource(buffer);
 
                 unsafe {
@@ -1211,28 +1211,28 @@ pub mod graph {
     #[deprecated]
     #[doc(hidden)]
     pub mod pass_ref {
-        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
-        pub type Acceleration<'a> = crate::cmd::CommandBuffer<'a>;
+        #[deprecated = "use vk_graph::cmd::CommandRef"]
+        pub type Acceleration<'a> = crate::cmd::CommandRef<'a>;
 
-        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        #[deprecated = "use vk_graph::cmd::CommandRef"]
         pub type AccelerationStructureBuildInfo = crate::cmd::BuildAccelerationStructureInfo;
 
-        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        #[deprecated = "use vk_graph::cmd::CommandRef"]
         pub type AccelerationStructureIndirectBuildInfo =
             crate::cmd::BuildAccelerationStructureIndirectInfo;
 
-        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        #[deprecated = "use vk_graph::cmd::CommandRef"]
         pub type AccelerationStructureIndirectUpdateInfo =
             crate::cmd::UpdateAccelerationStructureIndirectInfo;
 
-        #[deprecated = "use vk_graph::cmd::CommandBufferRef"]
+        #[deprecated = "use vk_graph::cmd::CommandRef"]
         pub type AccelerationStructureUpdateInfo = crate::cmd::UpdateAccelerationStructureInfo;
 
-        #[deprecated = "use vk_graph::cmd::Descriptor"]
-        pub type Descriptor = crate::cmd::Descriptor;
+        #[deprecated = "use vk_graph::cmd::Binding"]
+        pub type Descriptor = crate::cmd::Binding;
 
-        #[deprecated = "use vk_graph::cmd::GraphicCommandBufferRef"]
-        pub type Draw<'a> = crate::cmd::GraphicCommandBuffer<'a>;
+        #[deprecated = "use vk_graph::cmd::GraphicCommandRef"]
+        pub type Draw<'a> = crate::cmd::GraphicCommandRef<'a>;
 
         #[deprecated = "use vk_graph::cmd::CommandRef"]
         pub type PassRef<'a> = crate::cmd::Command<'a>;
@@ -1240,8 +1240,8 @@ pub mod graph {
         #[deprecated = "use vk_graph::cmd::PipelineCommand"]
         pub type PipelinePassRef<'a, T> = crate::cmd::PipelineCommand<'a, T>;
 
-        #[deprecated = "use vk_graph::cmd::RayTraceCommandBufferRef"]
-        pub type RayTrace<'a> = crate::cmd::RayTraceCommandBuffer<'a>;
+        #[deprecated = "use vk_graph::cmd::RayTraceCommandRef"]
+        pub type RayTrace<'a> = crate::cmd::RayTraceCommandRef<'a>;
 
         #[deprecated = "use vk_graph::ViewInfo"]
         pub type ViewType = crate::cmd::ViewInfo;

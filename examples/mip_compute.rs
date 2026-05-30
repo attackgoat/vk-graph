@@ -123,7 +123,7 @@ fn main() -> Result<(), DriverError> {
                     .mip_level_count(1),
                 AccessType::ComputeShaderWrite,
             )
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 cmd_buf.dispatch(
                     depth_info.width >> mip_level,
                     depth_info.height >> mip_level,

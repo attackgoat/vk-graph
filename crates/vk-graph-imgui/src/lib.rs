@@ -227,7 +227,7 @@ impl ImGui {
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
                 .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store)
-                .record_cmd_buf(move |cmd_buf| {
+                .record_cmd(move |cmd_buf| {
                     cmd_buf
                         .push_constants(0, &window_width.to_ne_bytes())
                         .push_constants(4, &window_height.to_ne_bytes())

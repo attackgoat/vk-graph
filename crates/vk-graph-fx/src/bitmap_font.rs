@@ -228,7 +228,7 @@ impl BitmapFont {
             );
         }
 
-        pass.record_cmd_buf(move |cmd_buf| {
+        pass.record_cmd(move |cmd_buf| {
             if let Some((x, y, width, height)) = scissor {
                 cmd_buf.set_scissor(
                     0,

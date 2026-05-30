@@ -32,14 +32,14 @@ use crate::Execution;
 /// # fn main() {
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd()
-///         .record_cmd_buf(move |cmd_buf| {
+///         .record_cmd(move |cmd_buf| {
 ///             // Use provided command buffer functions or native calls
 ///             assert_ne!(cmd_buf.handle, vk::CommandBuffer::null());
 ///         });
 /// # }
 /// ```
 #[derive(Clone, Copy)]
-pub struct CommandBuffer<'a> {
+pub struct CommandRef<'a> {
     cmd_buf: &'a crate::driver::cmd_buf::CommandBuffer,
 
     #[cfg(debug_assertions)]
@@ -48,7 +48,7 @@ pub struct CommandBuffer<'a> {
     resources: &'a [AnyResource],
 }
 
-impl<'a> CommandBuffer<'a> {
+impl<'a> CommandRef<'a> {
     pub(crate) fn new(
         cmd_buf: &'a crate::driver::cmd_buf::CommandBuffer,
         resources: &'a [AnyResource],
@@ -108,7 +108,7 @@ impl<'a> CommandBuffer<'a> {
     ///         .resource_access(vertex_buf, AccessType::VertexBuffer)
     ///         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
     ///         .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
-    ///         .record_cmd_buf(move |cmd_buf| {
+    ///         .record_cmd(move |cmd_buf| {
     ///             let scratch_addr = cmd_buf.resource(scratch_buf).device_address();
     ///             let geom = AccelerationStructureGeometry {
     ///                 max_primitive_count: 64,
@@ -526,7 +526,7 @@ impl<'a> CommandBuffer<'a> {
     }
 }
 
-impl<'a> Deref for CommandBuffer<'a> {
+impl<'a> Deref for CommandRef<'a> {
     type Target = crate::driver::cmd_buf::CommandBuffer;
 
     fn deref(&self) -> &Self::Target {
@@ -735,7 +735,7 @@ mod deprecated {
 
     use crate::{
         cmd::{
-            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandBuffer,
+            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
             UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
         },
         driver::accel_struct::{
@@ -748,7 +748,7 @@ mod deprecated {
         node::AnyAccelerationStructureNode,
     };
 
-    impl<'a> CommandBuffer<'a> {
+    impl<'a> CommandRef<'a> {
         #[deprecated = "use build_accel_struct function"]
         #[doc(hidden)]
         pub fn build_structure(

@@ -139,7 +139,7 @@ fn main() -> anyhow::Result<()> {
                 LoadOp::CLEAR_WHITE_ALPHA_ONE,
                 StoreOp::Store,
             )
-            .record_cmd_buf(move |cmd_buf| {
+            .record_cmd(move |cmd_buf| {
                 cmd_buf
                     .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                     .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
@@ -245,7 +245,7 @@ fn create_blas(
 
     pass.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-        .record_cmd_buf(move |cmd_buf| {
+        .record_cmd(move |cmd_buf| {
             cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 blas,
                 scratch_addr,
@@ -428,7 +428,7 @@ fn create_tlas(
         .resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
         .resource_access(tlas, AccessType::AccelerationStructureBuildWrite)
-        .record_cmd_buf(move |cmd_buf| {
+        .record_cmd(move |cmd_buf| {
             cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 tlas,
                 scratch_addr,
