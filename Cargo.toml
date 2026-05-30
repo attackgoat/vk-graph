@@ -99,4 +99,4 @@ vk-graph-window.workspace = true
 vk-shader-macros = "0.2"
 tobj = "4.0"
 winit.workspace = true
-winit_input_helper = { git = "https://github.com/stefnotch/winit_input_helper.git", rev = "6e76a79d01ce836c01b9cdeaa98846a6f0955dc4" } #"0.16"
+winit_input_helper = "0.17"

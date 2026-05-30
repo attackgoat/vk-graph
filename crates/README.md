@@ -1,6 +1,7 @@
 # Workspace Crates
 
 This directory contains the publishable helper crates that extend `vk-graph`.
+Each helper crate is versioned independently and has its own changelog.
 
 ## Included Crates
 

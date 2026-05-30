@@ -14,9 +14,8 @@ repository.workspace = true
 
 [dependencies]
 bytemuck = "1.25"
-# TODO: Waiting for egui to update winit version
-egui = { git = "https://github.com/emilk/egui.git", rev = "3777b8d2741f298eaa1409dc08062902f7541990" } #{ version = "0.28", features = ["bytemuck"] }
-egui-winit = { git = "https://github.com/emilk/egui.git", rev = "3777b8d2741f298eaa1409dc08062902f7541990" } #"0.28"
+egui = "0.34.3"
+egui-winit = "0.34.3"
 vk-graph.workspace = true
 vk-graph-fx.workspace = true
 vk-shader-macros = "0.2"

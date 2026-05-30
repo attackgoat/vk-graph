@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo clippy --all-features --all-targets --workspace --message-format=json \
+          cargo clippy --all-targets --workspace --no-default-features --features loaded --message-format=json \
             | clippy-sarif \
             | tee rust-clippy-results.sarif \
             | sarif-fmt

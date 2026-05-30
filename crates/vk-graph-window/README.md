@@ -2,6 +2,7 @@
 
 This crate provides `winit` integration for creating windows and rendering frames with
 `vk-graph`.
+This crate is versioned independently from `vk-graph`.
 
 ```sh
 cargo run --example hello_world

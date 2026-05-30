@@ -109,9 +109,6 @@ impl Egui {
                         assert_eq!(image.width() * image.height(), image.pixels.len());
                         Cow::Borrowed(&image.pixels)
                     }
-                    egui::ImageData::Font(image) => {
-                        Cow::Owned(image.srgba_pixels(Some(1.)).collect::<Vec<_>>())
-                    }
                 };
 
                 let tmp_buf = {
@@ -320,7 +317,7 @@ impl Egui {
         events: &[Event<()>],
         target: impl Into<AnyImageNode>,
         graph: &mut Graph,
-        ui_fn: impl FnMut(&egui::Context),
+        ui_fn: impl FnMut(&mut egui::Ui),
     ) {
         // Update events and generate shapes and texture deltas.
         for event in events {
@@ -332,7 +329,7 @@ impl Egui {
             }
         }
         let raw_input = self.egui_winit.take_egui_input(window);
-        let full_output = self.ctx.run(raw_input, ui_fn);
+        let full_output = self.ctx.run_ui(raw_input, ui_fn);
 
         self.egui_winit
             .handle_platform_output(window, full_output.platform_output);

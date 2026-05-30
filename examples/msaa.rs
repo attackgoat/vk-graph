@@ -54,19 +54,19 @@ fn main() -> anyhow::Result<()> {
         let dt = now - prev_frame_at;
         prev_frame_at = now;
 
-        input.step_with_window_events(
-            &frame
-                .events
-                .iter()
-                .filter_map(|event| {
-                    if let Event::WindowEvent { event, .. } = event {
-                        Some(event.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Box<_>>(),
-        );
+        input.step();
+        for event in frame.events {
+            match event {
+                Event::WindowEvent { event, .. } => {
+                    let _ = input.process_window_event(event);
+                }
+                Event::DeviceEvent { event, .. } => {
+                    input.process_device_event(event);
+                }
+                _ => {}
+            }
+        }
+        input.end_step();
 
         // Hold the tab key to render in non-multisample mode
         let will_render_msaa = !input.key_held(KeyCode::Tab) && sample_count != SampleCount::Type1;

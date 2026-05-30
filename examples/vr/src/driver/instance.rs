@@ -34,13 +34,15 @@ impl XrInstance {
     const XR_TARGET_VERSION: xr::Version = xr::Version::new(1, 2, 0);
 
     pub fn new() -> Result<Self, InstanceCreateError> {
-        let xr_entry = unsafe { xr::Entry::load().ok() };
+        #[cfg(feature = "linked")]
+        let xr_entry = xr::Entry::linked();
 
-        if xr_entry.is_none() {
-            debug!("Using statically linked OpenXR")
-        }
+        #[cfg(not(feature = "linked"))]
+        let xr_entry = unsafe { xr::Entry::load() }.map_err(|err| {
+            debug!("OpenXR loader unavailable: {err}");
 
-        let xr_entry = xr_entry.unwrap_or_else(xr::Entry::linked);
+            InstanceCreateError::OpenXRUnsupported
+        })?;
         let available_extensions = xr_entry.enumerate_extensions().unwrap_or_default();
         let mut required_extensions = xr::ExtensionSet::default();
         required_extensions.khr_vulkan_enable2 = available_extensions.khr_vulkan_enable2;

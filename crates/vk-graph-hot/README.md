@@ -2,6 +2,7 @@
 
 Hot-reloading shader pipelines for _vk-graph_. Supports compute, graphic, and ray-trace shader
 pipelines.
+This crate is versioned independently from `vk-graph`.
 
 Based on shaderc. Feel free to submit PRs for other compilers.
 

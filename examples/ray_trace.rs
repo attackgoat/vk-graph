@@ -793,19 +793,19 @@ fn main() -> anyhow::Result<()> {
         let image_node = frame.graph.bind_resource(image.as_ref().unwrap());
 
         {
-            input.step_with_window_events(
-                &frame
-                    .events
-                    .iter()
-                    .filter_map(|event| {
-                        if let Event::WindowEvent { event, .. } = event {
-                            Some(event.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Box<_>>(),
-            );
+            input.step();
+            for event in frame.events {
+                match event {
+                    Event::WindowEvent { event, .. } => {
+                        let _ = input.process_window_event(event);
+                    }
+                    Event::DeviceEvent { event, .. } => {
+                        input.process_device_event(event);
+                    }
+                    _ => {}
+                }
+            }
+            input.end_step();
 
             const SPEED: f32 = 0.1f32;
 
