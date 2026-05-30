@@ -99,9 +99,8 @@ fn main() -> Result<(), WindowError> {
                 LoadOp::CLEAR_BLACK_ALPHA_ZERO,
                 StoreOp::Store,
             )
-            .record_cmd(move |cmd_buf| {
-                cmd_buf
-                    .bind_index_buffer(index_node, 0, vk::IndexType::UINT16)
+            .record_cmd(move |cmd| {
+                cmd.bind_index_buffer(index_node, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_node, 0)
                     .draw_indexed(3, 1, 0, 0, 0);
             });

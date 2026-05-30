@@ -34,8 +34,8 @@ let data = 42u32.to_ne_bytes();
 graph
     .begin_cmd()
     .bind_pipeline(&pipeline)
-    .record_cmd(move |cmd_buf| {
-        cmd_buf
+    .record_cmd(move |cmd| {
+        cmd
             .push_constants(0, &data)
             .dispatch(1, 1, 1);
     });

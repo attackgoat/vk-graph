@@ -25,10 +25,10 @@ Graph
 Submission
   : _Automated graph execution_
 
-A `Graph` is data built dynamically by your program every frame. Once complete, the graph is
-optimized into a `Submission` which may be used to submit commands to the Vulkan implementation.
+A `Graph` is built dynamically by your program each frame. Once complete, it is optimized into a
+`Submission` that can be queued for execution on the Vulkan device.
 
-The overhead of building and submitting each graph is typically a few hundred microseconds.
+Building and submitting a graph typically takes only a few hundred microseconds.
 
 ## Philosophy
 

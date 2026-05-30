@@ -76,8 +76,8 @@ graph
     )
     .resource_access(vertices, AccessType::VertexBuffer)
     .resource_access(indices, AccessType::IndexBuffer)
-    .record_cmd(move |cmd_buf| {
-        cmd_buf
+    .record_cmd(move |cmd| {
+        cmd
             .bind_vertex_buffers(0, [(vertices, 0)])
             .bind_index_buffer(indices, 0, vk::IndexType::UINT32)
             .draw_indexed(36, 1, 0, 0, 0);
@@ -130,8 +130,8 @@ graph
     .bind_pipeline(&pipeline)
     .color_attachment_image(0, color, LoadOp::DontCare, StoreOp::Store)
     .resource_access(vertices, AccessType::VertexBuffer)
-    .record_cmd(move |cmd_buf| {
-        cmd_buf
+    .record_cmd(move |cmd| {
+        cmd
             .set_viewport(
                 0,
                 &[vk::Viewport {
@@ -232,8 +232,8 @@ graph
     .resource_access(indices, AccessType::IndexBuffer)
     .resource_access(draw_args, AccessType::IndirectBuffer)
     .resource_access(draw_count, AccessType::IndirectBuffer)
-    .record_cmd(move |cmd_buf| {
-        cmd_buf
+    .record_cmd(move |cmd| {
+        cmd
             .bind_vertex_buffers(0, [(vertices, 0)])
             .bind_index_buffer(indices, 0, vk::IndexType::UINT32)
             .draw_indexed_indirect_count(

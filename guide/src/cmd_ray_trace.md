@@ -50,14 +50,14 @@ graph
     .begin_cmd()
     .resource_access(scratch, AccessType::AccelerationStructureBufferWrite)
     .resource_access(blas, AccessType::AccelerationStructureBuildWrite)
-    .record_cmd(move |cmd_buf| {
-        let scratch_addr = cmd_buf.resource(scratch).device_address();
+    .record_cmd(move |cmd| {
+        let scratch_addr = cmd.resource(scratch).device_address();
         let build_info: AccelerationStructureGeometryInfo<(
             AccelerationStructureGeometry,
             vk::AccelerationStructureBuildRangeInfoKHR,
         )> = todo!("geometry setup");
 
-        cmd_buf.build_accel_struct(&[
+        cmd.build_accel_struct(&[
             BuildAccelerationStructureInfo::new(blas, scratch_addr, build_info),
         ]);
     });
@@ -115,8 +115,8 @@ graph
     .begin_cmd()
     .bind_pipeline(&pipeline)
     .shader_resource_access(0, output, AccessType::General)
-    .record_cmd(move |cmd_buf| {
-        cmd_buf.trace_rays(&raygen_sbt, &miss_sbt, &hit_sbt, &callable_sbt, 1280, 720, 1);
+    .record_cmd(move |cmd| {
+        cmd.trace_rays(&raygen_sbt, &miss_sbt, &hit_sbt, &callable_sbt, 1280, 720, 1);
     });
 # Ok(()) }
 ```
@@ -178,15 +178,15 @@ graph
     .bind_pipeline(&pipeline)
     .resource_access(args, AccessType::IndirectBuffer)
     .shader_resource_access(0, output, AccessType::General)
-    .record_cmd(move |cmd_buf| {
-        cmd_buf
+    .record_cmd(move |cmd| {
+        cmd
             .set_stack_size(4096)
             .trace_rays_indirect(
                 &raygen_sbt,
                 &miss_sbt,
                 &hit_sbt,
                 &callable_sbt,
-                cmd_buf.resource(args).device_address(),
+                cmd.resource(args).device_address(),
             );
     });
 # Ok(()) }

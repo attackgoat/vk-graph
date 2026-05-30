@@ -227,9 +227,8 @@ impl ImGui {
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
                 .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store)
-                .record_cmd(move |cmd_buf| {
-                    cmd_buf
-                        .push_constants(0, &window_width.to_ne_bytes())
+                .record_cmd(move |cmd| {
+                    cmd.push_constants(0, &window_width.to_ne_bytes())
                         .push_constants(4, &window_height.to_ne_bytes())
                         .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                         .bind_vertex_buffer(0, vertex_buf, 0);
@@ -245,21 +244,20 @@ impl ImGui {
                         let y = clip_rect[1].floor() as i32;
                         let width = (clip_rect[2] - clip_rect[0]).ceil() as u32;
                         let height = (clip_rect[3] - clip_rect[1]).ceil() as u32;
-                        cmd_buf
-                            .set_scissor(
-                                0,
-                                &[vk::Rect2D {
-                                    offset: vk::Offset2D { x, y },
-                                    extent: vk::Extent2D { width, height },
-                                }],
-                            )
-                            .draw_indexed(
-                                index_count as _,
-                                1,
-                                first_index as _,
-                                vertex_offset as _,
-                                0,
-                            );
+                        cmd.set_scissor(
+                            0,
+                            &[vk::Rect2D {
+                                offset: vk::Offset2D { x, y },
+                                extent: vk::Extent2D { width, height },
+                            }],
+                        )
+                        .draw_indexed(
+                            index_count as _,
+                            1,
+                            first_index as _,
+                            vertex_offset as _,
+                            0,
+                        );
                     }
                 });
         }

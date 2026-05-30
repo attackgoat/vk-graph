@@ -80,20 +80,19 @@ impl Device {
     /// to [`DriverError`] variants.
     pub fn begin_command_buffer(
         this: &Self,
-        cmd_buf: vk::CommandBuffer,
+        cmd: vk::CommandBuffer,
         begin_info: &vk::CommandBufferBeginInfo,
     ) -> Result<(), DriverError> {
         unsafe {
-            this.begin_command_buffer(cmd_buf, begin_info)
-                .map_err(|err| {
-                    warn!("unable to begin command buffer: {err}");
+            this.begin_command_buffer(cmd, begin_info).map_err(|err| {
+                warn!("unable to begin command buffer: {err}");
 
-                    match err {
-                        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
-                        | vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
-                        _ => DriverError::Unsupported,
-                    }
-                })
+                match err {
+                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                    | vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                    _ => DriverError::Unsupported,
+                }
+            })
         }
     }
 
@@ -136,9 +135,9 @@ impl Device {
     ///
     /// This is a thin wrapper around [`ash::Device::end_command_buffer`] that maps Vulkan errors
     /// to [`DriverError`] variants.
-    pub fn end_command_buffer(this: &Self, cmd_buf: vk::CommandBuffer) -> Result<(), DriverError> {
+    pub fn end_command_buffer(this: &Self, cmd: vk::CommandBuffer) -> Result<(), DriverError> {
         unsafe {
-            this.end_command_buffer(cmd_buf).map_err(|err| {
+            this.end_command_buffer(cmd).map_err(|err| {
                 warn!("unable to end command buffer: {err}");
 
                 match err {

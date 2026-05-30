@@ -19,7 +19,7 @@ let pipeline = ComputePipeline::create(device, info, shader.as_slice())?;
 let mut graph = Graph::default()
     .begin_cmd()
     .bind_pipeline(&pipeline)
-    .record_cmd(|cmd_buf| {
+    .record_cmd(|cmd| {
         // Record vulkan commands here
     })
     .end_cmd();
@@ -57,21 +57,21 @@ let mut graph = Graph::default();
 graph
     .begin_cmd()
     .bind_pipeline(&fire)
-    .record_cmd(|cmd_buf| {
+    .record_cmd(|cmd| {
         println!("1st");
     })
     .bind_pipeline(&water)
-    .record_cmd(|cmd_buf| {
+    .record_cmd(|cmd| {
         println!("2nd");
     })
     .bind_pipeline(&fire)
-    .record_cmd(|cmd_buf| {
+    .record_cmd(|cmd| {
         println!("3rd");
     })
     .end_cmd()
     .begin_cmd()
     .bind_pipeline(&water)
-    .record_cmd(|cmd_buf| {
+    .record_cmd(|cmd| {
         println!("4th");
     });
 # Ok(()) }

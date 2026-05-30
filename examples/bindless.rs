@@ -61,8 +61,8 @@ fn main() -> Result<(), WindowError> {
             LoadOp::CLEAR_BLACK_ALPHA_ZERO,
             StoreOp::Store,
         )
-        .record_cmd(move |cmd_buf| {
-            cmd_buf.draw_indirect(draw_buf_node, 0, 64, 16);
+        .record_cmd(move |cmd| {
+            cmd.draw_indirect(draw_buf_node, 0, 64, 16);
         });
     })
 }

@@ -32,15 +32,15 @@ use crate::Execution;
 /// # fn main() {
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd()
-///         .record_cmd(move |cmd_buf| {
+///         .record_cmd(move |cmd| {
 ///             // Use provided command buffer functions or native calls
-///             assert_ne!(cmd_buf.handle, vk::CommandBuffer::null());
+///             assert_ne!(cmd.handle, vk::CommandBuffer::null());
 ///         });
 /// # }
 /// ```
 #[derive(Clone, Copy)]
 pub struct CommandRef<'a> {
-    cmd_buf: &'a crate::driver::cmd_buf::CommandBuffer,
+    cmd: &'a crate::driver::cmd_buf::CommandBuffer,
 
     #[cfg(debug_assertions)]
     exec: &'a Execution,
@@ -50,12 +50,12 @@ pub struct CommandRef<'a> {
 
 impl<'a> CommandRef<'a> {
     pub(crate) fn new(
-        cmd_buf: &'a crate::driver::cmd_buf::CommandBuffer,
+        cmd: &'a crate::driver::cmd_buf::CommandBuffer,
         resources: &'a [AnyResource],
         #[cfg(debug_assertions)] exec: &'a Execution,
     ) -> Self {
         Self {
-            cmd_buf,
+            cmd,
             #[cfg(debug_assertions)]
             exec,
             resources,
@@ -108,20 +108,20 @@ impl<'a> CommandRef<'a> {
     ///         .resource_access(vertex_buf, AccessType::VertexBuffer)
     ///         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
     ///         .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
-    ///         .record_cmd(move |cmd_buf| {
-    ///             let scratch_addr = cmd_buf.resource(scratch_buf).device_address();
+    ///         .record_cmd(move |cmd| {
+    ///             let scratch_addr = cmd.resource(scratch_buf).device_address();
     ///             let geom = AccelerationStructureGeometry {
     ///                 max_primitive_count: 64,
     ///                 flags: vk::GeometryFlagsKHR::OPAQUE,
     ///                 geometry: AccelerationStructureGeometryData::Triangles {
     ///                     index_addr: DeviceOrHostAddress::DeviceAddress(
-    ///                         cmd_buf.resource(index_buf).device_address()
+    ///                         cmd.resource(index_buf).device_address()
     ///                     ),
     ///                     index_type: vk::IndexType::UINT32,
     ///                     max_vertex: 42,
     ///                     transform_addr: None,
     ///                     vertex_addr: DeviceOrHostAddress::DeviceAddress(
-    ///                         cmd_buf.resource(vertex_buf).device_address(),
+    ///                         cmd.resource(vertex_buf).device_address(),
     ///                     ),
     ///                     vertex_format: vk::Format::R32G32B32_SFLOAT,
     ///                     vertex_stride: 12,
@@ -135,7 +135,7 @@ impl<'a> CommandRef<'a> {
     ///             };
     ///             let info = AccelerationStructureGeometryInfo::blas([(geom, build_range)]);
     ///
-    ///             cmd_buf.build_accel_struct(&[
+    ///             cmd.build_accel_struct(&[
     ///                 BuildAccelerationStructureInfo::new(blas_node, scratch_addr, info)
     ///             ]);
     ///         });
@@ -209,8 +209,8 @@ impl<'a> CommandRef<'a> {
             };
 
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd_buf.device)
-                    .cmd_build_acceleration_structures(self.cmd_buf.handle, &vk_infos, &vk_ranges);
+                Device::expect_accel_struct_ext(&self.cmd.device)
+                    .cmd_build_acceleration_structures(self.cmd.handle, &vk_infos, &vk_ranges);
             }
         });
 
@@ -288,9 +288,9 @@ impl<'a> CommandRef<'a> {
             };
 
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd_buf.device)
+                Device::expect_accel_struct_ext(&self.cmd.device)
                     .cmd_build_acceleration_structures_indirect(
-                        self.cmd_buf.handle,
+                        self.cmd.handle,
                         &vk_infos,
                         &tls.range_bases,
                         &tls.range_strides,
@@ -408,8 +408,8 @@ impl<'a> CommandRef<'a> {
             };
 
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd_buf.device)
-                    .cmd_build_acceleration_structures(self.cmd_buf.handle, &vk_infos, &vk_ranges);
+                Device::expect_accel_struct_ext(&self.cmd.device)
+                    .cmd_build_acceleration_structures(self.cmd.handle, &vk_infos, &vk_ranges);
             }
         });
 
@@ -488,9 +488,9 @@ impl<'a> CommandRef<'a> {
             };
 
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd_buf.device)
+                Device::expect_accel_struct_ext(&self.cmd.device)
                     .cmd_build_acceleration_structures_indirect(
-                        self.cmd_buf.handle,
+                        self.cmd.handle,
                         &vk_infos,
                         &tls.range_bases,
                         &tls.range_strides,
@@ -530,7 +530,7 @@ impl<'a> Deref for CommandRef<'a> {
     type Target = crate::driver::cmd_buf::CommandBuffer;
 
     fn deref(&self) -> &Self::Target {
-        self.cmd_buf
+        self.cmd
     }
 }
 

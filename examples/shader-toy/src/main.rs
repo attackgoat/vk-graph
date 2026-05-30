@@ -299,9 +299,8 @@ fn main() -> anyhow::Result<()> {
                     AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
                 .color_attachment_image(0, output, LoadOp::DontCare, StoreOp::Store)
-                .record_cmd(move |cmd_buf| {
-                    cmd_buf
-                        .push_constants(0, bytes_of(&push_consts))
+                .record_cmd(move |cmd| {
+                    cmd.push_constants(0, bytes_of(&push_consts))
                         .draw(6, 1, 0, 0);
                 });
 
@@ -317,9 +316,8 @@ fn main() -> anyhow::Result<()> {
                     AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
                 .color_attachment_image(0, input, LoadOp::DontCare, StoreOp::Store)
-                .record_cmd(move |cmd_buf| {
-                    cmd_buf
-                        .push_constants(0, bytes_of(&push_consts))
+                .record_cmd(move |cmd| {
+                    cmd.push_constants(0, bytes_of(&push_consts))
                         .draw(6, 1, 0, 0);
                 });
 

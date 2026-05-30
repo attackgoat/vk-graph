@@ -482,13 +482,13 @@ impl Graph {
             cmd.set_subresource_access(dst, dst_region, AccessType::TransferWrite);
         }
 
-        cmd.record_cmd(move |cmd_buf| {
-            let src_image = cmd_buf.resource(src).handle;
-            let dst_image = cmd_buf.resource(dst).handle;
+        cmd.record_cmd(move |cmd| {
+            let src_image = cmd.resource(src).handle;
+            let dst_image = cmd.resource(dst).handle;
 
             unsafe {
-                cmd_buf.device.cmd_blit_image(
-                    cmd_buf.handle,
+                cmd.device.cmd_blit_image(
+                    cmd.handle,
                     src_image,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     dst_image,
@@ -515,12 +515,12 @@ impl Graph {
         self.begin_cmd()
             .debug_name("clear color")
             .subresource_access(image, image_view, AccessType::TransferWrite)
-            .record_cmd(move |cmd_buf| {
-                let image = cmd_buf.resource(image);
+            .record_cmd(move |cmd| {
+                let image = cmd.resource(image);
 
                 unsafe {
-                    cmd_buf.device.cmd_clear_color_image(
-                        cmd_buf.handle,
+                    cmd.device.cmd_clear_color_image(
+                        cmd.handle,
                         image.handle,
                         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                         &color,
@@ -545,12 +545,12 @@ impl Graph {
         self.begin_cmd()
             .debug_name("clear depth/stencil")
             .subresource_access(image, image_view, AccessType::TransferWrite)
-            .record_cmd(move |cmd_buf| {
-                let image = cmd_buf.resource(image);
+            .record_cmd(move |cmd| {
+                let image = cmd.resource(image);
 
                 unsafe {
-                    cmd_buf.device.cmd_clear_depth_stencil_image(
-                        cmd_buf.handle,
+                    cmd.device.cmd_clear_depth_stencil_image(
+                        cmd.handle,
                         image.handle,
                         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                         &vk::ClearDepthStencilValue { depth, stencil },
@@ -629,17 +629,13 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd(move |cmd_buf| {
-            let src = cmd_buf.resource(src);
-            let dst = cmd_buf.resource(dst);
+        cmd.record_cmd(move |cmd| {
+            let src = cmd.resource(src);
+            let dst = cmd.resource(dst);
 
             unsafe {
-                cmd_buf.device.cmd_copy_buffer(
-                    cmd_buf.handle,
-                    src.handle,
-                    dst.handle,
-                    regions.as_ref(),
-                );
+                cmd.device
+                    .cmd_copy_buffer(cmd.handle, src.handle, dst.handle, regions.as_ref());
             }
         })
         .end_cmd()
@@ -710,13 +706,13 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd(move |cmd_buf| {
-            let src = cmd_buf.resource(src);
-            let dst = cmd_buf.resource(dst);
+        cmd.record_cmd(move |cmd| {
+            let src = cmd.resource(src);
+            let dst = cmd.resource(dst);
 
             unsafe {
-                cmd_buf.device.cmd_copy_buffer_to_image(
-                    cmd_buf.handle,
+                cmd.device.cmd_copy_buffer_to_image(
+                    cmd.handle,
                     src.handle,
                     dst.handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -792,13 +788,13 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd(move |cmd_buf| {
-            let src = cmd_buf.resource(src);
-            let dst = cmd_buf.resource(dst);
+        cmd.record_cmd(move |cmd| {
+            let src = cmd.resource(src);
+            let dst = cmd.resource(dst);
 
             unsafe {
-                cmd_buf.device.cmd_copy_image(
-                    cmd_buf.handle,
+                cmd.device.cmd_copy_image(
+                    cmd.handle,
                     src.handle,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     dst.handle,
@@ -877,13 +873,13 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd(move |cmd_buf| {
-            let src = cmd_buf.resource(src);
-            let dst = cmd_buf.resource(dst);
+        cmd.record_cmd(move |cmd| {
+            let src = cmd.resource(src);
+            let dst = cmd.resource(dst);
 
             unsafe {
-                cmd_buf.device.cmd_copy_image_to_buffer(
-                    cmd_buf.handle,
+                cmd.device.cmd_copy_image_to_buffer(
+                    cmd.handle,
                     src.handle,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     dst.handle,
@@ -906,12 +902,12 @@ impl Graph {
         self.begin_cmd()
             .debug_name("fill buffer")
             .subresource_access(buffer, region.clone(), AccessType::TransferWrite)
-            .record_cmd(move |cmd_buf| {
-                let buffer = cmd_buf.resource(buffer);
+            .record_cmd(move |cmd| {
+                let buffer = cmd.resource(buffer);
 
                 unsafe {
-                    cmd_buf.device.cmd_fill_buffer(
-                        cmd_buf.handle,
+                    cmd.device.cmd_fill_buffer(
+                        cmd.handle,
                         buffer.handle,
                         region.start,
                         region.end - region.start,
@@ -986,16 +982,12 @@ impl Graph {
         self.begin_cmd()
             .debug_name("update buffer")
             .subresource_access(buffer, offset..data_end, AccessType::TransferWrite)
-            .record_cmd(move |cmd_buf| {
-                let buffer = cmd_buf.resource(buffer);
+            .record_cmd(move |cmd| {
+                let buffer = cmd.resource(buffer);
 
                 unsafe {
-                    cmd_buf.device.cmd_update_buffer(
-                        cmd_buf.handle,
-                        buffer.handle,
-                        offset,
-                        data.as_ref(),
-                    );
+                    cmd.device
+                        .cmd_update_buffer(cmd.handle, buffer.handle, offset, data.as_ref());
                 }
             })
             .end_cmd()

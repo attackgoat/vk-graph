@@ -212,7 +212,7 @@ impl BitmapFont {
             page_nodes.push(graph.bind_resource(page));
         }
 
-        let mut pass = graph
+        let mut cmd = graph
             .begin_cmd()
             .debug_name("text")
             .bind_pipeline(&self.pipeline)
@@ -221,16 +221,16 @@ impl BitmapFont {
 
         for (idx, page_node) in page_nodes.iter().copied().enumerate() {
             let descriptor = (0, [idx as _]);
-            pass.set_shader_resource_access(
+            cmd.set_shader_resource_access(
                 descriptor,
                 page_node,
                 AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
             );
         }
 
-        pass.record_cmd(move |cmd_buf| {
+        cmd.record_cmd(move |cmd| {
             if let Some((x, y, width, height)) = scissor {
-                cmd_buf.set_scissor(
+                cmd.set_scissor(
                     0,
                     &[vk::Rect2D {
                         offset: vk::Offset2D { x, y },
@@ -239,8 +239,7 @@ impl BitmapFont {
                 );
             }
 
-            cmd_buf
-                .push_constants(0, cast_slice(&transform.to_cols_array()))
+            cmd.push_constants(0, cast_slice(&transform.to_cols_array()))
                 .push_constants(64, &(1.0 / image_info.width as f32).to_ne_bytes())
                 .push_constants(68, &(1.0 / image_info.height as f32).to_ne_bytes())
                 .push_constants(80, &color_to_unorm(color.solid()))

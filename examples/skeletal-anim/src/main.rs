@@ -158,9 +158,8 @@ fn main() -> Result<(), WindowError> {
                 LoadOp::CLEAR_ONE_STENCIL_ZERO,
                 StoreOp::DontCare,
             )
-            .record_cmd(move |cmd_buf| {
-                cmd_buf
-                    .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
+            .record_cmd(move |cmd| {
+                cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
                     .bind_vertex_buffer(0, vertex_buf, 0)
                     .push_constants(0, bytes_of(&Mat4::IDENTITY))
                     .draw_indexed(character.index_count, 1, 0, 0, 0);

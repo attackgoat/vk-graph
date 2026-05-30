@@ -121,14 +121,11 @@ type CacheRef<T> = Weak<Mutex<Vec<T>>>;
 fn lease_command_buffer(cache: &mut Vec<CommandBuffer>) -> Option<CommandBuffer> {
     for idx in 0..cache.len() {
         if unsafe {
-            let cmd_buf = cache.get_unchecked(idx);
+            let cmd = cache.get_unchecked(idx);
 
             // Don't lease this command buffer if it is unsignalled; we'll create a new one
             // and wait for this, and those behind it, to signal.
-            cmd_buf
-                .device
-                .get_fence_status(cmd_buf.fence)
-                .unwrap_or_default()
+            cmd.device.get_fence_status(cmd.fence).unwrap_or_default()
         } {
             return Some(cache.swap_remove(idx));
         }

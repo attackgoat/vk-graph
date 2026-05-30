@@ -27,9 +27,9 @@ impl PipelineCommand<'_, RayTracePipeline> {
         #[cfg(debug_assertions)]
         let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
 
-        self.cmd.push_exec(move |cmd_buf| {
+        self.cmd.push_exec(move |cmd| {
             func(RayTraceCommandRef {
-                cmd_buf,
+                cmd,
 
                 #[cfg(debug_assertions)]
                 dynamic_stack_size,
@@ -70,13 +70,13 @@ impl PipelineCommand<'_, RayTracePipeline> {
 /// my_graph.begin_cmd()
 ///         .debug_name("my ray trace command")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
-///         .record_cmd(move |cmd_buf| {
+///         .record_cmd(move |cmd| {
 ///             // During this closure we have access to the ray trace functions!
 ///         });
 /// # Ok(()) }
 /// ```
 pub struct RayTraceCommandRef<'a> {
-    cmd_buf: CommandRef<'a>,
+    cmd: CommandRef<'a>,
 
     #[cfg(debug_assertions)]
     dynamic_stack_size: bool,
@@ -145,8 +145,8 @@ impl RayTraceCommandRef<'_> {
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_cmd(move |cmd_buf| {
-    ///             cmd_buf.push_constants(0, &[0xcb])
+    ///         .record_cmd(move |cmd| {
+    ///             cmd.push_constants(0, &[0xcb])
     ///                    .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
@@ -176,11 +176,11 @@ impl RayTraceCommandRef<'_> {
         #[cfg(debug_assertions)]
         assert!(self.dynamic_stack_size);
 
-        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd_buf.device);
+        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd.device);
 
         unsafe {
             ray_trace_ext
-                .cmd_set_ray_tracing_pipeline_stack_size(self.cmd_buf.handle, pipeline_stack_size);
+                .cmd_set_ray_tracing_pipeline_stack_size(self.cmd.handle, pipeline_stack_size);
         }
 
         self
@@ -222,8 +222,8 @@ impl RayTraceCommandRef<'_> {
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
     ///         .bind_pipeline(&my_ray_trace_pipeline)
-    ///         .record_cmd(move |cmd_buf| {
-    ///             cmd_buf.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
+    ///         .record_cmd(move |cmd| {
+    ///             cmd.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
     /// ```
@@ -241,11 +241,11 @@ impl RayTraceCommandRef<'_> {
         height: u32,
         depth: u32,
     ) -> &Self {
-        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd_buf.device);
+        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd.device);
 
         unsafe {
             ray_trace_ext.cmd_trace_rays(
-                self.cmd_buf.handle,
+                self.cmd.handle,
                 raygen_shader_binding_table,
                 miss_shader_binding_table,
                 hit_shader_binding_table,
@@ -277,11 +277,11 @@ impl RayTraceCommandRef<'_> {
         callable_shader_binding_table: &vk::StridedDeviceAddressRegionKHR,
         indirect_device_address: vk::DeviceAddress,
     ) -> &Self {
-        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd_buf.device);
+        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd.device);
 
         unsafe {
             ray_trace_ext.cmd_trace_rays_indirect(
-                self.cmd_buf.handle,
+                self.cmd.handle,
                 raygen_shader_binding_table,
                 miss_shader_binding_table,
                 hit_shader_binding_table,
@@ -298,7 +298,7 @@ impl<'a> Deref for RayTraceCommandRef<'a> {
     type Target = CommandRef<'a>;
 
     fn deref(&self) -> &Self::Target {
-        &self.cmd_buf
+        &self.cmd
     }
 }
 
@@ -369,8 +369,8 @@ mod deprecated {
             self,
             func: impl FnOnce(RayTraceCommandRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd(|cmd_buf| {
-                func(cmd_buf, ());
+            self.record_cmd(|cmd| {
+                func(cmd, ());
             })
         }
 

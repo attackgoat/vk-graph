@@ -288,9 +288,8 @@ fn main() -> anyhow::Result<()> {
                     LoadOp::CLEAR_BLACK_ALPHA_ZERO,
                     StoreOp::Store,
                 )
-                .record_cmd(move |cmd_buf| {
-                    cmd_buf
-                        .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
+                .record_cmd(move |cmd| {
+                    cmd.bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
                         .push_constants(0, cast_slice(&model_transform))
                         .draw_indexed(model_mesh.index_count, 1, 0, 0, 0)
@@ -328,9 +327,8 @@ fn main() -> anyhow::Result<()> {
                         LoadOp::clear_rgba(light.range, light.range, 0.0, 0.0),
                         StoreOp::Store,
                     )
-                    .record_cmd(move |cmd_buf| {
-                        cmd_buf
-                            .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
+                    .record_cmd(move |cmd| {
+                        cmd.bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
                             .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
                             .push_constants(0, cast_slice(&model_transform))
                             .draw_indexed(model_shadow.index_count, 1, 0, 0, 0)
@@ -386,9 +384,8 @@ fn main() -> anyhow::Result<()> {
                             LoadOp::clear_rgba(light.range, light.range, 0.0, 0.0),
                             StoreOp::Store,
                         )
-                        .record_cmd(move |cmd_buf| {
-                            cmd_buf
-                                .bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
+                        .record_cmd(move |cmd| {
+                            cmd.bind_index_buffer(model_shadow_index_buf, 0, vk::IndexType::UINT32)
                                 .bind_vertex_buffer(0, model_shadow_vertex_buf, 0)
                                 .push_constants(0, cast_slice(&model_transform))
                                 .draw_indexed(model_shadow.index_count, 1, 0, 0, 0)
@@ -415,8 +412,8 @@ fn main() -> anyhow::Result<()> {
                             AccessType::ComputeShaderReadOther,
                         )
                         .shader_resource_access(1, temp_image, AccessType::ComputeShaderWrite)
-                        .record_cmd(move |cmd_buf| {
-                            cmd_buf.dispatch(1, CUBEMAP_SIZE, 6);
+                        .record_cmd(move |cmd| {
+                            cmd.dispatch(1, CUBEMAP_SIZE, 6);
                         })
                         .end_cmd()
                         .begin_cmd()
@@ -428,8 +425,8 @@ fn main() -> anyhow::Result<()> {
                             shadow_faces_node,
                             AccessType::ComputeShaderWrite,
                         )
-                        .record_cmd(move |cmd_buf| {
-                            cmd_buf.dispatch(CUBEMAP_SIZE, 1, 6);
+                        .record_cmd(move |cmd| {
+                            cmd.dispatch(CUBEMAP_SIZE, 1, 6);
                         });
                 }
             }
@@ -474,15 +471,13 @@ fn main() -> anyhow::Result<()> {
                     LoadOp::CLEAR_BLACK_ALPHA_ZERO,
                     StoreOp::Store,
                 )
-                .record_cmd(move |cmd_buf| {
-                    cmd_buf
-                        .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
+                .record_cmd(move |cmd| {
+                    cmd.bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
                         .push_constants(0, cast_slice(&model_transform))
                         .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
 
-                    cmd_buf
-                        .bind_index_buffer(cube_mesh_index_buf, 0, vk::IndexType::UINT32)
+                    cmd.bind_index_buffer(cube_mesh_index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, cube_mesh_vertex_buf, 0)
                         .push_constants(0, cast_slice(&cube_transform))
                         .draw_indexed(cube_mesh.index_count, 1, 0, 0, 0);

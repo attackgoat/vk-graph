@@ -201,8 +201,8 @@ impl PipelineCommand<'_, GraphicPipeline> {
             .expect_graphic()
             .clone();
 
-        self.cmd.push_exec(move |cmd_buf| {
-            func(GraphicCommandRef { cmd_buf, pipeline });
+        self.cmd.push_exec(move |cmd| {
+            func(GraphicCommandRef { cmd, pipeline });
         });
     }
 
@@ -569,14 +569,14 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 ///     .debug_name("my draw command")
 ///     .bind_pipeline(&my_graphic_pipeline)
 ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
-///     .record_cmd(move |cmd_buf| {
+///     .record_cmd(move |cmd| {
 ///         // During this closure we have access to the drawing functions!
-///         cmd_buf.draw(3, 1, 0, 0);
+///         cmd.draw(3, 1, 0, 0);
 ///     });
 /// # Ok(()) }
 /// ```
 pub struct GraphicCommandRef<'a> {
-    cmd_buf: CommandRef<'a>,
+    cmd: CommandRef<'a>,
     pipeline: GraphicPipeline,
 }
 
@@ -624,8 +624,8 @@ impl GraphicCommandRef<'_> {
     ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
-    ///     .record_cmd(move |cmd_buf| {
-    ///         cmd_buf
+    ///     .record_cmd(move |cmd| {
+    ///         cmd
     ///             .bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///             .draw_indexed(42, 1, 0, 0, 0);
@@ -643,12 +643,9 @@ impl GraphicCommandRef<'_> {
         let buffer = self.resource(buffer);
 
         unsafe {
-            self.cmd_buf.device.cmd_bind_index_buffer(
-                self.cmd_buf.handle,
-                buffer.handle,
-                offset,
-                index_ty,
-            );
+            self.cmd
+                .device
+                .cmd_bind_index_buffer(self.cmd.handle, buffer.handle, offset, index_ty);
         }
 
         self
@@ -692,8 +689,8 @@ impl GraphicCommandRef<'_> {
     ///     .bind_pipeline(&my_graphic_pipeline)
     ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
-    ///     .record_cmd(move |cmd_buf| {
-    ///         cmd_buf
+    ///     .record_cmd(move |cmd| {
+    ///         cmd
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///             .draw(42, 1, 0, 0);
     ///     });
@@ -710,8 +707,8 @@ impl GraphicCommandRef<'_> {
         let buffer = self.resource(buffer);
 
         unsafe {
-            self.cmd_buf.device.cmd_bind_vertex_buffers(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_bind_vertex_buffers(
+                self.cmd.handle,
                 binding,
                 slice::from_ref(&buffer.handle),
                 slice::from_ref(&offset),
@@ -760,8 +757,8 @@ impl GraphicCommandRef<'_> {
             }
 
             unsafe {
-                self.cmd_buf.device.cmd_bind_vertex_buffers(
-                    self.cmd_buf.handle,
+                self.cmd.device.cmd_bind_vertex_buffers(
+                    self.cmd.handle,
                     first_binding,
                     tls.buffers.as_slice(),
                     tls.offsets.as_slice(),
@@ -787,8 +784,8 @@ impl GraphicCommandRef<'_> {
         first_instance: u32,
     ) -> &Self {
         unsafe {
-            self.cmd_buf.device.cmd_draw(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_draw(
+                self.cmd.handle,
                 vertex_count,
                 instance_count,
                 first_vertex,
@@ -815,8 +812,8 @@ impl GraphicCommandRef<'_> {
         first_instance: u32,
     ) -> &Self {
         unsafe {
-            self.cmd_buf.device.cmd_draw_indexed(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_draw_indexed(
+                self.cmd.handle,
                 index_count,
                 instance_count,
                 first_index,
@@ -895,8 +892,8 @@ impl GraphicCommandRef<'_> {
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
     ///     .resource_access(buf_node, AccessType::IndirectBuffer)
-    ///     .record_cmd(move |cmd_buf| {
-    ///         cmd_buf
+    ///     .record_cmd(move |cmd| {
+    ///         cmd
     ///             .bind_index_buffer(my_idx_buf, 0, vk::IndexType::UINT16)
     ///             .bind_vertex_buffer(0, my_vtx_buf, 0)
     ///             .draw_indexed_indirect(buf_node, 0, 1, 0);
@@ -915,8 +912,8 @@ impl GraphicCommandRef<'_> {
         let buffer = self.resource(buffer);
 
         unsafe {
-            self.cmd_buf.device.cmd_draw_indexed_indirect(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_draw_indexed_indirect(
+                self.cmd.handle,
                 buffer.handle,
                 offset,
                 draw_count,
@@ -956,8 +953,8 @@ impl GraphicCommandRef<'_> {
         let count_buf = self.resource(count_buf);
 
         unsafe {
-            self.cmd_buf.device.cmd_draw_indexed_indirect_count(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_draw_indexed_indirect_count(
+                self.cmd.handle,
                 buffer.handle,
                 offset,
                 count_buf.handle,
@@ -985,8 +982,8 @@ impl GraphicCommandRef<'_> {
         let buffer = self.resource(buffer);
 
         unsafe {
-            self.cmd_buf.device.cmd_draw_indirect(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_draw_indirect(
+                self.cmd.handle,
                 buffer.handle,
                 offset,
                 draw_count,
@@ -1017,8 +1014,8 @@ impl GraphicCommandRef<'_> {
         let count_buf = self.resource(count_buf);
 
         unsafe {
-            self.cmd_buf.device.cmd_draw_indirect_count(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_draw_indirect_count(
+                self.cmd.handle,
                 buffer.handle,
                 offset,
                 count_buf.handle,
@@ -1092,8 +1089,8 @@ impl GraphicCommandRef<'_> {
     ///     .debug_name("draw a quad")
     ///     .bind_pipeline(&my_graphic_pipeline)
     ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
-    ///     .record_cmd(move |cmd_buf| {
-    ///         cmd_buf
+    ///     .record_cmd(move |cmd| {
+    ///         cmd
     ///             .push_constants(0, &[42])
     ///             .draw(6, 1, 0, 0);
     ///     });
@@ -1119,9 +1116,9 @@ impl GraphicCommandRef<'_> {
     #[profiling::function]
     pub fn set_scissor(&self, first_scissor: u32, scissors: &[vk::Rect2D]) -> &Self {
         unsafe {
-            self.cmd_buf
+            self.cmd
                 .device
-                .cmd_set_scissor(self.cmd_buf.handle, first_scissor, scissors);
+                .cmd_set_scissor(self.cmd.handle, first_scissor, scissors);
         }
 
         self
@@ -1134,9 +1131,9 @@ impl GraphicCommandRef<'_> {
     #[profiling::function]
     pub fn set_viewport(&self, first_viewport: u32, viewports: &[vk::Viewport]) -> &Self {
         unsafe {
-            self.cmd_buf
+            self.cmd
                 .device
-                .cmd_set_viewport(self.cmd_buf.handle, first_viewport, viewports);
+                .cmd_set_viewport(self.cmd.handle, first_viewport, viewports);
         }
 
         self
@@ -1147,7 +1144,7 @@ impl<'a> Deref for GraphicCommandRef<'a> {
     type Target = CommandRef<'a>;
 
     fn deref(&self) -> &Self::Target {
-        &self.cmd_buf
+        &self.cmd
     }
 }
 
@@ -2985,8 +2982,8 @@ mod deprecated {
             self,
             func: impl FnOnce(GraphicCommandRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd(|cmd_buf| {
-                func(cmd_buf, ());
+            self.record_cmd(|cmd| {
+                func(cmd, ());
             })
         }
 

@@ -113,8 +113,8 @@ fn exclusive_sum(
             .bind_pipeline(reduce_pipeline)
             .shader_resource_access(0, input_buf, AccessType::ComputeShaderReadOther)
             .shader_resource_access(1, workgroup_buf, AccessType::ComputeShaderWrite)
-            .record_cmd(move |cmd_buf| {
-                cmd_buf.dispatch(reduce_count, 1, 1);
+            .record_cmd(move |cmd| {
+                cmd.dispatch(reduce_count, 1, 1);
             });
     }
 
@@ -125,17 +125,17 @@ fn exclusive_sum(
         .shader_resource_access(0, workgroup_buf, AccessType::ComputeShaderReadOther)
         .shader_resource_access(1, input_buf, AccessType::ComputeShaderReadOther)
         .shader_resource_access(2, output_buf, AccessType::ComputeShaderWrite)
-        .record_cmd(move |cmd_buf| {
-            cmd_buf.dispatch(workgroup_count, 1, 1);
+        .record_cmd(move |cmd| {
+            cmd.dispatch(workgroup_count, 1, 1);
         });
 
     let output_buf = graph.resource(output_buf).clone();
-    let mut cmd_buf = graph
+    let mut cmd = graph
         .into_submission()
         .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();
-    cmd_buf.wait_until_executed()?;
+    cmd.wait_until_executed()?;
 
     println!(
         "Waited {}μs (len={})",

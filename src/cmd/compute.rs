@@ -21,8 +21,8 @@ impl PipelineCommand<'_, ComputePipeline> {
             .expect_compute()
             .clone();
 
-        self.cmd.push_exec(move |cmd_buf| {
-            func(ComputeCommandRef { cmd_buf, pipeline });
+        self.cmd.push_exec(move |cmd| {
+            func(ComputeCommandRef { cmd, pipeline });
         });
     }
 }
@@ -54,14 +54,14 @@ impl PipelineCommand<'_, ComputePipeline> {
 /// my_graph
 ///     .begin_cmd()
 ///     .bind_pipeline(&my_compute_pipeline)
-///     .record_cmd(move |cmd_buf| {
+///     .record_cmd(move |cmd| {
 ///         // During this closure we have access to the compute functions!
-///         cmd_buf.dispatch(64, 1, 1);
+///         cmd.dispatch(64, 1, 1);
 ///     });
 /// # Ok(()) }
 /// ```
 pub struct ComputeCommandRef<'a> {
-    cmd_buf: CommandRef<'a>,
+    cmd: CommandRef<'a>,
     pipeline: ComputePipeline,
 }
 
@@ -112,8 +112,8 @@ impl ComputeCommandRef<'_> {
     ///     .debug_name("fill my_buf_node with data")
     ///     .bind_pipeline(&my_compute_pipeline)
     ///     .shader_resource_access(0, my_buf_node, AccessType::ComputeShaderWrite)
-    ///     .record_cmd(move |cmd_buf| {
-    ///         cmd_buf.dispatch(128, 64, 32);
+    ///     .record_cmd(move |cmd| {
+    ///         cmd.dispatch(128, 64, 32);
     ///     });
     /// # Ok(()) }
     /// ```
@@ -122,8 +122,8 @@ impl ComputeCommandRef<'_> {
     #[profiling::function]
     pub fn dispatch(&self, group_count_x: u32, group_count_y: u32, group_count_z: u32) -> &Self {
         unsafe {
-            self.cmd_buf.device.cmd_dispatch(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_dispatch(
+                self.cmd.handle,
                 group_count_x,
                 group_count_y,
                 group_count_z,
@@ -155,8 +155,8 @@ impl ComputeCommandRef<'_> {
         group_count_z: u32,
     ) -> &Self {
         unsafe {
-            self.cmd_buf.device.cmd_dispatch_base(
-                self.cmd_buf.handle,
+            self.cmd.device.cmd_dispatch_base(
+                self.cmd.handle,
                 base_group_x,
                 base_group_y,
                 base_group_z,
@@ -217,8 +217,8 @@ impl ComputeCommandRef<'_> {
     ///     .bind_pipeline(&my_compute_pipeline)
     ///     .resource_access(args_buf, AccessType::IndirectBuffer)
     ///     .shader_resource_access(0, my_buf_node, AccessType::ComputeShaderWrite)
-    ///     .record_cmd(move |cmd_buf| {
-    ///         cmd_buf.dispatch_indirect(args_buf, 0);
+    ///     .record_cmd(move |cmd| {
+    ///         cmd.dispatch_indirect(args_buf, 0);
     ///     });
     /// # Ok(()) }
     /// ```
@@ -235,11 +235,9 @@ impl ComputeCommandRef<'_> {
         let args_buf = self.resource(args_buf);
 
         unsafe {
-            self.cmd_buf.device.cmd_dispatch_indirect(
-                self.cmd_buf.handle,
-                args_buf.handle,
-                args_offset,
-            );
+            self.cmd
+                .device
+                .cmd_dispatch_indirect(self.cmd.handle, args_buf.handle, args_offset);
         }
 
         self
@@ -299,8 +297,8 @@ impl ComputeCommandRef<'_> {
     ///     .begin_cmd()
     ///     .debug_name("compute the ultimate question")
     ///     .bind_pipeline(&my_compute_pipeline)
-    ///     .record_cmd(move |cmd_buf| {
-    ///         cmd_buf
+    ///     .record_cmd(move |cmd| {
+    ///         cmd
     ///             .push_constants(0, &[42])
     ///             .dispatch(1, 1, 1);
     ///     });
@@ -325,7 +323,7 @@ impl<'a> Deref for ComputeCommandRef<'a> {
     type Target = CommandRef<'a>;
 
     fn deref(&self) -> &Self::Target {
-        &self.cmd_buf
+        &self.cmd
     }
 }
 
@@ -393,7 +391,7 @@ mod deprecated {
             self,
             func: impl FnOnce(ComputeCommandRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.record_cmd(|cmd_buf| func(cmd_buf, ()))
+            self.record_cmd(|cmd| func(cmd, ()))
         }
 
         #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderWrite"]

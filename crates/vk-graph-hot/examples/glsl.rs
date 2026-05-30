@@ -35,10 +35,12 @@ fn main() -> Result<(), WindowError> {
             .debug_name("oh that looks so cool")
             .bind_pipeline(&pipeline)
             .shader_resource_access(0, frame.swapchain_image, AccessType::ComputeShaderWrite)
-            .record_cmd(move |cmd_buf| {
-                cmd_buf
-                    .push_constants(0, &frame_index.to_ne_bytes())
-                    .dispatch(frame.width, frame.height, 1);
+            .record_cmd(move |cmd| {
+                cmd.push_constants(0, &frame_index.to_ne_bytes()).dispatch(
+                    frame.width,
+                    frame.height,
+                    1,
+                );
             });
 
         frame_index += 1;

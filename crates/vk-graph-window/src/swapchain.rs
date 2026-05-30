@@ -89,7 +89,7 @@ impl Swapchain {
 
         let mut execs = Vec::with_capacity(info.command_buffer_count as _);
         for _ in 0..info.command_buffer_count {
-            let cmd_buf = CommandBuffer::create(
+            let cmd = CommandBuffer::create(
                 &swapchain.surface.device,
                 CommandBufferInfo::new(info.queue_family_index),
             )?;
@@ -97,7 +97,7 @@ impl Swapchain {
             let swapchain_rendered = create_semaphore(&swapchain.surface.device)?;
 
             execs.push(Execution {
-                cmd_buf,
+                cmd,
                 swapchain_acquired,
                 swapchain_rendered,
             });
@@ -155,11 +155,11 @@ impl Swapchain {
         self.exec_idx %= self.execs.len();
         let exec = &mut self.execs[self.exec_idx];
 
-        exec.cmd_buf.wait_until_executed().inspect_err(|err| {
+        exec.cmd.wait_until_executed().inspect_err(|err| {
             warn!("unable to wait for swapchain fence: {err}");
         })?;
 
-        Device::reset_fences(&exec.cmd_buf.device, slice::from_ref(&exec.cmd_buf.fence))?;
+        Device::reset_fences(&exec.cmd.device, slice::from_ref(&exec.cmd.fence))?;
 
         let acquire_next_image = self
             .read_only
@@ -216,19 +216,19 @@ impl Swapchain {
         let exec_idx = self.image_execs[image_idx as usize];
         let exec = &mut self.execs[exec_idx];
 
-        debug_assert!(!exec.cmd_buf.has_executed().unwrap());
+        debug_assert!(!exec.cmd.has_executed().unwrap());
 
         let started = Instant::now();
 
         Device::begin_command_buffer(
-            &exec.cmd_buf.device,
-            exec.cmd_buf.handle,
+            &exec.cmd.device,
+            exec.cmd.handle,
             &vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
 
-        // submission.record_node_dependencies(&mut *self.pool, cmd_buf, swapchain_image)?;
-        submission.queue_resource(swapchain_image, pool, &mut exec.cmd_buf)?;
+        // submission.record_node_dependencies(&mut *self.pool, cmd, swapchain_image)?;
+        submission.queue_resource(swapchain_image, pool, &mut exec.cmd)?;
 
         {
             let swapchain_image = submission.resource(swapchain_image);
@@ -252,8 +252,8 @@ impl Swapchain {
 
                 // Force a presentation layout transition
                 pipeline_barrier(
-                    &exec.cmd_buf.device,
-                    exec.cmd_buf.handle,
+                    &exec.cmd.device,
+                    exec.cmd.handle,
                     None,
                     &[],
                     slice::from_ref(&ImageBarrier {
@@ -275,25 +275,25 @@ impl Swapchain {
         // before present which use nodes that are unused in the remainder of the graph.
         // These operations are still important, but they don't need to wait for any of the above
         // things so we do them last
-        submission.submit_cmd_buf(pool, &mut exec.cmd_buf)?;
+        submission.submit_cmd_buf(pool, &mut exec.cmd)?;
 
         Device::with_queue(
-            &exec.cmd_buf.device,
+            &exec.cmd.device,
             self.read_only.info.queue_family_index,
             queue_index,
             |queue| {
-                Device::end_command_buffer(&exec.cmd_buf.device, exec.cmd_buf.handle)?;
+                Device::end_command_buffer(&exec.cmd.device, exec.cmd.handle)?;
                 Device::queue_submit(
-                    &exec.cmd_buf.device,
+                    &exec.cmd.device,
                     queue,
                     slice::from_ref(
                         &vk::SubmitInfo::default()
-                            .command_buffers(slice::from_ref(&exec.cmd_buf.handle))
+                            .command_buffers(slice::from_ref(&exec.cmd.handle))
                             .wait_semaphores(slice::from_ref(&exec.swapchain_acquired))
                             .wait_dst_stage_mask(slice::from_ref(&wait_dst_stage_mask))
                             .signal_semaphores(slice::from_ref(&exec.swapchain_rendered)),
                     ),
-                    exec.cmd_buf.fence,
+                    exec.cmd.fence,
                 )
             },
         )?;
@@ -312,7 +312,7 @@ impl Swapchain {
 
         // Store the resolved graph because it contains bindings, leases, and other shared resources
         // that need to be kept alive until the fence is waited upon.
-        exec.cmd_buf.drop_after_executed(submission);
+        exec.cmd.drop_after_executed(submission);
 
         Ok(())
     }
@@ -344,7 +344,7 @@ impl Drop for Swapchain {
             return;
         }
 
-        let idle = unsafe { self.execs[0].cmd_buf.device.device_wait_idle() };
+        let idle = unsafe { self.execs[0].cmd.device.device_wait_idle() };
         if idle.is_err() {
             warn!("unable to wait for device");
 
@@ -353,7 +353,7 @@ impl Drop for Swapchain {
 
         for batch in &mut self.execs {
             // Wait for presentation to stop
-            let present = batch.cmd_buf.wait_until_executed();
+            let present = batch.cmd.wait_until_executed();
             if present.is_err() {
                 warn!("unable to wait for queue");
 
@@ -362,11 +362,11 @@ impl Drop for Swapchain {
 
             unsafe {
                 batch
-                    .cmd_buf
+                    .cmd
                     .device
                     .destroy_semaphore(batch.swapchain_acquired, None);
                 batch
-                    .cmd_buf
+                    .cmd
                     .device
                     .destroy_semaphore(batch.swapchain_rendered, None);
             }
@@ -572,7 +572,7 @@ impl From<UninitializedFieldError> for SwapchainInfoBuilderError {
 }
 
 struct Execution {
-    cmd_buf: CommandBuffer,
+    cmd: CommandBuffer,
     swapchain_acquired: vk::Semaphore,
     swapchain_rendered: vk::Semaphore,
 }

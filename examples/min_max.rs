@@ -220,8 +220,8 @@ fn reduce_depth_image(
         )?)
         .shader_resource_access(0, depth_image, AccessType::ComputeShaderReadOther)
         .shader_resource_access(1, reduced_image, AccessType::ComputeShaderWrite)
-        .record_cmd(move |cmd_buf| {
-            cmd_buf.dispatch(reduced_info.width, reduced_info.height, 1);
+        .record_cmd(move |cmd| {
+            cmd.dispatch(reduced_info.width, reduced_info.height, 1);
         });
 
     Ok(reduced_image)

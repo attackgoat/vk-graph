@@ -167,16 +167,16 @@ graph
     .begin_cmd()
     .resource_access(image, AccessType::TransferRead)
     .resource_access(buffer, AccessType::TransferWrite)
-    .record_cmd(move |cmd_buf| {
+    .record_cmd(move |cmd| {
         // Borrow resources from nodes we move into the closure
-        let buffer = cmd_buf.resource(buffer);
-        let image = cmd_buf.resource(image);
+        let buffer = cmd.resource(buffer);
+        let image = cmd.resource(image);
 
         // Run *any* Vulkan code using ash::Device
         unsafe {
             // Note: for example only, use safe versions!
-            cmd_buf.device.cmd_copy_image_to_buffer2(
-                cmd_buf.handle,
+            cmd.device.cmd_copy_image_to_buffer2(
+                cmd.handle,
                 &vk::CopyImageToBufferInfo2::default()
                     .src_image(image.handle)
                     .dst_buffer(buffer.handle),
@@ -236,15 +236,15 @@ graph
     .begin_cmd()
     .bind_pipeline(&pipeline)
     .shader_resource_access(0, image, AccessType::ComputeShaderWrite)
-    .record_cmd(|cmd_buf| {
-        cmd_buf.dispatch(320, 200, 1);
+    .record_cmd(|cmd| {
+        cmd.dispatch(320, 200, 1);
     });
 # Ok(()) }
 ```
 
 ## Queue Submission
 
-Completed graphs are submitted to a Vulkan implementation queue for execution.
+Completed graphs are queued for execution by a Vulkan implementation.
 
 > [!NOTE]
 > While executing, resources used in a graph may be bound and used by other graphs. Graph commands

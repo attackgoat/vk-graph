@@ -123,10 +123,8 @@ fn draw_triangle(
         .bind_pipeline(pipeline)
         .color_attachment_image(0, frame.swapchain_image, load, StoreOp::Store)
         .resource_access(vertex_buf, AccessType::VertexBuffer)
-        .record_cmd(move |cmd_buf| {
-            cmd_buf
-                .bind_vertex_buffer(0, vertex_buf, 0)
-                .draw(3, 1, 0, 0);
+        .record_cmd(move |cmd| {
+            cmd.bind_vertex_buffer(0, vertex_buf, 0).draw(3, 1, 0, 0);
         });
 }
 

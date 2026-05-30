@@ -484,12 +484,9 @@ impl TransitionPipeline {
             .shader_resource_access(0, a_image, AccessType::ComputeShaderReadOther)
             .shader_resource_access(1, b_image, AccessType::ComputeShaderReadOther)
             .shader_resource_access(2, dest_image, AccessType::ComputeShaderWrite)
-            .record_cmd(move |cmd_buf| {
-                cmd_buf.push_constants(0, &push_consts).dispatch(
-                    dest_info.width,
-                    dest_info.height,
-                    1,
-                );
+            .record_cmd(move |cmd| {
+                cmd.push_constants(0, &push_consts)
+                    .dispatch(dest_info.width, dest_info.height, 1);
             });
     }
 

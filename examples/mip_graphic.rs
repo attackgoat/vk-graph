@@ -105,8 +105,8 @@ fn main() -> Result<(), WindowError> {
                         height: swapchain_info.height,
                     },
                 })
-                .record_cmd(|cmd_buf| {
-                    cmd_buf.draw(6, 1, 0, 0);
+                .record_cmd(|cmd| {
+                    cmd.draw(6, 1, 0, 0);
                 });
         }
     })
@@ -197,16 +197,15 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
                 LoadOp::DontCare,
                 StoreOp::Store,
             )
-            .record_cmd(|cmd_buf| {
-                cmd_buf
-                    .push_constants(
-                        0,
-                        bytes_of(&PushConstants {
-                            a: vec3(0.0, 1.0, 1.0).extend(f32::NAN),
-                            b: vec3(1.0, 0.0, 1.0).extend(f32::NAN),
-                        }),
-                    )
-                    .draw(6, 1, 0, 0);
+            .record_cmd(|cmd| {
+                cmd.push_constants(
+                    0,
+                    bytes_of(&PushConstants {
+                        a: vec3(0.0, 1.0, 1.0).extend(f32::NAN),
+                        b: vec3(1.0, 0.0, 1.0).extend(f32::NAN),
+                    }),
+                )
+                .draw(6, 1, 0, 0);
             });
     }
 

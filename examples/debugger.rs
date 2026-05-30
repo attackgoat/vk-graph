@@ -188,8 +188,8 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             .debug_name("This doesn't look good...")
             .bind_pipeline(&compute_pipeline)
             .shader_resource_access(42, image, AccessType::ComputeShaderWrite)
-            .record_cmd(|cmd_buf| {
-                cmd_buf.dispatch(1024, 1024, 1);
+            .record_cmd(|cmd| {
+                cmd.dispatch(1024, 1024, 1);
             });
 
         // Growing tired of your advenutes, you signal that it is time to close the window and exit

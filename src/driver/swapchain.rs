@@ -20,7 +20,7 @@ struct QueueFamilySignal {
 
 #[derive(Debug)]
 struct QueueSignal {
-    cmd_buf: vk::CommandBuffer,
+    cmd: vk::CommandBuffer,
     fence: vk::Fence,
     queued: bool,
 }
@@ -110,22 +110,18 @@ impl Swapchain {
 
             let mut queue_signals = Vec::with_capacity(queue_family.queue_count as _);
 
-            for cmd_buf in cmd_bufs {
+            for cmd in cmd_bufs {
                 Device::begin_command_buffer(
                     device,
-                    cmd_buf,
+                    cmd,
                     &vk::CommandBufferBeginInfo::default()
                         .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE),
                 )?;
-                Device::end_command_buffer(device, cmd_buf)?;
+                Device::end_command_buffer(device, cmd)?;
 
                 let queued = false;
                 let fence = Device::create_fence(device, queued)?;
-                queue_signals.push(QueueSignal {
-                    cmd_buf,
-                    fence,
-                    queued,
-                });
+                queue_signals.push(QueueSignal { cmd, fence, queued });
             }
 
             queue_family_signals.push(QueueFamilySignal {
@@ -365,8 +361,7 @@ impl Swapchain {
             Device::queue_submit(
                 device,
                 queue,
-                &[vk::SubmitInfo::default()
-                    .command_buffers(slice::from_ref(&queue_signal.cmd_buf))],
+                &[vk::SubmitInfo::default().command_buffers(slice::from_ref(&queue_signal.cmd))],
                 queue_signal.fence,
             )?;
             queue_signal.queued = true;
@@ -643,7 +638,7 @@ impl Drop for Swapchain {
         for queue_family in &self.queue_family_signals {
             let mut cmd_bufs = Vec::with_capacity(queue_family.queue_signals.len());
             for queue in &queue_family.queue_signals {
-                cmd_bufs.push(queue.cmd_buf);
+                cmd_bufs.push(queue.cmd);
 
                 unsafe {
                     device.destroy_fence(queue.fence, None);

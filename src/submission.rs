@@ -421,7 +421,7 @@ impl Submission {
 
     #[profiling::function]
     fn begin_render_pass(
-        cmd_buf: &CommandBuffer,
+        cmd: &CommandBuffer,
         bindings: &[AnyResource],
         pass: &CommandData,
         physical_pass: &mut PhysicalPass,
@@ -589,8 +589,8 @@ impl Submission {
                 RenderPass::framebuffer(render_pass, FramebufferInfo { attachments })?;
 
             unsafe {
-                cmd_buf.device.cmd_begin_render_pass(
-                    cmd_buf.handle,
+                cmd.device.cmd_begin_render_pass(
+                    cmd.handle,
                     &vk::RenderPassBeginInfo::default()
                         .render_pass(render_pass.handle)
                         .framebuffer(framebuffer)
@@ -610,7 +610,7 @@ impl Submission {
 
     #[profiling::function]
     fn bind_descriptor_sets(
-        cmd_buf: &CommandBuffer,
+        cmd: &CommandBuffer,
         pipeline: &ExecutionPipeline,
         physical_pass: &PhysicalPass,
         exec_idx: usize,
@@ -635,8 +635,8 @@ impl Submission {
                 trace!("    bind descriptor sets {:?}", descriptor_sets);
 
                 unsafe {
-                    cmd_buf.device.cmd_bind_descriptor_sets(
-                        cmd_buf.handle,
+                    cmd.device.cmd_bind_descriptor_sets(
+                        cmd.handle,
                         pipeline.bind_point(),
                         pipeline.layout(),
                         0,
@@ -650,7 +650,7 @@ impl Submission {
 
     #[profiling::function]
     fn bind_pipeline(
-        cmd_buf: &mut CommandBuffer,
+        cmd: &mut CommandBuffer,
         physical_pass: &mut PhysicalPass,
         exec_idx: usize,
         pipeline: &mut ExecutionPipeline,
@@ -689,19 +689,18 @@ impl Submission {
         };
 
         unsafe {
-            cmd_buf
-                .device
-                .cmd_bind_pipeline(cmd_buf.handle, pipeline_bind_point, pipeline);
+            cmd.device
+                .cmd_bind_pipeline(cmd.handle, pipeline_bind_point, pipeline);
         }
 
         Ok(())
     }
 
-    fn end_render_pass(&mut self, cmd_buf: &CommandBuffer) {
+    fn end_render_pass(&mut self, cmd: &CommandBuffer) {
         trace!("  end render pass");
 
         unsafe {
-            cmd_buf.device.cmd_end_render_pass(cmd_buf.handle);
+            cmd.device.cmd_end_render_pass(cmd.handle);
         }
     }
 
@@ -1881,13 +1880,12 @@ impl Submission {
         });
     }
 
-    fn next_subpass(cmd_buf: &CommandBuffer) {
+    fn next_subpass(cmd: &CommandBuffer) {
         trace!("next_subpass");
 
         unsafe {
-            cmd_buf
-                .device
-                .cmd_next_subpass(cmd_buf.handle, vk::SubpassContents::INLINE);
+            cmd.device
+                .cmd_next_subpass(cmd.handle, vk::SubpassContents::INLINE);
         }
     }
 
@@ -1928,7 +1926,7 @@ impl Submission {
 
     #[profiling::function]
     fn record_execution_barriers<'a>(
-        cmd_buf: &CommandBuffer,
+        cmd: &CommandBuffer,
         resources: &mut [AnyResource],
         accesses: impl Iterator<Item = (&'a NodeIndex, &'a Vec<SubresourceAccess>)>,
     ) {
@@ -2167,8 +2165,8 @@ impl Submission {
             );
 
             pipeline_barrier(
-                &cmd_buf.device,
-                cmd_buf.handle,
+                &cmd.device,
+                cmd.handle,
                 global_barrier,
                 &buffer_barriers.collect::<Box<_>>(),
                 &image_barriers.collect::<Box<_>>(),
@@ -2178,7 +2176,7 @@ impl Submission {
 
     #[profiling::function]
     fn record_image_layout_transitions(
-        cmd_buf: &CommandBuffer,
+        cmd: &CommandBuffer,
         resources: &mut [AnyResource],
         pass: &mut CommandData,
     ) {
@@ -2354,8 +2352,8 @@ impl Submission {
             );
 
             pipeline_barrier(
-                &cmd_buf.device,
-                cmd_buf.handle,
+                &cmd.device,
+                cmd.handle,
                 None,
                 &[],
                 &image_barriers.collect::<Box<_>>(),
@@ -2367,7 +2365,7 @@ impl Submission {
     fn record_node_passes<P>(
         &mut self,
         pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
+        cmd: &mut CommandBuffer,
         node_idx: usize,
         end_pass_idx: usize,
     ) -> Result<(), DriverError>
@@ -2383,7 +2381,7 @@ impl Submission {
             schedule.passes.clear();
 
             self.schedule_node_passes(node_idx, end_pass_idx, schedule);
-            self.record_scheduled_passes(pool, cmd_buf, schedule, end_pass_idx)
+            self.record_scheduled_passes(pool, cmd, schedule, end_pass_idx)
         })
     }
 
@@ -2391,7 +2389,7 @@ impl Submission {
     fn record_scheduled_passes<P>(
         &mut self,
         pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
+        cmd: &mut CommandBuffer,
         schedule: &mut Schedule,
         end_pass_idx: usize,
     ) -> Result<(), DriverError>
@@ -2429,11 +2427,11 @@ impl Submission {
             trace!("recording pass [{}: {}]", pass_idx, pass.name());
 
             if !physical_pass.exec_descriptor_sets.is_empty() {
-                Self::write_descriptor_sets(cmd_buf, &self.graph.resources, pass, physical_pass)?;
+                Self::write_descriptor_sets(cmd, &self.graph.resources, pass, physical_pass)?;
             }
 
             let render_area = if is_graphic {
-                Self::record_image_layout_transitions(cmd_buf, &mut self.graph.resources, pass);
+                Self::record_image_layout_transitions(cmd, &mut self.graph.resources, pass);
 
                 let render_area = vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
@@ -2441,7 +2439,7 @@ impl Submission {
                 };
 
                 Self::begin_render_pass(
-                    cmd_buf,
+                    cmd,
                     &self.graph.resources,
                     pass,
                     physical_pass,
@@ -2463,12 +2461,12 @@ impl Submission {
                 let exec = &mut pass.execs[exec_idx];
 
                 if is_graphic && exec_idx > 0 {
-                    Self::next_subpass(cmd_buf);
+                    Self::next_subpass(cmd);
                 }
 
                 if let Some(pipeline) = exec.pipeline.as_mut() {
                     Self::bind_pipeline(
-                        cmd_buf,
+                        cmd,
                         physical_pass,
                         exec_idx,
                         pipeline,
@@ -2480,7 +2478,7 @@ impl Submission {
 
                         // In this case we set the viewport and scissor for the user
                         Self::set_viewport(
-                            cmd_buf,
+                            cmd,
                             render_area.offset.x as _,
                             render_area.offset.y as _,
                             render_area.extent.width as _,
@@ -2494,7 +2492,7 @@ impl Submission {
                                 .unwrap_or(0.0..1.0),
                         );
                         Self::set_scissor(
-                            cmd_buf,
+                            cmd,
                             render_area.offset.x,
                             render_area.offset.y,
                             render_area.extent.width,
@@ -2502,12 +2500,12 @@ impl Submission {
                         );
                     }
 
-                    Self::bind_descriptor_sets(cmd_buf, pipeline, physical_pass, exec_idx);
+                    Self::bind_descriptor_sets(cmd, pipeline, physical_pass, exec_idx);
                 }
 
                 if !is_graphic {
                     Self::record_execution_barriers(
-                        cmd_buf,
+                        cmd,
                         &mut self.graph.resources,
                         exec.accesses.iter(),
                     );
@@ -2520,7 +2518,7 @@ impl Submission {
 
                     let exec_func = exec.func.take().expect("missing command function").0;
                     exec_func(crate::cmd::CommandRef::new(
-                        cmd_buf,
+                        cmd,
                         &self.graph.resources,
                         #[cfg(debug_assertions)]
                         exec,
@@ -2529,7 +2527,7 @@ impl Submission {
             }
 
             if is_graphic {
-                self.end_render_pass(cmd_buf);
+                self.end_render_pass(cmd);
             }
         }
 
@@ -2551,7 +2549,7 @@ impl Submission {
                     if pass_idx == schedule_idx {
                         // This was a scheduled pass - store it!
 
-                        cmd_buf.drop_after_executed((
+                        cmd.drop_after_executed((
                             pass,
                             self.physical_passes.pop().expect("missing physical pass"),
                         ));
@@ -2823,10 +2821,10 @@ impl Submission {
         });
     }
 
-    fn set_scissor(cmd_buf: &CommandBuffer, x: i32, y: i32, width: u32, height: u32) {
+    fn set_scissor(cmd: &CommandBuffer, x: i32, y: i32, width: u32, height: u32) {
         unsafe {
-            cmd_buf.device.cmd_set_scissor(
-                cmd_buf.handle,
+            cmd.device.cmd_set_scissor(
+                cmd.handle,
                 0,
                 slice::from_ref(&vk::Rect2D {
                     extent: vk::Extent2D { width, height },
@@ -2837,7 +2835,7 @@ impl Submission {
     }
 
     fn set_viewport(
-        cmd_buf: &CommandBuffer,
+        cmd: &CommandBuffer,
         x: f32,
         y: f32,
         width: f32,
@@ -2845,8 +2843,8 @@ impl Submission {
         depth: Range<f32>,
     ) {
         unsafe {
-            cmd_buf.device.cmd_set_viewport(
-                cmd_buf.handle,
+            cmd.device.cmd_set_viewport(
+                cmd.handle,
                 0,
                 slice::from_ref(&vk::Viewport {
                     x,
@@ -2875,36 +2873,35 @@ impl Submission {
     {
         trace!("submit");
 
-        let mut cmd_buf = pool.lease_resource(CommandBufferInfo::new(queue_family_index as _))?;
+        let mut cmd = pool.lease_resource(CommandBufferInfo::new(queue_family_index as _))?;
 
-        cmd_buf.wait_until_executed()?;
+        cmd.wait_until_executed()?;
 
         Device::begin_command_buffer(
-            &cmd_buf.device,
-            cmd_buf.handle,
+            &cmd.device,
+            cmd.handle,
             &vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
 
-        self.submit_cmd_buf(pool, &mut cmd_buf)?;
+        self.submit_cmd_buf(pool, &mut cmd)?;
 
-        Device::with_queue(&cmd_buf.device, queue_family_index, queue_index, |queue| {
-            Device::end_command_buffer(&cmd_buf.device, cmd_buf.handle)?;
+        Device::with_queue(&cmd.device, queue_family_index, queue_index, |queue| {
+            Device::end_command_buffer(&cmd.device, cmd.handle)?;
 
             unsafe {
-                cmd_buf
-                    .device
-                    .reset_fences(slice::from_ref(&cmd_buf.fence))
+                cmd.device
+                    .reset_fences(slice::from_ref(&cmd.fence))
                     .map_err(|_| DriverError::OutOfMemory)?;
             }
 
             Device::queue_submit(
-                &cmd_buf.device,
+                &cmd.device,
                 queue,
                 slice::from_ref(
-                    &vk::SubmitInfo::default().command_buffers(slice::from_ref(&cmd_buf.handle)),
+                    &vk::SubmitInfo::default().command_buffers(slice::from_ref(&cmd.handle)),
                 ),
-                cmd_buf.fence,
+                cmd.fence,
             )?;
 
             Ok(())
@@ -2915,9 +2912,9 @@ impl Submission {
         // they will return to the pool for other things to use. The drop will happen the next time
         // someone tries to lease a command buffer and we notice this one has returned and the fence
         // has been signalled.
-        cmd_buf.drop_after_executed(self);
+        cmd.drop_after_executed(self);
 
-        Ok(cmd_buf)
+        Ok(cmd)
     }
 
     /// Records any pending render graph passes that have not been previously scheduled.
@@ -2925,7 +2922,7 @@ impl Submission {
     pub fn submit_cmd_buf<P>(
         &mut self,
         pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
+        cmd: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -2945,7 +2942,7 @@ impl Submission {
             schedule.passes.clear();
             schedule.passes.extend(0..self.graph.cmds.len());
 
-            self.record_scheduled_passes(pool, cmd_buf, schedule, self.graph.cmds.len())
+            self.record_scheduled_passes(pool, cmd, schedule, self.graph.cmds.len())
         })
     }
 
@@ -2955,7 +2952,7 @@ impl Submission {
         &mut self,
         resource_node: impl Node,
         pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
+        cmd: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -2969,7 +2966,7 @@ impl Submission {
         }
 
         let end_pass_idx = self.graph.cmds.len();
-        self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)
+        self.record_node_passes(pool, cmd, node_idx, end_pass_idx)
     }
 
     /// Records any pending render graph passes that are required by the given node, but does not
@@ -2983,7 +2980,7 @@ impl Submission {
         &mut self,
         resource_node: impl Node,
         pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
+        cmd: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -2994,7 +2991,7 @@ impl Submission {
 
         // We record up to but not including the first pass which accesses the target node
         if let Some(end_pass_idx) = self.graph.first_node_access_pass_index(resource_node) {
-            self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)?;
+            self.record_node_passes(pool, cmd, node_idx, end_pass_idx)?;
         }
 
         Ok(())
@@ -3002,7 +2999,7 @@ impl Submission {
 
     #[profiling::function]
     fn write_descriptor_sets(
-        cmd_buf: &CommandBuffer,
+        cmd: &CommandBuffer,
         bindings: &[AnyResource],
         pass: &CommandData,
         physical_pass: &PhysicalPass,
@@ -3311,8 +3308,7 @@ impl Submission {
             );
 
             unsafe {
-                cmd_buf
-                    .device
+                cmd.device
                     .update_descriptor_sets(tls.descriptors.as_slice(), &[]);
             }
         }
@@ -3359,13 +3355,13 @@ mod derecated {
         pub fn record_node<P>(
             &mut self,
             pool: &mut P,
-            cmd_buf: &mut CommandBuffer,
+            cmd: &mut CommandBuffer,
             node: impl Node,
         ) -> Result<(), DriverError>
         where
             P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
         {
-            self.queue_resource(node, pool, cmd_buf)
+            self.queue_resource(node, pool, cmd)
         }
 
         #[deprecated = "use submit_resource function"]
@@ -3373,13 +3369,13 @@ mod derecated {
         pub fn record_node_dependencies<P>(
             &mut self,
             pool: &mut P,
-            cmd_buf: &mut CommandBuffer,
+            cmd: &mut CommandBuffer,
             node: impl Node,
         ) -> Result<(), DriverError>
         where
             P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
         {
-            self.queue_resource_dependencies(node, pool, cmd_buf)
+            self.queue_resource_dependencies(node, pool, cmd)
         }
     }
 }

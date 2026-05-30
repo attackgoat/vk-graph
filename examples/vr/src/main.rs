@@ -386,9 +386,8 @@ fn main() -> anyhow::Result<()> {
                     StoreOp::DontCare,
                 )
                 .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
-                .record_cmd(move |cmd_buf| {
-                    cmd_buf
-                        .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                .record_cmd(move |cmd| {
+                    cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)
                         .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_left.index_count, 1, 0, 0, 0);
@@ -435,9 +434,8 @@ fn main() -> anyhow::Result<()> {
                     StoreOp::DontCare,
                 )
                 .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
-                .record_cmd(move |cmd_buf| {
-                    cmd_buf
-                        .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                .record_cmd(move |cmd| {
+                    cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)
                         .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_right.index_count, 1, 0, 0, 0);
@@ -477,9 +475,8 @@ fn main() -> anyhow::Result<()> {
                     LoadOp::CLEAR_ZERO_STENCIL_ZERO,
                     StoreOp::DontCare,
                 )
-                .record_cmd(move |cmd_buf| {
-                    cmd_buf
-                        .bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                .record_cmd(move |cmd| {
+                    cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
                         .bind_vertex_buffer(0, vertex_buf, 0)
                         .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_right.index_count, 1, 0, 0, 0);

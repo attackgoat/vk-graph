@@ -139,14 +139,12 @@ fn main() -> anyhow::Result<()> {
                 LoadOp::CLEAR_WHITE_ALPHA_ONE,
                 StoreOp::Store,
             )
-            .record_cmd(move |cmd_buf| {
-                cmd_buf
-                    .bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
+            .record_cmd(move |cmd| {
+                cmd.bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
                     .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
                     .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
 
-                cmd_buf
-                    .bind_index_buffer(ground_mesh_index_buf, 0, vk::IndexType::UINT32)
+                cmd.bind_index_buffer(ground_mesh_index_buf, 0, vk::IndexType::UINT32)
                     .bind_vertex_buffer(0, ground_mesh_vertex_buf, 0)
                     .draw_indexed(ground_mesh.index_count, 1, 0, 0, 0);
             });
@@ -233,20 +231,20 @@ fn create_blas(
     )?);
     let scratch_addr = graph.resource(scratch_buf).device_address();
 
-    let mut pass = graph.begin_cmd().debug_name("Build BLAS");
+    let mut cmd = graph.begin_cmd().debug_name("Build BLAS");
 
     for model in models.iter().copied() {
-        let index_buf = pass.bind_resource(&model.index_buf);
-        let vertex_buf = pass.bind_resource(&model.vertex_buf);
+        let index_buf = cmd.bind_resource(&model.index_buf);
+        let vertex_buf = cmd.bind_resource(&model.vertex_buf);
 
-        pass.set_resource_access(index_buf, AccessType::AccelerationStructureBuildRead);
-        pass.set_resource_access(vertex_buf, AccessType::AccelerationStructureBuildRead);
+        cmd.set_resource_access(index_buf, AccessType::AccelerationStructureBuildRead);
+        cmd.set_resource_access(vertex_buf, AccessType::AccelerationStructureBuildRead);
     }
 
     pass.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-        .record_cmd(move |cmd_buf| {
-            cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+        .record_cmd(move |cmd| {
+            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 blas,
                 scratch_addr,
                 info,
@@ -428,8 +426,8 @@ fn create_tlas(
         .resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
         .resource_access(tlas, AccessType::AccelerationStructureBuildWrite)
-        .record_cmd(move |cmd_buf| {
-            cmd_buf.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+        .record_cmd(move |cmd| {
+            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
                 tlas,
                 scratch_addr,
                 info,

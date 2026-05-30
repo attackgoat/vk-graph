@@ -46,9 +46,8 @@ fn main() -> Result<(), WindowError> {
                 LoadOp::CLEAR_BLACK_ALPHA_ZERO,
                 StoreOp::Store,
             )
-            .record_cmd(move |cmd_buf| {
-                cmd_buf
-                    .push_constants(0, &frame_index.to_ne_bytes())
+            .record_cmd(move |cmd| {
+                cmd.push_constants(0, &frame_index.to_ne_bytes())
                     .push_constants(4, &frame.width.to_ne_bytes())
                     .push_constants(8, &frame.height.to_ne_bytes())
                     .draw(3, 1, 0, 0);

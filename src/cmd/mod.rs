@@ -185,8 +185,8 @@ impl<'a> Command<'a> {
     /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
     /// code and interfaces.
     pub fn record_cmd_mut(&mut self, func: impl FnOnce(CommandRef<'_>) + Send + 'static) {
-        self.push_exec(move |cmd_buf| {
-            func(cmd_buf);
+        self.push_exec(move |cmd| {
+            func(cmd);
         });
     }
 
@@ -709,8 +709,8 @@ mod deprecated {
             mut self,
             func: impl FnOnce(CommandRef<'_>, ()) + Send + 'static,
         ) -> Self {
-            self.push_exec(|cmd_buf| {
-                func(cmd_buf, ());
+            self.push_exec(|cmd| {
+                func(cmd, ());
             });
 
             self
