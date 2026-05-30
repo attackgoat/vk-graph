@@ -130,7 +130,7 @@ fn main() -> anyhow::Result<()> {
             .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
             .depth_stencil_attachment_image(
                 depth_image,
-                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                LoadOp::CLEAR_ONE_STENCIL_ZERO,
                 StoreOp::DontCare,
             )
             .color_attachment_image(

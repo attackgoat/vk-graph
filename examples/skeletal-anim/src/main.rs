@@ -119,7 +119,7 @@ fn main() -> Result<(), WindowError> {
                 t if t < 1.0 => &mut run,
                 _ => &mut idle,
             };
-            let joints = animation.update(dt.as_secs_f32());
+            let joints = animation.update(dt);
             let mut buf = pool
                 .lease_resource(BufferInfo::host_mem(
                     size_of_val(joints) as _,
@@ -155,7 +155,7 @@ fn main() -> Result<(), WindowError> {
             )
             .depth_stencil_attachment_image(
                 depth_image,
-                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                LoadOp::CLEAR_ONE_STENCIL_ZERO,
                 StoreOp::DontCare,
             )
             .record_cmd(move |cmd_buf| {
@@ -227,8 +227,8 @@ struct Animation {
     joints: Vec<Joint>,
     local_joints: Vec<Mat4>,
     channels: Vec<Channel>,
-    time: u32,
-    total_time: u32,
+    time: Duration,
+    total_time: Duration,
 }
 
 impl Animation {
@@ -237,12 +237,13 @@ impl Animation {
         let joints = model.joints.clone();
         let animation = pak.read_animation(key).unwrap();
 
-        let total_time = animation
+        let total_millis = animation
             .channels()
             .iter()
             .map(|channel| channel.inputs().last().copied().unwrap_or_default())
             .max()
             .unwrap_or_default();
+        let total_time = Duration::from_millis(total_millis as _);
 
         // TODO: Here is where you probably want to flatten out the channels into a constant
         // framerate animation for each joint - it would make it easier to run the update code
@@ -260,14 +261,16 @@ impl Animation {
             joints,
             local_joints: repeat_n(Mat4::IDENTITY, model.joints.len()).collect(),
             channels,
-            time: 0,
+            time: Duration::ZERO,
             total_time,
         })
     }
 
-    fn update(&mut self, dt: f32) -> &[Mat4] {
-        self.time += Duration::from_secs_f32(dt).as_millis() as u32;
-        self.time %= self.total_time;
+    fn update(&mut self, dt: Duration) -> &[Mat4] {
+        self.time += dt;
+        while self.time > self.total_time {
+            self.time -= self.total_time;
+        }
 
         for transform in self.local_joints.iter_mut() {
             *transform = Mat4::IDENTITY;
@@ -360,16 +363,17 @@ impl Animation {
     /// Given an array of keyframe times, returns the two keyframe indices and the weight factor
     /// to use when interpolating between them.
     fn pick_weighted_keyframes(&self, inputs: &[u32]) -> (usize, usize, f32) {
-        let (idx_a, idx_b) = match inputs.binary_search(&self.time) {
+        let time = self.time.as_millis() as u32;
+        let (idx_a, idx_b) = match inputs.binary_search(&time) {
             Err(idx) if idx == 0 || idx == inputs.len() => (inputs.len() - 1, 0),
             Err(idx) => (idx - 1, idx),
             Ok(idx) => (idx, idx),
         };
         let ab = match idx_a.cmp(&idx_b) {
             Ordering::Equal => 0.0,
-            Ordering::Greater => self.time as f32 / inputs[idx_b] as f32,
+            Ordering::Greater => self.time.as_secs_f32() / inputs[idx_b] as f32,
             Ordering::Less => {
-                (self.time - inputs[idx_a]) as f32 / (inputs[idx_b] - inputs[idx_a]) as f32
+                (time - inputs[idx_a]) as f32 / (inputs[idx_b] - inputs[idx_a]) as f32
             }
         };
 
