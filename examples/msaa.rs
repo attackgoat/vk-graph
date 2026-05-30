@@ -153,7 +153,7 @@ fn main() -> anyhow::Result<()> {
             .set_color_attachment_resolve_image(0, 1, frame.swapchain_image)
             .set_depth_stencil_attachment_image(
                 msaa_depth_image,
-                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                LoadOp::CLEAR_ONE_STENCIL_ZERO,
                 StoreOp::DontCare,
             );
         } else {
@@ -177,7 +177,7 @@ fn main() -> anyhow::Result<()> {
             )
             .set_depth_stencil_attachment_image(
                 noaa_depth_image,
-                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                LoadOp::CLEAR_ONE_STENCIL_ZERO,
                 StoreOp::DontCare,
             );
         }

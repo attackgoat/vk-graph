@@ -308,28 +308,6 @@ impl Image {
         ImageAccessIter::new(self.lock_accesses(), access, access_range)
     }
 
-    #[profiling::function]
-    pub(super) fn clone_swapchain(&self) -> Self {
-        debug_assert!(self.allocation.is_none());
-
-        // Moves the image view cache from the current instance to the clone!
-        let image_view_cache = self.with_image_view_cache(take);
-
-        // Does NOT copy over the image accesses!
-        // Force previous access to general to wait for presentation
-        let Self { handle, info, .. } = *self;
-
-        Self {
-            accesses: Mutex::new(ImageAccess::new(info, AccessType::General)),
-            allocation: None,
-            device: self.device.clone(),
-            handle,
-            image_view_cache: Mutex::new(image_view_cache),
-            info,
-            name: self.name.clone(),
-        }
-    }
-
     /// Sets the debugging name assigned to this image.
     pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -367,11 +345,7 @@ impl Image {
         let device = device.clone();
         let info = info.into();
 
-        // For now default all image access to general, but maybe make this configurable later.
-        // This helps make sure the first presentation of a swapchain image doesn't throw a
-        // validation error, but it could also be very useful for raw vulkan images from other
-        // sources.
-        let accesses = ImageAccess::new(info, AccessType::General);
+        let accesses = ImageAccess::new(info, AccessType::Nothing);
 
         Self {
             accesses: Mutex::new(accesses),
@@ -391,6 +365,39 @@ impl Image {
         let accesses = accesses.expect("poisoned image access lock");
 
         accesses
+    }
+
+    /// Produces a new `Image` sharing the same Vulkan handle with independent access tracking.
+    ///
+    /// The returned image retains the handle, device, and debug name of `self` but starts with
+    /// no prior access history (`AccessType::Nothing`) and does not claim ownership of the image's
+    /// memory backing. Internal caches are moved out of `self` so they are not duplicated.
+    ///
+    /// This is used to create separate tracking instances for swapchain images that may be
+    /// used concurrently across different graph executions.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the Vulkan image handle remains valid for the lifetime of the
+    /// returned `Image`. This function should only be called on swapchain images or other
+    /// platform or extension images.
+    #[profiling::function]
+    pub unsafe fn to_detached(&self) -> Self {
+        debug_assert!(self.allocation.is_none());
+
+        let image_view_cache = self.with_image_view_cache(take);
+
+        let Self { handle, info, .. } = *self;
+
+        Self {
+            accesses: Mutex::new(ImageAccess::new(info, AccessType::Nothing)),
+            allocation: None,
+            device: self.device.clone(),
+            handle,
+            image_view_cache: Mutex::new(image_view_cache),
+            info,
+            name: self.name.clone(),
+        }
     }
 
     #[profiling::function]

@@ -700,7 +700,7 @@ impl Clone for SwapchainImage {
     fn clone(&self) -> Self {
         Self {
             read_only: ReadOnlySwapchainImage {
-                image: self.image.clone_swapchain(),
+                image: unsafe { self.image.to_detached() },
                 index: self.index,
             },
         }

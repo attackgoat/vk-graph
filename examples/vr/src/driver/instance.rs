@@ -155,7 +155,7 @@ impl XrInstance {
                     })?;
                 let vk_instance = vk::Instance::from_raw(vk_instance as _);
 
-                VkInstance::from_entry(entry, vk_instance).map_err(|err| {
+                VkInstance::try_from_entry(entry, vk_instance).map_err(|err| {
                     error!("Vulkan instance load: {err}");
 
                     InstanceCreateError::VulkanUnsupported

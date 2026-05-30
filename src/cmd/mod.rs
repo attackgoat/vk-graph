@@ -214,10 +214,10 @@ impl<'a> Command<'a> {
     }
 
     /// Sets a debugging name, but only in debug builds.
-    pub fn set_debug_name(&mut self, name: impl Into<String>) -> &mut Self {
+    pub fn set_debug_name(&mut self, _name: impl Into<String>) -> &mut Self {
         #[cfg(debug_assertions)]
         {
-            self.cmd_mut().name = Some(name.into());
+            self.cmd_mut().name = Some(_name.into());
         }
 
         self

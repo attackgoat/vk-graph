@@ -279,7 +279,7 @@ fn main() -> anyhow::Result<()> {
                 .resource_access(cube_mesh_vertex_buf, AccessType::VertexBuffer)
                 .depth_stencil_attachment_image(
                     depth_image,
-                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    LoadOp::CLEAR_ONE_STENCIL_ZERO,
                     StoreOp::Store,
                 )
                 .color_attachment_image(
@@ -319,7 +319,7 @@ fn main() -> anyhow::Result<()> {
                     .resource_access(cube_shadow_vertex_buf, AccessType::VertexBuffer)
                     .depth_stencil_attachment_image(
                         shadow_depth_image,
-                        LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                        LoadOp::CLEAR_ONE_STENCIL_ZERO,
                         StoreOp::DontCare,
                     )
                     .color_attachment_image(
@@ -376,7 +376,7 @@ fn main() -> anyhow::Result<()> {
                         .resource_access(cube_shadow_vertex_buf, AccessType::VertexBuffer)
                         .depth_stencil_attachment_image(
                             shadow_depth_image,
-                            LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                            LoadOp::CLEAR_ONE_STENCIL_ZERO,
                             StoreOp::DontCare,
                         )
                         .color_attachment_image_view(
@@ -457,7 +457,7 @@ fn main() -> anyhow::Result<()> {
                     shadow_faces_info
                         .into_image_view()
                         .with_type(vk::ImageViewType::CUBE),
-                    AccessType::AnyShaderReadUniformBuffer,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
                 .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
                 .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
@@ -465,7 +465,7 @@ fn main() -> anyhow::Result<()> {
                 .resource_access(cube_mesh_vertex_buf, AccessType::VertexBuffer)
                 .depth_stencil_attachment_image(
                     depth_image,
-                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    LoadOp::CLEAR_ONE_STENCIL_ZERO,
                     StoreOp::DontCare,
                 )
                 .color_attachment_image(

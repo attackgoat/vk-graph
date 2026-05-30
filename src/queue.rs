@@ -2879,10 +2879,12 @@ impl Queue {
 
         cmd_buf.wait_until_executed()?;
 
-        Device::begin_command_buffer(&cmd_buf
-                .device,  cmd_buf.handle,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),)?;
+        Device::begin_command_buffer(
+            &cmd_buf.device,
+            cmd_buf.handle,
+            &vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        )?;
 
         self.submit_cmd_buf(pool, &mut cmd_buf)?;
 

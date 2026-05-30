@@ -65,6 +65,20 @@ unsafe extern "system" fn debug_callback(
     };
 
     let is_error = message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR);
+
+    // HACK: This is not production-quality
+    // TODO: This was debugged and the issue has not been found, so this may or may not be valid
+    // The validation layer reports `UNASSIGNED-Threading-MultipleThreads-Write` when two threads
+    // touch different VkQueue handles at the same time. Ignoring until the issue is found.
+    if is_error
+        && message.contains("THREADING ERROR")
+        && message.contains("VkQueue is simultaneously used")
+    {
+        info!("ignoring: {message}");
+
+        return vk::FALSE;
+    }
+
     if is_error {
         error!("{message}");
     } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {

@@ -459,15 +459,13 @@ impl Device {
         let queue = queue_family
             .get(queue_index as usize)
             .expect("invalid queue index");
-        let queue_lock = queue.lock();
-
         #[cfg(not(feature = "parking_lot"))]
-        let queue = *queue_lock.expect("poisoned queue lock");
+        let guard = queue.lock().expect("poisoned queue lock");
 
         #[cfg(feature = "parking_lot")]
-        let queue = *queue_lock;
+        let guard = queue.lock();
 
-        f(queue)
+        f(*guard)
     }
 }
 

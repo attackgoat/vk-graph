@@ -516,7 +516,8 @@ impl<'a> CommandBuffer<'a> {
         // access type must first be specified so the correct barriers may be added.
         //
         // See: https://attackgoat.github.io/vk-graph/pipeline_sync.html
-        debug_assert!(
+        #[cfg(debug_assertions)]
+        assert!(
             self.exec.accesses.contains_key(&resource_node.index()),
             "unexpected node access: call an access function first"
         );

@@ -130,14 +130,21 @@ impl Surface {
         let surface_ext = Device::expect_surface_ext(&self.device);
 
         unsafe {
-            surface_ext.get_physical_device_surface_support(self.device.physical_device.handle, queue_family_index, self.handle)
-        }.map_err(|err| {
+            surface_ext.get_physical_device_surface_support(
+                self.device.physical_device.handle,
+                queue_family_index,
+                self.handle,
+            )
+        }
+        .map_err(|err| {
             warn!("unable to get physical device support: {err}");
 
             match err {
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY |vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                    DriverError::OutOfMemory
+                }
                 vk::Result::ERROR_SURFACE_LOST_KHR => DriverError::InvalidData,
-                _ => DriverError::Unsupported
+                _ => DriverError::Unsupported,
             }
         })
     }
@@ -146,12 +153,17 @@ impl Surface {
     pub fn present_modes(&self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
         let surface_ext = Device::expect_surface_ext(&self.device);
 
-        unsafe { surface_ext.get_physical_device_surface_present_modes(self.device.physical_device.handle, self.handle) }
-            .map_err(|err| {
-                warn!("unable to get present modes: {err}");
+        unsafe {
+            surface_ext.get_physical_device_surface_present_modes(
+                self.device.physical_device.handle,
+                self.handle,
+            )
+        }
+        .map_err(|err| {
+            warn!("unable to get present modes: {err}");
 
-                DriverError::Unsupported
-            })
+            DriverError::Unsupported
+        })
     }
 
     /// Helper function to automatically select the best sRGB format, if one is available.

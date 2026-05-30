@@ -63,8 +63,10 @@ impl CommandBuffer {
             warn!("unable to create command pool: {err}");
 
             match err {
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY |vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
-                _ => DriverError::Unsupported
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                    DriverError::OutOfMemory
+                }
+                _ => DriverError::Unsupported,
             }
         })?;
 
@@ -80,8 +82,10 @@ impl CommandBuffer {
             warn!("unable to allocate command buffer: {err}");
 
             match err {
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY |vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
-                _ => DriverError::Unsupported
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                    DriverError::OutOfMemory
+                }
+                _ => DriverError::Unsupported,
             }
         })?[0];
 
