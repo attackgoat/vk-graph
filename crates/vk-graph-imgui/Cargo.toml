@@ -19,3 +19,12 @@ imgui-winit-support = "0.13"
 log.workspace = true
 vk-graph.workspace = true
 vk-shader-macros = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { workspace = true, features = ["x11", "wayland"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winit = { workspace = true }
