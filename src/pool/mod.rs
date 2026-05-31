@@ -1,4 +1,4 @@
-//! Resource pooling, requesting, and aliasing types.
+//! Resource pooling, requesting, and caching types.
 //!
 //! Resource pools provide caching for buffer, image, and acceleration structure resources. Pooled
 //! resources may be requested from a pool using their corresponding information structure.
@@ -57,20 +57,19 @@
 //! * High performance is most important
 //! * Resources have consistent attributes each frame
 //!
-//! # When Should You Use Resource Aliasing?
+//! # When Should You Use Resource Caching?
 //!
-//! Wrapping any pool using [`cache::Cache::new`] enables resource
-//! aliasing, which prevents excess resources from being created even when different parts of your
-//! code request new resources.
+//! Wrapping any pool using [`cache::Cache::new`] enables resource caching, which prevents excess
+//! resources from being created even when different parts of your code request compatible
+//! resources.
 //!
 //! **_NOTE:_** Graph submission will automatically attempt to re-order submitted commands to
 //! reduce contention between individual resources.
 //!
-//! **_NOTE:_** In cases where multiple aliased resources using identical request information are
-//! used in the same graph command you must ensure the resources are aliased from different
-//! pools. There is currently no tagging or filter which would prevent "ping-pong" rendering of such
-//! resources from being the same actual resources; this causes Vulkan validation warnings when
-//! reading from and writing to the same images, or whatever your operations may be.
+//! **_NOTE:_** In cases where multiple cached resources using identical request information are
+//! used in the same graph command, ensure they come from different cache tags or different pool
+//! wrappers. Otherwise, two requests may resolve to the same underlying resource and trigger
+//! Vulkan validation warnings when reading from and writing to the same images.
 //!
 //! ### Pros:
 //!
@@ -80,9 +79,9 @@
 //!
 //! ### Cons:
 //!
-//! * Non-zero cost: Atomic load and compatibility check per active alias
+//! * Non-zero cost: atomic load and compatibility check per active cached resource
 //! * May cause GPU stalling if there is not enough work being submitted
-//! * Aliased resources are typed `Arc<Lease<T>>` and are not guaranteed to be mutable or unique
+//! * Cached resources are typed `Arc<Lease<T>>` and are not guaranteed to be mutable or unique
 
 pub mod cache;
 pub mod fifo;

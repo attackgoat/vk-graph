@@ -66,7 +66,7 @@ pub struct ComputeCommandRef<'a> {
 }
 
 impl ComputeCommandRef<'_> {
-    /// [Dispatch] compute work items.
+    /// [`Self::dispatch`] compute work items.
     ///
     /// When the command is executed, a global workgroup consisting of
     /// `group_count_x × group_count_y × group_count_z` local workgroups is assembled.
@@ -133,7 +133,7 @@ impl ComputeCommandRef<'_> {
         self
     }
 
-    /// [Dispatch] compute work items with non-zero base values for the workgroup IDs.
+    /// [`Self::dispatch_base`] compute work items with non-zero base values for the workgroup IDs.
     ///
     /// When the command is executed, a global workgroup consisting of
     /// `group_count_x × group_count_y × group_count_z` local workgroups is assembled, with

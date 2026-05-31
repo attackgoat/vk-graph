@@ -1105,7 +1105,7 @@ macro_rules! resource {
 
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-                    // In this function we are wrapping a newly leased resource (Lease<Image> or
+                    // In this function we are wrapping a newly pooled resource (Lease<Image> or
                     // Lease<Buffer> or etc)
 
                     // We will return a new node
@@ -1122,7 +1122,7 @@ macro_rules! resource {
 
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-                    // In this function we are wrapping an existing leased resource
+                    // In this function we are wrapping an existing pooled resource
                     // (Arc<Lease<Image>> or Arc<Lease<Buffer>> or etc)
 
                     // We will return an existing node, if possible

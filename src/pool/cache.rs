@@ -1,4 +1,4 @@
-//! Pool wrapper which enables memory-efficient resource aliasing.
+//! Pool wrapper which enables memory-efficient resource caching.
 
 use {
     super::{Lease, Pool},
@@ -27,10 +27,10 @@ struct AliasSet {
     images: Vec<(ImageInfo, Weak<Lease<Image>>)>,
 }
 
-/// A memory-efficient resource wrapper for any [`Pool`] type.
+/// A memory-efficient resource cache for any [`Pool`] type.
 ///
-/// Use [`Cache::tag`] to create a tag-scoped view that aliases resources independently from other
-/// tags. Untagged access still behaves like the previous cache wrapper.
+/// Use [`Cache::tag`] to create a tag-scoped view that caches resources independently from other
+/// tags. Untagged access still behaves like the default cache wrapper.
 ///
 /// # Examples
 ///
@@ -42,7 +42,7 @@ struct AliasSet {
 /// # fn main() {
 /// # let device = Device::create(DeviceInfo::default()).unwrap();
 /// # let mut cache = Cache::new(HashPool::new(&device));
-/// let shadow = cache.tag("shadow");
+/// let mut shadow = cache.tag("shadow");
 /// let image = shadow
 ///     .resource(ImageInfo::image_2d(
 ///         32,
@@ -106,11 +106,12 @@ where
             profiling::scope!("check aliases");
 
             for (item_info, item) in &state.accel_structs {
-                if item_info.ty == info.ty && item_info.size >= info.size {
-                    if let Some(item) = item.upgrade() {
-                        result = Some(item);
-                        break;
-                    }
+                if item_info.ty == info.ty
+                    && item_info.size >= info.size
+                    && let Some(item) = item.upgrade()
+                {
+                    result = Some(item);
+                    break;
                 }
             }
         }
@@ -153,11 +154,10 @@ where
                     && item_info.alignment >= info.alignment
                     && item_info.size >= info.size
                     && item_info.usage.contains(info.usage)
+                    && let Some(item) = item.upgrade()
                 {
-                    if let Some(item) = item.upgrade() {
-                        result = Some(item);
-                        break;
-                    }
+                    result = Some(item);
+                    break;
                 }
             }
         }
@@ -206,11 +206,10 @@ where
                     && item_info.width == info.width
                     && item_info.flags.contains(info.flags)
                     && item_info.usage.contains(info.usage)
+                    && let Some(item) = item.upgrade()
                 {
-                    if let Some(item) = item.upgrade() {
-                        result = Some(item);
-                        break;
-                    }
+                    result = Some(item);
+                    break;
                 }
             }
         }

@@ -56,12 +56,12 @@ graph data structures.
 
 Pooled resources are requested from `Pool` implementations. Dropped resources return to the pool.
 
-The `Lease<T>` type otherwise acts identically to an owned resource.
+The `Lease<T>` return type otherwise acts like an owned resource.
 
-## Aliased Resources
+## Cached Resources
 
-Resource aliasing is available using [`Cache`](https://docs.rs/vk-graph/latest/vk_graph/pool/cache/struct.Cache.html)
-and any `Pool`.
+Resource caching is available using [`Cache`](https://docs.rs/vk-graph/latest/vk_graph/pool/cache/struct.Cache.html)
+over any `Pool`.
 
-Aliased resources allow extremely optimized programs to ensure minimal resources during complex
-graphs.
+Cached resources let complex graphs reuse compatible resources while keeping the pooling strategy
+separate from the reuse policy.
