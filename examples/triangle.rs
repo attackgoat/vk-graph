@@ -1,12 +1,20 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::cast_slice,
     clap::Parser,
-    inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::{WindowBuilder, WindowError},
     std::sync::Arc,
+    vk_graph::{
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            buffer::Buffer,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+        },
+    },
+    vk_graph_window::{Window, WindowError},
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 // A Vulkan triangle using a graphic pipeline, vertex/fragment shaders, and index/vertex buffers.
@@ -15,15 +23,15 @@ fn main() -> Result<(), WindowError> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
-    let triangle_pipeline = Arc::new(GraphicPipeline::create(
+    let window = Window::builder().debug(args.debug).build()?;
+    let triangle_pipeline = GraphicPipeline::create(
         &window.device,
         GraphicPipelineInfo::default(),
         [
-            Shader::new_vertex(
-                inline_spirv!(
-                    r#"
+            glsl!(
+                r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     layout(location = 0) in vec3 position;
                     layout(location = 1) in vec3 color;
@@ -34,15 +42,13 @@ fn main() -> Result<(), WindowError> {
                         gl_Position = vec4(position, 1);
                         vk_Color = color;
                     }
-                    "#,
-                    vert
-                )
-                .as_slice(),
-            ),
-            Shader::new_fragment(
-                inline_spirv!(
-                    r#"
+                    "#
+            )
+            .as_slice(),
+            glsl!(
+                r#"
                     #version 460 core
+                    #pragma shader_stage(fragment)
 
                     layout(location = 0) in vec3 color;
 
@@ -51,13 +57,11 @@ fn main() -> Result<(), WindowError> {
                     void main() {
                         vk_Color = vec4(color, 1);
                     }
-                    "#,
-                    frag
-                )
-                .as_slice(),
-            ),
+                    "#
+            )
+            .as_slice(),
         ],
-    )?);
+    )?;
 
     let index_buf = Arc::new(Buffer::create_from_slice(
         &window.device,
@@ -79,21 +83,26 @@ fn main() -> Result<(), WindowError> {
     )?);
 
     window.run(|frame| {
-        let index_node = frame.render_graph.bind_node(&index_buf);
-        let vertex_node = frame.render_graph.bind_node(&vertex_buf);
+        let index_node = frame.graph.bind_resource(&index_buf);
+        let vertex_node = frame.graph.bind_resource(&vertex_buf);
 
         frame
-            .render_graph
-            .begin_pass("Triangle Example")
+            .graph
+            .begin_cmd()
+            .debug_name("Triangle Example")
             .bind_pipeline(&triangle_pipeline)
-            .access_node(index_node, AccessType::IndexBuffer)
-            .access_node(vertex_node, AccessType::VertexBuffer)
-            .clear_color(0, frame.swapchain_image)
-            .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass.bind_index_buffer(index_node, vk::IndexType::UINT16);
-                subpass.bind_vertex_buffer(vertex_node);
-                subpass.draw_indexed(3, 1, 0, 0, 0);
+            .resource_access(index_node, AccessType::IndexBuffer)
+            .resource_access(vertex_node, AccessType::VertexBuffer)
+            .color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+                StoreOp::Store,
+            )
+            .record_cmd(move |cmd| {
+                cmd.bind_index_buffer(index_node, 0, vk::IndexType::UINT16)
+                    .bind_vertex_buffer(0, vertex_node, 0)
+                    .draw_indexed(3, 1, 0, 0, 0);
             });
     })
 }

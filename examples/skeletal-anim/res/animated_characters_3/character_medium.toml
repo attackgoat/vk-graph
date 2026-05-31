@@ -1,3 +1,2 @@
-[model]
-src = 'character_medium.glb'
+[mesh]
 tangents = false

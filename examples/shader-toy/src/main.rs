@@ -34,13 +34,24 @@ mod res {
 
 use {
     anyhow::Context,
-    bytemuck::{bytes_of, Pod, Zeroable},
+    bytemuck::{Pod, Zeroable, bytes_of},
     clap::Parser,
     pak::{Pak, PakBuf},
-    screen_13::prelude::*,
-    screen_13_fx::*,
-    screen_13_window::WindowBuilder,
-    std::{sync::Arc, time::Instant},
+    std::time::Instant,
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            ash::vk,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            image::ImageInfo,
+            shader::Shader,
+            sync::AccessType,
+        },
+        pool::{Pool as _, lazy::LazyPool},
+    },
+    vk_graph_fx::*,
+    vk_graph_window::Window,
     winit::dpi::PhysicalSize,
 };
 
@@ -48,9 +59,9 @@ fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
-        .desired_image_count(3)
+        .min_image_count(3)
         .window(|builder| builder.with_inner_size(PhysicalSize::new(1280.0f64, 720.0f64)))
         .build()?;
     let display = GraphicPresenter::new(&window.device).context("Presenter")?;
@@ -94,33 +105,29 @@ fn main() -> anyhow::Result<()> {
     // no depth/stencil
     // 1x sample count
     // one-sided
-    let buffer_pipeline = Arc::new(
-        GraphicPipeline::create(
-            &window.device,
-            GraphicPipelineInfo::default(),
-            [
-                Shader::new_vertex(res::shader::QUAD_VERT),
-                Shader::new_fragment(res::shader::FLOCKAROO_BUF_FRAG),
-            ],
-        )
-        .context("FLOCKAROO_BUF_FRAG")?,
-    );
-    let image_pipeline = Arc::new(
-        GraphicPipeline::create(
-            &window.device,
-            GraphicPipelineInfo::default(),
-            [
-                Shader::new_vertex(res::shader::QUAD_VERT),
-                Shader::new_fragment(res::shader::FLOCKAROO_IMG_FRAG),
-            ],
-        )
-        .context("FLOCKAROO_IMG_FRAG")?,
-    );
+    let buffer_pipeline = GraphicPipeline::create(
+        &window.device,
+        GraphicPipelineInfo::default(),
+        [
+            Shader::new_vertex(res::shader::QUAD_VERT),
+            Shader::new_fragment(res::shader::FLOCKAROO_BUF_FRAG),
+        ],
+    )
+    .context("FLOCKAROO_BUF_FRAG")?;
+    let image_pipeline = GraphicPipeline::create(
+        &window.device,
+        GraphicPipelineInfo::default(),
+        [
+            Shader::new_vertex(res::shader::QUAD_VERT),
+            Shader::new_fragment(res::shader::FLOCKAROO_IMG_FRAG),
+        ],
+    )
+    .context("FLOCKAROO_IMG_FRAG")?;
 
-    let mut render_graph = RenderGraph::new();
-    let blank_image = render_graph.bind_node(
+    let mut graph = Graph::default();
+    let blank_image = graph.bind_resource(
         cache
-            .lease(ImageInfo::image_2d(
+            .resource(ImageInfo::image_2d(
                 8,
                 8,
                 vk::Format::R8G8B8A8_SRGB,
@@ -130,9 +137,9 @@ fn main() -> anyhow::Result<()> {
     );
 
     let (width, height) = (1280, 720);
-    let framebuffer_image = render_graph.bind_node(
+    let framebuffer_image = graph.bind_resource(
         cache
-            .lease(ImageInfo::image_2d(
+            .resource(ImageInfo::image_2d(
                 width,
                 height,
                 vk::Format::R8G8B8A8_SRGB,
@@ -143,9 +150,9 @@ fn main() -> anyhow::Result<()> {
             ))
             .context("Framebuffer image")?,
     );
-    let temp_image = render_graph.bind_node(
+    let temp_image = graph.bind_resource(
         cache
-            .lease(ImageInfo::image_2d(
+            .resource(ImageInfo::image_2d(
                 width,
                 height,
                 vk::Format::R8G8B8A8_SRGB,
@@ -157,18 +164,19 @@ fn main() -> anyhow::Result<()> {
             .context("Temp image")?,
     );
 
-    render_graph
-        .clear_color_image_value(framebuffer_image, [1.0, 1.0, 0.0, 1.0])
-        .clear_color_image_value(blank_image, [0.0, 0.0, 0.0, 1.0])
-        .clear_color_image_value(temp_image, [0.0, 1.0, 0.0, 1.0]);
+    graph
+        .clear_color_image(framebuffer_image, [1.0, 1.0, 0.0, 1.0])
+        .clear_color_image(blank_image, [0.0, 0.0, 0.0, 1.0])
+        .clear_color_image(temp_image, [0.0, 1.0, 0.0, 1.0]);
 
-    let mut framebuffer_image_binding = Some(render_graph.unbind_node(framebuffer_image));
-    let mut blank_image_binding = Some(render_graph.unbind_node(blank_image));
-    let mut temp_image_binding = Some(render_graph.unbind_node(temp_image));
+    let mut framebuffer_image_binding = Some(graph.resource(framebuffer_image).clone());
+    let mut blank_image_binding = Some(graph.resource(blank_image).clone());
+    let mut temp_image_binding = Some(graph.resource(temp_image).clone());
 
-    render_graph.resolve().submit(&mut cache, 0, 0)?;
+    graph.into_submission().queue_submit(&mut cache, 0, 0)?;
 
     let started_at = Instant::now();
+    let mut prev_frame_at = started_at;
     let mut count = 0i32;
     let framebuffer_info = framebuffer_image_binding.as_ref().unwrap().info;
     let flowers_image_info = flowers_image_binding.as_ref().unwrap().info;
@@ -177,33 +185,38 @@ fn main() -> anyhow::Result<()> {
 
     window
         .run(|frame| {
+            let now = Instant::now();
+
             // Update the stuff any shader toy shader would want to know each frame
-            let elapsed = Instant::now() - started_at;
+            let dt = now - prev_frame_at;
+            prev_frame_at = now;
+
+            let elapsed = now - started_at;
 
             count += 1;
 
             // Bind things to this graph (the graph will own our things until we unbind them)
             let flowers_image = frame
-                .render_graph
-                .bind_node(flowers_image_binding.take().unwrap());
+                .graph
+                .bind_resource(flowers_image_binding.take().unwrap());
             let noise_image = frame
-                .render_graph
-                .bind_node(noise_image_binding.take().unwrap());
+                .graph
+                .bind_resource(noise_image_binding.take().unwrap());
             let framebuffer_image = frame
-                .render_graph
-                .bind_node(framebuffer_image_binding.take().unwrap());
+                .graph
+                .bind_resource(framebuffer_image_binding.take().unwrap());
             let blank_image = frame
-                .render_graph
-                .bind_node(blank_image_binding.take().unwrap());
+                .graph
+                .bind_resource(blank_image_binding.take().unwrap());
             let temp_image = frame
-                .render_graph
-                .bind_node(temp_image_binding.take().unwrap());
+                .graph
+                .bind_resource(temp_image_binding.take().unwrap());
 
             // We need to push a shader-toy defined set of constants to each pipeline - any copy
             // type will do but we are getting fancy here by defining a struct to be super precise
             // about what we're doing - but you may want to just send a bunch of f32's
             #[repr(C)]
-            #[derive(Clone, Copy)]
+            #[derive(Clone, Copy, Pod, Zeroable)]
             struct PushConstants {
                 resolution: [f32; 3],
                 _pad_1: u32,
@@ -217,25 +230,6 @@ fn main() -> anyhow::Result<()> {
                 channel_resolution: [f32; 16],
             }
 
-            unsafe impl Pod for PushConstants {}
-
-            unsafe impl Zeroable for PushConstants {
-                fn zeroed() -> Self {
-                    Self {
-                        resolution: [0f32; 3],
-                        _pad_1: 0u32,
-                        date: [0f32; 4],
-                        mouse: [0f32; 4],
-                        time: 0f32,
-                        time_delta: 0f32,
-                        frame: 0i32,
-                        sample_rate: 0f32,
-                        channel_time: [0f32; 4],
-                        channel_resolution: [0f32; 16],
-                    }
-                }
-            }
-
             // Each pipeline gets the same constant data
             let push_consts = PushConstants {
                 resolution: [frame.width as f32, frame.height as _, 1.0],
@@ -243,7 +237,7 @@ fn main() -> anyhow::Result<()> {
                 date: [1970.0, 1.0, 1.0, elapsed.as_secs_f32()],
                 mouse: [0.0, 0.0, 0.0, 0.0],
                 time: elapsed.as_secs_f32(),
-                time_delta: 0.016,
+                time_delta: dt.as_secs_f32(),
                 frame: count,
                 sample_rate: 44100.0,
                 channel_time: [
@@ -280,40 +274,62 @@ fn main() -> anyhow::Result<()> {
 
             // Fill a buffer using a single-pass CFD pipeline where previous output feeds next input
             frame
-                .render_graph
-                .begin_pass("Buffer A")
+                .graph
+                .begin_cmd()
+                .debug_name("Buffer A")
                 .bind_pipeline(&buffer_pipeline)
-                .read_descriptor(0, input)
-                .read_descriptor(1, noise_image)
-                .read_descriptor(2, flowers_image)
-                .read_descriptor(3, blank_image)
-                .store_color(0, output)
-                .record_subpass(move |subpass, _| {
-                    subpass.push_constants(bytes_of(&push_consts));
-                    subpass.draw(6, 1, 0, 0);
+                .shader_resource_access(
+                    0,
+                    input,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
+                .shader_resource_access(
+                    1,
+                    noise_image,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
+                .shader_resource_access(
+                    2,
+                    flowers_image,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
+                .shader_resource_access(
+                    3,
+                    blank_image,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
+                .color_attachment_image(0, output, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd(move |cmd| {
+                    cmd.push_constants(0, bytes_of(&push_consts))
+                        .draw(6, 1, 0, 0);
                 });
 
             // Make the CFD look more like paint with a second pass
             frame
-                .render_graph
-                .begin_pass("Image")
+                .graph
+                .begin_cmd()
+                .debug_name("Image")
                 .bind_pipeline(&image_pipeline)
-                .read_descriptor(0, output)
-                .store_color(0, input)
-                .record_subpass(move |subpass, _| {
-                    subpass.push_constants(bytes_of(&push_consts));
-                    subpass.draw(6, 1, 0, 0);
+                .shader_resource_access(
+                    0,
+                    output,
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                )
+                .color_attachment_image(0, input, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd(move |cmd| {
+                    cmd.push_constants(0, bytes_of(&push_consts))
+                        .draw(6, 1, 0, 0);
                 });
 
             // Done!
-            display.present_image(frame.render_graph, input, frame.swapchain_image);
+            display.present_image(frame.graph, input, frame.swapchain_image);
 
             // Unbind things from this graph (we want them back for the next frame!)
-            flowers_image_binding = Some(frame.render_graph.unbind_node(flowers_image));
-            noise_image_binding = Some(frame.render_graph.unbind_node(noise_image));
-            framebuffer_image_binding = Some(frame.render_graph.unbind_node(framebuffer_image));
-            blank_image_binding = Some(frame.render_graph.unbind_node(blank_image));
-            temp_image_binding = Some(frame.render_graph.unbind_node(temp_image));
+            flowers_image_binding = Some(frame.graph.resource(flowers_image).clone());
+            noise_image_binding = Some(frame.graph.resource(noise_image).clone());
+            framebuffer_image_binding = Some(frame.graph.resource(framebuffer_image).clone());
+            blank_image_binding = Some(frame.graph.resource(blank_image).clone());
+            temp_image_binding = Some(frame.graph.resource(temp_image).clone());
         })
         .context("Unable to run event loop")?;
 

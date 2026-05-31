@@ -1,0 +1,24 @@
+[package]
+name = "vk-graph-window"
+version = "0.1.0"
+authors = ["John Wells <john@attackgoat.com>"]
+description = "winit window and swapchain integration for vk-graph"
+documentation = "https://docs.rs/vk-graph-window"
+homepage = "https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-window"
+keywords = ["gamedev", "vulkan", "winit"]
+categories = ["game-development", "multimedia::images", "rendering::engine"]
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+
+[dependencies]
+derive_builder = "0.20"
+log.workspace = true
+profiling.workspace = true
+read-only.workspace = true
+vk-graph.workspace = true
+winit.workspace = true
+
+[dev-dependencies]
+pretty_env_logger = "0.5"

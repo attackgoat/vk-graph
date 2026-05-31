@@ -4,11 +4,11 @@ use {
     clap::Parser,
     image::ImageReader,
     log::info,
-    screen_13::prelude::LazyPool,
-    screen_13_fx::*,
-    screen_13_imgui::prelude::*,
-    screen_13_window::WindowBuilder,
     std::{io::Cursor, time::Instant},
+    vk_graph::pool::lazy::LazyPool,
+    vk_graph_fx::*,
+    vk_graph_imgui::prelude::*,
+    vk_graph_window::Window,
     winit::dpi::LogicalSize,
 };
 
@@ -16,9 +16,9 @@ fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
     profile_with_puffin::init();
 
-    // Create Screen 13 things any similar program might need
+    // Create vk-graph things any similar program might need
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .window(|builder| builder.with_inner_size(LogicalSize::new(1024.0f64, 768.0f64)))
         .build()?;
@@ -58,46 +58,45 @@ fn main() -> anyhow::Result<()> {
 
     // Hold some app state which is displayed/mutated by imgui each frame
     let mut curr_transition_idx = 0;
-    let mut start_time = Instant::now();
+    let mut started_at = Instant::now();
+    let mut prev_frame_at = started_at;
 
     window.run(|frame| {
-        // Update the demo "state"
         let now = Instant::now();
-        let elapsed = (now - start_time).as_secs_f32();
-        let progress = if elapsed > 4.0 {
-            start_time = now;
-            0.0
-        } else if elapsed > 3.0 {
-            1.0 - (elapsed - 3.0)
-        } else if elapsed > 2.0 {
-            1.0
-        } else if elapsed > 1.0 {
-            elapsed - 1.0
-        } else {
-            0.0
+
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
+        let elapsed = now - started_at;
+
+        // Update the demo "state"
+        let progress = match elapsed.as_secs_f32() {
+            t if t > 4.0 => {
+                started_at = now;
+                0.0
+            }
+            t if t > 3.0 => 1.0 - (t - 3.0),
+            t if t > 2.0 => 1.0,
+            t if t > 1.0 => t - 1.0,
+            _ => 0.0,
         };
 
         // Bind images so we can graph them
-        let bart_image = frame.render_graph.bind_node(&bart_image);
-        let gulf_image = frame.render_graph.bind_node(&gulf_image);
+        let bart_image = frame.graph.bind_resource(&bart_image);
+        let gulf_image = frame.graph.bind_resource(&gulf_image);
 
         // Apply the current transition to the images and get a resultant image out; "blend_image"
         let transition = TRANSITIONS[curr_transition_idx];
-        let blend_image = transition_pipeline.apply(
-            frame.render_graph,
-            bart_image,
-            gulf_image,
-            transition,
-            progress,
-        );
+        let blend_image =
+            transition_pipeline.apply(frame.graph, bart_image, gulf_image, transition, progress);
 
         // Draw UI: TODO: Sliders and value setters? That would be fun.
         let gui_image = imgui.draw(
-            0.016,
+            dt.as_secs_f32(),
             frame.events,
             frame.window,
             &mut pool,
-            frame.render_graph,
+            frame.graph,
             |ui, _, _| {
                 ui.window("Transitions example")
                     .position([10.0, 10.0], Condition::FirstUseEver)
@@ -121,12 +120,7 @@ fn main() -> anyhow::Result<()> {
         );
 
         // Display the GUI + Blend images on screen
-        display.present_images(
-            frame.render_graph,
-            gui_image,
-            blend_image,
-            frame.swapchain_image,
-        );
+        display.present_images(frame.graph, gui_image, blend_image, frame.swapchain_image);
     })?;
 
     Ok(())

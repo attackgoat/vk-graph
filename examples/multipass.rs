@@ -1,13 +1,28 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3},
-    inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
-    std::sync::Arc,
+    std::{sync::Arc, time::Instant},
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::ImageInfo,
+            shader::Shader,
+        },
+        node::BufferLeaseNode,
+        pool::{Lease, Pool as _, lazy::LazyPool},
+    },
+    vk_graph_window::Window,
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 #[derive(Clone, Copy)]
@@ -36,8 +51,8 @@ const GOLD: Material = Material {
     roughness: 0.3,
 };
 
-/// The example demonstrates leasing resources (images and buffers) and composing rendering
-/// operations with just a few lines of RenderGraph builder-pattern code.
+/// The example demonstrates requesting pooled resources (images and buffers) and composing
+/// rendering operations with just a few lines of Graph builder-pattern code.
 ///
 /// Also shown:
 /// - Basic PBR rendering (from Sascha Willems)
@@ -48,7 +63,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let depth_stencil_format = best_depth_stencil_format(&window.device);
     let mut pool = LazyPool::new(&window.device);
     let fill_background = create_fill_background_pipeline(&window.device);
@@ -56,15 +71,22 @@ fn main() -> anyhow::Result<()> {
     let pbr = create_pbr_pipeline(&window.device);
     let funky_shape = create_funky_shape(&window.device, &mut pool)?;
 
-    let mut t = 0.0;
+    let mut angle = 0.0;
+    let mut prev_frame_at = Instant::now();
+
     window.run(|frame| {
-        t += 0.016;
+        let now = Instant::now();
 
-        let index_buf = frame.render_graph.bind_node(&funky_shape.index_buf);
-        let vertex_buf = frame.render_graph.bind_node(&funky_shape.vertex_buf);
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
 
-        let depth_stencil = frame.render_graph.bind_node(
-            pool.lease(ImageInfo::image_2d(
+        angle += dt.as_secs_f32();
+
+        let index_buf = frame.graph.bind_resource(&funky_shape.index_buf);
+        let vertex_buf = frame.graph.bind_resource(&funky_shape.vertex_buf);
+
+        let depth_stencil = frame.graph.bind_resource(
+            pool.resource(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 depth_stencil_format,
@@ -75,32 +97,39 @@ fn main() -> anyhow::Result<()> {
         );
 
         let camera = camera(frame.width, frame.height);
-        let model = Mat4::from_rotation_y(t * 0.4);
+        let model = Mat4::from_rotation_y(angle);
         let obj_pos = Vec3::ZERO;
         let material = GOLD;
 
-        let camera_buf = bind_camera_buf(frame.render_graph, &mut pool, camera, model);
-        let light_buf = bind_light_buf(frame.render_graph, &mut pool);
+        let camera_buf = bind_camera_buf(frame.graph, &mut pool, camera, model);
+        let light_buf = bind_light_buf(frame.graph, &mut pool);
         let push_const_data = write_push_consts(obj_pos, material);
 
-        let mut write = DepthStencilMode::DEPTH_WRITE;
+        let mut write = DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL;
 
         // Depth Prepass
         frame
-            .render_graph
-            .begin_pass("Depth Prepass")
+            .graph
+            .begin_cmd()
+            .debug_name("Depth Prepass")
             .bind_pipeline(&prepass)
-            .set_depth_stencil(write)
-            .read_descriptor(0, camera_buf)
-            .access_node(index_buf, AccessType::IndexBuffer)
-            .access_node(vertex_buf, AccessType::VertexBuffer)
-            .clear_depth_stencil(depth_stencil)
-            .store_depth_stencil(depth_stencil)
-            .record_subpass(move |subpass, _| {
-                subpass
-                    .bind_index_buffer(index_buf, vk::IndexType::UINT16)
-                    .bind_vertex_buffer(vertex_buf)
-                    .push_constants(bytes_of(&obj_pos))
+            .depth_stencil(write)
+            .shader_resource_access(
+                0,
+                camera_buf,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+            .resource_access(index_buf, AccessType::IndexBuffer)
+            .resource_access(vertex_buf, AccessType::VertexBuffer)
+            .depth_stencil_attachment_image(
+                depth_stencil,
+                LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                StoreOp::Store,
+            )
+            .record_cmd(move |cmd| {
+                cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
+                    .bind_vertex_buffer(0, vertex_buf, 0)
+                    .push_constants(0, bytes_of(&obj_pos))
                     .draw_indexed(funky_shape.index_count, 1, 0, 0, 0);
             });
 
@@ -117,22 +146,29 @@ fn main() -> anyhow::Result<()> {
 
         // Renders a golden orb on an un-cleared swapchain image
         frame
-            .render_graph
-            .begin_pass("funky shape PBR")
+            .graph
+            .begin_cmd()
+            .debug_name("funky shape PBR")
             .bind_pipeline(&pbr)
-            .set_depth_stencil(write)
-            .read_descriptor(0, camera_buf)
-            .read_descriptor(1, light_buf)
-            .access_node(index_buf, AccessType::IndexBuffer)
-            .access_node(vertex_buf, AccessType::VertexBuffer)
-            .load_depth_stencil(depth_stencil)
-            .store_depth_stencil(depth_stencil)
-            .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass
-                    .bind_index_buffer(index_buf, vk::IndexType::UINT16)
-                    .bind_vertex_buffer(vertex_buf)
-                    .push_constants(&push_const_data)
+            .depth_stencil(write)
+            .shader_resource_access(
+                0,
+                camera_buf,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+            .shader_resource_access(
+                1,
+                light_buf,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+            .resource_access(index_buf, AccessType::IndexBuffer)
+            .resource_access(vertex_buf, AccessType::VertexBuffer)
+            .depth_stencil_attachment_image(depth_stencil, LoadOp::Load, StoreOp::Store)
+            .color_attachment_image(0, frame.swapchain_image, LoadOp::DontCare, StoreOp::Store)
+            .record_cmd(move |cmd| {
+                cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
+                    .bind_vertex_buffer(0, vertex_buf, 0)
+                    .push_constants(0, &push_const_data)
                     .draw_indexed(funky_shape.index_count, 1, 0, 0, 0);
             });
 
@@ -145,15 +181,15 @@ fn main() -> anyhow::Result<()> {
 
         // Renders a solid color wherever the golden orb did not draw
         frame
-            .render_graph
-            .begin_pass("fill background")
+            .graph
+            .begin_cmd()
+            .debug_name("fill background")
             .bind_pipeline(&fill_background)
-            .set_depth_stencil(read)
-            .load_depth_stencil(depth_stencil)
-            .load_color(0, frame.swapchain_image)
-            .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass.draw(6, 1, 0, 0);
+            .depth_stencil(read)
+            .depth_stencil_attachment_image(depth_stencil, LoadOp::Load, StoreOp::DontCare)
+            .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
+            .record_cmd(move |cmd| {
+                cmd.draw(6, 1, 0, 0);
             });
     })?;
 
@@ -166,8 +202,7 @@ fn best_depth_stencil_format(device: &Device) -> vk::Format {
         vk::Format::D16_UNORM_S8_UINT,
         vk::Format::D32_SFLOAT_S8_UINT,
     ] {
-        let format_props = Device::image_format_properties(
-            device,
+        let format_props = device.physical_device.image_format_properties(
             format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -185,32 +220,32 @@ fn best_depth_stencil_format(device: &Device) -> vk::Format {
 }
 
 fn bind_camera_buf(
-    render_graph: &mut RenderGraph,
+    graph: &mut Graph,
     pool: &mut LazyPool,
     camera: Camera,
     model: Mat4,
 ) -> BufferLeaseNode {
     let mut buf = pool
-        .lease(BufferInfo::host_mem(
+        .resource(BufferInfo::host_mem(
             204,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
         ))
         .unwrap();
     write_camera_buf(&mut buf, camera, model);
 
-    render_graph.bind_node(buf)
+    graph.bind_resource(buf)
 }
 
-fn bind_light_buf(render_graph: &mut RenderGraph, pool: &mut LazyPool) -> BufferLeaseNode {
+fn bind_light_buf(graph: &mut Graph, pool: &mut LazyPool) -> BufferLeaseNode {
     let mut buf = pool
-        .lease(BufferInfo::host_mem(
+        .resource(BufferInfo::host_mem(
             64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
         ))
         .unwrap();
     write_light_buf(&mut buf);
 
-    render_graph.bind_node(buf)
+    graph.bind_resource(buf)
 }
 
 fn write_push_consts(obj_pos: Vec3, material: Material) -> [u8; 32] {
@@ -243,7 +278,7 @@ fn camera(width: u32, height: u32) -> Camera {
 
 /// Returns ready-to-use index and vertex buffers. Index count is also returned. The shape data uses
 /// temporary staging buffers which are not required but are fun.
-fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape, DriverError> {
+fn create_funky_shape(device: &Device, pool: &mut LazyPool) -> Result<Shape, DriverError> {
     // Static index/vertex data courtesy of the polyhedron-ops library
     let (indices, vertices) = funky_shape_data();
     let index_count = indices.len() as u32;
@@ -277,13 +312,13 @@ fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape
     )?);
 
     // We will use a temporary render graph to copy host data to the GPU
-    let mut graph = RenderGraph::new();
+    let mut graph = Graph::default();
 
     // Bind things to the graph
-    let index_buf_host = graph.bind_node(index_buf_host);
-    let vertex_buf_host = graph.bind_node(vertex_buf_host);
-    let index_buf_gpu = graph.bind_node(&index_buf);
-    let vertex_buf_gpu = graph.bind_node(&vertex_buf);
+    let index_buf_host = graph.bind_resource(index_buf_host);
+    let vertex_buf_host = graph.bind_resource(vertex_buf_host);
+    let index_buf_gpu = graph.bind_resource(&index_buf);
+    let vertex_buf_gpu = graph.bind_resource(&vertex_buf);
 
     // Add operations to the graph which copy host-accessible data to GPU
     graph
@@ -291,7 +326,7 @@ fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape
         .copy_buffer(vertex_buf_host, vertex_buf_gpu);
 
     // Submit the graph, which runs the operations on the GPU
-    graph.resolve().submit(pool, 0, 0)?;
+    graph.into_submission().queue_submit(pool, 0, 0)?;
 
     // (We drop the graph here; it's okay the cache keeps things alive until they're done)
 
@@ -302,65 +337,61 @@ fn create_funky_shape(device: &Arc<Device>, pool: &mut LazyPool) -> Result<Shape
     })
 }
 
-fn create_fill_background_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
+fn create_fill_background_pipeline(device: &Device) -> GraphicPipeline {
     let vertex_shader = Shader::new_vertex(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450 core
+            #pragma shader_stage(vertex)
 
             const float X[6] = {-1, -1, 1, 1, 1, -1};
             const float Y[6] = {-1, 1, -1, 1, -1, 1};
 
-            vec2 vertex_pos()
-            {
+            vec2 vertex_pos() {
                 float x = X[gl_VertexIndex];
                 float y = Y[gl_VertexIndex];
 
                 return vec2(x, y);
             }
 
-            void main()
-            {
+            void main() {
                 gl_Position = vec4(vertex_pos(), 0, 1);
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
     );
 
     let fragment_shader = Shader::new_fragment(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color;
 
-            void main()
-            {
+            void main() {
                 color = vec4(vec3(0.75), 1.0);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
 
-    Arc::new(
-        GraphicPipeline::create(
-            device,
-            GraphicPipelineInfo::default(),
-            [vertex_shader, fragment_shader],
-        )
-        .unwrap(),
+    GraphicPipeline::create(
+        device,
+        GraphicPipelineInfo::default(),
+        [vertex_shader, fragment_shader],
     )
+    .unwrap()
 }
 
-fn create_prepass_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
+fn create_prepass_pipeline(device: &Device) -> GraphicPipeline {
     let vertex_shader = Shader::new_vertex(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(vertex)
 
             layout (location = 0) in vec3 inPos;
             layout (location = 1) in vec3 inNormal;
@@ -380,65 +411,59 @@ fn create_prepass_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
                 vec3 objPos;
             } pushConsts;
 
-            out gl_PerVertex 
-            {
+            out gl_PerVertex {
                 vec4 gl_Position;
             };
 
-            void main() 
-            {
+            void main() {
                 vec3 locPos = vec3(ubo.model * vec4(inPos, 1.0));
                 outWorldPos = locPos + pushConsts.objPos;
                 outNormal = mat3(ubo.model) * inNormal;
                 gl_Position =  ubo.projection * ubo.view * vec4(outWorldPos, 1.0);
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
     );
 
     let fragment_shader = Shader::new_fragment(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(fragment)
 
             layout (location = 0) in vec3 inWorldPos;
             layout (location = 1) in vec3 inNormal;
 
-            layout (binding = 0) uniform UBO 
-            {
+            layout (binding = 0) uniform UBO {
                 mat4 projection;
                 mat4 model;
                 mat4 view;
                 vec3 camPos;
             } ubo;
 
-            void main()
-            {
+            void main() {
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
 
-    Arc::new(
-        GraphicPipeline::create(
-            device,
-            GraphicPipelineInfo::default(),
-            [vertex_shader, fragment_shader],
-        )
-        .unwrap(),
+    GraphicPipeline::create(
+        device,
+        GraphicPipelineInfo::default(),
+        [vertex_shader, fragment_shader],
     )
+    .unwrap()
 }
 
-fn create_pbr_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
+fn create_pbr_pipeline(device: &Device) -> GraphicPipeline {
     // See: https://github.com/SaschaWillems/Vulkan/blob/master/data/shaders/glsl/pbrbasic/pbr.vert
     let vertex_shader = Shader::new_vertex(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(vertex)
 
             layout (location = 0) in vec3 inPos;
             layout (location = 1) in vec3 inNormal;
@@ -458,29 +483,27 @@ fn create_pbr_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
                 vec3 objPos;
             } pushConsts;
 
-            out gl_PerVertex 
-            {
+            out gl_PerVertex {
                 vec4 gl_Position;
             };
 
-            void main() 
-            {
+            void main() {
                 vec3 locPos = vec3(ubo.model * vec4(inPos, 1.0));
                 outWorldPos = locPos + pushConsts.objPos;
                 outNormal = mat3(ubo.model) * inNormal;
                 gl_Position =  ubo.projection * ubo.view * vec4(outWorldPos, 1.0);
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
     );
 
     // See: https://github.com/SaschaWillems/Vulkan/blob/master/data/shaders/glsl/pbrbasic/pbr.frag
     let fragment_shader = Shader::new_fragment(
-        inline_spirv!(
+        glsl!(
             r#"
             #version 450
+            #pragma shader_stage(fragment)
 
             layout (location = 0) in vec3 inWorldPos;
             layout (location = 1) in vec3 inNormal;
@@ -606,20 +629,17 @@ fn create_pbr_pipeline(device: &Arc<Device>) -> Arc<GraphicPipeline> {
 
                 outColor = vec4(color, 1.0);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
 
-    Arc::new(
-        GraphicPipeline::create(
-            device,
-            GraphicPipelineInfo::default(),
-            [vertex_shader, fragment_shader],
-        )
-        .unwrap(),
+    GraphicPipeline::create(
+        device,
+        GraphicPipelineInfo::default(),
+        [vertex_shader, fragment_shader],
     )
+    .unwrap()
 }
 
 /// Returns index and position/normal data (polyhedron_ops you are 🥇🏆🥂💯)

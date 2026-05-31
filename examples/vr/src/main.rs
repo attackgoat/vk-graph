@@ -1,38 +1,40 @@
 mod driver;
 
 use {
-    self::driver::{Instance, Swapchain},
-    bytemuck::{bytes_of, cast_slice, Pod, Zeroable},
-    glam::{vec3, vec4, Mat3, Mat4, Quat, Vec2, Vec3},
+    self::driver::{Swapchain, XrInstance},
+    bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
+    glam::{Mat3, Mat4, Quat, Vec2, Vec3, vec3, vec4},
     log::{debug, error, trace},
     meshopt::{generate_vertex_remap, remap_index_buffer, remap_vertex_buffer},
     openxr::{self as xr, EnvironmentBlendMode, ViewConfigurationType},
-    screen_13::{
-        driver::{
-            ash::vk::{self},
-            buffer::{Buffer, BufferInfo},
-            device::Device,
-            graphic::{DepthStencilMode, GraphicPipelineInfo},
-            image::{Image, ImageInfo},
-            AccessType,
-        },
-        graph::RenderGraph,
-        pool::{lazy::LazyPool, Pool as _},
-    },
-    screen_13_hot::{graphic::HotGraphicPipeline, shader::HotShader},
     std::{
-        fs::{metadata, File},
+        fs::{File, metadata},
         io::BufReader,
+        iter::repeat_with,
         path::{Path, PathBuf},
         ptr::copy_nonoverlapping,
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
         thread::sleep,
         time::Duration,
     },
-    tobj::{load_obj, GPU_LOAD_OPTIONS},
+    tobj::{GPU_LOAD_OPTIONS, load_obj},
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            ash::vk::{self},
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+            sync::AccessType,
+        },
+        pool::{Pool as _, lazy::LazyPool},
+    },
+    vk_graph_hot::{HotGraphicPipeline, HotShader},
 };
 
 // Sets bits with index 0 and 1 for stereoscopic rendering
@@ -53,15 +55,15 @@ fn main() -> anyhow::Result<()> {
     trace!("Starting");
 
     // Initialize OpenXR and Vulkan
-    let mut instance = Instance::new().unwrap();
-    let device = Instance::device(&instance);
+    let mut instance = XrInstance::new().unwrap();
+    let device = XrInstance::device(&instance);
     let queue_family_index =
         device_queue_family_index(device, vk::QueueFlags::GRAPHICS | vk::QueueFlags::TRANSFER)
             .unwrap();
 
     // Start a VR session
     let (session, mut frame_wait, mut frame_stream) =
-        Instance::create_session(&instance, queue_family_index, 0).unwrap();
+        XrInstance::create_session(&instance, queue_family_index, 0).unwrap();
     let action_set = instance
         .create_action_set("input", "input pose information", 0)
         .unwrap();
@@ -95,10 +97,10 @@ fn main() -> anyhow::Result<()> {
     session.attach_action_sets(&[&action_set]).unwrap();
 
     let right_space = right_action
-        .create_space(session.clone(), xr::Path::NULL, xr::Posef::IDENTITY)
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
         .unwrap();
     let left_space = left_action
-        .create_space(session.clone(), xr::Path::NULL, xr::Posef::IDENTITY)
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
         .unwrap();
     let stage = session
         .create_reference_space(xr::ReferenceSpaceType::STAGE, xr::Posef::IDENTITY)
@@ -115,14 +117,14 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut pool = LazyPool::new(device);
-    let mut graphs = Vec::with_capacity(Swapchain::images(&swapchain).len());
-    for _ in 0..graphs.capacity() {
-        graphs.push(None);
-    }
+    let swapchain_image_count = Swapchain::images(&swapchain).len();
+    let mut swapchain_queues = repeat_with(|| None)
+        .take(swapchain_image_count)
+        .collect::<Box<_>>();
 
     let res_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("res");
 
-    let mut hands_pipeline = HotGraphicPipeline::create(
+    let hands_pipeline = HotGraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
@@ -130,7 +132,7 @@ fn main() -> anyhow::Result<()> {
             HotShader::new_fragment(res_dir.join("hands.frag")),
         ],
     )?;
-    let mut mammoth_pipeline = HotGraphicPipeline::create(
+    let mammoth_pipeline = HotGraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
@@ -144,7 +146,12 @@ fn main() -> anyhow::Result<()> {
     let woolly_mammoth_dir = example_assets_dir.join("woolly-mammoth");
 
     if metadata(&lincoln_hands_dir).is_err() {
-        panic!("Asset submodule missing! You must first initialize the submodules and then update them using:\ngit submodule init\ngit submodule update");
+        panic!(concat!(
+            "Asset submodule missing! You must first initialize the submodules and then update ",
+            "them using:\n",
+            "git submodule init\n",
+            "git submodule update"
+        ));
     }
 
     // Load a model and textures for the left hand
@@ -217,7 +224,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        while let Some(event) = Instance::poll_event(&mut instance).unwrap() {
+        while let Some(event) = XrInstance::poll_event(&mut instance).unwrap() {
             use xr::Event::*;
             match event {
                 SessionStateChanged(e) => {
@@ -268,9 +275,9 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        let mut render_graph = RenderGraph::new();
-        let depth_image = render_graph.bind_node(
-            pool.lease(ImageInfo::image_2d_array(
+        let mut graph = Graph::default();
+        let depth_image = graph.bind_resource(
+            pool.resource(ImageInfo::image_2d_array(
                 resolution.width,
                 resolution.height,
                 2,
@@ -282,7 +289,7 @@ fn main() -> anyhow::Result<()> {
 
         let swapchain_image_index = swapchain.acquire_image().unwrap();
         let swapchain_image = Swapchain::image(&swapchain, swapchain_image_index as _);
-        let swapchain_image = render_graph.bind_node(swapchain_image);
+        let swapchain_image = graph.bind_resource(swapchain_image);
 
         // Get the XR views and copy them into a leased uniform buffer
         let (_, views) = session.locate_views(
@@ -293,12 +300,12 @@ fn main() -> anyhow::Result<()> {
         let camera_buf = {
             let cameras = [CameraBuffer::new(views[0]), CameraBuffer::new(views[1])];
             let data = cast_slice(&cameras);
-            let mut buf = pool.lease(BufferInfo::host_mem(
+            let mut buf = pool.resource(BufferInfo::host_mem(
                 data.len() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
-            Buffer::copy_from_slice(&mut buf, 0, data);
-            render_graph.bind_node(buf)
+            buf.copy_from_slice(0, data);
+            graph.bind_resource(buf)
         };
 
         session.sync_actions(&[(&action_set).into()]).unwrap();
@@ -332,137 +339,149 @@ fn main() -> anyhow::Result<()> {
         let light_buf = {
             let light = LightBuffer::new(light_position);
             let data = bytes_of(&light);
-            let mut buf = pool.lease(BufferInfo::host_mem(
+            let mut buf = pool.resource(BufferInfo::host_mem(
                 data.len() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))?;
-            Buffer::copy_from_slice(&mut buf, 0, data);
-            render_graph.bind_node(buf)
+            buf.copy_from_slice(0, data);
+            graph.bind_resource(buf)
         };
 
-        render_graph.clear_color_image_value(swapchain_image, [0x00, 0x00, 0x00, 0xff]);
+        graph.clear_color_image(swapchain_image, [0x00, 0x00, 0x00, 0xff]);
 
         if let Some(location) = left_hand_location {
-            let index_buf = render_graph.bind_node(&lincoln_hand_left.index_buf);
-            let vertex_buf = render_graph.bind_node(&lincoln_hand_left.vertex_buf);
-            let diffuse_texture = render_graph.bind_node(&lincoln_hand_left_diffuse);
-            let normal_texture = render_graph.bind_node(&lincoln_hand_left_normal);
-            let occlusion_texture = render_graph.bind_node(&lincoln_hand_left_occlusion);
+            let index_buf = graph.bind_resource(&lincoln_hand_left.index_buf);
+            let vertex_buf = graph.bind_resource(&lincoln_hand_left.vertex_buf);
+            let diffuse_texture = graph.bind_resource(&lincoln_hand_left_diffuse);
+            let normal_texture = graph.bind_resource(&lincoln_hand_left_normal);
+            let occlusion_texture = graph.bind_resource(&lincoln_hand_left_occlusion);
             let model_transform = pose_transform(location.pose);
             let push_consts = PushConstants::new(model_transform);
 
-            render_graph
-                .begin_pass("Left hand")
-                .bind_pipeline(hands_pipeline.hot())
-                .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-                .set_multiview(VIEW_MASK, VIEW_MASK)
-                .store_color(0, swapchain_image)
-                .clear_depth_stencil(depth_image)
-                .access_node(index_buf, AccessType::IndexBuffer)
-                .access_node(vertex_buf, AccessType::VertexBuffer)
-                .access_descriptor(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(
+            graph
+                .begin_cmd()
+                .debug_name("Left hand")
+                .bind_pipeline(&hands_pipeline)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                .multiview(VIEW_MASK, VIEW_MASK)
+                .resource_access(index_buf, AccessType::IndexBuffer)
+                .resource_access(vertex_buf, AccessType::VertexBuffer)
+                .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(
                     2,
                     diffuse_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     3,
                     normal_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     4,
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_subpass(move |subpass, _| {
-                    subpass
-                        .bind_index_buffer(index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(vertex_buf)
-                        .push_constants(bytes_of(&push_consts))
+                .depth_stencil_attachment_image(
+                    depth_image,
+                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    StoreOp::DontCare,
+                )
+                .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd(move |cmd| {
+                    cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, vertex_buf, 0)
+                        .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_left.index_count, 1, 0, 0, 0);
                 });
         }
 
         if let Some(location) = right_hand_location {
-            let index_buf = render_graph.bind_node(&lincoln_hand_right.index_buf);
-            let vertex_buf = render_graph.bind_node(&lincoln_hand_right.vertex_buf);
-            let diffuse_texture = render_graph.bind_node(&lincoln_hand_right_diffuse);
-            let normal_texture = render_graph.bind_node(&lincoln_hand_right_normal);
-            let occlusion_texture = render_graph.bind_node(&lincoln_hand_right_occlusion);
+            let index_buf = graph.bind_resource(&lincoln_hand_right.index_buf);
+            let vertex_buf = graph.bind_resource(&lincoln_hand_right.vertex_buf);
+            let diffuse_texture = graph.bind_resource(&lincoln_hand_right_diffuse);
+            let normal_texture = graph.bind_resource(&lincoln_hand_right_normal);
+            let occlusion_texture = graph.bind_resource(&lincoln_hand_right_occlusion);
             let model_transform = pose_transform(location.pose);
             let push_consts = PushConstants::new(model_transform);
 
-            render_graph
-                .begin_pass("Right hand")
-                .bind_pipeline(hands_pipeline.hot())
-                .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-                .set_multiview(VIEW_MASK, VIEW_MASK)
-                .store_color(0, swapchain_image)
-                .clear_depth_stencil(depth_image)
-                .access_node(index_buf, AccessType::IndexBuffer)
-                .access_node(vertex_buf, AccessType::VertexBuffer)
-                .access_descriptor(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(
+            graph
+                .begin_cmd()
+                .debug_name("Right hand")
+                .bind_pipeline(&hands_pipeline)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                .multiview(VIEW_MASK, VIEW_MASK)
+                .resource_access(index_buf, AccessType::IndexBuffer)
+                .resource_access(vertex_buf, AccessType::VertexBuffer)
+                .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(
                     2,
                     diffuse_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     3,
                     normal_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     4,
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_subpass(move |subpass, _| {
-                    subpass
-                        .bind_index_buffer(index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(vertex_buf)
-                        .push_constants(bytes_of(&push_consts))
+                .depth_stencil_attachment_image(
+                    depth_image,
+                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    StoreOp::DontCare,
+                )
+                .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
+                .record_cmd(move |cmd| {
+                    cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, vertex_buf, 0)
+                        .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_right.index_count, 1, 0, 0, 0);
                 });
         }
 
         {
-            let index_buf = render_graph.bind_node(&woolly_mammoth.index_buf);
-            let vertex_buf = render_graph.bind_node(&woolly_mammoth.vertex_buf);
-            let normal_texture = render_graph.bind_node(&woolly_mammoth_normal);
-            let occlusion_texture = render_graph.bind_node(&woolly_mammoth_occlusion);
+            let index_buf = graph.bind_resource(&woolly_mammoth.index_buf);
+            let vertex_buf = graph.bind_resource(&woolly_mammoth.vertex_buf);
+            let normal_texture = graph.bind_resource(&woolly_mammoth_normal);
+            let occlusion_texture = graph.bind_resource(&woolly_mammoth_occlusion);
             let push_consts = PushConstants::new(Mat4::IDENTITY);
 
-            render_graph
-                .begin_pass("Woolly Mammoth")
-                .bind_pipeline(mammoth_pipeline.hot())
-                .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-                .set_multiview(VIEW_MASK, VIEW_MASK)
-                .store_color(0, swapchain_image)
-                .clear_depth_stencil(depth_image)
-                .access_node(index_buf, AccessType::IndexBuffer)
-                .access_node(vertex_buf, AccessType::VertexBuffer)
-                .access_descriptor(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
-                .access_descriptor(
+            graph
+                .begin_cmd()
+                .debug_name("Woolly Mammoth")
+                .bind_pipeline(&mammoth_pipeline)
+                .resource_access(index_buf, AccessType::IndexBuffer)
+                .resource_access(vertex_buf, AccessType::VertexBuffer)
+                .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(1, light_buf, AccessType::VertexShaderReadUniformBuffer)
+                .shader_resource_access(
                     2,
                     normal_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .access_descriptor(
+                .shader_resource_access(
                     3,
                     occlusion_texture,
                     AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .record_subpass(move |subpass, _| {
-                    subpass
-                        .bind_index_buffer(index_buf, vk::IndexType::UINT32)
-                        .bind_vertex_buffer(vertex_buf)
-                        .push_constants(bytes_of(&push_consts))
+                .multiview(VIEW_MASK, VIEW_MASK)
+                .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                .depth_stencil_attachment_image(
+                    depth_image,
+                    LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+                    StoreOp::DontCare,
+                )
+                .record_cmd(move |cmd| {
+                    cmd.bind_index_buffer(index_buf, 0, vk::IndexType::UINT32)
+                        .bind_vertex_buffer(0, vertex_buf, 0)
+                        .push_constants(0, bytes_of(&push_consts))
                         .draw_indexed(lincoln_hand_right.index_count, 1, 0, 0, 0);
                 });
         }
@@ -471,12 +490,12 @@ fn main() -> anyhow::Result<()> {
         // the image - afterwards we keep the submitted command buffer around (including all
         // in-flight resources) so that nothing is dropped until that image is actually done.
         swapchain.wait_image(xr::Duration::INFINITE).unwrap();
-        let cmd_buf = render_graph
-            .resolve()
-            .submit(&mut pool, queue_family_index as _, 0)
+        let swapchain_queue = graph
+            .into_submission()
+            .queue_submit(&mut pool, queue_family_index as _, 0)
             .unwrap();
         swapchain.release_image().unwrap();
-        graphs[swapchain_image_index as usize] = Some(cmd_buf);
+        swapchain_queues[swapchain_image_index as usize] = Some(swapchain_queue);
 
         frame_stream.end(
             xr_frame_state.predicted_display_time,
@@ -556,7 +575,7 @@ fn device_queue_family_index(device: &Device, flags: vk::QueueFlags) -> Option<u
 /// Loads a .obj model from disk, reading position, normal and UV data.
 ///
 /// Tangent (and bitangent) data is calculated and the whole thing is re-indexed using meshopt.
-fn load_model(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Model> {
+fn load_model(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> {
     trace!("Loading model {}", path.as_ref().display());
 
     let (mut models, _) = load_obj(path.as_ref(), &GPU_LOAD_OPTIONS)?;
@@ -679,13 +698,20 @@ fn load_model(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Mo
             res
         }
 
-        fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
-            self.vertex_mut(face, vert)[3..7].copy_from_slice(&tangent);
+        fn set_tangent(
+            &mut self,
+            tangent: Option<mikktspace::TangentSpace>,
+            face: usize,
+            vert: usize,
+        ) {
+            if let Some(tangent) = tangent {
+                self.vertex_mut(face, vert)[3..7].copy_from_slice(&tangent.tangent_encoded());
+            }
         }
     }
 
     let mut mesh = Mesh(vertices);
-    assert!(mikktspace::generate_tangents(&mut mesh));
+    assert!(mikktspace::generate_tangents(&mut mesh).is_ok());
     let vertices = mesh.0;
 
     // Re-index and de-dupe the model vertices using meshopt
@@ -717,7 +743,7 @@ fn load_model(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Mo
 
 /// Loads a texture from disk and returns the image after waiting for GPU operations to complete.
 fn load_texture(
-    device: &Arc<Device>,
+    device: &Device,
     path: impl AsRef<Path>,
     fmt: vk::Format,
 ) -> anyhow::Result<Arc<Image>> {
@@ -759,15 +785,15 @@ fn load_texture(
         ),
     )?);
 
-    let mut render_graph = RenderGraph::new();
-    let staging_buf = render_graph.bind_node(staging_buf);
-    let texture_image = render_graph.bind_node(&texture);
-    render_graph.copy_buffer_to_image(staging_buf, texture_image);
+    let mut graph = Graph::default();
+    let staging_buf = graph.bind_resource(staging_buf);
+    let texture_image = graph.bind_resource(&texture);
+    graph.copy_buffer_to_image(staging_buf, texture_image);
 
     let queue_family_index = device_queue_family_index(device, vk::QueueFlags::TRANSFER).unwrap();
-    render_graph
-        .resolve()
-        .submit(&mut LazyPool::new(device), queue_family_index as _, 0)?
+    graph
+        .into_submission()
+        .queue_submit(&mut LazyPool::new(device), queue_family_index as _, 0)?
         .wait_until_executed()?;
 
     Ok(texture)

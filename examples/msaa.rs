@@ -1,21 +1,32 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::{NoUninit, bytes_of, cast_slice},
+    ash::vk,
+    bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3},
-    inline_spirv::inline_spirv,
     log::warn,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
-    std::{mem::size_of, sync::Arc},
+    std::{mem::size_of, sync::Arc, time::Instant},
+    vk_graph::{
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::{ImageInfo, SampleCount},
+            physical_device::Vulkan10Limits,
+        },
+        pool::{Pool as _, fifo::FifoPool},
+    },
+    vk_graph_window::Window,
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };
 
 type CubeVertex = [[f32; 3]; 3];
-
-const WHITE: ClearColorValue = ClearColorValue([1.0, 1.0, 1.0, 1.0]);
 
 /// Draws a spinning cube with high-contrast edges; hold any key to display the cube in non-MSAA
 /// mode.
@@ -27,7 +38,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut input = WinitInputHelper::default();
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let depth_format = best_depth_format(&window.device);
     let sample_count = max_supported_sample_count(&window.device);
     let mesh_msaa_pipeline = create_mesh_pipeline(&window.device, sample_count)?;
@@ -36,42 +47,42 @@ fn main() -> anyhow::Result<()> {
     let mut pool = FifoPool::new(&window.device);
 
     let mut angle = 0f32;
+    let mut prev_frame_at = Instant::now();
 
     window.run(|frame| {
-        input.step_with_window_events(
-            &frame
-                .events
-                .iter()
-                .filter_map(|event| {
-                    if let Event::WindowEvent { event, .. } = event {
-                        Some(event.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Box<_>>(),
-        );
+        let now = Instant::now();
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
+        input.step();
+        for event in frame.events {
+            match event {
+                Event::WindowEvent { event, .. } => {
+                    let _ = input.process_window_event(event);
+                }
+                Event::DeviceEvent { event, .. } => {
+                    input.process_device_event(event);
+                }
+                _ => {}
+            }
+        }
+        input.end_step();
 
         // Hold the tab key to render in non-multisample mode
         let will_render_msaa = !input.key_held(KeyCode::Tab) && sample_count != SampleCount::Type1;
 
-        angle += input
-            .delta_time()
-            .map(|dt| dt.as_secs_f32())
-            .unwrap_or(0.016)
-            * 0.1;
+        angle += dt.as_secs_f32() * 0.1;
         let world_transform = Mat4::from_rotation_x(angle)
             * Mat4::from_rotation_y(angle * 0.61)
             * Mat4::from_rotation_z(angle * 0.22);
 
         let mut scene_uniform_buf = pool
-            .lease(BufferInfo::host_mem(
+            .resource(BufferInfo::host_mem(
                 size_of::<SceneUniformBuffer>() as _,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
             ))
             .unwrap();
-        Buffer::copy_from_slice(
-            &mut scene_uniform_buf,
+        scene_uniform_buf.copy_from_slice(
             0,
             bytes_of(&SceneUniformBuffer {
                 view: Mat4::look_at_lh(Vec3::Z * 4.0, Vec3::ZERO, Vec3::NEG_Y),
@@ -86,38 +97,39 @@ fn main() -> anyhow::Result<()> {
             }),
         );
 
-        let cube_vertex_buf = frame.render_graph.bind_node(&cube_mesh.vertex_buf);
-        let scene_uniform_buf = frame.render_graph.bind_node(scene_uniform_buf);
+        let cube_vertex_buf = frame.graph.bind_resource(&cube_mesh.vertex_buf);
+        let scene_uniform_buf = frame.graph.bind_resource(scene_uniform_buf);
 
-        let mut pass = frame
-            .render_graph
-            .begin_pass("cube")
+        let mut cmd = frame
+            .graph
+            .begin_cmd()
+            .debug_name("cube")
             .bind_pipeline(if will_render_msaa {
                 &mesh_msaa_pipeline
             } else {
                 &mesh_noaa_pipeline
             })
-            .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-            .access_node(cube_vertex_buf, AccessType::VertexBuffer)
-            .access_descriptor(0, scene_uniform_buf, AccessType::AnyShaderReadUniformBuffer);
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .resource_access(cube_vertex_buf, AccessType::VertexBuffer)
+            .shader_resource_access(0, scene_uniform_buf, AccessType::AnyShaderReadUniformBuffer);
 
         if will_render_msaa {
-            let msaa_color_image = pass.bind_node(
-                pool.lease(
+            let msaa_color_image = cmd.bind_resource(
+                pool.resource(
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        pass.node_info(frame.swapchain_image).fmt,
+                        cmd.resource(frame.swapchain_image).info.fmt,
                         vk::ImageUsageFlags::COLOR_ATTACHMENT
                             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     )
-                    .to_builder()
+                    .into_builder()
                     .sample_count(sample_count),
                 )
                 .unwrap(),
             );
-            let msaa_depth_image = pass.bind_node(
-                pool.lease(
+            let msaa_depth_image = cmd.bind_resource(
+                pool.resource(
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
@@ -125,20 +137,28 @@ fn main() -> anyhow::Result<()> {
                         vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
                             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     )
-                    .to_builder()
+                    .into_builder()
                     .sample_count(sample_count),
                 )
                 .unwrap(),
             );
 
             // Attachments for multisample mode
-            pass = pass
-                .clear_color_value(0, msaa_color_image, WHITE)
-                .clear_depth_stencil(msaa_depth_image)
-                .resolve_color(0, 1, frame.swapchain_image);
+            cmd.set_color_attachment_image(
+                0,
+                msaa_color_image,
+                LoadOp::CLEAR_WHITE_ALPHA_ONE,
+                StoreOp::DontCare,
+            )
+            .set_color_attachment_resolve_image(0, 1, frame.swapchain_image)
+            .set_depth_stencil_attachment_image(
+                msaa_depth_image,
+                LoadOp::CLEAR_ONE_STENCIL_ZERO,
+                StoreOp::DontCare,
+            );
         } else {
-            let noaa_depth_image = pass.bind_node(
-                pool.lease(ImageInfo::image_2d(
+            let noaa_depth_image = cmd.bind_resource(
+                pool.resource(ImageInfo::image_2d(
                     frame.width,
                     frame.height,
                     depth_format,
@@ -149,16 +169,22 @@ fn main() -> anyhow::Result<()> {
             );
 
             // Attachments for non-multisample mode
-            pass = pass
-                .clear_color_value(0, frame.swapchain_image, WHITE)
-                .clear_depth_stencil(noaa_depth_image)
-                .store_color(0, frame.swapchain_image);
+            cmd.set_color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_WHITE_ALPHA_ONE,
+                StoreOp::Store,
+            )
+            .set_depth_stencil_attachment_image(
+                noaa_depth_image,
+                LoadOp::CLEAR_ONE_STENCIL_ZERO,
+                StoreOp::DontCare,
+            );
         }
 
-        pass.record_subpass(move |subpass, _| {
-            subpass
-                .bind_vertex_buffer(cube_vertex_buf)
-                .push_constants(bytes_of(&world_transform))
+        cmd.record_cmd(move |cmd| {
+            cmd.bind_vertex_buffer(0, cube_vertex_buf, 0)
+                .push_constants(0, bytes_of(&world_transform))
                 .draw(cube_mesh.vertex_count, 1, 0, 0);
         });
     })?;
@@ -168,8 +194,7 @@ fn main() -> anyhow::Result<()> {
 
 fn best_depth_format(device: &Device) -> vk::Format {
     for format in [vk::Format::D32_SFLOAT, vk::Format::D16_UNORM] {
-        let format_props = Device::image_format_properties(
-            device,
+        let format_props = device.physical_device.image_format_properties(
             format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -298,7 +323,7 @@ fn load_cube_data() -> [CubeVertex; 36] {
 }
 
 /// Loads a cube as unindexed position, normal and color vertices
-fn load_cube_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
+fn load_cube_mesh(device: &Device) -> Result<Model, DriverError> {
     let vertices = load_cube_data();
 
     let vertex_buf = Arc::new(Buffer::create_from_slice(
@@ -314,12 +339,13 @@ fn load_cube_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
 }
 
 fn create_mesh_pipeline(
-    device: &Arc<Device>,
+    device: &Device,
     sample_count: SampleCount,
-) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let vert = inline_spirv!(
+) -> Result<GraphicPipeline, DriverError> {
+    let vert = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(vertex)
 
         layout(push_constant) uniform PushConstants {
             mat4 world;
@@ -345,12 +371,12 @@ fn create_mesh_pipeline(
             normal_out = (push_const.world * vec4(normal, 1.0)).xyz;
             color_out = color;
         }
-        "#,
-        vert
+        "#
     );
-    let frag = inline_spirv!(
+    let frag = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(fragment)
 
         layout(set = 0, binding = 0) uniform Scene {
             mat4 view;
@@ -368,20 +394,12 @@ fn create_mesh_pipeline(
 
             color_out = vec4(color * lambertian, 1.0);
         }
-        "#,
-        frag
+        "#
     );
 
-    let info = GraphicPipelineInfoBuilder::default().samples(sample_count);
+    let info = GraphicPipelineInfo::builder().samples(sample_count);
 
-    Ok(Arc::new(GraphicPipeline::create(
-        device,
-        info,
-        [
-            Shader::new_vertex(vert.as_slice()),
-            Shader::new_fragment(frag.as_slice()),
-        ],
-    )?))
+    GraphicPipeline::create(device, info, [vert.as_slice(), frag.as_slice()])
 }
 
 #[derive(Parser)]
@@ -397,7 +415,7 @@ struct Model {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, NoUninit)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniformBuffer {
     view: Mat4,
     projection: Mat4,

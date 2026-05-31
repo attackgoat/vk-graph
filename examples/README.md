@@ -1,8 +1,8 @@
-# _Screen 13_ Example Code
+# _vk-graph_ Example Code
 
 ## Getting Started
 
-A helpful [getting started](getting-started.md) guide is available which describes basic _Screen 13_
+A helpful [guide](https://attackgoat.github.io/vk-graph) is available which describes _vk-graph_
 types and functions.
 
 See the [README](../README.md) for more information.
@@ -17,7 +17,7 @@ Example | Instructions | Preview
 [min_max.rs](min_max.rs) | <pre>cargo run --example min_max</pre> | _See console output_
 [mip_compute.rs](mip_compute.rs) | <pre>cargo run --example mip_compute</pre> | _See console output_
 [subgroup_ops.rs](subgroup_ops.rs) | <pre>cargo run --example subgroup_ops</pre> | _See console output_
-[hello_world.rs](../contrib/screen-13-window/examples/hello_world.rs) | _See [screen-13-window](../contrib/screen-13-window/README.md)_ | <image alt="hello_world.rs" src="../.github/img/hello_world.png" width="176" height="150">
+[hello_world.rs](../crates/vk-graph-window/examples/hello_world.rs) | _See [vk-graph-window](../crates/vk-graph-window/README.md)_ | <image alt="hello_world.rs" src="../.github/img/hello_world.png" width="176" height="150">
 [app.rs](app.rs) | <pre>cargo run --example app</pre> | <image alt="app.rs" src="../.github/img/app.png" width="176" height="150">
 [triangle.rs](triangle.rs) | <pre>cargo run --example triangle</pre> | <image alt="triangle.rs" src="../.github/img/triangle.png" width="176" height="150">
 [vertex_layout.rs](vertex_layout.rs) | <pre>cargo run --example vertex_layout</pre> | <image alt="vertex_layout.rs" src="../.github/img/vertex_layout.png" width="176" height="150">
@@ -35,16 +35,16 @@ Example | Instructions | Preview
 [vsm_omni.rs](vsm_omni.rs) | <pre>cargo run --example vsm_omni</pre> Variance shadow mapping for omni/point lights | <image alt="vsm_omni.rs" src="../.github/img/vsm_omni.png" width="176" height="150">
 [ray_omni.rs](ray_omni.rs) | <pre>cargo run --example ray_omni</pre> Ray query for omni/point lights | <image alt="ray_omni.rs" src="../.github/img/ray_omni.png" width="176" height="150">
 [transitions.rs](transitions.rs) | <pre>cargo run --example transitions</pre> | <image alt="transitions.rs" src="../.github/img/transitions.png" width="176" height="150">
-[skeletal-anim/](skeletal-anim/src/main.rs) | <pre>cargo run --manifest-path examples/skeletal-anim/Cargo.toml</pre> Skeletal mesh animation using GLTF | <image alt="skeletal-anim" src="../.github/img/skeletal-anim.png" width="176" height="150">
-[shader-toy/](shader-toy/src/main.rs) | <pre>cargo run --manifest-path examples/shader-toy/Cargo.toml</pre> | <image alt="shader-toy" src="../.github/img/shader-toy.png" width="176" height="105">
-[vr/](vr/src/main.rs) | <pre>cargo run --manifest-path examples/vr/Cargo.toml</pre> | <image alt="vr" src="../.github/img/vr.png" width="176" height="146">
+[skeletal-anim/](skeletal-anim/src/main.rs) | <pre>cargo run -p skeletal-anim</pre> Skeletal mesh animation using GLTF | <image alt="skeletal-anim" src="../.github/img/skeletal-anim.png" width="176" height="150">
+[shader-toy/](shader-toy/src/main.rs) | <pre>cargo run -p shader-toy</pre> | <image alt="shader-toy" src="../.github/img/shader-toy.png" width="176" height="105">
+[vr/](vr/src/main.rs) | <pre>cargo run -p vr</pre> | <image alt="vr" src="../.github/img/vr.png" width="176" height="146">
 
 ## Additional Examples
 
 The following packages offer examples for specific cases not listed here:
 
-- [contrib/screen-13-hot](../contrib/screen-13-hot/examples/README.md): Shader pipeline hot-reload
+- [crates/vk-graph-hot](../crates/vk-graph-hot/examples/README.md): Shader pipeline hot-reload
 - [attackgoat/mood](https://github.com/attackgoat/mood): FPS game prototype with level loading and
   multiple rendering backends
 - [attackgoat/jw-basic](https://github.com/attackgoat/jw-basic): BASIC interpreter with graphics
-  commands powered by _Screen 13_
+  commands powered by _vk-graph_

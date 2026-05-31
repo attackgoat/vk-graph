@@ -1,18 +1,39 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::{NoUninit, cast_slice},
+    ash::vk,
+    bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
-    inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
     std::sync::Arc,
+    vk_graph::{
+        Graph,
+        cmd::BuildAccelerationStructureInfo,
+        driver::{
+            DriverError,
+            accel_struct::{
+                AccelerationStructure, AccelerationStructureGeometry,
+                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
+                AccelerationStructureInfo,
+            },
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            physical_device::RayTraceProperties,
+            ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup},
+            shader::Shader,
+        },
+        pool::hash::HashPool,
+    },
+    vk_graph_window::Window,
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
-static SHADER_RAY_GEN: &[u32] = inline_spirv!(
+static SHADER_RAY_GEN: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : enable
+    #pragma shader_stage(raygen)
     
     layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
     layout(binding = 1, set = 0, rgba32f) uniform image2D image;
@@ -31,21 +52,33 @@ static SHADER_RAY_GEN: &[u32] = inline_spirv!(
         float tmin = 0.001;
         float tmax = 10000.0;
     
-        traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin.xyz, tmin, direction.xyz, tmax, 0);
+        traceRayEXT(
+            topLevelAS,
+            gl_RayFlagsOpaqueEXT,
+            0xff,
+            0,
+            0,
+            0,
+            origin.xyz,
+            tmin,
+            direction.xyz,
+            tmax,
+            0
+        );
     
         imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(hitValue, 0.0));
     }
-    "#,
-    rgen,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
+static SHADER_CLOSEST_HIT: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : enable
     #extension GL_EXT_nonuniform_qualifier : enable
+    #pragma shader_stage(closest)
     
     layout(location = 0) rayPayloadInEXT vec3 resultColor;
     hitAttributeEXT vec2 attribs;
@@ -54,32 +87,30 @@ static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
       const vec3 barycentricCoords = vec3(1.0f - attribs.x - attribs.y, attribs.x, attribs.y);
       resultColor = barycentricCoords;
     }
-    "#,
-    rchit,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_MISS: &[u32] = inline_spirv!(
+static SHADER_MISS: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : enable
+    #pragma shader_stage(miss)
     
     layout(location = 0) rayPayloadInEXT vec3 hitValue;
     
     void main() {
         hitValue = vec3(0.0, 0.0, 0.2);
     }
-    "#,
-    rmiss,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipeline>, DriverError> {
-    Ok(Arc::new(RayTracePipeline::create(
+fn create_ray_trace_pipeline(device: &Device) -> Result<RayTracePipeline, DriverError> {
+    RayTracePipeline::create(
         device,
-        RayTracePipelineInfoBuilder::default().max_ray_recursion_depth(1),
+        RayTracePipelineInfo::builder().max_ray_recursion_depth(1),
         [
             Shader::new_ray_gen(SHADER_RAY_GEN),
             Shader::new_closest_hit(SHADER_CLOSEST_HIT),
@@ -90,7 +121,7 @@ fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipelin
             RayTraceShaderGroup::new_triangles(1, None),
             RayTraceShaderGroup::new_general(2),
         ],
-    )?))
+    )
 }
 
 /// Adapted from https://iorange.github.io/p01/HappyTriangle.html
@@ -99,7 +130,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let mut pool = HashPool::new(&window.device);
 
     // ------------------------------------------------------------------------------------------ //
@@ -136,27 +167,27 @@ fn main() -> anyhow::Result<()> {
                 vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             )
-            .to_builder()
+            .into_builder()
             .alignment(shader_group_base_alignment as _),
         )
         .unwrap();
 
         let data = Buffer::mapped_slice_mut(&mut buf);
 
-        let rgen_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 0)?;
+        let rgen_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 0);
         data[0..rgen_handle.len()].copy_from_slice(rgen_handle);
 
-        let hit_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 1)?;
+        let hit_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 1);
         data[sbt_hit_start as usize..sbt_hit_start as usize + hit_handle.len()]
             .copy_from_slice(hit_handle);
 
-        let miss_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 2)?;
+        let miss_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 2);
         data[sbt_miss_start as usize..sbt_miss_start as usize + miss_handle.len()]
             .copy_from_slice(miss_handle);
 
         buf
     });
-    let sbt_address = Buffer::device_address(&sbt_buf);
+    let sbt_address = sbt_buf.device_address();
     let sbt_rgen = vk::StridedDeviceAddressRegionKHR {
         device_address: sbt_address,
         stride: shader_group_handle_size as _,
@@ -182,7 +213,7 @@ fn main() -> anyhow::Result<()> {
     let vertex_count = triangle_count * 3;
 
     #[repr(C)]
-    #[derive(Debug, Clone, Copy, NoUninit)]
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
     #[allow(dead_code)]
     struct Vertex {
         pos: [f32; 3],
@@ -212,7 +243,7 @@ fn main() -> anyhow::Result<()> {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, data);
+        buf.copy_from_slice(0, data);
         Arc::new(buf)
     };
 
@@ -226,7 +257,7 @@ fn main() -> anyhow::Result<()> {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, data);
+        buf.copy_from_slice(0, data);
         Arc::new(buf)
     };
 
@@ -238,11 +269,11 @@ fn main() -> anyhow::Result<()> {
         AccelerationStructureGeometry::opaque(
             triangle_count,
             AccelerationStructureGeometryData::triangles(
-                Buffer::device_address(&index_buf),
+                index_buf.device_address(),
                 vk::IndexType::UINT32,
                 vertex_count,
                 None,
-                Buffer::device_address(&vertex_buf),
+                vertex_buf.device_address(),
                 vk::Format::R32G32B32_SFLOAT,
                 12,
             ),
@@ -287,7 +318,7 @@ fn main() -> anyhow::Result<()> {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buffer, 0, instance_data);
+        buffer.copy_from_slice(0, instance_data);
 
         buffer
     });
@@ -299,7 +330,7 @@ fn main() -> anyhow::Result<()> {
     let tlas_geometry_info = AccelerationStructureGeometryInfo::tlas([(
         AccelerationStructureGeometry::opaque(
             1,
-            AccelerationStructureGeometryData::instances(Buffer::device_address(&instance_buf)),
+            AccelerationStructureGeometryData::instances(instance_buf.device_address()),
         ),
         vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
     )]);
@@ -322,62 +353,72 @@ fn main() -> anyhow::Result<()> {
             .unwrap()
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
-        let mut render_graph = RenderGraph::new();
-        let index_node = render_graph.bind_node(&index_buf);
-        let vertex_node = render_graph.bind_node(&vertex_buf);
-        let blas_node = render_graph.bind_node(&blas);
+        let mut graph = Graph::default();
+        let index_node = graph.bind_resource(&index_buf);
+        let vertex_node = graph.bind_resource(&vertex_buf);
+        let blas_node = graph.bind_resource(&blas);
 
         {
-            let scratch_buf = render_graph.bind_node(Buffer::create(
+            let scratch_buf = graph.bind_resource(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     blas_size.build_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
-                .to_builder()
+                .into_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = render_graph.node_device_address(scratch_buf);
+            let scratch_addr = graph.resource(scratch_buf).device_address();
 
-            render_graph
-                .begin_pass("Build BLAS")
-                .access_node(index_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(vertex_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-                .access_node(blas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_acceleration(move |accel, _| {
-                    accel.build_structure(&blas_geometry_info, blas_node, scratch_data);
+            graph
+                .begin_cmd()
+                .debug_name("Build BLAS")
+                .resource_access(index_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(vertex_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
+                .record_cmd(move |cmd| {
+                    cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+                        blas_node,
+                        scratch_addr,
+                        blas_geometry_info,
+                    )]);
                 });
         }
 
         {
-            let instance_node = render_graph.bind_node(instance_buf);
-            let scratch_buf = render_graph.bind_node(Buffer::create(
+            let instance_node = graph.bind_resource(instance_buf);
+            let scratch_buf = graph.bind_resource(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     tlas_size.build_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
-                .to_builder()
+                .into_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = render_graph.node_device_address(scratch_buf);
-            let tlas_node = render_graph.bind_node(&tlas);
+            let scratch_addr = graph.resource(scratch_buf).device_address();
+            let tlas_node = graph.bind_resource(&tlas);
 
-            render_graph
-                .begin_pass("Build TLAS")
-                .access_node(blas_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(instance_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-                .access_node(tlas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_acceleration(move |accel, _| {
-                    accel.build_structure(&tlas_geometry_info, tlas_node, scratch_data);
+            graph
+                .begin_cmd()
+                .debug_name("Build TLAS")
+                .resource_access(blas_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(instance_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
+                .record_cmd(move |cmd| {
+                    cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+                        tlas_node,
+                        scratch_addr,
+                        tlas_geometry_info,
+                    )]);
                 });
         }
 
-        render_graph.resolve().submit(&mut pool, 0, 0)?;
+        graph.into_submission().queue_submit(&mut pool, 0, 0)?;
     }
 
     // ------------------------------------------------------------------------------------------ //
@@ -388,27 +429,28 @@ fn main() -> anyhow::Result<()> {
     // - Trace the image
     // - Copy image to the swapchain
     window.run(|frame| {
-        let blas_node = frame.render_graph.bind_node(&blas);
-        let tlas_node = frame.render_graph.bind_node(&tlas);
-        let sbt_node = frame.render_graph.bind_node(&sbt_buf);
+        let blas_node = frame.graph.bind_resource(&blas);
+        let tlas_node = frame.graph.bind_resource(&tlas);
+        let sbt_node = frame.graph.bind_resource(&sbt_buf);
 
         frame
-            .render_graph
-            .begin_pass("ray-traced triangle")
+            .graph
+            .begin_cmd()
+            .debug_name("ray-traced triangle")
             .bind_pipeline(&ray_trace_pipeline)
-            .access_node(
+            .resource_access(
                 blas_node,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .access_node(sbt_node, AccessType::RayTracingShaderReadOther)
-            .access_descriptor(
+            .resource_access(sbt_node, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(
                 0,
                 tlas_node,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .write_descriptor(1, frame.swapchain_image)
-            .record_ray_trace(move |ray_trace, _| {
-                ray_trace.trace_rays(
+            .shader_resource_access(1, frame.swapchain_image, AccessType::AnyShaderWrite)
+            .record_cmd(move |cmd| {
+                cmd.trace_rays(
                     &sbt_rgen,
                     &sbt_miss,
                     &sbt_hit,
@@ -418,7 +460,7 @@ fn main() -> anyhow::Result<()> {
                     1,
                 );
             })
-            .submit_pass();
+            .end_cmd();
     })?;
 
     Ok(())

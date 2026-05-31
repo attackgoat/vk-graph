@@ -1,9 +1,22 @@
 use {
+    ash::vk,
     bytemuck::cast_slice,
     clap::Parser,
-    inline_spirv::inline_spirv,
-    screen_13::prelude::*,
     std::{mem::size_of, sync::Arc, time::Instant},
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::{Device, DeviceInfo},
+            physical_device::Vulkan11Properties,
+            shader::{Shader, SpecializationMap},
+        },
+        pool::hash::HashPool,
+    },
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 /// Advanced example demonstrating subgroup operations (arithmetic and ballot).
@@ -30,8 +43,8 @@ fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
     let args = Args::parse();
-    let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::create_headless(device_info)?);
+    let device_info = DeviceInfo::builder().debug(args.debug);
+    let device = Device::create(device_info)?;
     let Vulkan11Properties {
         subgroup_size,
         subgroup_supported_operations,
@@ -61,20 +74,20 @@ fn main() -> Result<(), DriverError> {
 }
 
 fn exclusive_sum(
-    device: &Arc<Device>,
-    reduce_pipeline: &Arc<ComputePipeline>,
-    scan_pipeline: &Arc<ComputePipeline>,
+    device: &Device,
+    reduce_pipeline: &ComputePipeline,
+    scan_pipeline: &ComputePipeline,
     input_data: &[u32],
 ) -> Result<Vec<u32>, DriverError> {
-    let mut render_graph = RenderGraph::new();
+    let mut graph = Graph::default();
 
-    let input_buf = render_graph.bind_node(Buffer::create_from_slice(
+    let input_buf = graph.bind_resource(Buffer::create_from_slice(
         device,
         vk::BufferUsageFlags::STORAGE_BUFFER,
         cast_slice(input_data),
     )?);
 
-    let output_buf = render_graph.bind_node(Arc::new(Buffer::create(
+    let output_buf = graph.bind_resource(Arc::new(Buffer::create(
         device,
         BufferInfo::host_mem(
             input_data.len() as vk::DeviceSize * size_of::<u32>() as vk::DeviceSize,
@@ -85,7 +98,7 @@ fn exclusive_sum(
     let workgroup_count =
         input_data.len() as u32 / device.physical_device.properties_v1_1.subgroup_size;
     let reduce_count = workgroup_count - 1;
-    let workgroup_buf = render_graph.bind_node(Buffer::create(
+    let workgroup_buf = graph.bind_resource(Buffer::create(
         device,
         BufferInfo::device_mem(
             reduce_count.max(1) as vk::DeviceSize * size_of::<u32>() as vk::DeviceSize,
@@ -94,33 +107,35 @@ fn exclusive_sum(
     )?);
 
     if reduce_count > 0 {
-        render_graph
-            .begin_pass("exclusive sum reduce")
+        graph
+            .begin_cmd()
+            .debug_name("exclusive sum reduce")
             .bind_pipeline(reduce_pipeline)
-            .read_descriptor(0, input_buf)
-            .write_descriptor(1, workgroup_buf)
-            .record_compute(move |compute, _| {
-                compute.dispatch(reduce_count, 1, 1);
+            .shader_resource_access(0, input_buf, AccessType::ComputeShaderReadOther)
+            .shader_resource_access(1, workgroup_buf, AccessType::ComputeShaderWrite)
+            .record_cmd(move |cmd| {
+                cmd.dispatch(reduce_count, 1, 1);
             });
     }
 
-    render_graph
-        .begin_pass("exclusive sum scan")
+    graph
+        .begin_cmd()
+        .debug_name("exclusive sum scan")
         .bind_pipeline(scan_pipeline)
-        .read_descriptor(0, workgroup_buf)
-        .read_descriptor(1, input_buf)
-        .write_descriptor(2, output_buf)
-        .record_compute(move |compute, _| {
-            compute.dispatch(workgroup_count, 1, 1);
+        .shader_resource_access(0, workgroup_buf, AccessType::ComputeShaderReadOther)
+        .shader_resource_access(1, input_buf, AccessType::ComputeShaderReadOther)
+        .shader_resource_access(2, output_buf, AccessType::ComputeShaderWrite)
+        .record_cmd(move |cmd| {
+            cmd.dispatch(workgroup_count, 1, 1);
         });
 
-    let output_buf = render_graph.unbind_node(output_buf);
-    let mut cmd_buf = render_graph
-        .resolve()
-        .submit(&mut HashPool::new(device), 0, 0)?;
+    let output_buf = graph.resource(output_buf).clone();
+    let mut cmd = graph
+        .into_submission()
+        .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();
-    cmd_buf.wait_until_executed()?;
+    cmd.wait_until_executed()?;
 
     println!(
         "Waited {}μs (len={})",
@@ -150,16 +165,18 @@ fn assert_output_data(input_data: &[u32], output_data: &[u32]) {
     }
 }
 
-fn create_reduce_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, DriverError> {
-    Ok(Arc::new(ComputePipeline::create(
+fn create_reduce_pipeline(device: &Device) -> Result<ComputePipeline, DriverError> {
+    ComputePipeline::create(
         device,
         ComputePipelineInfo::default(),
-        Shader::new_compute(
-            inline_spirv!(
+        Shader::from_spirv(
+            glsl!(
+                target: vulkan1_2,
                 r#"
                 #version 460 core
                 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
                 #extension GL_KHR_shader_subgroup_arithmetic : require
+                #pragma shader_stage(compute)
 
                 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -178,84 +195,82 @@ fn create_reduce_pipeline(device: &Arc<Device>) -> Result<Arc<ComputePipeline>, 
                         workgroup_buf[gl_WorkGroupID.x] = sum;
                     }
                 }
-                "#,
-                comp,
-                vulkan1_2,
+                "#
             )
             .as_slice(),
         )
-        .specialization_info(SpecializationInfo {
-            data: device
-                .physical_device
-                .properties_v1_1
-                .subgroup_size
-                .to_ne_bytes()
-                .to_vec(),
-            map_entries: vec![vk::SpecializationMapEntry {
-                constant_id: 0,
-                offset: 0,
-                size: size_of::<u32>(),
-            }],
-        }),
-    )?))
+        .specialization(
+            SpecializationMap::new(
+                device
+                    .physical_device
+                    .properties_v1_1
+                    .subgroup_size
+                    .to_ne_bytes(),
+            )
+            .constant(0, 0, 4),
+        ),
+    )
 }
 
-fn create_exclusive_sum_pipeline(
-    device: &Arc<Device>,
-) -> Result<Arc<ComputePipeline>, DriverError> {
-    Ok( Arc::new(
-        ComputePipeline::create(
-            device,
-            ComputePipelineInfo::default(),
-            Shader::new_compute(inline_spirv!(
-                r#"
-                #version 460 core
-                #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
-                #extension GL_KHR_shader_subgroup_arithmetic : require
+fn create_exclusive_sum_pipeline(device: &Device) -> Result<ComputePipeline, DriverError> {
+    ComputePipeline::create(
+        device,
+        ComputePipelineInfo::default(),
+        Shader::new_compute(
+            glsl!(
+                    target: vulkan1_2,
+                    r#"
+                    #version 460 core
+                    #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+                    #extension GL_KHR_shader_subgroup_arithmetic : require
+                    #pragma shader_stage(compute)
 
-                layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+                    layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-                layout(binding = 0) restrict readonly buffer WorkgroupBuffer {
-                    uint32_t workgroup_buf[];
-                };
+                    layout(binding = 0) restrict readonly buffer WorkgroupBuffer {
+                        uint32_t workgroup_buf[];
+                    };
 
-                layout(binding = 1) restrict readonly buffer InputBuffer {
-                    uint32_t input_buf[];
-                };
+                    layout(binding = 1) restrict readonly buffer InputBuffer {
+                        uint32_t input_buf[];
+                    };
 
-                layout(binding = 2) restrict writeonly buffer OutputBuffer {
-                    uint32_t output_buf[];
-                };
+                    layout(binding = 2) restrict writeonly buffer OutputBuffer {
+                        uint32_t output_buf[];
+                    };
 
-                void main() {
-                    uint32_t subgroup_sum = subgroupExclusiveAdd(input_buf[gl_GlobalInvocationID.x]);
-                    uint32_t workgroup_sum = 0;
+                    void main() {
+                        uint32_t subgroup_sum =
+                            subgroupExclusiveAdd(input_buf[gl_GlobalInvocationID.x]);
+                        uint32_t workgroup_sum = 0;
 
-                    uint workgroups_per_subgroup_invocation = (gl_NumWorkGroups.x + gl_SubgroupSize - 1) / gl_SubgroupSize;
-                    uint start = gl_SubgroupInvocationID * workgroups_per_subgroup_invocation;
-                    uint end = min(start + workgroups_per_subgroup_invocation, gl_WorkGroupID.x);
-                    for (uint workgroup_id = start; workgroup_id < end; workgroup_id++) {
-                        workgroup_sum += workgroup_buf[workgroup_id];
+                        uint workgroups_per_subgroup_invocation =
+                            (gl_NumWorkGroups.x + gl_SubgroupSize - 1) / gl_SubgroupSize;
+                        uint start = gl_SubgroupInvocationID * workgroups_per_subgroup_invocation;
+                        uint end = min(start + workgroups_per_subgroup_invocation, gl_WorkGroupID.x);
+                        for (uint workgroup_id = start; workgroup_id < end; workgroup_id++) {
+                            workgroup_sum += workgroup_buf[workgroup_id];
+                        }
+
+                        workgroup_sum = subgroupAdd(workgroup_sum);
+
+                        output_buf[gl_GlobalInvocationID.x] = subgroup_sum + workgroup_sum;
                     }
-
-                    workgroup_sum = subgroupAdd(workgroup_sum);
-
-                    output_buf[gl_GlobalInvocationID.x] = subgroup_sum + workgroup_sum;
-                }
-                "#,
-                comp,
-                vulkan1_2
-        ).as_slice())
-            .specialization_info(SpecializationInfo {
-                data: device.physical_device.properties_v1_1.subgroup_size.to_ne_bytes().to_vec(),
-                map_entries: vec![vk::SpecializationMapEntry {
-                    constant_id: 0,
-                    offset: 0,
-                    size: size_of::<u32>(),
-                }],
-            }),
-        )?
-    ))
+                    "#
+            )
+            .as_slice(),
+        )
+        .specialization(
+            SpecializationMap::new(
+                device
+                    .physical_device
+                    .properties_v1_1
+                    .subgroup_size
+                    .to_ne_bytes(),
+            )
+            .constant(0, 0, 4),
+        ),
+    )
 }
 
 #[derive(Parser)]

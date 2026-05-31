@@ -1,11 +1,12 @@
 [package]
 name = "shader-toy"
-version = "0.1.0"
 authors = ["John Wells <john@attackgoat.com>"]
-edition = "2021"
-license = "MIT OR Apache-2.0"
-readme = "README.md"
 description = "Example api usage"
+edition.workspace = true
+license.workspace = true
+publish = false
+readme.workspace = true
+repository.workspace = true
 
 [features]
 default = ["include-pak"]
@@ -13,18 +14,18 @@ include-pak = []
 
 [dependencies]
 anyhow = "1.0"
-bytemuck = "1.14"
-clap = { version = "4.5", features = ["derive"] }
-pak = "0.5"
+bytemuck = { version = "1.25", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
+pak = "0.7"
 pretty_env_logger = "0.5"
-screen-13 = { path = "../.." }
-screen-13-fx = { path = "../../contrib/screen-13-fx" }
-screen-13-window = { path = "../../contrib/screen-13-window" }
-winit = "0.30"
+vk-graph.workspace = true
+vk-graph-fx.workspace = true
+vk-graph-window.workspace = true
+winit.workspace = true
 
 [build-dependencies]
 anyhow = "1.0"
-pak = { version = "0.5", features = ["bake"] }
+pak = { version = "0.7", features = ["bake"] }
 paste = "1.0"
 shader-prepper = "0.3.0-pre.3"  
-shaderc = "0.8"
+shaderc = "0.10"

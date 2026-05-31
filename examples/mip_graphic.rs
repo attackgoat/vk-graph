@@ -1,14 +1,27 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{Pod, Zeroable, bytes_of},
     clap::Parser,
     core::f32,
     glam::{Vec4, vec3},
-    inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::{WindowBuilder, WindowError},
     std::sync::Arc,
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+            shader::{SamplerInfoBuilder, Shader},
+        },
+        pool::lazy::LazyPool,
+    },
+    vk_graph_window::{Window, WindowError},
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 // TODO: Add texelFetch option
@@ -18,7 +31,7 @@ fn main() -> Result<(), WindowError> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
 
     let size = 237u32;
     let mip_level_count = size.ilog2();
@@ -31,7 +44,7 @@ fn main() -> Result<(), WindowError> {
         vk::Format::R8G8B8A8_UNORM,
         vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
     )
-    .to_builder()
+    .into_builder()
     .mip_level_count(mip_level_count)
     .build();
     let image = Arc::new(Image::create(&window.device, image_info)?);
@@ -46,59 +59,76 @@ fn main() -> Result<(), WindowError> {
         // https://vulkan.gpuinfo.org/listsurfaceusageflags.php
         assert!(
             frame
-                .render_graph
-                .node_info(frame.swapchain_image)
+                .graph
+                .resource(frame.swapchain_image)
+                .info
                 .usage
                 .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
         );
 
-        let image = frame.render_graph.bind_node(&image);
-        let swapchain_info = frame.render_graph.node_info(frame.swapchain_image);
+        let image = frame.graph.bind_resource(&image);
+        let swapchain_info = frame.graph.resource(frame.swapchain_image).info;
         let stripe_width = swapchain_info.width / mip_level_count;
 
-        let mut pass = frame
-            .render_graph
-            .begin_pass("splat mips")
+        let mut cmd = frame
+            .graph
+            .begin_cmd()
+            .debug_name("splat mips")
             .bind_pipeline(&splat);
 
         for mip_level in 0..mip_level_count {
             let stripe_x = mip_level * stripe_width;
-            pass = pass
-                .read_descriptor_as(
+            let load_op = if mip_level == 0 {
+                LoadOp::CLEAR_BLACK_ALPHA_ZERO
+            } else {
+                LoadOp::Load
+            };
+            cmd = cmd
+                .shader_subresource_access(
                     0,
                     image,
                     image_info
-                        .default_view_info()
-                        .to_builder()
+                        .into_image_view()
+                        .into_builder()
                         .base_mip_level(mip_level)
                         .mip_level_count(1),
+                    AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
-                .load_color(0, frame.swapchain_image)
-                .store_color(0, frame.swapchain_image)
-                .set_render_area(stripe_x as _, 0, stripe_width, swapchain_info.height)
-                .record_subpass(|subpass, _| {
-                    subpass.draw(6, 1, 0, 0);
+                .color_attachment_image(0, frame.swapchain_image, load_op, StoreOp::Store)
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D {
+                        x: stripe_x as _,
+                        y: 0,
+                    },
+                    extent: vk::Extent2D {
+                        width: stripe_width,
+                        height: swapchain_info.height,
+                    },
+                })
+                .record_cmd(|cmd| {
+                    cmd.draw(6, 1, 0, 0);
                 });
         }
     })
 }
 
-fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), DriverError> {
-    #[derive(Clone, Copy, Pod, Zeroable)]
+fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverError> {
     #[repr(C)]
+    #[derive(Clone, Copy, Pod, Zeroable)]
     struct PushConstants {
         a: Vec4,
         b: Vec4,
     }
 
-    let vertical_gradient = Arc::new(GraphicPipeline::create(
+    let vertical_gradient = GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     const vec2 POSITION[] = {
                         vec2(-1, -1),
@@ -116,15 +146,15 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
                         ab = max(position.y, 0);
                         gl_Position = vec4(position, 0, 1);
                     }
-                    "#,
-                    vert
+                    "#
                 )
                 .as_slice(),
             ),
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(fragment)
 
                     layout(push_constant) uniform PushConstants {
                         layout(offset = 0) vec3 a;
@@ -137,41 +167,45 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
                     void main() {
                         color = vec4(mix(a, b, ab), 1);
                     }
-                    "#,
-                    frag
+                    "#
                 )
                 .as_slice(),
             ),
         ],
-    )?);
+    )?;
 
-    let mut render_graph = RenderGraph::new();
+    let mut graph = Graph::default();
     let image_info = image.info;
-    let image = render_graph.bind_node(image);
+    let image = graph.bind_resource(image);
 
     // NOTE: Each pass writes to a different mip level, and so although it's the same image they are
     // unable to be used as a single pass so we must call begin_pass for each. Without starting a
     // new pass for each level the Vulkan framebuffer would be set to the size of the first image.
     for mip_level in 0..image_info.mip_level_count {
-        render_graph
-            .begin_pass("fill mip levels")
+        graph
+            .begin_cmd()
+            .debug_name("fill mip levels")
             .bind_pipeline(&vertical_gradient)
-            .store_color_as(
+            .color_attachment_image_view(
                 0,
                 image,
                 image_info
-                    .default_view_info()
-                    .to_builder()
+                    .into_image_view()
+                    .into_builder()
                     .base_mip_level(mip_level)
                     .mip_level_count(1),
+                LoadOp::DontCare,
+                StoreOp::Store,
             )
-            .record_subpass(|subpass, _| {
-                subpass
-                    .push_constants(bytes_of(&PushConstants {
+            .record_cmd(|cmd| {
+                cmd.push_constants(
+                    0,
+                    bytes_of(&PushConstants {
                         a: vec3(0.0, 1.0, 1.0).extend(f32::NAN),
                         b: vec3(1.0, 0.0, 1.0).extend(f32::NAN),
-                    }))
-                    .draw(6, 1, 0, 0);
+                    }),
+                )
+                .draw(6, 1, 0, 0);
             });
     }
 
@@ -185,26 +219,27 @@ fn fill_mip_levels(device: &Arc<Device>, image: &Arc<Image>) -> Result<(), Drive
             family
                 .queue_flags
                 .contains(vk::QueueFlags::GRAPHICS)
-                .then_some(idx)
+                .then_some(idx as u32)
         })
         .ok_or(DriverError::Unsupported)?;
 
     // Submits to the GPU but does not wait for anything to be finished
-    render_graph
-        .resolve()
-        .submit(&mut LazyPool::new(device), queue_family_index, 0)
+    graph
+        .into_submission()
+        .queue_submit(&mut LazyPool::new(device), queue_family_index, 0)
         .map(|_| ())
 }
 
-fn splat(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
-    Ok(Arc::new(GraphicPipeline::create(
+fn splat(device: &Device) -> Result<GraphicPipeline, DriverError> {
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     const vec2 POSITION[] = {
                         vec2(-1, -1),
@@ -229,15 +264,15 @@ fn splat(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
                         texcoord = TEXCOORD[gl_VertexIndex];
                         gl_Position = vec4(POSITION[gl_VertexIndex], 0, 1);
                     }
-                    "#,
-                    vert
+                    "#
                 )
                 .as_slice(),
             ),
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(fragment)
 
                     layout(binding = 0) uniform sampler2D image;
 
@@ -247,8 +282,7 @@ fn splat(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
                     void main() {
                         color = texture(image, texcoord);
                     }
-                    "#,
-                    frag
+                    "#
                 )
                 .as_slice(),
             )
@@ -257,7 +291,7 @@ fn splat(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
                 SamplerInfoBuilder::default().mipmap_mode(vk::SamplerMipmapMode::LINEAR),
             ),
         ],
-    )?))
+    )
 }
 
 #[derive(Parser)]

@@ -1,19 +1,53 @@
-[package]
-name = "screen-13"
-version = "0.13.0"
-authors = ["John Wells <john@attackgoat.com>"]
+[workspace]
+resolver = "3"
+members = [
+    "crates/vk-graph-egui",
+    "crates/vk-graph-fx",
+    "crates/vk-graph-hot",
+    "crates/vk-graph-imgui",
+    "crates/vk-graph-window",
+    "examples/shader-toy",
+    "examples/skeletal-anim",
+    "examples/vr",
+    "guide",
+    "guide/guide-helper"
+]
+
+[workspace.package]
+rust-version = "1.94"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/attackgoat/vk-graph"
 readme = "README.md"
-repository = "https://github.com/attackgoat/screen-13"
-homepage = "https://github.com/attackgoat/screen-13"
-documentation = "https://docs.rs/screen-13"
+
+[workspace.dependencies]
+log = "0.4"
+profiling = "1.0"
+read-only = "0.1"
+vk-graph.path = ""
+vk-graph-egui.path = "crates/vk-graph-egui"
+vk-graph-fx.path = "crates/vk-graph-fx"
+vk-graph-hot.path = "crates/vk-graph-hot"
+vk-graph-imgui.path = "crates/vk-graph-imgui"
+vk-graph-window.path = "crates/vk-graph-window"
+winit = "0.30"
+
+[package]
+name = "vk-graph"
+version = "0.14.0+alpha"
+authors = ["John Wells <john@attackgoat.com>"]
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+homepage = "https://github.com/attackgoat/vk-graph"
+documentation = "https://docs.rs/vk-graph"
 keywords = ["gamedev", "vulkan"]
 categories = ["game-development", "multimedia::images", "rendering::engine"]
-description = "An easy-to-use Vulkan rendering engine in the spirit of QBasic."
+description = "A high-performance Vulkan driver with automatic resource management and execution."
 
 [features]
-default = ["loaded"]
+default = ["loaded", "parking_lot"]
 ash-molten=["loaded", "dep:ash-molten"]
 linked=["ash/linked"]
 loaded=["ash/loaded"]
@@ -24,18 +58,19 @@ profile-with-superluminal = ["profiling/profile-with-superluminal"]
 profile-with-tracy = ["profiling/profile-with-tracy"]
 
 [dependencies]
-ash = { version = "0.38", default-features = false, features = ["debug", "std"] }
+ash = { version = "0.38.0", default-features = false, features = ["debug", "std"] }
 ash-window = "0.13"
 derive_builder = "0.20"
 gpu-allocator = "0.28"
-log = "0.4"
+log.workspace = true
 ordered-float = "5.1"
 parking_lot = { version = "0.12", optional = true }
 paste = "1.0"
-profiling = "1.0"
+profiling.workspace = true
 raw-window-handle = "0.6"
+read-only.workspace = true
 spirq = "1.2"
-vk-sync = { version = "0.5", package = "vk-sync-fork" }  # // SEE: https://github.com/gwihlidal/vk-sync-rs/pull/4 -> https://github.com/expenses/vk-sync-rs
+vk-sync = { version = "0.5", package = "vk-sync-fork" } # // SEE: https://github.com/gwihlidal/vk-sync-rs/pull/4 -> https://github.com/expenses/vk-sync-rs
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ash-molten = { version = "0.20", optional = true }
@@ -43,13 +78,12 @@ ash-molten = { version = "0.20", optional = true }
 [dev-dependencies]
 anyhow = "1.0"
 bmfont = { version = "0.3", default-features = false }
-bytemuck = "1.22"
+bytemuck = "1.25"
 clap = { version = "4.5", features = ["derive"] }
-glam = { version = "0.30", features = ["bytemuck"] }
+glam = { version = "0.32", features = ["bytemuck"] }
 half = { version = "2.4", features = ["bytemuck"] }
 hassle-rs = "0.11"
 image = "0.25"
-inline-spirv = "0.2"
 log = "0.4"
 meshopt = "0.2"
 polyhedron-ops = ">=0.2, <=0.2.4"
@@ -58,10 +92,11 @@ puffin = "0.19"
 puffin_http = "0.16"
 rand = "0.9"
 reqwest = { version = "0.12", features = ["blocking"] }
-screen-13-fx = { path = "contrib/screen-13-fx" }
-screen-13-imgui = { path = "contrib/screen-13-imgui" }
-screen-13-egui = { path = "contrib/screen-13-egui" }
-screen-13-window = { path = "contrib/screen-13-window" }
+vk-graph-fx.workspace = true
+vk-graph-imgui.workspace = true
+vk-graph-egui.workspace = true
+vk-graph-window.workspace = true
+vk-shader-macros = "0.2"
 tobj = "4.0"
-winit = "0.30"
-winit_input_helper = { git = "https://github.com/stefnotch/winit_input_helper.git", rev = "6e76a79d01ce836c01b9cdeaa98846a6f0955dc4" } #"0.16"
+winit.workspace = true
+winit_input_helper = "0.17"

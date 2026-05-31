@@ -1,8 +1,23 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::cast_slice, clap::Parser, inline_spirv::inline_spirv, screen_13::prelude::*,
-    std::sync::Arc,
+    ash::vk,
+    bytemuck::cast_slice,
+    clap::Parser,
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::{Device, DeviceInfo},
+            image::{Image, ImageInfo},
+            shader::{SamplerInfo, Shader},
+        },
+        pool::hash::HashPool,
+    },
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 /// This program demonstrates a single render pass which uses multiple executions to record a chain
@@ -16,12 +31,12 @@ fn main() -> Result<(), DriverError> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::create_headless(device_info)?);
+    let device_info = DeviceInfo::builder().debug(args.debug);
+    let device = Device::create(device_info)?;
 
-    let mut render_graph = RenderGraph::new();
+    let mut graph = Graph::default();
 
-    let depth_pyramid = render_graph.bind_node(Image::create(
+    let depth_pyramid = graph.bind_resource(Image::create(
         &device,
         ImageInfo::image_2d(
             4,
@@ -32,14 +47,14 @@ fn main() -> Result<(), DriverError> {
                 | vk::ImageUsageFlags::TRANSFER_SRC
                 | vk::ImageUsageFlags::TRANSFER_DST,
         )
-        .to_builder()
+        .into_builder()
         .mip_level_count(3),
     )?);
-    let depth_info = render_graph.node_info(depth_pyramid);
+    let depth_info = graph.resource(depth_pyramid).info;
 
     // You would normally create this buffer by copying the depth attachment image
     #[allow(clippy::inconsistent_digit_grouping)]
-    let depth_buf = render_graph.bind_node(Buffer::create_from_slice(
+    let depth_buf = graph.bind_resource(Buffer::create_from_slice(
         &device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         cast_slice(&[
@@ -49,17 +64,19 @@ fn main() -> Result<(), DriverError> {
             [13.0__, 14.0, 15.0, 16.0],
         ]),
     )?);
-    render_graph.copy_buffer_to_image(depth_buf, depth_pyramid);
+    graph.copy_buffer_to_image(depth_buf, depth_pyramid);
 
-    let mut pass = render_graph
-        .begin_pass("update depth pyramid")
+    let mut pass = graph
+        .begin_cmd()
+        .debug_name("update depth pyramid")
         .bind_pipeline(ComputePipeline::create(
             &device,
             ComputePipelineInfo::default(),
             Shader::new_compute(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(compute)
 
                     layout(binding = 0) uniform sampler2D src_mip;
                     layout(binding = 1, r32f) writeonly uniform image2D dst_mip;
@@ -68,15 +85,13 @@ fn main() -> Result<(), DriverError> {
                         vec4 depth = texture(src_mip, vec2(gl_GlobalInvocationID.xy << 1) + 1.0);
                         imageStore(dst_mip, ivec2(gl_GlobalInvocationID.xy), depth);
                     }
-                    "#,
-                    comp,
-                    vulkan1_2
+                    "#
                 )
                 .as_slice(),
             )
             .image_sampler(
                 0,
-                SamplerInfoBuilder::default()
+                SamplerInfo::builder()
                     .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                     .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                     .mag_filter(vk::Filter::LINEAR)
@@ -88,26 +103,28 @@ fn main() -> Result<(), DriverError> {
 
     for mip_level in 1..depth_info.mip_level_count {
         pass = pass
-            .read_descriptor_as(
+            .shader_subresource_access(
                 0,
                 depth_pyramid,
                 depth_info
-                    .default_view_info()
-                    .to_builder()
+                    .into_image_view()
+                    .into_builder()
                     .base_mip_level(mip_level - 1)
                     .mip_level_count(1),
+                AccessType::ComputeShaderReadOther,
             )
-            .write_descriptor_as(
+            .shader_subresource_access(
                 1,
                 depth_pyramid,
                 depth_info
-                    .default_view_info()
-                    .to_builder()
+                    .into_image_view()
+                    .into_builder()
                     .base_mip_level(mip_level)
                     .mip_level_count(1),
+                AccessType::ComputeShaderWrite,
             )
-            .record_compute(move |compute, _| {
-                compute.dispatch(
+            .record_cmd(move |cmd| {
+                cmd.dispatch(
                     depth_info.width >> mip_level,
                     depth_info.height >> mip_level,
                     1,
@@ -115,14 +132,14 @@ fn main() -> Result<(), DriverError> {
             });
     }
 
-    let depth_pixel = render_graph.bind_node(Buffer::create(
+    let depth_pixel = graph.bind_resource(Buffer::create(
         &device,
         BufferInfo::host_mem(size_of::<f32>() as _, vk::BufferUsageFlags::TRANSFER_DST),
     )?);
-    render_graph.copy_image_to_buffer_region(
+    graph.copy_image_to_buffer_region(
         depth_pyramid,
         depth_pixel,
-        vk::BufferImageCopy {
+        [vk::BufferImageCopy {
             buffer_offset: 0,
             buffer_row_length: 1,
             buffer_image_height: 1,
@@ -138,14 +155,14 @@ fn main() -> Result<(), DriverError> {
                 height: 1,
                 depth: 1,
             },
-        },
+        }],
     );
 
-    let depth_pixel = render_graph.unbind_node(depth_pixel);
+    let depth_pixel = graph.resource(depth_pixel).clone();
 
-    render_graph
-        .resolve()
-        .submit(&mut HashPool::new(&device), 0, 0)?
+    graph
+        .into_submission()
+        .queue_submit(&mut HashPool::new(&device), 0, 0)?
         .wait_until_executed()?;
 
     let depth_pixel = f32::from_ne_bytes(Buffer::mapped_slice(&depth_pixel).try_into().unwrap());

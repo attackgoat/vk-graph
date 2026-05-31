@@ -6,6 +6,8 @@ _Exaimine the skeleton of a Woolly Mammoth using the hands of Abraham Lincoln_
 
 This example uses assets from the Smithsonian collection to create a real-life-size display in VR.
 Any OpenXR-supported VR headset should work.
+The example defaults to the runtime OpenXR loader (`loaded`); enable the `linked` feature if you want to
+link against a system loader instead.
 
 ## Features
 

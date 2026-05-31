@@ -1,11 +1,8 @@
-//! [Vulkan 1.2](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/index.html) interface
-//! based on smart pointers.
+//! Vulkan interface based on smart pointers.
 //!
 //! # Resources
 //!
-//! Each resource contains an opaque Vulkan object handle and an information structure which
-//! describes the object. Resources also contain an atomic [`AccessType`] state value which is used to
-//! maintain consistency in any system which accesses the resource.
+//! Resources are created and destroyed using RAII-style wrapper structures.
 //!
 //! The following resources are available:
 //!
@@ -13,25 +10,47 @@
 //! - [`Buffer`]
 //! - [`Image`](image::Image)
 //!
+//! Resources are logically mutable. All resource types contain useful read-only public fields, for
+//! example:
+//!
+//! [`Buffer`] Field|`->`
+//! -|-
+//! [`device`](Buffer::device)|[`Device`](device::Device)
+//! [`handle`](Buffer::handle)|[`vk::Buffer`]
+//! [`info`](Buffer::info)|[`BufferInfo`]
+//!
+//! Resources use atomic [`AccessType`](sync::AccessType) values to maintain consistency and track
+//! changes.
+//!
 //! # Pipelines
 //!
-//! Pipelines allow you to run shader code which read and write resources using graphics hardware.
-//!
-//! Each pipeline contains an opaque Vulkan object handle and an information structure which
-//! describes the configuration and shaders. They are immutable once created.
+//! Pipelines enable reading and writing resources using shader code running on physical graphics
+//! hardware.
 //!
 //! The following pipelines are available:
 //!
 //! - [`ComputePipeline`](compute::ComputePipeline)
-//! - [`GraphicPipeline`]
+//! - [`GraphicPipeline`](graphic::GraphicPipeline)
 //! - [`RayTracePipeline`](ray_trace::RayTracePipeline)
+//!
+//! Pipelines are immutable. All pipeline types contain useful public methods, for
+//! example:
+//!
+//! [`ComputePipeline`](compute::ComputePipeline) Method | `->`
+//! -|-
+//! [`device(&self)`](compute::ComputePipeline::device)|[`Device`](device::Device)
+//! [`handle(&self)`](compute::ComputePipeline::handle)|[`vk::Pipeline`]
+//! [`info(&self)`](compute::ComputePipeline::info)
+//! | [`ComputePipelineInfo`](compute::ComputePipelineInfo)
 
 pub mod accel_struct;
 pub mod buffer;
+pub mod cmd_buf;
 pub mod compute;
 pub mod device;
 pub mod graphic;
 pub mod image;
+pub mod instance;
 pub mod physical_device;
 pub mod ray_trace;
 pub mod render_pass;
@@ -39,28 +58,26 @@ pub mod shader;
 pub mod surface;
 pub mod swapchain;
 
-mod cmd_buf;
-mod descriptor_set;
+#[doc(hidden)]
+pub mod descriptor_set;
+
 mod descriptor_set_layout;
-mod instance;
 
 pub use {
-    self::{cmd_buf::CommandBuffer, instance::Instance},
     ash::{self},
-    vk_sync::AccessType,
+    vk_sync::{self as sync},
 };
 
-/// Specifying depth and stencil resolve modes.
 #[deprecated = "Use driver::render_pass::ResolveMode instead"]
+#[doc(hidden)]
 pub type ResolveMode = self::render_pass::ResolveMode;
 
 pub(crate) use self::{
-    cmd_buf::CommandBufferInfo,
-    descriptor_set::{DescriptorPool, DescriptorPoolInfo, DescriptorSet},
+    descriptor_set::DescriptorSet,
     descriptor_set_layout::DescriptorSetLayout,
     render_pass::{
-        AttachmentInfo, AttachmentRef, FramebufferAttachmentImageInfo, FramebufferInfo, RenderPass,
-        RenderPassInfo, SubpassDependency, SubpassInfo,
+        AttachmentInfo, AttachmentRef, FramebufferAttachmentImageInfo, FramebufferInfo,
+        SubpassDependency, SubpassInfo,
     },
     shader::{Descriptor, DescriptorBindingMap, DescriptorInfo},
     surface::Surface,
@@ -69,8 +86,7 @@ pub(crate) use self::{
 use {
     self::{
         buffer::{Buffer, BufferInfo},
-        graphic::{DepthStencilMode, GraphicPipeline, VertexInputState},
-        image::SampleCount,
+        graphic::VertexInputState,
     },
     ash::vk,
     gpu_allocator::AllocationError,
@@ -79,8 +95,12 @@ use {
         error::Error,
         fmt::{Display, Formatter},
     },
-    vk_sync::ImageLayout,
 };
+
+// When removing, fix all the extra-overly-qualiified references in this file
+#[deprecated = "use from sync module"]
+#[doc(hidden)]
+pub type AccessType = self::sync::AccessType;
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
     match fmt {
@@ -97,10 +117,14 @@ pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags 
     }
 }
 
-/// Returns number of bytes used to store one texel block (a single addressable element of an uncompressed image, or a single compressed block of a compressed image)
-/// See [Representation and Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
+/// Returns number of bytes used to store one texel block (a single addressable element of an
+/// uncompressed image, or a single compressed block of a compressed image).
+///
+/// See the [Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
+/// section of the Vulkan specification.
 pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
     match fmt {
+        vk::Format::UNDEFINED => 0,
         vk::Format::R4G4_UNORM_PACK8
         | vk::Format::R8_UNORM
         | vk::Format::R8_SNORM
@@ -349,18 +373,18 @@ pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
         vk::Format::G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16
         | vk::Format::G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16
         | vk::Format::G16_B16R16_2PLANE_444_UNORM => 6,
-        _ => {
-            // Remaining formats should be implemented in the future
-            unimplemented!()
-        }
+        _ => panic!("unsupported texel block size format"),
     }
 }
 
 /// Returns the extent of a block of texels for the given Vulkan format.
 /// Uncompressed formats typically have a block extent of `(1, 1)`.
-/// See [Representation and Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
+///
+/// See the [Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
+/// section of the Vulkan specification.
 pub const fn format_texel_block_extent(vk_format: vk::Format) -> (u32, u32) {
     match vk_format {
+        vk::Format::UNDEFINED => (1, 1),
         vk::Format::R4G4_UNORM_PACK8
         | vk::Format::R8_UNORM
         | vk::Format::R8_SNORM
@@ -609,10 +633,7 @@ pub const fn format_texel_block_extent(vk_format: vk::Format) -> (u32, u32) {
         | vk::Format::PVRTC1_4BPP_SRGB_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_UNORM_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_SRGB_BLOCK_IMG => (4, 4),
-        _ => {
-            // Remaining formats should be implemented in the future
-            unimplemented!()
-        }
+        _ => panic!("unsupported texel block extent format"),
     }
 }
 
@@ -633,24 +654,18 @@ pub(super) const fn image_subresource_range_from_layers(
     }
 }
 
-pub(super) const fn image_access_layout(access: AccessType) -> ImageLayout {
-    if matches!(access, AccessType::Present | AccessType::ComputeShaderWrite) {
-        ImageLayout::General
-    } else {
-        ImageLayout::Optimal
-    }
-}
-
-pub(super) const fn initial_image_layout_access(ty: AccessType) -> AccessType {
-    use AccessType::*;
+pub(super) const fn initial_image_layout_access(
+    ty: self::sync::AccessType,
+) -> self::sync::AccessType {
+    use self::sync::AccessType::*;
     match ty {
         DepthStencilAttachmentReadWrite => DepthStencilAttachmentRead,
         _ => ty,
     }
 }
 
-pub(super) const fn is_read_access(ty: AccessType) -> bool {
-    use AccessType::*;
+pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
+    use self::sync::AccessType::*;
     match ty {
         Nothing
         | CommandBufferWriteNVX
@@ -723,8 +738,8 @@ pub(super) const fn is_read_access(ty: AccessType) -> bool {
     }
 }
 
-pub(super) const fn is_write_access(ty: AccessType) -> bool {
-    use AccessType::*;
+pub(super) const fn is_write_access(ty: self::sync::AccessType) -> bool {
+    use self::sync::AccessType::*;
     match ty {
         Nothing
         | CommandBufferReadNVX
@@ -899,11 +914,11 @@ fn merge_push_constant_ranges(pcr: &[vk::PushConstantRange]) -> Vec<vk::PushCons
 }
 
 pub(super) const fn pipeline_stage_access_flags(
-    access_type: AccessType,
+    access_type: vk_sync::AccessType,
 ) -> (vk::PipelineStageFlags, vk::AccessFlags) {
     use {
-        AccessType as ty,
         vk::{AccessFlags as access, PipelineStageFlags as stage},
+        vk_sync::AccessType as ty,
     };
 
     match access_type {
@@ -1100,14 +1115,14 @@ pub(super) const fn pipeline_stage_access_flags(
 
 /// Describes the general category of all graphics driver failure cases.
 ///
-/// In the event of a failure you should follow the _Screen 13_ code to the responsible Vulkan API
+/// In the event of a failure you should follow the _vk-graph_ code to the responsible Vulkan API
 /// and then to the `Ash` stub call; it will generally contain a link to the appropriate
 /// specification. The specifications provide a table of possible error conditions which can be a
 /// good starting point to debug the issue.
 ///
-/// Feel free to open an issue on GitHub, [here](https://github.com/attackgoat/screen-13/issues) for
+/// Feel free to open an issue on GitHub, [here](https://github.com/attackgoat/vk-graph/issues) for
 /// help debugging the issue.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum DriverError {
     /// The input data, or referenced data, is not valid for the current state.
     InvalidData,
@@ -1146,7 +1161,7 @@ impl Display for DriverError {
 impl Error for DriverError {}
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {super::merge_push_constant_ranges, ash::vk};
 
     macro_rules! assert_pcr_eq {

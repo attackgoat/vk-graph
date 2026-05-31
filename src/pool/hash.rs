@@ -1,14 +1,16 @@
-//! Pool which leases by exactly matching the information before creating new resources.
+//! Pool which requests by exactly matching the information before creating new resources.
 
 use {
-    super::{Cache, Lease, Pool, PoolInfo, lease_command_buffer},
+    super::{Cache, Lease, Pool, PoolConfig, lease_command_buffer},
     crate::driver::{
-        CommandBuffer, CommandBufferInfo, DescriptorPool, DescriptorPoolInfo, DriverError,
-        RenderPass, RenderPassInfo,
+        DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
         buffer::{Buffer, BufferInfo},
+        cmd_buf::{CommandBuffer, CommandBufferInfo},
+        descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         device::Device,
         image::{Image, ImageInfo},
+        render_pass::{RenderPass, RenderPassInfo},
     },
     log::debug,
     paste::paste,
@@ -25,39 +27,52 @@ use std::sync::Mutex;
 ///
 /// # Bucket Strategy
 ///
-/// The information for each lease request is the key for a `HashMap` of buckets. If no bucket
+/// The information for each resource request is the key for a `HashMap` of buckets. If no bucket
 /// exists with the exact information provided a new bucket is created.
 ///
-/// In practice this means that for a [`PoolInfo::image_capacity`] of `4`, requests for a 1024x1024
-/// image with certain attributes will store a maximum of `4` such images. Requests for any image
-/// having a different size or attributes will store an additional maximum of `4` images.
+/// In practice this means that for a [`PoolConfig::image_capacity`] of `4`, requests for a
+/// 1024x1024 image with certain attributes will store a maximum of `4` such images. Requests for
+/// any image having a different size or attributes will store an additional maximum of `4` images.
 ///
 /// # Memory Management
 ///
 /// If requests for varying resources is common [`HashPool::clear_images_by_info`] and other memory
 /// management functions are nessecery in order to avoid using all available device memory.
 #[derive(Debug)]
+#[read_only::cast]
 pub struct HashPool {
     acceleration_structure_cache: HashMap<AccelerationStructureInfo, Cache<AccelerationStructure>>,
     buffer_cache: HashMap<BufferInfo, Cache<Buffer>>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: HashMap<DescriptorPoolInfo, Cache<DescriptorPool>>,
-    device: Arc<Device>,
+
+    /// The device which owns this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
     image_cache: HashMap<ImageInfo, Cache<Image>>,
-    info: PoolInfo,
+
+    /// Information used to create this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub info: PoolConfig,
+
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
 
 impl HashPool {
     /// Constructs a new `HashPool`.
-    pub fn new(device: &Arc<Device>) -> Self {
-        Self::with_capacity(device, PoolInfo::default())
+    pub fn new(device: &Device) -> Self {
+        Self::with_capacity(device, PoolConfig::default())
     }
 
     /// Constructs a new `HashPool` with the given capacity information.
-    pub fn with_capacity(device: &Arc<Device>, info: impl Into<PoolInfo>) -> Self {
-        let info: PoolInfo = info.into();
-        let device = Arc::clone(device);
+    pub fn with_capacity(device: &Device, info: impl Into<PoolConfig>) -> Self {
+        let info: PoolConfig = info.into();
+        let device = device.clone();
 
         Self {
             acceleration_structure_cache: Default::default(),
@@ -128,17 +143,17 @@ resource_mgmt_fns!("images", "image", ImageInfo, image_cache);
 
 impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
     #[profiling::function]
-    fn lease(&mut self, info: CommandBufferInfo) -> Result<Lease<CommandBuffer>, DriverError> {
+    fn resource(&mut self, info: CommandBufferInfo) -> Result<Lease<CommandBuffer>, DriverError> {
         let cache_ref = self
             .command_buffer_cache
             .entry(info.queue_family_index)
-            .or_insert_with(PoolInfo::default_cache);
-        let mut item = {
+            .or_insert_with(PoolConfig::default_cache);
+        let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             lease_command_buffer(&mut cache)
         }
@@ -150,7 +165,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
         })?;
 
         // Drop anything we were holding from the last submission
-        CommandBuffer::drop_fenced(&mut item);
+        //item.wait_until_executed()?;
 
         Ok(Lease::new(Arc::downgrade(cache_ref), item))
     }
@@ -158,17 +173,17 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
 
 impl Pool<DescriptorPoolInfo, DescriptorPool> for HashPool {
     #[profiling::function]
-    fn lease(&mut self, info: DescriptorPoolInfo) -> Result<Lease<DescriptorPool>, DriverError> {
+    fn resource(&mut self, info: DescriptorPoolInfo) -> Result<Lease<DescriptorPool>, DriverError> {
         let cache_ref = self
             .descriptor_pool_cache
             .entry(info.clone())
-            .or_insert_with(PoolInfo::default_cache);
+            .or_insert_with(PoolConfig::default_cache);
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             cache.pop()
         }
@@ -185,21 +200,21 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for HashPool {
 
 impl Pool<RenderPassInfo, RenderPass> for HashPool {
     #[profiling::function]
-    fn lease(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
+    fn resource(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
         let cache_ref = if let Some(cache) = self.render_pass_cache.get(&info) {
             cache
         } else {
             // We tried to get the cache first in order to avoid this clone
             self.render_pass_cache
                 .entry(info.clone())
-                .or_insert_with(PoolInfo::default_cache)
+                .or_insert_with(PoolConfig::default_cache)
         };
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             cache.pop()
         }
@@ -214,13 +229,13 @@ impl Pool<RenderPassInfo, RenderPass> for HashPool {
     }
 }
 
-// Enable leasing items using their basic info
+// Enable requesting items using their basic info
 macro_rules! lease {
     ($info:ident => $item:ident, $capacity:ident) => {
         paste::paste! {
             impl Pool<$info, $item> for HashPool {
                 #[profiling::function]
-                fn lease(&mut self, info: $info) -> Result<Lease<$item>, DriverError> {
+                fn resource(&mut self, info: $info) -> Result<Lease<$item>, DriverError> {
                     let cache_ref = self.[<$item:snake _cache>].entry(info)
                         .or_insert_with(|| {
                             Cache::new(Mutex::new(Vec::with_capacity(self.info.$capacity)))
@@ -230,7 +245,7 @@ macro_rules! lease {
                         let mut cache = cache_ref.lock();
 
                         #[cfg(not(feature = "parking_lot"))]
-                        let mut cache = cache.unwrap();
+                        let mut cache = cache.expect("poisoned cache lock");
 
                         cache.pop()
                     }

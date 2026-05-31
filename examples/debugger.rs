@@ -1,3 +1,11 @@
+use ash::vk;
+use vk_graph::driver::{
+    compute::{ComputePipeline, ComputePipelineInfo},
+    image::{Image, ImageInfo},
+    shader::Shader,
+};
+use vk_sync::AccessType;
+
 /*
     This example details some common debugging techniques you might find helpful
     when something goes wrong.
@@ -5,7 +13,7 @@
     I hope you enjoy this choose-your-own-debugger adventure!
 
     First you will want to read this:
-    https://github.com/attackgoat/screen-13/blob/master/examples/getting-started.md
+    https://github.com/attackgoat/vk-graph/blob/master/examples/getting-started.md
 
     Enter your "name" to begin:
         cargo run --example debugger
@@ -23,8 +31,8 @@
 
     To continue, uncomment line 30.
 */
-fn main() -> Result<(), screen_13_window::WindowError> {
-    use {log::debug, screen_13::prelude::*, screen_13_window::Window, std::sync::Arc};
+fn main() -> Result<(), vk_graph_window::WindowError> {
+    use {log::debug, vk_graph_window::Window};
 
     // 👋, 🌎!
     //pretty_env_logger::init();
@@ -44,7 +52,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
             Note:
                 This callback runs each time the operating system requests a new window image and it
                 expects you to render something to `frame.swapchain_image` using
-                `frame.render_graph`. Note that this scope is infalliable. You may create additional
+                `frame.graph`. Note that this scope is infalliable. You may create additional
                 images and graphs if you choose. You can resolve multiple render graphs per frame -
                 but you only need to do that if you have a hot-section that is part of a VERY large
                 graph.
@@ -52,7 +60,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
                 When something goes wrong, it is probably *not* during this frame closure. The
                 reason is that during this scope nearly everything is deferred until frame
                 resolution where we try to schedule the work and get it displayed on the screen.
-                Typically, as here, we let Screen 13 handle all graph resolution (no code or
+                Typically, as here, we let vk-graph handle all graph resolution (no code or
                 concerns here) - but it is valid to control the process manually, see the available
                 functions in the API docs.
 
@@ -80,7 +88,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
                 }
             - Run `cargo run --example debugger`
             - You should see the PID in the console output
-            - Enter the VS Code Debugger; click `[>] Attach (screen-13)`
+            - Enter the VS Code Debugger; click `[>] Attach (vk-graph)`
             - Enter the PID
             - In the call stack pane, select the first thread; pause it
             - You are now parked on a syscall
@@ -100,7 +108,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
             It is left as an excerise to the reader to determine *what* might have gone wrong here.
         */
         #[allow(unused_variables)]
-        let image = frame.render_graph.bind_node(
+        let image = frame.graph.bind_resource(
             Image::create(
                 frame.device,
                 ImageInfo::image_2d(
@@ -112,7 +120,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
             )
             .unwrap(),
         );
-        let image = frame.render_graph.bind_node(
+        let image = frame.graph.bind_resource(
             Image::create(
                 frame.device,
                 ImageInfo::image_2d(
@@ -126,32 +134,31 @@ fn main() -> Result<(), screen_13_window::WindowError> {
         );
 
         // Note: This is just for example
-        let compute_pipeline = Arc::new(
-            ComputePipeline::create(
-                frame.device,
-                ComputePipelineInfo::default(),
-                Shader::new_compute(
-                    inline_spirv::inline_spirv!(
-                        r#"
-                        #version 460 core
+        let compute_pipeline = ComputePipeline::create(
+            frame.device,
+            ComputePipelineInfo::default(),
+            Shader::new_compute(
+                vk_shader_macros::glsl!(
+                    r#"
+                    #version 460 core
+                    #pragma shader_stage(compute)
 
-                        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
-                        layout(set = 0, binding = 42, rgba8) restrict readonly uniform image2D an_image;
+                    layout(set = 0, binding = 42, rgba8)
+                    restrict readonly uniform image2D an_image;
 
-                        void main() {/* TODO: 📈...💰! */}
-                        "#,
-                        comp
-                    )
-                    .as_slice(),
-                ),
-            )
-            .unwrap(),
-        );
+                    void main() {/* TODO: 📈...💰! */}
+                    "#
+                )
+                .as_slice(),
+            ),
+        )
+        .unwrap();
 
         /*
             Case #2:
-                We are about to record a compute pass which causes Screen 13 to panic
+                We are about to record a compute pass which causes vk-graph to panic
 
             Note: You'll see a panic here:
                 thread 'main' panicked at 'uninitialized swapchain image ...'
@@ -177,12 +184,13 @@ fn main() -> Result<(), screen_13_window::WindowError> {
                 .write_descriptor(42, frame.swapchain_image)
         */
         frame
-            .render_graph
-            .begin_pass("This doesn't look good...")
+            .graph
+            .begin_cmd()
+            .debug_name("This doesn't look good...")
             .bind_pipeline(&compute_pipeline)
-            .write_descriptor(42, image)
-            .record_compute(|compute, _| {
-                compute.dispatch(1024, 1024, 1);
+            .shader_resource_access(42, image, AccessType::ComputeShaderWrite)
+            .record_cmd(|cmd| {
+                cmd.dispatch(1024, 1024, 1);
             });
 
         // Growing tired of your advenutes, you signal that it is time to close the window and exit
@@ -205,7 +213,7 @@ fn main() -> Result<(), screen_13_window::WindowError> {
         Where to next? Fire up RenderDoc, capture a frame and have fun! But beware - RenderDoc does
         a replay of the capture it created; and it resubmits things ever so slightly differently at
         times - you most likely will NOT see any synchronization issues in RenderDoc if you DO see
-        them in Screen 13.
+        them in vk-graph.
 
         If you ever get stuck, switch between `vkconfig` settings of API dump and synchronization;
         those usually say exactly what is going wrong, and usually you need to use multiple layers

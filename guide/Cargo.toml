@@ -1,0 +1,20 @@
+[package]
+name = "guide"
+authors = ["John Wells <john@attackgoat.com>"]
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "guide"
+path = "doctest.rs"
+
+[features]
+default = []
+hot = ["dep:vk-graph-hot"]
+
+[dependencies]
+bytemuck = "1.25"
+vk-graph.workspace = true
+vk-graph-hot = { optional = true, workspace = true }
+vk-graph-window.workspace = true

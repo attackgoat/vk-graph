@@ -1,94 +1,105 @@
 //! Native platform window surface types.
 
 use {
-    super::{DriverError, Instance, device::Device},
+    super::{DriverError, device::Device, instance::Instance},
     ash::vk,
     ash_window::create_surface,
     log::warn,
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     std::{
         fmt::{Debug, Formatter},
-        ops::Deref,
-        sync::Arc,
         thread::panicking,
     },
 };
 
 /// Smart pointer handle to a [`vk::SurfaceKHR`] object.
+#[read_only::cast]
 pub struct Surface {
-    device: Arc<Device>,
-    surface: vk::SurfaceKHR,
+    /// The device which owns this surface resource.
+    ///
+    /// _Note:_ This field is read-only.
+    pub device: Device,
+
+    /// The native Vulkan resource handle of this surface.
+    ///
+    /// _Note:_ This field is read-only.
+    pub handle: vk::SurfaceKHR,
 }
 
 impl Surface {
     /// Query surface capabilities
-    pub fn capabilities(this: &Self) -> Result<vk::SurfaceCapabilitiesKHR, DriverError> {
-        let surface_ext = Device::expect_surface_ext(&this.device);
+    pub fn capabilities(&self) -> Result<vk::SurfaceCapabilitiesKHR, DriverError> {
+        let surface_ext = Device::expect_surface_ext(&self.device);
 
         unsafe {
             surface_ext.get_physical_device_surface_capabilities(
-                *this.device.physical_device,
-                this.surface,
+                self.device.physical_device.handle,
+                self.handle,
             )
         }
-        .inspect_err(|err| warn!("unable to get surface capabilities: {err}"))
-        .or(Err(DriverError::Unsupported))
+        .map_err(|err| {
+            warn!("unable to get surface capabilities: {err}");
+
+            DriverError::Unsupported
+        })
     }
 
     /// Create a surface from a raw window display handle.
     ///
-    /// `device` must have been created with platform specific surface extensions enabled, acquired
-    /// through [`Device::create_display_window`].
+    /// `device` must have been created with platform specific surface extensions enabled.
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
-        window: &(impl HasDisplayHandle + HasWindowHandle),
+        device: &Device,
+        display: impl HasDisplayHandle,
+        window: impl HasWindowHandle,
     ) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
-        let instance = Device::instance(&device);
-        let display_handle = window.display_handle().map_err(|err| {
-            warn!("{err}");
+        let device = device.clone();
+
+        let display_handle = display.display_handle().map_err(|err| {
+            warn!("unable to get display handle: {err}");
 
             DriverError::Unsupported
         })?;
         let window_handle = window.window_handle().map_err(|err| {
-            warn!("{err}");
+            warn!("unable to get window handle: {err}");
 
             DriverError::Unsupported
         })?;
-        let surface = unsafe {
+
+        let handle = unsafe {
             create_surface(
-                Instance::entry(instance),
-                instance,
+                Instance::entry(&device.physical_device.instance),
+                &device.physical_device.instance,
                 display_handle.as_raw(),
                 window_handle.as_raw(),
                 None,
             )
         }
         .map_err(|err| {
-            warn!("Unable to create surface: {err}");
+            warn!("unable to create surface: {err}");
 
             DriverError::Unsupported
         })?;
 
-        Ok(Self { device, surface })
+        Ok(Self { device, handle })
     }
 
     /// Lists the supported surface formats.
     #[profiling::function]
-    pub fn formats(this: &Self) -> Result<Vec<vk::SurfaceFormatKHR>, DriverError> {
-        unsafe {
-            this.device
-                .surface_ext
-                .as_ref()
-                .unwrap()
-                .get_physical_device_surface_formats(*this.device.physical_device, this.surface)
-                .map_err(|err| {
-                    warn!("Unable to get surface formats: {err}");
+    pub fn formats(&self) -> Result<Vec<vk::SurfaceFormatKHR>, DriverError> {
+        let surface_ext = Device::expect_surface_ext(&self.device);
 
-                    DriverError::Unsupported
-                })
+        unsafe {
+            surface_ext.get_physical_device_surface_formats(
+                self.device.physical_device.handle,
+                self.handle,
+            )
         }
+        .map_err(|err| {
+            warn!("unable to get surface formats: {err}");
+
+            DriverError::Unsupported
+        })
     }
 
     /// Helper function to automatically select the best UNORM format, if one is available.
@@ -114,18 +125,45 @@ impl Surface {
         Self::linear(formats).unwrap_or_else(|| formats.first().copied().unwrap_or_default())
     }
 
+    /// Returns `true` if the given queue family supports presentation on this surface.
+    pub fn physical_device_support(&self, queue_family_index: u32) -> Result<bool, DriverError> {
+        let surface_ext = Device::expect_surface_ext(&self.device);
+
+        unsafe {
+            surface_ext.get_physical_device_surface_support(
+                self.device.physical_device.handle,
+                queue_family_index,
+                self.handle,
+            )
+        }
+        .map_err(|err| {
+            warn!("unable to get physical device support: {err}");
+
+            match err {
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                    DriverError::OutOfMemory
+                }
+                vk::Result::ERROR_SURFACE_LOST_KHR => DriverError::InvalidData,
+                _ => DriverError::Unsupported,
+            }
+        })
+    }
+
     /// Query supported presentation modes.
-    pub fn present_modes(this: &Self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
-        let surface_ext = Device::expect_surface_ext(&this.device);
+    pub fn present_modes(&self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
+        let surface_ext = Device::expect_surface_ext(&self.device);
 
         unsafe {
             surface_ext.get_physical_device_surface_present_modes(
-                *this.device.physical_device,
-                this.surface,
+                self.device.physical_device.handle,
+                self.handle,
             )
         }
-        .inspect_err(|err| warn!("unable to get surface present modes: {err}"))
-        .or(Err(DriverError::Unsupported))
+        .map_err(|err| {
+            warn!("unable to get present modes: {err}");
+
+            DriverError::Unsupported
+        })
     }
 
     /// Helper function to automatically select the best sRGB format, if one is available.
@@ -164,14 +202,6 @@ impl Debug for Surface {
     }
 }
 
-impl Deref for Surface {
-    type Target = vk::SurfaceKHR;
-
-    fn deref(&self) -> &Self::Target {
-        &self.surface
-    }
-}
-
 impl Drop for Surface {
     #[profiling::function]
     fn drop(&mut self) {
@@ -182,7 +212,85 @@ impl Drop for Surface {
         let surface_ext = Device::expect_surface_ext(&self.device);
 
         unsafe {
-            surface_ext.destroy_surface(self.surface, None);
+            surface_ext.destroy_surface(self.handle, None);
         }
+    }
+}
+
+impl Eq for Surface {}
+
+impl PartialEq for Surface {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Surface;
+    use ash::vk;
+
+    #[test]
+    fn linear_prefers_known_unorm_formats() {
+        let formats = [
+            vk::SurfaceFormatKHR {
+                format: vk::Format::R8G8B8A8_SRGB,
+                ..Default::default()
+            },
+            vk::SurfaceFormatKHR {
+                format: vk::Format::R8G8B8A8_UNORM,
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            Surface::linear(&formats).unwrap().format,
+            vk::Format::R8G8B8A8_UNORM
+        );
+    }
+
+    #[test]
+    fn linear_or_default_falls_back_to_first_format() {
+        let formats = [vk::SurfaceFormatKHR {
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            ..Default::default()
+        }];
+
+        assert_eq!(
+            Surface::linear_or_default(&formats).format,
+            vk::Format::R16G16B16A16_SFLOAT
+        );
+    }
+
+    #[test]
+    fn srgb_prefers_known_srgb_formats() {
+        let formats = [
+            vk::SurfaceFormatKHR {
+                color_space: vk::ColorSpaceKHR::DISPLAY_P3_NONLINEAR_EXT,
+                format: vk::Format::B8G8R8A8_SRGB,
+            },
+            vk::SurfaceFormatKHR {
+                color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                format: vk::Format::R8G8B8A8_SRGB,
+            },
+        ];
+
+        assert_eq!(
+            Surface::srgb(&formats).unwrap().format,
+            vk::Format::R8G8B8A8_SRGB
+        );
+    }
+
+    #[test]
+    fn srgb_or_default_falls_back_to_first_format() {
+        let formats = [vk::SurfaceFormatKHR {
+            color_space: vk::ColorSpaceKHR::DISPLAY_P3_NONLINEAR_EXT,
+            format: vk::Format::R16G16B16A16_SFLOAT,
+        }];
+
+        assert_eq!(
+            Surface::srgb_or_default(&formats).format,
+            vk::Format::R16G16B16A16_SFLOAT
+        );
     }
 }

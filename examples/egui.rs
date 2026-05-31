@@ -1,8 +1,15 @@
 mod profile_with_puffin;
 
 use {
-    clap::Parser, screen_13::prelude::*, screen_13_egui::prelude::*,
-    screen_13_window::WindowBuilder, winit::dpi::LogicalSize,
+    ash::vk,
+    clap::Parser,
+    vk_graph::{
+        driver::image::ImageInfo,
+        pool::{Pool as _, lazy::LazyPool},
+    },
+    vk_graph_egui::{Egui, egui},
+    vk_graph_window::Window,
+    winit::dpi::LogicalSize,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -10,19 +17,19 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .v_sync(false)
         .window(|window| window.with_inner_size(LogicalSize::new(1024, 768)))
         .build()?;
-    let mut egui = Egui::new(&window.device, window.as_ref());
+    let mut egui = Egui::new(&window.device, &window);
 
     let mut cache = LazyPool::new(&window.device);
 
     window.run(|frame| {
-        let img = frame.render_graph.bind_node(
+        let img = frame.graph.bind_resource(
             cache
-                .lease(ImageInfo::image_2d(
+                .resource(ImageInfo::image_2d(
                     100,
                     100,
                     vk::Format::R8G8B8A8_UNORM,
@@ -30,12 +37,10 @@ fn main() -> anyhow::Result<()> {
                 ))
                 .unwrap(),
         );
+        frame.graph.clear_color_image(img, [0., 1., 0., 1.]);
         frame
-            .render_graph
-            .clear_color_image_value(img, [0., 1., 0., 1.]);
-        frame
-            .render_graph
-            .clear_color_image_value(frame.swapchain_image, [0., 0., 0., 1.]);
+            .graph
+            .clear_color_image(frame.swapchain_image, [0., 0., 0., 1.]);
 
         let id = egui.register_texture(img);
 
@@ -43,7 +48,7 @@ fn main() -> anyhow::Result<()> {
             frame.window,
             frame.events,
             frame.swapchain_image,
-            frame.render_graph,
+            frame.graph,
             |ui| {
                 egui::Window::new("Test")
                     .resizable(true)

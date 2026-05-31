@@ -13,54 +13,59 @@ use {
     std::{
         fmt::{Debug, Formatter},
         mem::ManuallyDrop,
-        ops::{Deref, DerefMut, Range},
-        sync::Arc,
+        ops::{DerefMut, Range},
         thread::panicking,
     },
     vk_sync::AccessType,
 };
 
 #[cfg(feature = "parking_lot")]
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
 #[cfg(not(feature = "parking_lot"))]
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// Smart pointer handle to a [buffer] object.
 ///
 /// Also contains information about the object.
 ///
-/// ## `Deref` behavior
-///
-/// `Buffer` automatically dereferences to [`vk::Buffer`] (via the [`Deref`] trait), so you
-/// can call `vk::Buffer`'s methods on a value of type `Buffer`. To avoid name clashes with
-/// `vk::Buffer`'s methods, the methods of `Buffer` itself are associated functions, called using
-/// [fully qualified syntax]:
-///
 /// ```no_run
-/// # use std::sync::Arc;
 /// # use ash::vk;
-/// # use screen_13::driver::{AccessType, DriverError};
-/// # use screen_13::driver::device::{Device, DeviceInfo};
-/// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+/// # use vk_graph::driver::DriverError;
+/// # use vk_graph::driver::device::{Device, DeviceInfo};
+/// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
-/// # let info = BufferInfo::device_mem(8, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
-/// # let my_buf = Buffer::create(&device, info)?;
-/// let addr = Buffer::device_address(&my_buf);
+/// # let device = Device::new(DeviceInfo::default())?;
+/// let info = BufferInfo::device_mem(1_024, vk::BufferUsageFlags::STORAGE_BUFFER);
+/// let my_buf = Buffer::create(&device, info)?;
+///
+/// assert_eq!(my_buf.info, info);
+/// assert_ne!(my_buf.handle, vk::Buffer::null());
 /// # Ok(()) }
 /// ```
 ///
 /// [buffer]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
-/// [deref]: core::ops::Deref
-/// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
+#[read_only::cast]
 pub struct Buffer {
     accesses: Mutex<BufferAccess>,
     allocation: ManuallyDrop<Allocation>,
-    buffer: vk::Buffer,
-    device: Arc<Device>,
 
-    /// Information used to create this object.
+    /// The device which owns this buffer resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
+    /// The native Vulkan resource handle of this buffer.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub handle: vk::Buffer,
+
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub info: BufferInfo,
 
     /// A name for debugging purposes.
@@ -77,102 +82,109 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// const SIZE: vk::DeviceSize = 1024;
     /// let info = BufferInfo::host_mem(SIZE, vk::BufferUsageFlags::UNIFORM_BUFFER);
     /// let buf = Buffer::create(&device, info)?;
     ///
-    /// assert_ne!(*buf, vk::Buffer::null());
+    /// assert_ne!(buf.handle, vk::Buffer::null());
     /// assert_eq!(buf.info.size, SIZE);
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn create(device: &Arc<Device>, info: impl Into<BufferInfo>) -> Result<Self, DriverError> {
+    pub fn create(device: &Device, info: impl Into<BufferInfo>) -> Result<Self, DriverError> {
         let info = info.into();
 
         trace!("create: {:?}", info);
 
         debug_assert_ne!(info.size, 0, "Size must be non-zero");
 
-        let device = Arc::clone(device);
+        let device = device.clone();
         let buffer_info = vk::BufferCreateInfo::default()
             .size(info.size)
             .usage(info.usage)
             .sharing_mode(vk::SharingMode::CONCURRENT)
             .queue_family_indices(&device.physical_device.queue_family_indices);
-        let buffer = unsafe {
+        let handle = unsafe {
             device.create_buffer(&buffer_info, None).map_err(|err| {
                 warn!("unable to create buffer: {err}");
 
                 DriverError::Unsupported
             })?
         };
-        let mut requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+        let mut requirements = unsafe { device.get_buffer_memory_requirements(handle) };
         requirements.alignment = requirements.alignment.max(info.alignment);
 
-        let memory_location = if info.mappable {
+        let allocation_scheme = if info.dedicated {
+            AllocationScheme::DedicatedBuffer(handle)
+        } else {
+            AllocationScheme::GpuAllocatorManaged
+        };
+        let location = if info.host_write {
             MemoryLocation::CpuToGpu
+        } else if info.host_read {
+            MemoryLocation::GpuToCpu
         } else {
             MemoryLocation::GpuOnly
         };
         let allocation = {
             profiling::scope!("allocate");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = device.allocator.lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut allocator = allocator.unwrap();
-
-            allocator
-                .allocate(&AllocationCreateDesc {
-                    name: "buffer",
-                    requirements,
-                    location: memory_location,
-                    linear: true, // Buffers are always linear
-                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-                })
-                .map_err(|err| {
-                    warn!("unable to allocate buffer memory: {err}");
-
-                    unsafe {
-                        device.destroy_buffer(buffer, None);
-                    }
-
-                    DriverError::from_alloc_err(err)
-                })
-                .and_then(|allocation| {
-                    if let Err(err) = unsafe {
-                        device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-                    } {
-                        warn!("unable to bind buffer memory: {err}");
-
-                        if let Err(err) = allocator.free(allocation) {
-                            warn!("unable to free buffer allocation: {err}")
-                        }
+            Device::with_allocator(&device, |allocator| {
+                allocator
+                    .allocate(&AllocationCreateDesc {
+                        name: "buffer",
+                        requirements,
+                        location,
+                        linear: true, // Buffers are always linear
+                        allocation_scheme,
+                    })
+                    .map_err(|err| {
+                        warn!("unable to allocate buffer memory: {err}");
 
                         unsafe {
-                            device.destroy_buffer(buffer, None);
+                            device.destroy_buffer(handle, None);
                         }
 
-                        Err(DriverError::OutOfMemory)
-                    } else {
-                        Ok(allocation)
-                    }
-                })
+                        DriverError::from_alloc_err(err)
+                    })
+                    .and_then(|allocation| {
+                        if let Err(err) = unsafe {
+                            device.bind_buffer_memory(
+                                handle,
+                                allocation.memory(),
+                                allocation.offset(),
+                            )
+                        } {
+                            warn!("unable to bind buffer memory: {err}");
+
+                            if let Err(err) = allocator.free(allocation) {
+                                warn!("unable to free buffer allocation: {err}")
+                            }
+
+                            unsafe {
+                                device.destroy_buffer(handle, None);
+                            }
+
+                            Err(DriverError::OutOfMemory)
+                        } else {
+                            Ok(allocation)
+                        }
+                    })
+            })
         }?;
 
-        debug_assert_ne!(buffer, vk::Buffer::null());
+        debug_assert_ne!(handle, vk::Buffer::null());
 
         Ok(Self {
             accesses: Mutex::new(BufferAccess::new(info.size)),
             allocation: ManuallyDrop::new(allocation),
-            buffer,
             device,
+            handle,
             info,
             name: None,
         })
@@ -187,30 +199,29 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// const DATA: [u8; 4] = [0xfe, 0xed, 0xbe, 0xef];
     /// let buf = Buffer::create_from_slice(&device, vk::BufferUsageFlags::UNIFORM_BUFFER, &DATA)?;
     ///
-    /// assert_ne!(*buf, vk::Buffer::null());
+    /// assert_ne!(buf.handle, vk::Buffer::null());
     /// assert_eq!(buf.info.size, 4);
     /// assert_eq!(Buffer::mapped_slice(&buf), &DATA);
     /// # Ok(()) }
     /// ```
     #[profiling::function]
     pub fn create_from_slice(
-        device: &Arc<Device>,
+        device: &Device,
         usage: vk::BufferUsageFlags,
-        slice: impl AsRef<[u8]>,
+        data: &[u8],
     ) -> Result<Self, DriverError> {
-        let slice = slice.as_ref();
-        let info = BufferInfo::host_mem(slice.len() as _, usage);
+        let info = BufferInfo::host_mem(data.len() as _, usage);
         let mut buffer = Self::create(device, info)?;
 
-        Self::copy_from_slice(&mut buffer, 0, slice);
+        Self::copy_from_slice(&mut buffer, 0, data);
 
         Ok(buffer)
     }
@@ -222,7 +233,7 @@ impl Buffer {
     ///
     /// # Note
     ///
-    /// Used to maintain object state when passing a _Screen 13_-created `vk::Buffer` handle to
+    /// Used to maintain object state when passing a _vk-graph_-created `vk::Buffer` handle to
     /// external code such as [_Ash_] or [_Erupt_] bindings.
     ///
     /// # Examples
@@ -232,11 +243,11 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::{AccessType, DriverError};
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo, BufferSubresourceRange};
+    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo, BufferSubresourceRange};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # const SIZE: vk::DeviceSize = 1024;
     /// # let info = BufferInfo::device_mem(SIZE, vk::BufferUsageFlags::STORAGE_BUFFER);
     /// # let my_buf = Buffer::create(&device, info)?;
@@ -266,22 +277,17 @@ impl Buffer {
     /// [_Erupt_]: https://crates.io/crates/erupt
     #[profiling::function]
     pub fn access(
-        this: &Self,
+        &self,
         access: AccessType,
         access_range: impl Into<BufferSubresourceRange>,
     ) -> impl Iterator<Item = (AccessType, BufferSubresourceRange)> + '_ {
         let mut access_range: BufferSubresourceRange = access_range.into();
 
         if access_range.end == vk::WHOLE_SIZE {
-            access_range.end = this.info.size;
+            access_range.end = self.info.size;
         }
 
-        let accesses = this.accesses.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let accesses = accesses.unwrap();
-
-        BufferAccessIter::new(accesses, access, access_range)
+        BufferAccessIter::new(self.lock_accesses(), access, access_range)
     }
 
     /// Updates a mappable buffer starting at `offset` with the data in `slice`.
@@ -297,11 +303,11 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let info = BufferInfo::host_mem(4, vk::BufferUsageFlags::empty());
     /// # let mut my_buf = Buffer::create(&device, info)?;
     /// const DATA: [u8; 4] = [0xde, 0xad, 0xc0, 0xde];
@@ -311,10 +317,11 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn copy_from_slice(this: &mut Self, offset: vk::DeviceSize, slice: impl AsRef<[u8]>) {
-        let slice = slice.as_ref();
-        Self::mapped_slice_mut(this)[offset as _..offset as usize + slice.len()]
-            .copy_from_slice(slice);
+    pub fn copy_from_slice(&mut self, offset: vk::DeviceSize, data: &[u8]) {
+        let range = offset as _..offset as usize + data.len();
+        let mapped_data = self.mapped_slice_mut();
+
+        mapped_data[range].copy_from_slice(data);
     }
 
     /// Returns the device address of this object.
@@ -330,31 +337,40 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let info = BufferInfo::host_mem(4, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
     /// # let my_buf = Buffer::create(&device, info)?;
-    /// let addr = Buffer::device_address(&my_buf);
+    /// let addr = my_buf.device_address();
     ///
     /// assert_ne!(addr, 0);
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn device_address(this: &Self) -> vk::DeviceAddress {
+    pub fn device_address(&self) -> vk::DeviceAddress {
         debug_assert!(
-            this.info
+            self.info
                 .usage
                 .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
         );
 
         unsafe {
-            this.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(this.buffer),
+            self.device.get_buffer_device_address(
+                &vk::BufferDeviceAddressInfo::default().buffer(self.handle),
             )
         }
+    }
+
+    fn lock_accesses(&self) -> MutexGuard<'_, BufferAccess> {
+        let accesses = self.accesses.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let accesses = accesses.expect("poisoned buffer access lock");
+
+        accesses
     }
 
     /// Returns a mapped slice.
@@ -370,11 +386,11 @@ impl Buffer {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # const DATA: [u8; 4] = [0; 4];
     /// # let my_buf = Buffer::create_from_slice(&device, vk::BufferUsageFlags::empty(), &DATA)?;
     /// // my_buf is mappable and filled with four zeroes
@@ -385,13 +401,16 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn mapped_slice(this: &Self) -> &[u8] {
+    pub fn mapped_slice(&self) -> &[u8] {
         debug_assert!(
-            this.info.mappable,
-            "Buffer is not mappable - create using mappable flag"
+            self.info.host_read,
+            "Buffer is not readable - create using host_read flag"
         );
 
-        &this.allocation.mapped_slice().unwrap()[0..this.info.size as usize]
+        &self
+            .allocation
+            .mapped_slice()
+            .expect("missing mapped buffer memory")[0..self.info.size as usize]
     }
 
     /// Returns a mapped mutable slice.
@@ -408,13 +427,17 @@ impl Buffer {
     /// # use std::sync::Arc;
     /// # use ash::vk;
     /// # use glam::Mat4;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::buffer::{Buffer, BufferInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # const DATA: [u8; 4] = [0; 4];
-    /// # let mut my_buf = Buffer::create_from_slice(&device, vk::BufferUsageFlags::empty(), &DATA)?;
+    /// # let mut my_buf = Buffer::create_from_slice(
+    /// #     &device,
+    /// #     vk::BufferUsageFlags::empty(),
+    /// #     &DATA,
+    /// # )?;
     /// let mut data = Buffer::mapped_slice_mut(&mut my_buf);
     /// data.copy_from_slice(&42f32.to_be_bytes());
     ///
@@ -423,31 +446,33 @@ impl Buffer {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn mapped_slice_mut(this: &mut Self) -> &mut [u8] {
+    pub fn mapped_slice_mut(&mut self) -> &mut [u8] {
         debug_assert!(
-            this.info.mappable,
-            "Buffer is not mappable - create using mappable flag"
+            self.info.host_write,
+            "Buffer is not writable - create using host_write flag"
         );
 
-        &mut this.allocation.mapped_slice_mut().unwrap()[0..this.info.size as usize]
+        &mut self
+            .allocation
+            .mapped_slice_mut()
+            .expect("missing mapped buffer memory")[0..self.info.size as usize]
+    }
+
+    /// Sets the debugging name assigned to this buffer.
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
     }
 }
 
 impl Debug for Buffer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(name) = &self.name {
-            write!(f, "{} ({:?})", name, self.buffer)
+            write!(f, "{} ({:?})", name, self.handle)
         } else {
-            write!(f, "{:?}", self.buffer)
+            write!(f, "{:?}", self.handle)
         }
-    }
-}
-
-impl Deref for Buffer {
-    type Target = vk::Buffer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
     }
 }
 
@@ -461,19 +486,23 @@ impl Drop for Buffer {
         {
             profiling::scope!("deallocate");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = self.device.allocator.lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut allocator = allocator.unwrap();
-
-            allocator.free(unsafe { ManuallyDrop::take(&mut self.allocation) })
+            Device::with_allocator(&self.device, |allocator| {
+                allocator.free(unsafe { ManuallyDrop::take(&mut self.allocation) })
+            })
         }
         .unwrap_or_else(|err| warn!("unable to free buffer allocation: {err}"));
 
         unsafe {
-            self.device.destroy_buffer(self.buffer, None);
+            self.device.destroy_buffer(self.handle, None);
         }
+    }
+}
+
+impl Eq for Buffer {}
+
+impl PartialEq for Buffer {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
     }
 }
 
@@ -702,7 +731,6 @@ where
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct BufferInfo {
     /// Byte alignment of the base device address of the buffer.
     ///
@@ -710,9 +738,25 @@ pub struct BufferInfo {
     #[builder(default = "1")]
     pub alignment: vk::DeviceSize,
 
-    /// Specifies a buffer whose memory is host visible and may be mapped.
+    /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the
+    /// internal memory allocation pool transient resources share.
+    ///
+    /// The driver may optimize access to dedicated buffers.
     #[builder(default)]
-    pub mappable: bool,
+    pub dedicated: bool,
+
+    /// Specifies a buffer whose memory is host visible and may be mapped.
+    ///
+    /// Memory optimal for CPU readback of data may be used.
+    #[builder(default)]
+    pub host_read: bool,
+
+    /// Specifies a buffer whose memory is host visible and may be mapped.
+    ///
+    /// Memory optimal for uploading data to the GPU and potentially for constant buffers may be
+    /// used.
+    #[builder(default)]
+    pub host_write: bool,
 
     /// Size in bytes of the buffer to be created.
     pub size: vk::DeviceSize,
@@ -730,7 +774,9 @@ impl BufferInfo {
     pub const fn device_mem(size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> BufferInfo {
         BufferInfo {
             alignment: 1,
-            mappable: false,
+            dedicated: false,
+            host_read: false,
+            host_write: false,
             size,
             usage,
         }
@@ -754,41 +800,46 @@ impl BufferInfo {
 
         BufferInfo {
             alignment: 1,
-            mappable: true,
+            dedicated: false,
+            host_read: true,
+            host_write: true,
             size,
             usage,
         }
     }
 
-    /// Specifies a non-mappable buffer with the given `size` and `usage` values.
-    #[allow(clippy::new_ret_no_self)]
-    #[deprecated = "Use BufferInfo::device_mem()"]
-    #[doc(hidden)]
-    pub fn new(size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> BufferInfoBuilder {
-        Self::device_mem(size, usage).to_builder()
+    /// Creates a default `BufferInfoBuilder`.
+    pub fn builder() -> BufferInfoBuilder {
+        Default::default()
     }
 
-    /// Specifies a mappable buffer with the given `size` and `usage` values.
-    ///
-    /// # Note
-    ///
-    /// For convenience the given usage value will be bitwise OR'd with
-    /// `TRANSFER_DST | TRANSFER_SRC`.
-    #[deprecated = "Use BufferInfo::host_mem()"]
-    #[doc(hidden)]
-    pub fn new_mappable(size: vk::DeviceSize, usage: vk::BufferUsageFlags) -> BufferInfoBuilder {
-        Self::host_mem(size, usage).to_builder()
+    /// Returns `true` if this information specifies host-accessible memory.
+    pub fn is_host_mem(&self) -> bool {
+        self.host_read | self.host_write
     }
 
     /// Converts a `BufferInfo` into a `BufferInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> BufferInfoBuilder {
+    pub fn into_builder(self) -> BufferInfoBuilder {
         BufferInfoBuilder {
             alignment: Some(self.alignment),
-            mappable: Some(self.mappable),
+            dedicated: Some(self.dedicated),
+            host_read: Some(self.host_read),
+            host_write: Some(self.host_write),
             size: Some(self.size),
             usage: Some(self.usage),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> BufferInfoBuilder {
+        self.into_builder()
+    }
+}
+
+impl From<BufferInfoBuilder> for BufferInfo {
+    fn from(info: BufferInfoBuilder) -> Self {
+        info.build()
     }
 }
 
@@ -809,19 +860,12 @@ impl BufferInfoBuilder {
             Ok(info) => info,
         };
 
-        assert_eq!(
-            res.alignment.count_ones(),
-            1,
+        assert!(
+            res.alignment.is_power_of_two(),
             "Alignment must be a power of two"
         );
 
         res
-    }
-}
-
-impl From<BufferInfoBuilder> for BufferInfo {
-    fn from(info: BufferInfoBuilder) -> Self {
-        info.build()
     }
 }
 
@@ -869,12 +913,6 @@ impl From<Range<vk::DeviceSize>> for BufferSubresourceRange {
     }
 }
 
-impl From<Option<Range<vk::DeviceSize>>> for BufferSubresourceRange {
-    fn from(range: Option<Range<vk::DeviceSize>>) -> Self {
-        range.unwrap_or(0..vk::WHOLE_SIZE).into()
-    }
-}
-
 impl From<BufferSubresourceRange> for Range<vk::DeviceSize> {
     fn from(subresource: BufferSubresourceRange) -> Self {
         subresource.start..subresource.end
@@ -882,7 +920,7 @@ impl From<BufferSubresourceRange> for Range<vk::DeviceSize> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {
         super::*,
         rand::{Rng, SeedableRng, rngs::SmallRng},
@@ -1285,7 +1323,7 @@ mod tests {
     #[test]
     pub fn buffer_info() {
         let info = Info::device_mem(0, vk::BufferUsageFlags::empty());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

@@ -3,17 +3,15 @@ mod profile_with_puffin;
 use {
     clap::Parser,
     log::error,
-    screen_13::{
-        Display, DisplayError, DisplayInfo,
+    vk_graph::{
+        Graph,
         driver::{
             device::{Device, DeviceInfoBuilder},
             surface::Surface,
-            swapchain::{Swapchain, SwapchainInfo},
         },
-        graph::RenderGraph,
         pool::hash::HashPool,
     },
-    std::sync::Arc,
+    vk_graph_window::swapchain::{Swapchain, SwapchainError, SwapchainInfo},
     winit::{
         application::ApplicationHandler,
         error::EventLoopError,
@@ -39,30 +37,35 @@ impl ApplicationHandler for Application {
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window_attributes = Window::default_attributes().with_title("Screen 13");
+        let window_attributes = Window::default_attributes().with_title("vk-graph");
         let window = event_loop.create_window(window_attributes).unwrap();
 
         let args = Args::parse();
         let device_info = DeviceInfoBuilder::default().debug(args.debug);
-        let device = Arc::new(Device::create_display(device_info, &window).unwrap());
+        let device = Device::try_from_display(&window, device_info).unwrap();
 
-        let surface = Surface::create(&device, &window).unwrap();
+        let surface = Surface::create(&device, &window, &window).unwrap();
         let surface_formats = Surface::formats(&surface).unwrap();
         let surface_format = Surface::linear_or_default(&surface_formats);
         let window_size = window.inner_size();
+        let present_mode = Surface::present_modes(&surface)
+            .unwrap()
+            .first()
+            .copied()
+            .unwrap();
         let swapchain = Swapchain::new(
-            &device,
             surface,
-            SwapchainInfo::new(window_size.width, window_size.height, surface_format),
+            SwapchainInfo::new(window_size.width, window_size.height, surface_format)
+                .into_builder()
+                .present_mode(present_mode),
         )
         .unwrap();
 
-        let display_pool = HashPool::new(&device);
-        let display = Display::new(&device, swapchain, DisplayInfo::default()).unwrap();
+        let swapchain_pool = HashPool::new(&device);
 
         self.0 = Some(Context {
-            display,
-            display_pool,
+            swapchain,
+            swapchain_pool,
             window,
         });
     }
@@ -78,10 +81,10 @@ impl ApplicationHandler for Application {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                let mut swapchain_info = context.display.swapchain_info();
+                let mut swapchain_info = context.swapchain.info;
                 swapchain_info.width = size.width;
                 swapchain_info.height = size.height;
-                context.display.set_swapchain_info(swapchain_info);
+                context.swapchain.set_info(swapchain_info);
             }
             WindowEvent::RedrawRequested => {
                 if let Err(err) = context.draw() {
@@ -106,23 +109,23 @@ struct Args {
 }
 
 struct Context {
-    display: Display,
-    display_pool: HashPool,
+    swapchain: Swapchain,
+    swapchain_pool: HashPool,
     window: Window,
 }
 
 impl Context {
-    fn draw(&mut self) -> Result<(), DisplayError> {
-        if let Some(swapchain_image) = self.display.acquire_next_image()? {
-            let mut render_graph = RenderGraph::new();
-            let swapchain_image = render_graph.bind_node(swapchain_image);
+    fn draw(&mut self) -> Result<(), SwapchainError> {
+        if let Some(swapchain_image) = self.swapchain.acquire_next_image()? {
+            let mut graph = Graph::default();
+            let swapchain_image = graph.bind_resource(swapchain_image);
 
             // Rendering goes here!
-            render_graph.clear_color_image_value(swapchain_image, [1.0, 0.0, 1.0]);
+            graph.clear_color_image(swapchain_image, [1.0, 0.0, 1.0, 1.0]);
 
             self.window.pre_present_notify();
-            self.display
-                .present_image(&mut self.display_pool, render_graph, swapchain_image, 0)?;
+            self.swapchain
+                .present_image(&mut self.swapchain_pool, graph, swapchain_image, 0)?;
         }
 
         Ok(())

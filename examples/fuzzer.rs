@@ -22,21 +22,41 @@ Also helpful to run with valgrind:
 
 */
 use {
+    ash::vk,
     clap::Parser,
-    inline_spirv::inline_spirv,
     log::debug,
     rand::{Rng, rng, seq::IndexedRandom},
-    screen_13::prelude::*,
-    screen_13_window::{FrameContext, WindowBuilder, WindowError},
-    std::{mem::size_of, sync::Arc},
+    std::mem::size_of,
+    vk_graph::{
+        cmd::{BuildAccelerationStructureInfo, LoadOp, StoreOp},
+        driver::{
+            accel_struct::{
+                AccelerationStructure, AccelerationStructureGeometry,
+                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
+                AccelerationStructureInfo, DeviceOrHostAddress,
+            },
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo, StencilMode},
+            image::{ImageInfo, SampleCount},
+            physical_device::Vulkan10Limits,
+            render_pass::ResolveMode,
+            shader::{Shader, SpecializationMap},
+        },
+        pool::{Pool as _, hash::HashPool},
+    },
+    vk_graph_window::{FrameContext, Window, WindowError},
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 type Operation = fn(&mut FrameContext, &mut HashPool);
 
 static OPERATIONS: &[Operation] = &[
-    record_compute_array_bind,
-    record_compute_bindless,
-    record_compute_no_op,
+    record_pipeline_array_bind,
+    record_pipeline_bindless,
+    record_pipeline_no_op,
     record_graphic_bindless,
     record_graphic_load_store,
     record_graphic_msaa_depth_stencil,
@@ -57,14 +77,14 @@ fn main() -> Result<(), WindowError> {
 
     let mut rng = rng();
 
-    let screen_13 = WindowBuilder::default().debug(true).build()?;
-    let mut pool = HashPool::new(&screen_13.device);
+    let vk_graph = Window::builder().debug(true).build()?;
+    let mut pool = HashPool::new(&vk_graph.device);
 
     let mut frame_count = 0;
 
     let args = Args::parse();
 
-    screen_13.run(|mut frame| {
+    vk_graph.run(|mut frame| {
         if frame_count == args.frame_count {
             *frame.will_exit = true;
             return;
@@ -76,7 +96,9 @@ fn main() -> Result<(), WindowError> {
         let clear_before: bool = rng.random();
 
         if clear_before {
-            frame.render_graph.clear_color_image(frame.swapchain_image);
+            frame
+                .graph
+                .clear_color_image(frame.swapchain_image, [0f32; 4]);
         }
 
         for _ in 0..args.ops_per_frame {
@@ -85,7 +107,9 @@ fn main() -> Result<(), WindowError> {
         }
 
         if !clear_before {
-            frame.render_graph.clear_color_image(frame.swapchain_image);
+            frame
+                .graph
+                .clear_color_image(frame.swapchain_image, [0f32; 4]);
         }
     })?;
 
@@ -100,7 +124,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     // Vertex buffer for a triangle
     let vertex_buf = {
         let mut buf = pool
-            .lease(BufferInfo::host_mem(
+            .resource(BufferInfo::host_mem(
                 36,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -109,19 +133,19 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             .unwrap();
 
         // Vertex 1
-        Buffer::copy_from_slice(&mut buf, 0, 0f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 4, 0f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 8, 0f32.to_ne_bytes());
+        buf.copy_from_slice(0, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(4, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(8, 0f32.to_ne_bytes().as_slice());
 
         // Vertex 2
-        Buffer::copy_from_slice(&mut buf, 12, 1f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 16, 1f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 20, 0f32.to_ne_bytes());
+        buf.copy_from_slice(12, 1f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(16, 1f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(20, 0f32.to_ne_bytes().as_slice());
 
         // Vertex 3
-        Buffer::copy_from_slice(&mut buf, 24, 2f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 28, 0f32.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 32, 0f32.to_ne_bytes());
+        buf.copy_from_slice(24, 2f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(28, 0f32.to_ne_bytes().as_slice());
+        buf.copy_from_slice(32, 0f32.to_ne_bytes().as_slice());
 
         buf
     };
@@ -129,7 +153,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     // Index buffer for a single triangle
     let index_buf = {
         let mut buf = pool
-            .lease(BufferInfo::host_mem(
+            .resource(BufferInfo::host_mem(
                 6,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -137,9 +161,9 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             ))
             .unwrap();
 
-        Buffer::copy_from_slice(&mut buf, 0, 0u16.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 2, 1u16.to_ne_bytes());
-        Buffer::copy_from_slice(&mut buf, 4, 2u16.to_ne_bytes());
+        buf.copy_from_slice(0, 0u16.to_ne_bytes().as_slice());
+        buf.copy_from_slice(2, 1u16.to_ne_bytes().as_slice());
+        buf.copy_from_slice(4, 2u16.to_ne_bytes().as_slice());
 
         buf
     };
@@ -149,13 +173,11 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             max_primitive_count: 1,
             flags: vk::GeometryFlagsKHR::OPAQUE,
             geometry: AccelerationStructureGeometryData::Triangles {
-                index_addr: DeviceOrHostAddress::DeviceAddress(Buffer::device_address(&index_buf)),
+                index_addr: DeviceOrHostAddress::DeviceAddress(index_buf.device_address()),
                 index_type: vk::IndexType::UINT16,
                 max_vertex: 3,
                 transform_addr: None,
-                vertex_addr: DeviceOrHostAddress::DeviceAddress(Buffer::device_address(
-                    &vertex_buf,
-                )),
+                vertex_addr: DeviceOrHostAddress::DeviceAddress(vertex_buf.device_address()),
                 vertex_format: vk::Format::R32G32B32_SFLOAT,
                 vertex_stride: 12,
             },
@@ -188,10 +210,9 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     // Lease and bind a bunch of bottom-level acceleration structures and add to instance buffer
     let mut blas_nodes = Vec::with_capacity(BLAS_COUNT as _);
     for idx in 0..BLAS_COUNT {
-        let blas = pool.lease(blas_info).unwrap();
+        let blas = pool.resource(blas_info).unwrap();
 
-        Buffer::copy_from_slice(
-            &mut instance_buf,
+        instance_buf.copy_from_slice(
             idx * instance_len,
             AccelerationStructure::instance_slice(&[vk::AccelerationStructureInstanceKHR {
                 transform: vk::TransformMatrixKHR {
@@ -212,21 +233,21 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             }]),
         );
 
-        let blas_node = frame.render_graph.bind_node(blas);
-        let scratch_buf = frame.render_graph.bind_node(
-            pool.lease(
+        let blas_node = frame.graph.bind_resource(blas);
+        let scratch_buf = frame.graph.bind_resource(
+            pool.resource(
                 BufferInfo::device_mem(
                     blas_size.build_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
-                .to_builder()
+                .into_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )
             .unwrap(),
         );
 
-        blas_nodes.push((scratch_buf, blas_node));
+        blas_nodes.push((blas_node, scratch_buf, blas_geometry_info.clone()));
     }
 
     // Lease and bind a single top-level acceleration structure
@@ -236,84 +257,96 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             flags: vk::GeometryFlagsKHR::OPAQUE,
             geometry: AccelerationStructureGeometryData::Instances {
                 array_of_pointers: false,
-                addr: DeviceOrHostAddress::DeviceAddress(Buffer::device_address(&instance_buf)),
+                addr: DeviceOrHostAddress::DeviceAddress(instance_buf.device_address()),
             },
         },
         vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
     )]);
-    let instance_buf = frame.render_graph.bind_node(instance_buf);
+    let instance_buf = frame.graph.bind_resource(instance_buf);
     let tlas_size = AccelerationStructure::size_of(frame.device, &tlas_geometry_info);
     let tlas = pool
-        .lease(AccelerationStructureInfo::tlas(tlas_size.create_size))
+        .resource(AccelerationStructureInfo::tlas(tlas_size.create_size))
         .unwrap();
-    let tlas_node = frame.render_graph.bind_node(tlas);
-    let tlas_scratch_buf = frame.render_graph.bind_node(
-        pool.lease(
+    let tlas_node = frame.graph.bind_resource(tlas);
+    let tlas_scratch_buf = frame.graph.bind_resource(
+        pool.resource(
             BufferInfo::device_mem(
                 tlas_size.build_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             )
-            .to_builder()
+            .into_builder()
             .alignment(accel_struct_scratch_offset_alignment),
         )
         .unwrap(),
     );
 
-    let index_node = frame.render_graph.bind_node(index_buf);
-    let vertex_node = frame.render_graph.bind_node(vertex_buf);
+    let index_node = frame.graph.bind_resource(index_buf);
+    let vertex_node = frame.graph.bind_resource(vertex_buf);
 
-    let pass = frame
-        .render_graph
-        .begin_pass("build acceleration structures");
+    let mut cmd = frame
+        .graph
+        .begin_cmd()
+        .debug_name("build acceleration structures");
 
-    // TODO: AccessType for these is funky, should be access_node?
-    let mut pass = pass.read_node(index_node).read_node(vertex_node);
+    cmd.set_resource_access(index_node, AccessType::IndexBuffer);
+    cmd.set_resource_access(vertex_node, AccessType::VertexBuffer);
 
-    // TODO: Like this:
-    for (scratch_buf, blas_node) in &blas_nodes {
-        pass.access_node_mut(*scratch_buf, AccessType::AccelerationStructureBufferWrite);
-        pass.access_node_mut(*blas_node, AccessType::AccelerationStructureBuildWrite);
+    for (blas_node, scratch_buf, _) in &blas_nodes {
+        cmd.set_resource_access(*blas_node, AccessType::AccelerationStructureBuildWrite);
+        cmd.set_resource_access(*scratch_buf, AccessType::AccelerationStructureBufferWrite);
     }
 
     // Ugly copy of the nodes that I want to figure out a way around while not being confusing
     let blas_nodes_copy = blas_nodes
         .iter()
-        .map(|(_, blas_node)| *blas_node)
+        .map(|(blas_node, _, _)| *blas_node)
         .collect::<Vec<_>>();
 
-    let mut pass = pass.record_acceleration(move |accel, bindings| {
-        for (scratch_buf, blas_node) in blas_nodes {
-            let scratch_data = Buffer::device_address(&bindings[scratch_buf]);
-            accel.build_structure(&blas_geometry_info, blas_node, scratch_data);
+    let mut cmd = cmd.record_cmd(move |cmd| {
+        for (blas_node, scratch_buf, build_data) in blas_nodes {
+            let scratch_buf = cmd.resource(scratch_buf);
+            let scratch_addr = scratch_buf.device_address();
+
+            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+                blas_node,
+                scratch_addr,
+                build_data,
+            )]);
         }
     });
 
     for blas_node in blas_nodes_copy {
-        pass.access_node_mut(blas_node, AccessType::AccelerationStructureBuildRead);
+        cmd.set_resource_access(blas_node, AccessType::AccelerationStructureBuildRead);
     }
 
-    pass.access_node_mut(instance_buf, AccessType::AccelerationStructureBuildRead);
-    pass.access_node_mut(
-        tlas_scratch_buf,
-        AccessType::AccelerationStructureBufferWrite,
-    );
-    pass.access_node_mut(tlas_node, AccessType::AccelerationStructureBuildWrite);
+    cmd.resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
+        .resource_access(
+            tlas_scratch_buf,
+            AccessType::AccelerationStructureBufferWrite,
+        )
+        .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
+        .record_cmd(move |cmd| {
+            let scratch_buf = cmd.resource(tlas_scratch_buf);
+            let scratch_addr = scratch_buf.device_address();
 
-    pass.record_acceleration(move |accel, bindings| {
-        let scratch_data = Buffer::device_address(&bindings[tlas_scratch_buf]);
-        accel.build_structure(&tlas_geometry_info, tlas_node, scratch_data);
-    });
+            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+                tlas_node,
+                scratch_addr,
+                tlas_geometry_info,
+            )]);
+        });
 }
 
-fn record_compute_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
+fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = compute_pipeline(
         "array_bind",
         frame.device,
         ComputePipelineInfo::default(),
-        Shader::new_compute(
-            inline_spirv!(
+        Shader::from_spirv(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(compute)
 
                 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -323,23 +356,16 @@ fn record_compute_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
                     layout(offset = 0) float offset;
                 } push_const;
 
-                layout(set = 0, binding = 0) uniform sampler2D layer_images_sampler_llr[LAYER_COUNT];
+                layout(set = 0, binding = 0) uniform sampler2D
+                    layer_images_sampler_llr[LAYER_COUNT];
 
                 void main() {
                 }
-                "#,
-                comp
+                "#
             )
             .as_slice(),
         )
-        .specialization_info(SpecializationInfo::new(
-            vec![vk::SpecializationMapEntry {
-                constant_id: 0,
-                offset: 0,
-                size: 4,
-            }],
-            5u32.to_ne_bytes(),
-        )),
+        .specialization(SpecializationMap::new(5u32.to_ne_bytes()).constant(0, 0, 4)),
     );
 
     let image_info = ImageInfo::image_2d(
@@ -350,53 +376,54 @@ fn record_compute_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
     );
     let images = [
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
     ];
 
     frame
-        .render_graph
-        .clear_color_image(images[0])
-        .clear_color_image(images[1])
-        .clear_color_image(images[2])
-        .clear_color_image(images[3])
-        .clear_color_image(images[4])
-        .begin_pass("array-bind")
+        .graph
+        .clear_color_image(images[0], [0f32; 4])
+        .clear_color_image(images[1], [0f32; 4])
+        .clear_color_image(images[2], [0f32; 4])
+        .clear_color_image(images[3], [0f32; 4])
+        .clear_color_image(images[4], [0f32; 4])
+        .begin_cmd()
+        .debug_name("array-bind")
         .bind_pipeline(&pipeline)
-        .read_descriptor((0, [0]), images[0])
-        .read_descriptor((0, [1]), images[1])
-        .read_descriptor((0, [2]), images[2])
-        .read_descriptor((0, [3]), images[3])
-        .read_descriptor((0, [4]), images[4])
-        .record_compute(|compute, _| {
-            compute
-                .push_constants(&0f32.to_ne_bytes())
+        .shader_resource_access((0, [0]), images[0], AccessType::ComputeShaderReadOther)
+        .shader_resource_access((0, [1]), images[1], AccessType::ComputeShaderReadOther)
+        .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderReadOther)
+        .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderReadOther)
+        .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderReadOther)
+        .record_cmd(|cmd| {
+            cmd.push_constants(0, &0f32.to_ne_bytes())
                 .dispatch(64, 64, 1);
         });
 }
 
-fn record_compute_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
+fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = compute_pipeline(
         "bindless",
         frame.device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
                 #extension GL_EXT_nonuniform_qualifier : require
+                #pragma shader_stage(compute)
 
                 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
@@ -415,8 +442,7 @@ fn record_compute_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
                         );
                     }
                 }
-                "#,
-                comp
+                "#
             )
             .as_slice(),
         ),
@@ -430,62 +456,63 @@ fn record_compute_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
     );
     let images = [
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
     ];
 
     frame
-        .render_graph
-        .begin_pass("compute-bindless")
+        .graph
+        .begin_cmd()
+        .debug_name("compute-bindless")
         .bind_pipeline(&pipeline)
-        .write_descriptor((0, [0]), images[0])
-        .write_descriptor((0, [1]), images[1])
-        .write_descriptor((0, [2]), images[2])
-        .write_descriptor((0, [3]), images[3])
-        .write_descriptor((0, [4]), images[4])
-        .record_compute(|compute, _| {
-            compute
-                .push_constants(&5u32.to_ne_bytes())
+        .shader_resource_access((0, [0]), images[0], AccessType::ComputeShaderWrite)
+        .shader_resource_access((0, [1]), images[1], AccessType::ComputeShaderWrite)
+        .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderWrite)
+        .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderWrite)
+        .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderWrite)
+        .record_cmd(|cmd| {
+            cmd.push_constants(0, &5u32.to_ne_bytes())
                 .dispatch(64, 64, 1);
         });
 }
 
-fn record_compute_no_op(frame: &mut FrameContext, _: &mut HashPool) {
+fn record_pipeline_no_op(frame: &mut FrameContext, _: &mut HashPool) {
     let pipeline = compute_pipeline(
         "no_op",
         frame.device,
         ComputePipelineInfo::default(),
         Shader::new_compute(
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(compute)
 
                 void main() {
                 }
-                "#,
-                comp
+                "#
             )
             .as_slice(),
         ),
     );
     frame
-        .render_graph
-        .begin_pass("no-op")
+        .graph
+        .begin_cmd()
+        .debug_name("no-op")
         .bind_pipeline(&pipeline)
-        .record_compute(|compute, _| {
-            compute.dispatch(1, 1, 1);
+        .record_cmd(|cmd| {
+            cmd.dispatch(1, 1, 1);
         });
 }
 
@@ -493,20 +520,21 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             void main() {
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
             #extension GL_EXT_nonuniform_qualifier : require
+            #pragma shader_stage(fragment)
 
             layout(push_constant) uniform PushConstants {
                 layout(offset = 0) uint count;
@@ -524,14 +552,13 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
                     );
                 }
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
 
-    let image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -549,40 +576,60 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
     );
     let images = [
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
         frame
-            .render_graph
-            .bind_node(pool.lease(image_info).unwrap()),
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
     ];
 
     frame
-        .render_graph
-        .clear_color_image(images[0])
-        .clear_color_image(images[1])
-        .clear_color_image(images[2])
-        .clear_color_image(images[3])
-        .clear_color_image(images[4])
-        .begin_pass("graphic-bindless")
+        .graph
+        .clear_color_image(images[0], [0f32; 4])
+        .clear_color_image(images[1], [0f32; 4])
+        .clear_color_image(images[2], [0f32; 4])
+        .clear_color_image(images[3], [0f32; 4])
+        .clear_color_image(images[4], [0f32; 4])
+        .begin_cmd()
+        .debug_name("graphic-bindless")
         .bind_pipeline(&pipeline)
-        .read_descriptor((0, [0]), images[0])
-        .read_descriptor((0, [1]), images[1])
-        .read_descriptor((0, [2]), images[2])
-        .read_descriptor((0, [3]), images[3])
-        .read_descriptor((0, [4]), images[4])
-        .clear_color(0, image)
-        .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.push_constants(&5u32.to_ne_bytes()).draw(1, 1, 0, 0);
+        .shader_resource_access(
+            (0, [0]),
+            images[0],
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .shader_resource_access(
+            (0, [1]),
+            images[1],
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .shader_resource_access(
+            (0, [2]),
+            images[2],
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .shader_resource_access(
+            (0, [3]),
+            images[3],
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .shader_resource_access(
+            (0, [4]),
+            images[4],
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .color_attachment_image(0, image, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.push_constants(0, &5u32.to_ne_bytes()).draw(1, 1, 0, 0);
         });
 }
 
@@ -590,39 +637,39 @@ fn record_graphic_load_store(frame: &mut FrameContext, _: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             void main() {
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color_out;
 
             void main() {
                 color_out = vec4(0);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
 
     frame
-        .render_graph
-        .begin_pass("load-store")
+        .graph
+        .begin_cmd()
+        .debug_name("load-store")
         .bind_pipeline(&pipeline)
-        .load_color(0, frame.swapchain_image)
-        .store_color(0, frame.swapchain_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
@@ -655,8 +702,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             vk::Format::D16_UNORM_S8_UINT,
             vk::Format::D32_SFLOAT_S8_UINT,
         ] {
-            let format_props = Device::image_format_properties(
-                frame.device,
+            let format_props = frame.device.physical_device.image_format_properties(
                 format,
                 vk::ImageType::TYPE_2D,
                 vk::ImageTiling::OPTIMAL,
@@ -696,10 +742,11 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
 
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfoBuilder::default().samples(sample_count),
-        inline_spirv!(
+        GraphicPipelineInfo::builder().samples(sample_count),
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             const vec2 UV[3] = {
                 vec2(-1, -1),
@@ -710,41 +757,40 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             void main() {
                 gl_Position = vec4(UV[gl_VertexIndex], 0, 1);
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color_out;
 
             void main() {
                 color_out = vec4(1);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
 
-    let swapchain_format = frame.render_graph.node_info(frame.swapchain_image).fmt;
-    let msaa_color_image = frame.render_graph.bind_node(
-        pool.lease(
+    let swapchain_format = frame.graph.resource(frame.swapchain_image).info.fmt;
+    let msaa_color_image = frame.graph.bind_resource(
+        pool.resource(
             ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 swapchain_format,
                 vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
             )
-            .to_builder()
+            .into_builder()
             .sample_count(sample_count),
         )
         .unwrap(),
     );
-    let msaa_depth_stencil_image = frame.render_graph.bind_node(
-        pool.lease(
+    let msaa_depth_stencil_image = frame.graph.bind_resource(
+        pool.resource(
             ImageInfo::image_2d(
                 frame.width,
                 frame.height,
@@ -752,13 +798,13 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
                 vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
                     | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
             )
-            .to_builder()
+            .into_builder()
             .sample_count(sample_count),
         )
         .unwrap(),
     );
-    let depth_stencil_image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let depth_stencil_image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             frame.width,
             frame.height,
             depth_stencil_format,
@@ -767,7 +813,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .unwrap(),
     );
 
-    let depth_stencil_mode = DepthStencilMode {
+    let depth_stencil_info = DepthStencilInfo {
         back: StencilMode::IGNORE,
         bounds_test: true,
         compare_op: vk::CompareOp::LESS_OR_EQUAL,
@@ -788,27 +834,37 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
     };
 
     frame
-        .render_graph
-        .begin_pass("msaa-depth-stencil")
+        .graph
+        .begin_cmd()
+        .debug_name("msaa-depth-stencil")
         .bind_pipeline(&pipeline)
-        .set_depth_stencil(depth_stencil_mode)
-        .clear_color(0, msaa_color_image)
-        .clear_depth_stencil(msaa_depth_stencil_image)
-        .resolve_color(0, 1, frame.swapchain_image)
-        .resolve_depth_stencil(
+        .depth_stencil(depth_stencil_info)
+        .color_attachment_image(
+            0,
+            msaa_color_image,
+            LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+            StoreOp::DontCare,
+        )
+        .color_attachment_resolve_image(0, 1, frame.swapchain_image)
+        .depth_stencil_attachment_image(
+            msaa_depth_stencil_image,
+            LoadOp::CLEAR_ZERO_STENCIL_ZERO,
+            StoreOp::DontCare,
+        )
+        .depth_stencil_attachment_resolve_image(
             2,
             depth_stencil_image,
             Some(depth_resolve_mode),
             Some(ResolveMode::SampleZero),
         )
-        .record_subpass(|subpass, _| {
-            subpass.draw(3, 1, 0, 0);
+        .record_cmd(|cmd| {
+            cmd.draw(3, 1, 0, 0);
         });
 }
 
 fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut HashPool) {
-    let image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -819,71 +875,78 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
 
     // Pass "a" stores color0 which "b" compatibly loads; so these two will get merged
     frame
-        .render_graph
-        .begin_pass("a")
+        .graph
+        .begin_cmd()
+        .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color0;
+
                 void main() {
                     color0 = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("b")
+        .graph
+        .begin_cmd()
+        .debug_name("b")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color0;
+
                 void main() {
                     color0 = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .load_color(0, image)
-        .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
 fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut HashPool) {
-    let image_0 = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let image_0 = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -891,8 +954,8 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         ))
         .unwrap(),
     );
-    let image_1 = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let image_1 = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -902,105 +965,115 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
     );
 
     frame
-        .render_graph
-        .begin_pass("a")
+        .graph
+        .begin_cmd()
+        .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color0;
+
                 void main() {
                     color0 = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .store_color(0, image_0)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image_0, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("b")
+        .graph
+        .begin_cmd()
+        .debug_name("b")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color0;
                 layout(location = 1) out vec4 color1;
+
                 void main() {
                     color0 = vec4(0);
                     color1 = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .load_color(0, image_0)
-        .store_color(0, image_0)
-        .store_color(1, image_1)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image_0, LoadOp::Load, StoreOp::Store)
+        .color_attachment_image(1, image_1, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("c")
+        .graph
+        .begin_cmd()
+        .debug_name("c")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
-            #version 460 core
-            void main() { }
-            "#,
-                vert
+                #version 460 core
+                #pragma shader_stage(vertex)
+
+                void main() { }
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
-            #version 460 core
-            layout(location = 0) out vec4 color0;
-            void main() {
-                color0 = vec4(0);
-            }
-            "#,
-                frag
+                #version 460 core
+                #pragma shader_stage(fragment)
+
+                layout(location = 0) out vec4 color0;
+
+                void main() {
+                    color0 = vec4(0);
+                }
+                "#
             )
             .as_slice(),
         ))
-        .clear_color(0, image_0)
-        .store_color(0, image_0)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image_0, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
 fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut HashPool) {
-    let color_image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let color_image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1008,8 +1081,8 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         ))
         .unwrap(),
     );
-    let depth_image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let depth_image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::D32_SFLOAT,
@@ -1020,71 +1093,77 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
 
     // Pass "a" stores color0+depth which "b" compatibly loads; so these two will get merged
     frame
-        .render_graph
-        .begin_pass("a")
+        .graph
+        .begin_cmd()
+        .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color_out;
+
                 void main() {
                     color_out = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .store_color(0, color_image)
-        .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, color_image, LoadOp::DontCare, StoreOp::Store)
+        .depth_stencil_attachment_image(depth_image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("b")
+        .graph
+        .begin_cmd()
+        .debug_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 void main() {
                     gl_FragDepth = 0.0;
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .load_depth_stencil(depth_image)
-        .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
 fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut HashPool) {
-    let color_image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let color_image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1092,8 +1171,8 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         ))
         .unwrap(),
     );
-    let depth_image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let depth_image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::D32_SFLOAT,
@@ -1104,71 +1183,77 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
 
     // Pass "a" stores color0+depth which "b" compatibly loads; so these two will get merged
     frame
-        .render_graph
-        .begin_pass("a")
+        .graph
+        .begin_cmd()
+        .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 void main() {
                     gl_FragDepth = 0.0;
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .depth_stencil_attachment_image(depth_image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("b")
+        .graph
+        .begin_cmd()
+        .debug_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 layout(location = 0) out vec4 color_out;
+
                 void main() {
                     color_out = vec4(0);
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .store_color(0, color_image)
-        .load_depth_stencil(depth_image)
-        .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, color_image, LoadOp::DontCare, StoreOp::Store)
+        .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
 fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut HashPool) {
-    let depth_image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let depth_image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::D32_SFLOAT,
@@ -1178,92 +1263,97 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
     );
 
     frame
-        .render_graph
-        .begin_pass("a")
+        .graph
+        .begin_cmd()
+        .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(                kind: frag,
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 void main() {
                     gl_FragDepth = 0.0;
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .depth_stencil_attachment_image(depth_image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("b")
+        .graph
+        .begin_cmd()
+        .debug_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
             GraphicPipelineInfo::default(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(vertex)
+
                 void main() { }
-                "#,
-                vert
+                "#
             )
             .as_slice(),
-            inline_spirv!(
+            glsl!(
                 r#"
                 #version 460 core
+                #pragma shader_stage(fragment)
+
                 void main() {
                     gl_FragDepth = 0.0;
                 }
-                "#,
-                frag
+                "#
             )
             .as_slice(),
         ))
-        .load_depth_stencil(depth_image)
-        .store_depth_stencil(depth_image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
 fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut HashPool) {
-    let vertex = inline_spirv!(
+    let vertex = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(vertex)
 
         void main() {
         }
-        "#,
-        vert
+        "#
     )
     .as_slice();
     let pipeline_a = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
         vertex,
-        inline_spirv!(
+        glsl!(            kind: frag,
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color_out;
 
             void main() {
                 color_out = vec4(0);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
@@ -1271,9 +1361,11 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
         frame.device,
         GraphicPipelineInfo::default(),
         vertex,
-        inline_spirv!(
+        glsl!(
+            kind: frag,
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(input_attachment_index = 0, binding = 0) uniform subpassInput color_in;
             layout(location = 0) out vec4 color_out;
@@ -1281,13 +1373,12 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
             void main() {
                 color_out = subpassLoad(color_in);
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
-    let image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1300,21 +1391,22 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
 
     // Pass "a" stores color 0 which "b" compatibly inputs; so these two will get merged
     frame
-        .render_graph
-        .begin_pass("a")
+        .graph
+        .begin_cmd()
+        .debug_name("a")
         .bind_pipeline(&pipeline_a)
-        .clear_color(0, image)
-        .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("b")
+        .graph
+        .begin_cmd()
+        .debug_name("b")
         .bind_pipeline(&pipeline_b)
-        .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
@@ -1322,32 +1414,32 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             void main() {
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(location = 0) out vec4 color;
 
             void main() {
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
 
-    let image = frame.render_graph.bind_node(
-        pool.lease(ImageInfo::image_2d(
+    let image = frame.graph.bind_resource(
+        pool.resource(ImageInfo::image_2d(
             256,
             256,
             vk::Format::R8G8B8A8_UNORM,
@@ -1358,20 +1450,22 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
 
     // These two passes have common writes but are otherwise regular - they won't get merged
     frame
-        .render_graph
-        .begin_pass("c")
+        .graph
+        .begin_cmd()
+        .debug_name("c")
         .bind_pipeline(&pipeline)
-        .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("d")
+        .graph
+        .begin_cmd()
+        .debug_name("d")
         .bind_pipeline(&pipeline)
-        .store_color(0, image)
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, image, LoadOp::DontCare, StoreOp::Store)
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
@@ -1379,19 +1473,20 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
         GraphicPipelineInfo::default(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(vertex)
 
             void main() {
             }
-            "#,
-            vert
+            "#
         )
         .as_slice(),
-        inline_spirv!(
+        glsl!(
             r#"
             #version 460 core
+            #pragma shader_stage(fragment)
 
             layout(binding = 0) uniform sampler2D my_sampler_lle;
 
@@ -1400,14 +1495,13 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
             void main() {
                 color_out = texture(my_sampler_lle, vec2(0));
             }
-            "#,
-            frag
+            "#
         )
         .as_slice(),
     );
     let images = [
-        frame.render_graph.bind_node(
-            pool.lease(ImageInfo::image_2d(
+        frame.graph.bind_resource(
+            pool.resource(ImageInfo::image_2d(
                 256,
                 256,
                 vk::Format::R8G8B8A8_UNORM,
@@ -1415,8 +1509,8 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
             ))
             .unwrap(),
         ),
-        frame.render_graph.bind_node(
-            pool.lease(ImageInfo::image_2d(
+        frame.graph.bind_resource(
+            pool.resource(ImageInfo::image_2d(
                 256,
                 256,
                 vk::Format::R8G8B8A8_UNORM,
@@ -1426,30 +1520,43 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
         ),
     ];
 
-    frame.render_graph.clear_color_image(images[0]);
-    frame.render_graph.clear_color_image(images[1]);
+    frame.graph.clear_color_image(images[0], [0f32; 4]);
+    frame.graph.clear_color_image(images[1], [0f32; 4]);
 
     // a and b should merge into one renderpass with two subpasses; however the use of images[1] in
     // b should have a pipeline barrier (on the clear we just did) before the pass starts.
     frame
-        .render_graph
-        .begin_pass("a")
+        .graph
+        .begin_cmd()
+        .debug_name("a")
         .bind_pipeline(&pipeline)
-        .clear_color(0, frame.swapchain_image)
-        .store_color(0, frame.swapchain_image)
-        .read_descriptor(0, images[0])
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(
+            0,
+            frame.swapchain_image,
+            LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+            StoreOp::Store,
+        )
+        .shader_resource_access(
+            0,
+            images[0],
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
     frame
-        .render_graph
-        .begin_pass("b")
+        .graph
+        .begin_cmd()
+        .debug_name("b")
         .bind_pipeline(&pipeline)
-        .load_color(0, frame.swapchain_image)
-        .store_color(0, frame.swapchain_image)
-        .read_descriptor(0, images[1])
-        .record_subpass(|subpass, _| {
-            subpass.draw(1, 1, 0, 0);
+        .color_attachment_image(0, frame.swapchain_image, LoadOp::Load, StoreOp::Store)
+        .shader_resource_access(
+            0,
+            images[1],
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .record_cmd(|cmd| {
+            cmd.draw(1, 1, 0, 0);
         });
 }
 
@@ -1457,31 +1564,30 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
 
 fn compute_pipeline(
     key: &'static str,
-    device: &Arc<Device>,
+    device: &Device,
     info: impl Into<ComputePipelineInfo>,
     shader: impl Into<Shader>,
-) -> Arc<ComputePipeline> {
+) -> ComputePipeline {
     use std::{cell::RefCell, collections::HashMap};
 
     thread_local! {
-        static TLS: RefCell<HashMap<&'static str, Arc<ComputePipeline>>> = Default::default();
+        static TLS: RefCell<HashMap<&'static str, ComputePipeline>> = Default::default();
     }
 
     TLS.with(|tls| {
-        Arc::clone(
-            tls.borrow_mut().entry(key).or_insert_with(|| {
-                Arc::new(ComputePipeline::create(device, info, shader).unwrap())
-            }),
-        )
+        tls.borrow_mut()
+            .entry(key)
+            .or_insert_with(|| ComputePipeline::create(device, info, shader).unwrap())
+            .clone()
     })
 }
 
 fn graphic_vert_frag_pipeline(
-    device: &Arc<Device>,
+    device: &Device,
     info: impl Into<GraphicPipelineInfo>,
     vert_source: &'static [u32],
     frag_source: &'static [u32],
-) -> Arc<GraphicPipeline> {
+) -> GraphicPipeline {
     use std::{cell::RefCell, collections::HashMap};
 
     #[derive(Eq, Hash, PartialEq)]
@@ -1492,33 +1598,30 @@ fn graphic_vert_frag_pipeline(
     }
 
     thread_local! {
-        static TLS: RefCell<HashMap<Key, Arc<GraphicPipeline>>> = Default::default();
+        static TLS: RefCell<HashMap<Key, GraphicPipeline>> = Default::default();
     }
 
     let info = info.into();
 
     TLS.with(|tls| {
-        Arc::clone(
-            tls.borrow_mut()
-                .entry(Key {
+        tls.borrow_mut()
+            .entry(Key {
+                info,
+                vert_source,
+                frag_source,
+            })
+            .or_insert_with(move || {
+                GraphicPipeline::create(
+                    device,
                     info,
-                    vert_source,
-                    frag_source,
-                })
-                .or_insert_with(move || {
-                    Arc::new(
-                        GraphicPipeline::create(
-                            device,
-                            info,
-                            [
-                                Shader::new_vertex(vert_source),
-                                Shader::new_fragment(frag_source),
-                            ],
-                        )
-                        .unwrap(),
-                    )
-                }),
-        )
+                    [
+                        Shader::new_vertex(vert_source),
+                        Shader::new_fragment(frag_source),
+                    ],
+                )
+                .unwrap()
+            })
+            .clone()
     })
 }
 

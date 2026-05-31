@@ -1,24 +1,42 @@
+//! Descriptor pool allocation helpers used by pipeline execution.
+
 use {
     super::{DescriptorSetLayout, DriverError, device::Device},
     ash::vk,
     log::warn,
-    std::{ops::Deref, sync::Arc, thread::panicking},
+    std::{ops::Deref, slice, thread::panicking},
 };
 
+/// Descriptor pool resource used to allocate descriptor sets for pipeline execution.
 #[derive(Debug)]
+#[read_only::cast]
 pub struct DescriptorPool {
+    /// The device which owns this descriptor pool resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
+    /// The native Vulkan resource handle of this descriptor pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub handle: vk::DescriptorPool,
+
+    /// Information used to create this descriptor pool resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub info: DescriptorPoolInfo,
-    descriptor_pool: vk::DescriptorPool,
-    pub device: Arc<Device>,
 }
 
 impl DescriptorPool {
     #[profiling::function]
-    pub fn create(
-        device: &Arc<Device>,
+    pub(crate) fn create(
+        device: &Device,
         info: impl Into<DescriptorPoolInfo>,
     ) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
+        let device = device.clone();
         let info = info.into();
 
         let mut pool_sizes = [vk::DescriptorPoolSize {
@@ -123,7 +141,7 @@ impl DescriptorPool {
             pool_size_count += 1;
         }
 
-        let descriptor_pool = unsafe {
+        let handle = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
@@ -133,47 +151,45 @@ impl DescriptorPool {
             )
         }
         .map_err(|err| {
-            warn!("{err}");
+            warn!("unable to create descriptor pool: {err}");
 
             DriverError::Unsupported
         })?;
 
         Ok(Self {
-            descriptor_pool,
             device,
+            handle,
             info,
         })
     }
 
-    pub fn allocate_descriptor_set(
+    pub(crate) fn allocate_descriptor_set(
         this: &Self,
         layout: &DescriptorSetLayout,
     ) -> Result<DescriptorSet, DriverError> {
         Ok(Self::allocate_descriptor_sets(this, layout, 1)?
             .next()
-            .unwrap())
+            .expect("missing descriptor set"))
     }
 
     #[profiling::function]
-    pub fn allocate_descriptor_sets<'a>(
-        this: &'a Self,
+    pub(crate) fn allocate_descriptor_sets<'a>(
+        &'a self,
         layout: &DescriptorSetLayout,
         count: u32,
     ) -> Result<impl Iterator<Item = DescriptorSet> + 'a, DriverError> {
-        use std::slice::from_ref;
-
         let mut create_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(this.descriptor_pool)
-            .set_layouts(from_ref(layout));
+            .descriptor_pool(self.handle)
+            .set_layouts(slice::from_ref(&layout.handle));
         create_info.descriptor_set_count = count;
 
         Ok(unsafe {
-            this.device
+            self.device
                 .allocate_descriptor_sets(&create_info)
                 .map_err(|err| {
                     use {DriverError::*, vk::Result as vk};
 
-                    warn!("{err}");
+                    warn!("unable to allocate descriptor sets: {err}");
 
                     match err {
                         e if e == vk::ERROR_FRAGMENTED_POOL => InvalidData,
@@ -185,19 +201,11 @@ impl DescriptorPool {
                 })?
                 .into_iter()
                 .map(move |descriptor_set| DescriptorSet {
-                    descriptor_pool: this.descriptor_pool,
+                    descriptor_pool: self.handle,
                     descriptor_set,
-                    device: Arc::clone(&this.device),
+                    device: self.device.clone(),
                 })
         })
-    }
-}
-
-impl Deref for DescriptorPool {
-    type Target = vk::DescriptorPool;
-
-    fn deref(&self) -> &Self::Target {
-        &self.descriptor_pool
     }
 }
 
@@ -209,31 +217,31 @@ impl Drop for DescriptorPool {
         }
 
         unsafe {
-            self.device
-                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device.destroy_descriptor_pool(self.handle, None);
         }
     }
 }
 
+/// Descriptor counts and limits used to create a [`DescriptorPool`].
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct DescriptorPoolInfo {
-    pub acceleration_structure_count: u32,
-    pub combined_image_sampler_count: u32,
-    pub input_attachment_count: u32,
-    pub max_sets: u32,
-    pub sampled_image_count: u32,
-    pub sampler_count: u32,
-    pub storage_buffer_count: u32,
-    pub storage_buffer_dynamic_count: u32,
-    pub storage_image_count: u32,
-    pub storage_texel_buffer_count: u32,
-    pub uniform_buffer_count: u32,
-    pub uniform_buffer_dynamic_count: u32,
-    pub uniform_texel_buffer_count: u32,
+    pub(crate) acceleration_structure_count: u32,
+    pub(crate) combined_image_sampler_count: u32,
+    pub(crate) input_attachment_count: u32,
+    pub(crate) max_sets: u32,
+    pub(crate) sampled_image_count: u32,
+    pub(crate) sampler_count: u32,
+    pub(crate) storage_buffer_count: u32,
+    pub(crate) storage_buffer_dynamic_count: u32,
+    pub(crate) storage_image_count: u32,
+    pub(crate) storage_texel_buffer_count: u32,
+    pub(crate) uniform_buffer_count: u32,
+    pub(crate) uniform_buffer_dynamic_count: u32,
+    pub(crate) uniform_texel_buffer_count: u32,
 }
 
 impl DescriptorPoolInfo {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.acceleration_structure_count
             + self.combined_image_sampler_count
             + self.input_attachment_count
@@ -251,10 +259,10 @@ impl DescriptorPoolInfo {
 }
 
 #[derive(Debug)]
-pub struct DescriptorSet {
+pub(crate) struct DescriptorSet {
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
-    device: Arc<Device>,
+    device: Device,
 }
 
 impl Deref for DescriptorSet {
@@ -268,16 +276,15 @@ impl Deref for DescriptorSet {
 impl Drop for DescriptorSet {
     #[profiling::function]
     fn drop(&mut self) {
-        use std::slice::from_ref;
-
         if panicking() {
             return;
         }
 
-        unsafe {
+        if let Err(err) = unsafe {
             self.device
-                .free_descriptor_sets(self.descriptor_pool, from_ref(&self.descriptor_set))
-                .unwrap_or_else(|_| warn!("Unable to free descriptor set"))
+                .free_descriptor_sets(self.descriptor_pool, slice::from_ref(&self.descriptor_set))
+        } {
+            warn!("unable to free descriptor set: {err}");
         }
     }
 }

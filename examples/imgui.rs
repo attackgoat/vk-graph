@@ -1,11 +1,16 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     clap::Parser,
-    screen_13::prelude::*,
-    screen_13_fx::*,
-    screen_13_imgui::{Condition, ImGui},
-    screen_13_window::{WindowBuilder, WindowError},
+    std::time::Instant,
+    vk_graph::{
+        driver::image::ImageInfo,
+        pool::{Pool as _, lazy::LazyPool},
+    },
+    vk_graph_fx::*,
+    vk_graph_imgui::{Condition, ImGui},
+    vk_graph_window::{Window, WindowError},
     winit::dpi::LogicalSize,
 };
 
@@ -13,9 +18,9 @@ fn main() -> Result<(), WindowError> {
     pretty_env_logger::init();
     profile_with_puffin::init();
 
-    // Screen 13 things we need for this demo
+    // vk-graph things we need for this demo
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .v_sync(false)
         .window(|window| window.with_inner_size(LogicalSize::new(1024, 768)))
@@ -27,11 +32,16 @@ fn main() -> Result<(), WindowError> {
     // Some example state to make the demo more interesting
     let mut value = 0;
     let choices = ["test test this is 1", "test test this is 2"];
+    let mut prev_frame_at = Instant::now();
 
     window.run(|frame| {
+        let now = Instant::now();
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
         // Lease and clear an image as a stand-in for some real game or program output
-        let app_image = frame.render_graph.bind_node(
-            pool.lease(ImageInfo::image_2d(
+        let app_image = frame.graph.bind_resource(
+            pool.resource(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 vk::Format::R8G8B8A8_UNORM,
@@ -42,16 +52,16 @@ fn main() -> Result<(), WindowError> {
             .unwrap(),
         );
         frame
-            .render_graph
-            .clear_color_image_value(app_image, [0.2, 0.22, 0.2, 1.0]);
+            .graph
+            .clear_color_image(app_image, [0.2, 0.22, 0.2, 1.0]);
 
         // Use the draw function callback to do some fun meant-for-debug-mode GUI stuff
         let gui_image = imgui.draw(
-            0.016,
+            dt.as_secs_f32(),
             frame.events,
             frame.window,
             &mut pool,
-            frame.render_graph,
+            frame.graph,
             |ui, _, _| {
                 ui.window("Hello world")
                     .position([10.0, 10.0], Condition::FirstUseEver)
@@ -76,12 +86,7 @@ fn main() -> Result<(), WindowError> {
         );
 
         // Present "gui_image" on top of "app_image" onto "frame.swapchain"
-        display.present_images(
-            frame.render_graph,
-            gui_image,
-            app_image,
-            frame.swapchain_image,
-        );
+        display.present_images(frame.graph, gui_image, app_image, frame.swapchain_image);
     })
 }
 

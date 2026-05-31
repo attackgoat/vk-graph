@@ -1,0 +1,33 @@
+[package]
+name = "vk-graph-fx"
+version = "0.1.0"
+authors = ["John Wells <john@attackgoat.com>"]
+documentation = "https://docs.rs/vk-graph-fx"
+homepage = "https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-fx"
+keywords = ["gamedev", "vulkan"]
+categories = ["game-development", "multimedia::images", "rendering::engine"]
+description = "A bunch of pre-built utilities that are helpful when using vk-graph"
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+
+[features]
+default = [
+    "blend-modes",
+    "mask-modes",
+    "matte-modes",
+]
+blend-modes = []
+mask-modes = []
+matte-modes = []
+
+[dependencies]
+bmfont = { version = "0.3", default-features = false }
+bytemuck = "1.25"
+parking_lot = "0.12"
+log.workspace = true
+anyhow = "1.0"
+glam = "0.27"
+vk-graph.workspace = true
+vk-shader-macros = "0.2"

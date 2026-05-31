@@ -1,22 +1,44 @@
 mod profile_with_puffin;
 
 use {
-    bytemuck::cast_slice,
+    ash::vk,
+    bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
-    inline_spirv::inline_spirv,
     log::warn,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
     std::{io::BufReader, mem::size_of, sync::Arc},
     tobj::{GPU_LOAD_OPTIONS, load_mtl_buf, load_obj_buf},
+    vk_graph::{
+        Graph,
+        cmd::BuildAccelerationStructureInfo,
+        driver::{
+            DriverError,
+            accel_struct::{
+                AccelerationStructure, AccelerationStructureGeometry,
+                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
+                AccelerationStructureInfo,
+            },
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            image::ImageInfo,
+            physical_device::RayTraceProperties,
+            ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup},
+            shader::Shader,
+        },
+        pool::{Pool as _, hash::HashPool},
+    },
+    vk_graph_window::Window,
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };
 
-static SHADER_RAY_GEN: &[u32] = inline_spirv!(
+static SHADER_RAY_GEN: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : require
+    #pragma shader_stage(raygen)
 
     #define M_PI 3.1415926535897932384626433832795
 
@@ -83,17 +105,17 @@ static SHADER_RAY_GEN: &[u32] = inline_spirv!(
 
         imageStore(image, ivec2(gl_LaunchIDEXT.xy), color);
     }
-    "#,
-    rgen,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
+static SHADER_CLOSEST_HIT: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : require
     #extension GL_EXT_nonuniform_qualifier : enable
+    #pragma shader_stage(closest)
 
     #define M_PI 3.1415926535897932384626433832795
 
@@ -281,16 +303,16 @@ static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
 
         payload.rayDepth += 1;
     }
-    "#,
-    rchit,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_MISS: &[u32] = inline_spirv!(
+static SHADER_MISS: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : require
+    #pragma shader_stage(miss)
 
     layout(location = 0) rayPayloadInEXT Payload {
         vec3 rayOrigin;
@@ -307,32 +329,30 @@ static SHADER_MISS: &[u32] = inline_spirv!(
     void main() {
         payload.rayActive = 0;
     }
-    "#,
-    rmiss,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-static SHADER_SHADOW_MISS: &[u32] = inline_spirv!(
+static SHADER_SHADOW_MISS: &[u32] = glsl!(
+    target: vulkan1_2,
     r#"
     #version 460
     #extension GL_EXT_ray_tracing : require
+    #pragma shader_stage(miss)
 
     layout(location = 1) rayPayloadInEXT bool isShadow;
 
     void main() {
         isShadow = false;
     }
-    "#,
-    rmiss,
-    vulkan1_2
+    "#
 )
 .as_slice();
 
-fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipeline>, DriverError> {
-    Ok(Arc::new(RayTracePipeline::create(
+fn create_ray_trace_pipeline(device: &Device) -> Result<RayTracePipeline, DriverError> {
+    RayTracePipeline::create(
         device,
-        RayTracePipelineInfoBuilder::default().max_ray_recursion_depth(1),
+        RayTracePipelineInfo::builder().max_ray_recursion_depth(1),
         [
             Shader::new_ray_gen(SHADER_RAY_GEN),
             Shader::new_closest_hit(SHADER_CLOSEST_HIT),
@@ -345,12 +365,12 @@ fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipelin
             RayTraceShaderGroup::new_general(2),
             RayTraceShaderGroup::new_general(3),
         ],
-    )?))
+    )
 }
 
 #[allow(clippy::type_complexity)]
 fn load_scene_buffers(
-    device: &Arc<Device>,
+    device: &Device,
 ) -> Result<(Arc<Buffer>, Arc<Buffer>, u32, u32, Arc<Buffer>, Arc<Buffer>), DriverError> {
     use std::slice::from_raw_parts;
 
@@ -398,7 +418,7 @@ fn load_scene_buffers(
                     | vk::BufferUsageFlags::STORAGE_BUFFER,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, data);
+        buf.copy_from_slice(0, data);
         buf
     };
 
@@ -413,7 +433,7 @@ fn load_scene_buffers(
                     | vk::BufferUsageFlags::STORAGE_BUFFER,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, data);
+        buf.copy_from_slice(0, data);
         buf
     };
 
@@ -429,7 +449,7 @@ fn load_scene_buffers(
             device,
             BufferInfo::host_mem(data.len() as _, vk::BufferUsageFlags::STORAGE_BUFFER),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, data);
+        buf.copy_from_slice(0, data);
         buf
     };
 
@@ -460,13 +480,13 @@ fn load_scene_buffers(
                     0.0,
                 ]
             })
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let buf_len = materials.len() * 64;
         let mut buf = Buffer::create(
             device,
             BufferInfo::host_mem(buf_len as _, vk::BufferUsageFlags::STORAGE_BUFFER),
         )?;
-        Buffer::copy_from_slice(&mut buf, 0, unsafe {
+        buf.copy_from_slice(0, unsafe {
             from_raw_parts(materials.as_ptr() as *const _, buf_len)
         });
         buf
@@ -488,7 +508,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let mut cache = HashPool::new(&window.device);
 
     // ------------------------------------------------------------------------------------------ //
@@ -527,23 +547,23 @@ fn main() -> anyhow::Result<()> {
                 vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             )
-            .to_builder()
+            .into_builder()
             .alignment(shader_group_base_alignment as _),
         )
         .unwrap();
 
         let data = Buffer::mapped_slice_mut(&mut buf);
-        let rgen_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 0)?;
+        let rgen_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 0);
         data[0..rgen_handle.len()].copy_from_slice(rgen_handle);
 
-        let hit_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 1)?;
+        let hit_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 1);
         data[sbt_hit_start as usize..sbt_hit_start as usize + hit_handle.len()]
             .copy_from_slice(hit_handle);
 
-        let miss_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 2)?;
+        let miss_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 2);
         data[sbt_miss_start as usize..sbt_miss_start as usize + miss_handle.len()]
             .copy_from_slice(miss_handle);
-        let miss_shadow_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 3)?;
+        let miss_shadow_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 3);
         let sbt_miss_shadow_start = sbt_miss_start + shader_group_handle_alignment;
         data[sbt_miss_shadow_start as usize
             ..sbt_miss_shadow_start as usize + miss_shadow_handle.len()]
@@ -551,7 +571,7 @@ fn main() -> anyhow::Result<()> {
 
         buf
     });
-    let sbt_address = Buffer::device_address(&sbt_buf);
+    let sbt_address = sbt_buf.device_address();
     let sbt_rgen = vk::StridedDeviceAddressRegionKHR {
         device_address: sbt_address,
         stride: shader_group_handle_size as _,
@@ -584,11 +604,11 @@ fn main() -> anyhow::Result<()> {
         AccelerationStructureGeometry::opaque(
             triangle_count,
             AccelerationStructureGeometryData::triangles(
-                Buffer::device_address(&index_buf),
+                index_buf.device_address(),
                 vk::IndexType::UINT32,
                 vertex_count,
                 None,
-                Buffer::device_address(&vertex_buf),
+                vertex_buf.device_address(),
                 vk::Format::R32G32B32_SFLOAT,
                 12,
             ),
@@ -633,7 +653,7 @@ fn main() -> anyhow::Result<()> {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buffer, 0, instance_data);
+        buffer.copy_from_slice(0, instance_data);
 
         buffer
     });
@@ -645,7 +665,7 @@ fn main() -> anyhow::Result<()> {
     let tlas_geometry_info = AccelerationStructureGeometryInfo::tlas([(
         AccelerationStructureGeometry::opaque(
             1,
-            AccelerationStructureGeometryData::instances(Buffer::device_address(&instance_buf)),
+            AccelerationStructureGeometryData::instances(instance_buf.device_address()),
         ),
         vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
     )]);
@@ -668,62 +688,72 @@ fn main() -> anyhow::Result<()> {
             .unwrap()
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
-        let mut render_graph = RenderGraph::new();
-        let index_node = render_graph.bind_node(&index_buf);
-        let vertex_node = render_graph.bind_node(&vertex_buf);
-        let blas_node = render_graph.bind_node(&blas);
+        let mut graph = Graph::default();
+        let index_node = graph.bind_resource(&index_buf);
+        let vertex_node = graph.bind_resource(&vertex_buf);
+        let blas_node = graph.bind_resource(&blas);
 
         {
-            let scratch_buf = render_graph.bind_node(Buffer::create(
+            let scratch_buf = graph.bind_resource(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     blas_size.build_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
-                .to_builder()
+                .into_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = render_graph.node_device_address(scratch_buf);
+            let scratch_data = graph.resource(scratch_buf).device_address();
 
-            render_graph
-                .begin_pass("Build BLAS")
-                .access_node(index_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(vertex_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-                .access_node(blas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_acceleration(move |accel, _| {
-                    accel.build_structure(&blas_geometry_info, blas_node, scratch_data);
+            graph
+                .begin_cmd()
+                .debug_name("Build BLAS")
+                .resource_access(index_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(vertex_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
+                .record_cmd(move |cmd| {
+                    cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+                        blas_node,
+                        scratch_data,
+                        blas_geometry_info,
+                    )]);
                 });
         }
 
         {
-            let scratch_buf = render_graph.bind_node(Buffer::create(
+            let scratch_buf = graph.bind_resource(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
                     tlas_size.build_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
-                .to_builder()
+                .into_builder()
                 .alignment(accel_struct_scratch_offset_alignment),
             )?);
-            let scratch_data = render_graph.node_device_address(scratch_buf);
-            let instance_node = render_graph.bind_node(&instance_buf);
-            let tlas_node = render_graph.bind_node(&tlas);
+            let scratch_addr = graph.resource(scratch_buf).device_address();
+            let instance_node = graph.bind_resource(&instance_buf);
+            let tlas_node = graph.bind_resource(&tlas);
 
-            render_graph
-                .begin_pass("Build TLAS")
-                .access_node(blas_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(instance_node, AccessType::AccelerationStructureBuildRead)
-                .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-                .access_node(tlas_node, AccessType::AccelerationStructureBuildWrite)
-                .record_acceleration(move |accel, _| {
-                    accel.build_structure(&tlas_geometry_info, tlas_node, scratch_data);
+            graph
+                .begin_cmd()
+                .debug_name("Build TLAS")
+                .resource_access(blas_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(instance_node, AccessType::AccelerationStructureBuildRead)
+                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
+                .record_cmd(move |cmd| {
+                    cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+                        tlas_node,
+                        scratch_addr,
+                        tlas_geometry_info,
+                    )]);
                 });
         }
 
-        render_graph.resolve().submit(&mut cache, 0, 0)?;
+        graph.into_submission().queue_submit(&mut cache, 0, 0)?;
     }
 
     // ------------------------------------------------------------------------------------------ //
@@ -748,10 +778,10 @@ fn main() -> anyhow::Result<()> {
         if image.is_none() {
             image = Some(Arc::new(
                 cache
-                    .lease(ImageInfo::image_2d(
+                    .resource(ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        frame.render_graph.node_info(frame.swapchain_image).fmt,
+                        frame.graph.resource(frame.swapchain_image).info.fmt,
                         vk::ImageUsageFlags::STORAGE
                             | vk::ImageUsageFlags::TRANSFER_DST
                             | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -760,22 +790,22 @@ fn main() -> anyhow::Result<()> {
             ));
         }
 
-        let image_node = frame.render_graph.bind_node(image.as_ref().unwrap());
+        let image_node = frame.graph.bind_resource(image.as_ref().unwrap());
 
         {
-            input.step_with_window_events(
-                &frame
-                    .events
-                    .iter()
-                    .filter_map(|event| {
-                        if let Event::WindowEvent { event, .. } = event {
-                            Some(event.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Box<_>>(),
-            );
+            input.step();
+            for event in frame.events {
+                match event {
+                    Event::WindowEvent { event, .. } => {
+                        let _ = input.process_window_event(event);
+                    }
+                    Event::DeviceEvent { event, .. } => {
+                        input.process_device_event(event);
+                    }
+                    _ => {}
+                }
+            }
+            input.end_step();
 
             const SPEED: f32 = 0.1f32;
 
@@ -801,14 +831,15 @@ fn main() -> anyhow::Result<()> {
 
             if input.key_pressed(KeyCode::Escape) {
                 frame_count = 0;
-                frame.render_graph.clear_color_image(image_node);
+                frame.graph.clear_color_image(image_node, [0f32; 4]);
             } else {
                 frame_count += 1;
             }
         }
 
-        let camera_buf = frame.render_graph.bind_node({
+        let camera_buf = frame.graph.bind_resource({
             #[repr(C)]
+            #[derive(Clone, Copy, Pod, Zeroable)]
             struct Camera {
                 position: [f32; 4],
                 right: [f32; 4],
@@ -818,60 +849,59 @@ fn main() -> anyhow::Result<()> {
             }
 
             let mut buf = cache
-                .lease(BufferInfo::host_mem(
+                .resource(BufferInfo::host_mem(
                     size_of::<Camera>() as _,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 ))
                 .unwrap();
-            Buffer::copy_from_slice(&mut buf, 0, unsafe {
-                std::slice::from_raw_parts(
-                    &Camera {
-                        position,
-                        right,
-                        up,
-                        forward,
-                        frame_count,
-                    } as *const _ as *const _,
-                    size_of::<Camera>(),
-                )
-            });
+            buf.copy_from_slice(
+                0,
+                bytes_of(&Camera {
+                    position,
+                    right,
+                    up,
+                    forward,
+                    frame_count,
+                }),
+            );
 
             buf
         });
-        let blas_node = frame.render_graph.bind_node(&blas);
-        let tlas_node = frame.render_graph.bind_node(&tlas);
-        let index_buf_node = frame.render_graph.bind_node(&index_buf);
-        let vertex_buf_node = frame.render_graph.bind_node(&vertex_buf);
-        let material_id_buf_node = frame.render_graph.bind_node(&material_id_buf);
-        let material_buf_node = frame.render_graph.bind_node(&material_buf);
-        let sbt_node = frame.render_graph.bind_node(&sbt_buf);
+        let blas_node = frame.graph.bind_resource(&blas);
+        let tlas_node = frame.graph.bind_resource(&tlas);
+        let index_buf_node = frame.graph.bind_resource(&index_buf);
+        let vertex_buf_node = frame.graph.bind_resource(&vertex_buf);
+        let material_id_buf_node = frame.graph.bind_resource(&material_id_buf);
+        let material_buf_node = frame.graph.bind_resource(&material_buf);
+        let sbt_node = frame.graph.bind_resource(&sbt_buf);
 
         frame
-            .render_graph
-            .begin_pass("basic ray tracer")
+            .graph
+            .begin_cmd()
+            .debug_name("basic ray tracer")
             .bind_pipeline(&ray_trace_pipeline)
-            .access_node(
+            .resource_access(
                 blas_node,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .access_node(sbt_node, AccessType::RayTracingShaderReadOther)
-            .access_descriptor(
+            .resource_access(sbt_node, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(
                 0,
                 tlas_node,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .access_descriptor(1, camera_buf, AccessType::RayTracingShaderReadOther)
-            .access_descriptor(2, index_buf_node, AccessType::RayTracingShaderReadOther)
-            .access_descriptor(3, vertex_buf_node, AccessType::RayTracingShaderReadOther)
-            .write_descriptor(4, image_node)
-            .access_descriptor(
+            .shader_resource_access(1, camera_buf, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(2, index_buf_node, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(3, vertex_buf_node, AccessType::RayTracingShaderReadOther)
+            .shader_resource_access(4, image_node, AccessType::AnyShaderWrite)
+            .shader_resource_access(
                 5,
                 material_id_buf_node,
                 AccessType::RayTracingShaderReadOther,
             )
-            .access_descriptor(6, material_buf_node, AccessType::RayTracingShaderReadOther)
-            .record_ray_trace(move |ray_trace, _| {
-                ray_trace.trace_rays(
+            .shader_resource_access(6, material_buf_node, AccessType::RayTracingShaderReadOther)
+            .record_cmd(move |cmd| {
+                cmd.trace_rays(
                     &sbt_rgen,
                     &sbt_miss,
                     &sbt_hit,
@@ -881,7 +911,7 @@ fn main() -> anyhow::Result<()> {
                     1,
                 );
             })
-            .submit_pass()
+            .end_cmd()
             .copy_image(image_node, frame.swapchain_image);
     })?;
 

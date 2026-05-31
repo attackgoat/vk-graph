@@ -1,7 +1,8 @@
 Cargo.lock
 **/target/
 **/.vscode/
-!contrib/.vscode/
 imgui.ini
+libdxcompiler.so
 **/*.pak
 **/*.profraw
+AGENTS.md

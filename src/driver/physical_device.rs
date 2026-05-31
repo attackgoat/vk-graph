@@ -1,14 +1,15 @@
-//! Physical device resource types
+//! Physical device types
 
 use {
-    super::{DriverError, Instance},
+    super::{DriverError, instance::Instance},
+    crate::driver::device::Device,
     ash::{ext, khr, vk},
-    log::{debug, error},
+    log::{debug, error, warn},
     std::{
         collections::HashSet,
         ffi::{CStr, c_char},
         fmt::{Debug, Formatter},
-        ops::Deref,
+        iter::repeat_n,
     },
 };
 
@@ -22,10 +23,8 @@ fn vk_cstr_to_string_lossy(cstr: &[c_char]) -> String {
 
 /// Properties of the physical device for acceleration structures.
 ///
-/// See
-/// [`VkPhysicalDeviceAccelerationStructurePropertiesKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceAccelerationStructurePropertiesKHR.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceAccelerationStructurePropertiesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceAccelerationStructurePropertiesKHR.html).
+#[derive(Clone, Copy, Debug)]
 pub struct AccelerationStructureProperties {
     /// The maximum number of geometries in a bottom level acceleration structure.
     pub max_geometry_count: u64,
@@ -76,10 +75,8 @@ impl From<vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'_>>
 /// Structure describing depth/stencil resolve properties that can be supported by an
 /// implementation.
 ///
-/// See
-/// [`VkPhysicalDeviceDepthStencilResolveProperties`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceDepthStencilResolveProperties.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceDepthStencilResolveProperties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceDepthStencilResolveProperties.html).
+#[derive(Clone, Copy, Debug)]
 pub struct DepthStencilResolveProperties {
     /// A bitmask indicating the set of supported depth resolve modes.
     ///
@@ -120,10 +117,8 @@ impl From<vk::PhysicalDeviceDepthStencilResolveProperties<'_>> for DepthStencilR
 
 /// Features of the physical device for vertex indexing.
 ///
-/// See
-/// [`VkPhysicalDeviceIndexTypeUint8FeaturesEXT`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceIndexTypeUint8FeaturesEXT.html)
-/// manual page.
-#[derive(Debug, Default)]
+/// See [`VkPhysicalDeviceIndexTypeUint8FeaturesEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceIndexTypeUint8FeaturesEXT.html).
+#[derive(Clone, Copy, Debug, Default)]
 pub struct IndexTypeUint8Features {
     /// Indicates that VK_INDEX_TYPE_UINT8_EXT can be used with vkCmdBindIndexBuffer2KHR and
     /// vkCmdBindIndexBuffer.
@@ -139,68 +134,118 @@ impl From<vk::PhysicalDeviceIndexTypeUint8FeaturesEXT<'_>> for IndexTypeUint8Fea
 }
 
 /// Structure which holds data about the physical hardware selected by the current device.
+#[derive(Clone)]
+#[read_only::cast]
 pub struct PhysicalDevice {
     /// Describes the properties of the device which relate to acceleration structures, if
     /// available.
+    ///
+    /// _Note:_ This field is read-only.
     pub accel_struct_properties: Option<AccelerationStructureProperties>,
 
     /// Describes the properties of the device which relate to depth/stencil resolve operations.
+    ///
+    /// _Note:_ This field is read-only.
     pub depth_stencil_resolve_properties: DepthStencilResolveProperties,
 
-    /// Describes the features of the physical device which are part of the Vulkan 1.0 base feature set.
+    /// Describes the features of the physical device which are part of the Vulkan 1.0 base feature
+    /// set.
+    ///
+    /// _Note:_ This field is read-only.
     pub features_v1_0: Vulkan10Features,
 
-    /// Describes the features of the physical device which are part of the Vulkan 1.1 base feature set.
+    /// Describes the features of the physical device which are part of the Vulkan 1.1 base feature
+    /// set.
+    ///
+    /// _Note:_ This field is read-only.
     pub features_v1_1: Vulkan11Features,
 
-    /// Describes the features of the physical device which are part of the Vulkan 1.2 base feature set.
+    /// Describes the features of the physical device which are part of the Vulkan 1.2 base feature
+    /// set.
+    ///
+    /// _Note:_ This field is read-only.
     pub features_v1_2: Vulkan12Features,
 
+    /// The native Vulkan resource handle of this buffer.
+    ///
+    /// _Note:_ This field is read-only.
+    pub handle: vk::PhysicalDevice,
+
     /// Describes the features of the physical device which relate to vertex indexing.
+    ///
+    /// _Note:_ This field is read-only.
     pub index_type_uint8_features: IndexTypeUint8Features,
 
+    /// The Vulkan instance which owns this device.
+    ///
+    /// _Note:_ This field is read-only.
+    pub instance: Instance,
+
     /// Memory properties of the physical device.
+    ///
+    /// _Note:_ This field is read-only.
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
 
     /// Device properties of the physical device which are part of the Vulkan 1.0 base feature set.
+    ///
+    /// _Note:_ This field is read-only.
     pub properties_v1_0: Vulkan10Properties,
 
     /// Describes the properties of the physical device which are part of the Vulkan 1.1 base
     /// feature set.
+    ///
+    /// _Note:_ This field is read-only.
     pub properties_v1_1: Vulkan11Properties,
 
     /// Describes the properties of the physical device which are part of the Vulkan 1.2 base
     /// feature set.
+    ///
+    /// _Note:_ This field is read-only.
     pub properties_v1_2: Vulkan12Properties,
 
-    physical_device: vk::PhysicalDevice,
-
     /// Describes the queues offered by this physical device.
+    ///
+    /// _Note:_ This field is read-only.
     pub queue_families: Box<[vk::QueueFamilyProperties]>,
 
     pub(crate) queue_family_indices: Box<[u32]>,
 
     /// Describes the features of the device which relate to ray query, if available.
+    ///
+    /// _Note:_ This field is read-only.
     pub ray_query_features: RayQueryFeatures,
 
     /// Describes the features of the device which relate to ray tracing, if available.
+    ///
+    /// _Note:_ This field is read-only.
     pub ray_trace_features: RayTraceFeatures,
 
     /// Describes the properties of the device which relate to ray tracing, if available.
+    ///
+    /// _Note:_ This field is read-only.
     pub ray_trace_properties: Option<RayTraceProperties>,
 
     /// Describes the properties of the device which relate to min/max sampler filtering.
+    ///
+    /// _Note:_ This field is read-only.
     pub sampler_filter_minmax_properties: SamplerFilterMinmaxProperties,
+
+    /// True if the device supports swapchain use.
+    ///
+    /// _Note:_ This field is read-only.
+    pub swapchain_ext: bool,
 }
 
 impl PhysicalDevice {
     /// Creates a physical device wrapper which reports features and properties.
     #[profiling::function]
-    pub fn new(
-        instance: &Instance,
+    pub(super) fn new(
+        instance: Instance,
         physical_device: vk::PhysicalDevice,
     ) -> Result<Self, DriverError> {
         if physical_device == vk::PhysicalDevice::null() {
+            warn!("invalid physical device handle: null");
+
             return Err(DriverError::InvalidData);
         }
 
@@ -273,11 +318,11 @@ impl PhysicalDevice {
         let depth_stencil_resolve_properties = depth_stencil_resolve_properties.into();
         let sampler_filter_minmax_properties = sampler_filter_minmax_properties.into();
 
-        let extensions = unsafe {
+        let extension_properties = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device)
                 .map_err(|err| {
-                    error!("Unable to enumerate device extensions {err}");
+                    error!("unable to enumerate device extensions: {err}");
 
                     DriverError::Unsupported
                 })?
@@ -285,30 +330,33 @@ impl PhysicalDevice {
 
         debug!("physical device: {}", &properties_v1_0.device_name);
 
-        for property in &extensions {
-            let extension_name = property.extension_name.as_ptr();
+        for prop in &extension_properties {
+            let extension_name = prop.extension_name.as_ptr();
 
             if extension_name.is_null() {
+                warn!("invalid device extension name pointer: null");
+
                 return Err(DriverError::InvalidData);
             }
 
             let extension_name = unsafe { CStr::from_ptr(extension_name) };
 
-            debug!("extension {:?} v{}", extension_name, property.spec_version);
+            debug!("extension {:?} v{}", extension_name, prop.spec_version);
         }
 
         // Check for supported extensions
-        let extensions = extensions
+        let extension_names = extension_properties
             .iter()
-            .map(|property: &vk::ExtensionProperties| property.extension_name.as_ptr())
-            .filter(|&extension_name| !extension_name.is_null())
+            .map(|prop| prop.extension_name.as_ptr())
+            .filter(|extension_name| !extension_name.is_null())
             .map(|extension_name| unsafe { CStr::from_ptr(extension_name) })
             .collect::<HashSet<_>>();
-        let supports_accel_struct = extensions.contains(khr::acceleration_structure::NAME)
-            && extensions.contains(khr::deferred_host_operations::NAME);
-        let supports_index_type_uint8 = extensions.contains(ext::index_type_uint8::NAME);
-        let supports_ray_query = extensions.contains(khr::ray_query::NAME);
-        let supports_ray_trace = extensions.contains(khr::ray_tracing_pipeline::NAME);
+        let supports_accel_struct = extension_names.contains(khr::acceleration_structure::NAME)
+            && extension_names.contains(khr::deferred_host_operations::NAME);
+        let supports_index_type_uint8 = extension_names.contains(ext::index_type_uint8::NAME);
+        let supports_ray_query = extension_names.contains(khr::ray_query::NAME);
+        let supports_ray_trace = extension_names.contains(khr::ray_tracing_pipeline::NAME);
+        let swapchain_ext = extension_names.contains(khr::swapchain::NAME) && instance.surface_ext;
 
         // Gather optional features and properties of the physical device
         let index_type_uint8_features = if supports_index_type_uint8 {
@@ -335,9 +383,10 @@ impl PhysicalDevice {
             features_v1_0,
             features_v1_1,
             features_v1_2,
+            handle: physical_device,
             index_type_uint8_features,
+            instance,
             memory_properties,
-            physical_device,
             properties_v1_0,
             properties_v1_1,
             properties_v1_2,
@@ -347,7 +396,172 @@ impl PhysicalDevice {
             ray_trace_features,
             ray_trace_properties,
             sampler_filter_minmax_properties,
+            swapchain_ext,
         })
+    }
+
+    /// Prepares device creation information and calls the provided callback to allow an application
+    /// to control the device creation process.
+    ///
+    /// _Note:_  This is only useful for interoperating with other libraries as device creation is
+    /// normally handled by the [`Device::create_display`] and [`Device::new`]
+    /// functions.
+    ///
+    /// # Safety
+    ///
+    /// This comes with all the caveats of using `ash` builder types, which are inherently
+    /// dangerous. Use with extreme caution.
+    #[profiling::function]
+    pub unsafe fn create_ash_device<F>(&self, create_fn: F) -> ash::prelude::VkResult<ash::Device>
+    where
+        F: FnOnce(vk::DeviceCreateInfo) -> ash::prelude::VkResult<ash::Device>,
+    {
+        let mut enabled_ext_names = Vec::with_capacity(6);
+
+        // The swapchain extension is required for presentation support, so we enable it whenever
+        // the physical device reports support. Imported instances may already carry the required
+        // instance extensions even though vk-graph did not create them.
+        if self.swapchain_ext {
+            enabled_ext_names.push(khr::swapchain::NAME.as_ptr());
+        }
+
+        if self.accel_struct_properties.is_some() {
+            enabled_ext_names.push(khr::acceleration_structure::NAME.as_ptr());
+            enabled_ext_names.push(khr::deferred_host_operations::NAME.as_ptr());
+        }
+
+        if self.ray_query_features.ray_query {
+            enabled_ext_names.push(khr::ray_query::NAME.as_ptr());
+        }
+
+        if self.ray_trace_features.ray_tracing_pipeline {
+            enabled_ext_names.push(khr::ray_tracing_pipeline::NAME.as_ptr());
+        }
+
+        if self.index_type_uint8_features.index_type_uint8 {
+            enabled_ext_names.push(ext::index_type_uint8::NAME.as_ptr());
+        }
+
+        // Molten-vk doesn't support the full Vulkan feature set, hence the portability subset
+        // extension must be enabled.
+        #[cfg(all(target_os = "macos", feature = "loaded"))]
+        enabled_ext_names.push(khr::portability_subset::NAME.as_ptr());
+
+        let priorities = repeat_n(
+            1.0,
+            self.queue_families
+                .iter()
+                .map(|family| family.queue_count)
+                .max()
+                .unwrap_or_default() as _,
+        )
+        .collect::<Box<_>>();
+
+        let queue_infos = self
+            .queue_families
+            .iter()
+            .enumerate()
+            .map(|(idx, family)| {
+                let mut queue_info = vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(idx as _)
+                    .queue_priorities(&priorities[0..family.queue_count as usize]);
+                queue_info.queue_count = family.queue_count;
+
+                queue_info
+            })
+            .collect::<Box<_>>();
+
+        let ash::InstanceFnV1_1 {
+            get_physical_device_features2,
+            ..
+        } = self.instance.fp_v1_1();
+        let mut features_v1_1 = vk::PhysicalDeviceVulkan11Features::default();
+        let mut features_v1_2 = vk::PhysicalDeviceVulkan12Features::default();
+        let mut acceleration_structure_features =
+            vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let mut index_type_uint8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
+        let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+        let mut ray_trace_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+        let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut features_v1_1)
+            .push_next(&mut features_v1_2);
+
+        if self.accel_struct_properties.is_some() {
+            features = features.push_next(&mut acceleration_structure_features);
+        }
+
+        if self.ray_query_features.ray_query {
+            features = features.push_next(&mut ray_query_features);
+        }
+
+        if self.ray_trace_features.ray_tracing_pipeline {
+            features = features.push_next(&mut ray_trace_features);
+        }
+
+        if self.index_type_uint8_features.index_type_uint8 {
+            features = features.push_next(&mut index_type_uint8_features);
+        }
+
+        unsafe { get_physical_device_features2(self.handle, &mut features) };
+
+        let device_create_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_infos)
+            .enabled_extension_names(&enabled_ext_names)
+            .push_next(&mut features);
+
+        create_fn(device_create_info)
+    }
+
+    /// Lists the capabilities of a given format.
+    #[profiling::function]
+    pub fn format_properties(&self, format: vk::Format) -> vk::FormatProperties {
+        unsafe {
+            self.instance
+                .get_physical_device_format_properties(self.handle, format)
+        }
+    }
+
+    /// Lists the physical device's image format capabilities.
+    ///
+    /// A result of `None` indicates the format is not supported.
+    #[profiling::function]
+    pub fn image_format_properties(
+        &self,
+        format: vk::Format,
+        ty: vk::ImageType,
+        tiling: vk::ImageTiling,
+        usage: vk::ImageUsageFlags,
+        flags: vk::ImageCreateFlags,
+    ) -> Result<Option<vk::ImageFormatProperties>, DriverError> {
+        unsafe {
+            match self.instance.get_physical_device_image_format_properties(
+                self.handle,
+                format,
+                ty,
+                tiling,
+                usage,
+                flags,
+            ) {
+                Ok(properties) => Ok(Some(properties)),
+                Err(err) if err == vk::Result::ERROR_FORMAT_NOT_SUPPORTED => {
+                    // We don't log this condition because it is normal for unsupported
+                    // formats to be checked - we use the result to inform callers they
+                    // cannot use those formats.
+
+                    Ok(None)
+                }
+                Err(err) => {
+                    warn!("unable to query image format properties: {err}");
+
+                    Err(DriverError::OutOfMemory)
+                }
+            }
+        }
+    }
+
+    /// Creates a logical [`Device`] from this selected physical device.
+    pub fn try_into_device(self) -> Result<Device, DriverError> {
+        Device::try_from_physical_device(self)
     }
 }
 
@@ -361,20 +575,10 @@ impl Debug for PhysicalDevice {
     }
 }
 
-impl Deref for PhysicalDevice {
-    type Target = vk::PhysicalDevice;
-
-    fn deref(&self) -> &Self::Target {
-        &self.physical_device
-    }
-}
-
 /// Features of the physical device for ray query.
 ///
-/// See
-/// [`VkPhysicalDeviceRayQueryFeaturesKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceRayQueryFeaturesKHR.html)
-/// manual page.
-#[derive(Debug, Default)]
+/// See [`VkPhysicalDeviceRayQueryFeaturesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayQueryFeaturesKHR.html).
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RayQueryFeatures {
     /// Indicates whether the implementation supports ray query (`OpRayQueryProceedKHR`)
     /// functionality.
@@ -391,15 +595,13 @@ impl From<vk::PhysicalDeviceRayQueryFeaturesKHR<'_>> for RayQueryFeatures {
 
 /// Features of the physical device for ray tracing.
 ///
-/// See
-/// [`VkPhysicalDeviceRayTracingPipelineFeaturesKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceRayTracingPipelineFeaturesKHR.html)
-/// manual page.
-#[derive(Debug, Default)]
+/// See [`VkPhysicalDeviceRayTracingPipelineFeaturesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayTracingPipelineFeaturesKHR.html).
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RayTraceFeatures {
     /// Indicates whether the implementation supports the ray tracing pipeline functionality.
     ///
     /// See
-    /// [Ray Tracing](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#ray-tracing).
+    /// See the [ray tracing pipeline chapter](https://docs.vulkan.org/spec/latest/chapters/raytracing.html).
     pub ray_tracing_pipeline: bool,
 
     /// Indicates whether the implementation supports saving and reusing shader group handles, e.g.
@@ -441,10 +643,8 @@ impl From<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>> for RayTraceFeatu
 
 /// Properties of the physical device for ray tracing.
 ///
-/// See
-/// [`VkPhysicalDeviceRayTracingPipelinePropertiesKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceRayTracingPipelinePropertiesKHR.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceRayTracingPipelinePropertiesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayTracingPipelinePropertiesKHR.html).
+#[derive(Clone, Copy, Debug)]
 pub struct RayTraceProperties {
     /// The size in bytes of the shader header.
     pub shader_group_handle_size: u32,
@@ -492,9 +692,8 @@ impl From<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>> for RayTracePro
 
 /// Properties of the physical device for min/max sampler filtering.
 ///
-/// See
-/// [`VkPhysicalDeviceSamplerFilterMinmaxProperties`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT.html)
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceLimits`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceLimits.html).
+#[derive(Clone, Copy, Debug)]
 pub struct SamplerFilterMinmaxProperties {
     /// When `false` the component mapping of the image view used with min/max filtering must have
     /// been created with the r component set to the identity swizzle. Only the r component of the
@@ -537,10 +736,8 @@ impl From<vk::PhysicalDeviceSamplerFilterMinmaxProperties<'_>> for SamplerFilter
 
 /// Description of Vulkan features.
 ///
-/// See
-/// [`VkPhysicalDeviceFeatures`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceFeatures.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceProperties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceProperties.html).
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan10Features {
     /// Specifies that accesses to buffers are bounds-checked against the range of the buffer
     /// descriptor.
@@ -553,8 +750,8 @@ pub struct Vulkan10Features {
     /// primitive restart index, which is always 2^32 - 1 when the VkIndexType is
     /// `VK_INDEX_TYPE_UINT32`).
     ///
-    /// If this feature is supported, `maxDrawIndexedIndexValue` must be 2^32 - 1; otherwise it must
-    /// be no smaller than 2^24 - 1. See maxDrawIndexedIndexValue.
+    /// If this feature is supported, `maxDrawIndexedIndexValue` must be 2^32 - 1; otherwise it
+    /// must be no smaller than 2^24 - 1. See maxDrawIndexedIndexValue.
     pub full_draw_index_uint32: bool,
 
     /// Specifies whether image views with a `VkImageViewType` of `VK_IMAGE_VIEW_TYPE_CUBE_ARRAY`
@@ -602,26 +799,27 @@ pub struct Vulkan10Features {
     ///
     /// If this feature is not enabled, the `VK_BLEND_FACTOR_SRC1_COLOR`,
     /// `VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR`, `VK_BLEND_FACTOR_SRC1_ALPHA`, and
-    /// `VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA` enum values must not be used as source or destination
-    /// blending factors.
+    /// `VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA` enum values must not be used as source or
+    /// destination blending factors.
     ///
-    /// See [dual-source blending](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#framebuffer-dsb).
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub dual_src_blend: bool,
 
     /// Specifies whether logic operations are supported.
     ///
     /// If this feature is not enabled, the `logicOpEnable` member of the
-    /// `VkPipelineColorBlendStateCreateInfo` structure must be set to `VK_FALSE`, and the `logicOp`
-    /// member is ignored.
+    /// `VkPipelineColorBlendStateCreateInfo` structure must be set to `VK_FALSE`, and the
+    /// `logicOp` member is ignored.
     pub logic_op: bool,
 
     /// Specifies whether multiple draw indirect is supported.
     ///
     /// If this feature is not enabled, the `drawCount` parameter to the `vkCmdDrawIndirect` and
-    /// `vkCmdDrawIndexedIndirect` commands must be `0` or `1`. The `maxDrawIndirectCount` member of the
-    /// `VkPhysicalDeviceLimits` structure must also be `1` if this feature is not supported.
+    /// `vkCmdDrawIndexedIndirect` commands must be `0` or `1`. The `maxDrawIndirectCount` member
+    /// of the `VkPhysicalDeviceLimits` structure must also be `1` if this feature is not
+    /// supported.
     ///
-    /// See [maxDrawIndirectCount](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#limits-maxDrawIndirectCount).
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub multi_draw_indirect: bool,
 
     /// Specifies whether indirect drawing calls support the `firstInstance` parameter.
@@ -674,14 +872,16 @@ pub struct Vulkan10Features {
 
     /// Specifies whether points with size greater than `1.0` are supported.
     ///
-    /// If this feature is not enabled, only a point size of `1.0` written by a shader is supported.
+    /// If this feature is not enabled, only a point size of `1.0` written by a shader is
+    /// supported.
     ///
-    /// The range and granularity of supported point sizes are indicated by the `pointSizeRange` and
-    /// `pointSizeGranularity` members of the `VkPhysicalDeviceLimits` structure, respectively.
+    /// The range and granularity of supported point sizes are indicated by the `pointSizeRange`
+    /// and `pointSizeGranularity` members of the `VkPhysicalDeviceLimits` structure,
+    /// respectively.
     pub large_points: bool,
 
     /// Specifies whether the implementation is able to replace the alpha value of the fragment
-    /// shader color output in the [multisample coverage](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-covg)
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     /// fragment operation.
     ///
     /// If this feature is not enabled, then the `alphaToOneEnable` member of the
@@ -834,7 +1034,8 @@ pub struct Vulkan10Features {
     /// If this feature is not enabled, the `OpImage*Gather` instructions do not support the
     /// `Offset` and `ConstOffsets` operands.
     ///
-    /// This also specifies whether shader modules can declare the `ImageGatherExtended` capability.
+    /// This also specifies whether shader modules can declare the `ImageGatherExtended`
+    /// capability.
     pub shader_image_gather_extended: bool,
 
     /// Specifies whether all the “storage image extended formats” below are supported.
@@ -866,9 +1067,9 @@ pub struct Vulkan10Features {
     /// - VK_FORMAT_R16_UINT
     /// - VK_FORMAT_R8_UINT
     ///
-    /// _Note:_ `shaderStorageImageExtendedFormats` feature only adds a guarantee of format support,
-    /// which is specified for the whole physical device. Therefore enabling or disabling the
-    /// feature via vkCreateDevice has no practical effect.
+    /// _Note:_ `shaderStorageImageExtendedFormats` feature only adds a guarantee of format
+    /// support, which is specified for the whole physical device. Therefore enabling or
+    /// disabling the feature via vkCreateDevice has no practical effect.
     ///
     /// To query for additional properties, or if the feature is not supported,
     /// `vkGetPhysicalDeviceFormatProperties` and `vkGetPhysicalDeviceImageFormatProperties` can be
@@ -876,7 +1077,7 @@ pub struct Vulkan10Features {
     ///
     /// `VK_FORMAT_R32G32_UINT`, `VK_FORMAT_R32G32_SINT`, and `VK_FORMAT_R32G32_SFLOAT` from
     /// `StorageImageExtendedFormats` SPIR-V capability, are already covered by core Vulkan
-    /// [mandatory format support](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#formats-mandatory-features-32bit).
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub shader_storage_image_extended_formats: bool,
 
     /// Specifies whether multisampled storage images are supported.
@@ -892,7 +1093,7 @@ pub struct Vulkan10Features {
     /// specified when reading.
     ///
     /// `shaderStorageImageReadWithoutFormat` applies only to formats listed in the
-    /// [storage without format](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#formats-without-shader-storage-format)
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     /// list.
     pub shader_storage_image_read_without_format: bool,
 
@@ -900,7 +1101,7 @@ pub struct Vulkan10Features {
     /// specified when writing.
     ///
     /// `shaderStorageImageWriteWithoutFormat` applies only to formats listed in the
-    /// [storage without format](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#formats-without-shader-storage-format)
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     /// list.
     pub shader_storage_image_write_without_format: bool,
 
@@ -915,8 +1116,8 @@ pub struct Vulkan10Features {
     /// `UniformBufferArrayDynamicIndexing` capability.
     pub shader_uniform_buffer_array_dynamic_indexing: bool,
 
-    /// Specifies whether arrays of samplers or sampled images can be indexed by dynamically uniform
-    /// integer expressions in shader code.
+    /// Specifies whether arrays of samplers or sampled images can be indexed by dynamically
+    /// uniform integer expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
     /// `VK_DESCRIPTOR_TYPE_SAMPLER`, `VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`, or
@@ -967,7 +1168,8 @@ pub struct Vulkan10Features {
 
     /// Specifies whether 64-bit floats (doubles) are supported in shader code.
     ///
-    /// If this feature is not enabled, 64-bit floating-point types must not be used in shader code.
+    /// If this feature is not enabled, 64-bit floating-point types must not be used in shader
+    /// code.
     ///
     /// This also specifies whether shader modules can declare the `Float64` capability. Declaring
     /// and using 64-bit floats is enabled for all storage classes that SPIR-V allows with the
@@ -978,21 +1180,21 @@ pub struct Vulkan10Features {
     ///
     /// If this feature is not enabled, 64-bit integer types must not be used in shader code.
     ///
-    /// This also specifies whether shader modules can declare the `Int64` capability. Declaring and
-    /// using 64-bit integers is enabled for all storage classes that SPIR-V allows with the `Int64`
-    /// capability.
+    /// This also specifies whether shader modules can declare the `Int64` capability. Declaring
+    /// and using 64-bit integers is enabled for all storage classes that SPIR-V allows with
+    /// the `Int64` capability.
     pub shader_int64: bool,
 
     /// Specifies whether 16-bit integers (signed and unsigned) are supported in shader code.
     ///
     /// If this feature is not enabled, 16-bit integer types must not be used in shader code.
     ///
-    /// This also specifies whether shader modules can declare the `Int16` capability. However, this
-    /// only enables a subset of the storage classes that SPIR-V allows for the `Int16` SPIR-V
-    /// capability: Declaring and using 16-bit integers in the `Private`, `Workgroup` (for non-Block
-    /// variables), and `Function` storage classes is enabled, while declaring them in the interface
-    /// storage classes (e.g., `UniformConstant`, `Uniform`, `StorageBuffer`, `Input`, `Output`, and
-    /// `PushConstant`) is not enabled.
+    /// This also specifies whether shader modules can declare the `Int16` capability. However,
+    /// this only enables a subset of the storage classes that SPIR-V allows for the `Int16`
+    /// SPIR-V capability: Declaring and using 16-bit integers in the `Private`, `Workgroup`
+    /// (for non-Block variables), and `Function` storage classes is enabled, while declaring
+    /// them in the interface storage classes (e.g., `UniformConstant`, `Uniform`,
+    /// `StorageBuffer`, `Input`, `Output`, and `PushConstant`) is not enabled.
     pub shader_int16: bool,
 
     /// Specifies whether image operations specifying the minimum resource LOD are supported in
@@ -1100,50 +1302,48 @@ impl From<vk::PhysicalDeviceFeatures> for Vulkan10Features {
 
 /// Description of Vulkan limitations.
 ///
-/// See
-/// [`VkPhysicalDeviceLimits`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceLimits.html)
-/// manual page.
-#[allow(missing_docs)] // TODO: Finish docs!
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceVulkan11Features`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan11Features.html).
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan10Limits {
-    /// The largest dimension (width) that is guaranteed to be supported for all images created with
-    /// an image type of [`ImageType::Texture1D`](super::image::ImageType).
+    /// The largest dimension (width) that is guaranteed to be supported for all images created
+    /// with an image type of [`vk::ImageType::TYPE_1D`].
     ///
     /// Some combinations of image parameters (format, usage, etc.) may allow support for larger
     /// dimensions, which can be queried using
-    /// [`Device::image_format_properties`](super::device::Device::image_format_properties).
+    /// [`PhysicalDevice::image_format_properties`].
     pub max_image_dimension1_d: u32,
 
     /// The largest dimension (width or height) that is guaranteed to be supported for all images
-    /// created with an image type of [`ImageType::Texture2D`](super::image::ImageType) and without
+    /// created with an image type of [`vk::ImageType::TYPE_2D`] and without
     /// [`vk::ImageCreateFlags::CUBE_COMPATIBLE`] set in
     /// [`ImageInfo::flags`](super::image::ImageInfo::flags).
     ///
     /// Some combinations of image parameters (format, usage, etc.) may allow support for larger
     /// dimensions, which can be queried using
-    /// [`Device::image_format_properties`](super::device::Device::image_format_properties).
+    /// [`PhysicalDevice::image_format_properties`].
     pub max_image_dimension2_d: u32,
 
     /// The largest dimension (width, height, or depth) that is guaranteed to be supported for all
-    /// images created with an image type of [`ImageType::Texture3D`](super::image::ImageType).
+    /// images created with an image type of [`vk::ImageType::TYPE_3D`].
     ///
     /// Some combinations of image parameters (format, usage, etc.) may allow support for larger
     /// dimensions, which can be queried using
-    /// [`Device::image_format_properties`](super::device::Device::image_format_properties).
+    /// [`PhysicalDevice::image_format_properties`].
     pub max_image_dimension3_d: u32,
 
     /// The largest dimension (width or height) that is guaranteed to be supported for all images
-    /// created with an image type of [`ImageType::Texture2D`](super::image::ImageType) and with
+    /// created with an image type of [`vk::ImageType::TYPE_2D`] and with
     /// [`vk::ImageCreateFlags::CUBE_COMPATIBLE`] set in
     /// [`ImageInfo::flags`](super::image::ImageInfo::flags).
     ///
     /// Some combinations of image parameters (format, usage, etc.) may allow support for larger
     /// dimensions, which can be queried using
-    /// [`Device::image_format_properties`](super::device::Device::image_format_properties).
+    /// [`PhysicalDevice::image_format_properties`].
     pub max_image_dimension_cube: u32,
 
     /// The maximum number of layers
-    /// ([`ImageInfo::array_elements`](super::image::ImageInfo::array_elements)) for an image.
+    /// ([`ImageInfo::array_layer_count`](super::image::ImageInfo::array_layer_count)) for an
+    /// image.
     pub max_image_array_layers: u32,
 
     /// The maximum number of addressable texels for a buffer view created on a buffer which was
@@ -1151,105 +1351,305 @@ pub struct Vulkan10Limits {
     /// [`vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER`] set in
     /// [`BufferInfo::usage`](super::buffer::BufferInfo::usage).
     pub max_texel_buffer_elements: u32,
+
+    /// The maximum range, in bytes, for a uniform buffer binding.
     pub max_uniform_buffer_range: u32,
+
+    /// The maximum range, in bytes, for a storage buffer binding.
     pub max_storage_buffer_range: u32,
+
+    /// The maximum size, in bytes, of the push constant storage available to a pipeline layout.
     pub max_push_constants_size: u32,
+
+    /// The maximum number of simultaneously active device memory allocations.
     pub max_memory_allocation_count: u32,
+
+    /// The maximum number of sampler objects that may exist at one time.
     pub max_sampler_allocation_count: u32,
+
+    /// The required granularity, in bytes, for aliasing linear and optimal resources in memory.
     pub buffer_image_granularity: vk::DeviceSize,
+
+    /// The maximum size, in bytes, of the address space available for sparse resources.
     pub sparse_address_space_size: vk::DeviceSize,
+
+    /// The maximum number of descriptor sets that can be bound simultaneously.
     pub max_bound_descriptor_sets: u32,
+
+    /// The maximum number of sampler descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_samplers: u32,
+
+    /// The maximum number of uniform buffer descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_uniform_buffers: u32,
+
+    /// The maximum number of storage buffer descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_storage_buffers: u32,
+
+    /// The maximum number of sampled image descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_sampled_images: u32,
+
+    /// The maximum number of storage image descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_storage_images: u32,
+
+    /// The maximum number of input attachment descriptors accessible from a single shader stage.
     pub max_per_stage_descriptor_input_attachments: u32,
+
+    /// The maximum total number of resources accessible from a single shader stage.
     pub max_per_stage_resources: u32,
+
+    /// The maximum number of sampler descriptors available across a single descriptor set.
     pub max_descriptor_set_samplers: u32,
+
+    /// The maximum number of uniform buffer descriptors available across a single descriptor set.
     pub max_descriptor_set_uniform_buffers: u32,
+
+    /// The maximum number of dynamic uniform buffer descriptors available across a descriptor set.
     pub max_descriptor_set_uniform_buffers_dynamic: u32,
+
+    /// The maximum number of storage buffer descriptors available across a single descriptor set.
     pub max_descriptor_set_storage_buffers: u32,
+
+    /// The maximum number of dynamic storage buffer descriptors available across a descriptor set.
     pub max_descriptor_set_storage_buffers_dynamic: u32,
+
+    /// The maximum number of sampled image descriptors available across a single descriptor set.
     pub max_descriptor_set_sampled_images: u32,
+
+    /// The maximum number of storage image descriptors available across a single descriptor set.
     pub max_descriptor_set_storage_images: u32,
+
+    /// The maximum number of input attachment descriptors available across a descriptor set.
     pub max_descriptor_set_input_attachments: u32,
+
+    /// The maximum number of vertex input attributes for a graphics pipeline.
     pub max_vertex_input_attributes: u32,
+
+    /// The maximum number of vertex input bindings for a graphics pipeline.
     pub max_vertex_input_bindings: u32,
+
+    /// The maximum offset, in bytes, allowed for a vertex input attribute.
     pub max_vertex_input_attribute_offset: u32,
+
+    /// The maximum stride, in bytes, for a vertex input binding.
     pub max_vertex_input_binding_stride: u32,
+
+    /// The maximum number of components output by the vertex stage.
     pub max_vertex_output_components: u32,
+
+    /// The maximum tessellation generation level.
     pub max_tessellation_generation_level: u32,
+
+    /// The maximum number of control points in a tessellation patch.
     pub max_tessellation_patch_size: u32,
+
+    /// The maximum number of per-vertex input components to tessellation control shaders.
     pub max_tessellation_control_per_vertex_input_components: u32,
+
+    /// The maximum number of per-vertex output components from tessellation control shaders.
     pub max_tessellation_control_per_vertex_output_components: u32,
+
+    /// The maximum number of per-patch output components from tessellation control shaders.
     pub max_tessellation_control_per_patch_output_components: u32,
+
+    /// The maximum total number of output components from tessellation control shaders.
     pub max_tessellation_control_total_output_components: u32,
+
+    /// The maximum number of input components to tessellation evaluation shaders.
     pub max_tessellation_evaluation_input_components: u32,
+
+    /// The maximum number of output components from tessellation evaluation shaders.
     pub max_tessellation_evaluation_output_components: u32,
+
+    /// The maximum number of geometry shader invocations per primitive.
     pub max_geometry_shader_invocations: u32,
+
+    /// The maximum number of input components to geometry shaders.
     pub max_geometry_input_components: u32,
+
+    /// The maximum number of output components from geometry shaders.
     pub max_geometry_output_components: u32,
+
+    /// The maximum number of vertices a geometry shader may emit.
     pub max_geometry_output_vertices: u32,
+
+    /// The maximum total number of output components from a geometry shader invocation.
     pub max_geometry_total_output_components: u32,
+
+    /// The maximum number of input components to fragment shaders.
     pub max_fragment_input_components: u32,
+
+    /// The maximum number of color attachments written by a fragment shader.
     pub max_fragment_output_attachments: u32,
+
+    /// The maximum number of dual-source attachments written by a fragment shader.
     pub max_fragment_dual_src_attachments: u32,
+
+    /// The maximum combined number of fragment shader output resources.
     pub max_fragment_combined_output_resources: u32,
+
+    /// The maximum amount of shared memory, in bytes, available to a compute workgroup.
     pub max_compute_shared_memory_size: u32,
+
+    /// The maximum workgroup counts for compute dispatch in each dimension.
     pub max_compute_work_group_count: [u32; 3],
+
+    /// The maximum total number of invocations in a single compute workgroup.
     pub max_compute_work_group_invocations: u32,
+
+    /// The maximum workgroup size for compute dispatch in each dimension.
     pub max_compute_work_group_size: [u32; 3],
+
+    /// The number of bits of sub-pixel precision in framebuffer coordinates.
     pub sub_pixel_precision_bits: u32,
+
+    /// The number of bits of sub-texel precision for image sampling.
     pub sub_texel_precision_bits: u32,
+
+    /// The number of bits of precision available for mipmap level selection.
     pub mipmap_precision_bits: u32,
+
+    /// The maximum value of an index used with indexed drawing.
     pub max_draw_indexed_index_value: u32,
+
+    /// The maximum number of draws executed by an indirect draw-count command.
     pub max_draw_indirect_count: u32,
+
+    /// The maximum absolute value of sampler LOD bias.
     pub max_sampler_lod_bias: f32,
+
+    /// The maximum sampler anisotropy level.
     pub max_sampler_anisotropy: f32,
+
+    /// The maximum number of simultaneously active viewports.
     pub max_viewports: u32,
+
+    /// The maximum viewport width and height.
     pub max_viewport_dimensions: [u32; 2],
+
+    /// The minimum and maximum supported viewport bounds.
     pub viewport_bounds_range: [f32; 2],
+
+    /// The number of bits of precision for viewport sub-pixel coordinates.
     pub viewport_sub_pixel_bits: u32,
+
+    /// The minimum alignment, in bytes, of host pointer values passed to mapping functions.
     pub min_memory_map_alignment: usize,
+
+    /// The minimum alignment, in bytes, for texel buffer offsets.
     pub min_texel_buffer_offset_alignment: vk::DeviceSize,
+
+    /// The minimum alignment, in bytes, for uniform buffer offsets.
     pub min_uniform_buffer_offset_alignment: vk::DeviceSize,
+
+    /// The minimum alignment, in bytes, for storage buffer offsets.
     pub min_storage_buffer_offset_alignment: vk::DeviceSize,
+
+    /// The minimum offset allowed for texel fetch operations.
     pub min_texel_offset: i32,
+
+    /// The maximum offset allowed for texel fetch operations.
     pub max_texel_offset: u32,
+
+    /// The minimum offset allowed for texel gather operations.
     pub min_texel_gather_offset: i32,
+
+    /// The maximum offset allowed for texel gather operations.
     pub max_texel_gather_offset: u32,
+
+    /// The minimum interpolation offset supported by the implementation.
     pub min_interpolation_offset: f32,
+
+    /// The maximum interpolation offset supported by the implementation.
     pub max_interpolation_offset: f32,
+
+    /// The number of bits of sub-pixel precision for interpolation offsets.
     pub sub_pixel_interpolation_offset_bits: u32,
+
+    /// The maximum framebuffer width.
     pub max_framebuffer_width: u32,
+
+    /// The maximum framebuffer height.
     pub max_framebuffer_height: u32,
+
+    /// The maximum number of framebuffer layers.
     pub max_framebuffer_layers: u32,
+
+    /// The sample counts supported for color framebuffer attachments.
     pub framebuffer_color_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for depth framebuffer attachments.
     pub framebuffer_depth_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for stencil framebuffer attachments.
     pub framebuffer_stencil_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for framebuffers with no attachments.
     pub framebuffer_no_attachments_sample_counts: vk::SampleCountFlags,
+
+    /// The maximum number of color attachments in a framebuffer.
     pub max_color_attachments: u32,
+
+    /// The sample counts supported for sampled color images.
     pub sampled_image_color_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for sampled integer images.
     pub sampled_image_integer_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for sampled depth images.
     pub sampled_image_depth_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for sampled stencil images.
     pub sampled_image_stencil_sample_counts: vk::SampleCountFlags,
+
+    /// The sample counts supported for storage images.
     pub storage_image_sample_counts: vk::SampleCountFlags,
+
+    /// The maximum number of words in a sample mask.
     pub max_sample_mask_words: u32,
+
+    /// True if timestamps are supported in both graphics and compute queues.
     pub timestamp_compute_and_graphics: bool,
+
+    /// The number of nanoseconds per timestamp increment.
     pub timestamp_period: f32,
+
+    /// The maximum number of clip distances.
     pub max_clip_distances: u32,
+
+    /// The maximum number of cull distances.
     pub max_cull_distances: u32,
+
+    /// The maximum combined number of clip and cull distances.
     pub max_combined_clip_and_cull_distances: u32,
+
+    /// The number of discrete queue priorities supported by the implementation.
     pub discrete_queue_priorities: u32,
+
+    /// The supported range of point sizes.
     pub point_size_range: [f32; 2],
+
+    /// The supported range of line widths.
     pub line_width_range: [f32; 2],
+
+    /// The granularity of point-size values.
     pub point_size_granularity: f32,
+
+    /// The granularity of line-width values.
     pub line_width_granularity: f32,
+
+    /// True if line rasterization follows strict diamond-exit rules.
     pub strict_lines: bool,
+
+    /// True if standard sample locations are supported.
     pub standard_sample_locations: bool,
+
+    /// The optimal alignment, in bytes, for buffer copy source and destination offsets.
     pub optimal_buffer_copy_offset_alignment: vk::DeviceSize,
+
+    /// The optimal alignment, in bytes, for buffer copy row pitch values.
     pub optimal_buffer_copy_row_pitch_alignment: vk::DeviceSize,
+
+    /// The non-coherent atom size, in bytes, used for host cache management.
     pub non_coherent_atom_size: vk::DeviceSize,
 }
 
@@ -1380,20 +1780,18 @@ impl From<vk::PhysicalDeviceLimits> for Vulkan10Limits {
 
 /// Description of Vulkan 1.0 properties.
 ///
-/// See
-/// [`VkPhysicalDeviceProperties`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceProperties.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceVulkan11Properties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan11Properties.html).
+#[derive(Clone, Debug)]
 pub struct Vulkan10Properties {
     /// The version of Vulkan supported by the device, encoded as described
-    /// [here](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#extendingvulkan-coreversions-versionnumbers).
+    /// See the [limits chapter](https://docs.vulkan.org/spec/latest/chapters/limits.html).
     pub api_version: u32,
 
     /// The vendor-specified version of the driver.
     pub driver_version: u32,
 
     /// A unique identifier for the vendor (see
-    /// [note](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceProperties.html#_description))
+    /// See the [limits chapter](https://docs.vulkan.org/spec/latest/chapters/limits.html).
     /// of the physical device.
     pub vendor_id: u32,
 
@@ -1401,7 +1799,7 @@ pub struct Vulkan10Properties {
     pub device_id: u32,
 
     /// a
-    /// [VkPhysicalDeviceType](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceType.html)
+    /// See the [limits chapter](https://docs.vulkan.org/spec/latest/chapters/limits.html).
     /// specifying the type of device.
     pub device_type: vk::PhysicalDeviceType,
 
@@ -1438,10 +1836,8 @@ impl From<vk::PhysicalDeviceProperties> for Vulkan10Properties {
 
 /// Description of Vulkan 1.1 features.
 ///
-/// See
-/// [`VkPhysicalDeviceVulkan11Features`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan11Features.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceVulkan12Features`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan12Features.html).
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan11Features {
     /// Specifies whether objects in the StorageBuffer, ShaderRecordBufferKHR, or
     /// PhysicalStorageBuffer storage class with the Block decoration can have 16-bit integer and
@@ -1463,8 +1859,8 @@ pub struct Vulkan11Features {
     /// Specifies whether objects in the PushConstant storage class can have 16-bit integer and
     /// 16-bit floating-point members.
     ///
-    /// If this feature is not enabled, 16-bit integer or floating-point members must not be used in
-    /// such objects. This also specifies whether shader modules can declare the
+    /// If this feature is not enabled, 16-bit integer or floating-point members must not be used
+    /// in such objects. This also specifies whether shader modules can declare the
     /// StoragePushConstant16 capability.
     pub storage_push_constant16: bool,
 
@@ -1481,15 +1877,15 @@ pub struct Vulkan11Features {
     /// If this feature is not enabled, the view mask of each subpass must always be zero.
     pub multiview: bool,
 
-    /// Specifies whether the implementation supports multiview rendering within a render pass, with
-    /// geometry shaders.
+    /// Specifies whether the implementation supports multiview rendering within a render pass,
+    /// with geometry shaders.
     ///
     /// If this feature is not enabled, then a pipeline compiled against a subpass with a non-zero
     /// view mask must not include a geometry shader.
     pub multiview_geometry_shader: bool,
 
-    /// Specifies whether the implementation supports multiview rendering within a render pass, with
-    /// tessellation shaders.
+    /// Specifies whether the implementation supports multiview rendering within a render pass,
+    /// with tessellation shaders.
     ///
     /// If this feature is not enabled, then a pipeline compiled against a subpass with a non-zero
     /// view mask must not include any tessellation shaders.
@@ -1547,10 +1943,8 @@ impl From<vk::PhysicalDeviceVulkan11Features<'_>> for Vulkan11Features {
 
 /// Description of Vulkan 1.1 properties.
 ///
-/// See
-/// [`VkPhysicalDeviceVulkan11Properties`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan11Properties.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceVulkan12Properties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan12Properties.html).
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan11Properties {
     /// An array of `VK_UUID_SIZE` `u8` values representing a universally unique identifier for
     /// the device
@@ -1605,16 +1999,16 @@ pub struct Vulkan11Properties {
     /// recorded within a subpass of a multiview render pass instance.
     pub max_multiview_instance_index: u32,
 
-    /// Specifies how an implementation behaves when an application attempts to write to unprotected
-    /// memory in a protected queue operation, read from protected memory in an unprotected queue
-    /// operation, or perform a query in a protected queue operation.
+    /// Specifies how an implementation behaves when an application attempts to write to
+    /// unprotected memory in a protected queue operation, read from protected memory in an
+    /// unprotected queue operation, or perform a query in a protected queue operation.
     ///
     /// If this limit is `true`, such writes will be discarded or have undefined values written,
     /// reads and queries will return undefined values.
     ///
     /// If this limit is `false`, applications must not perform these operations.
     ///
-    /// See [memory-protected-access-rules](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan11Properties.html#memory-protected-access-rules)
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     /// for more information.
     pub protected_no_fault: bool,
 
@@ -1656,10 +2050,8 @@ impl From<vk::PhysicalDeviceVulkan11Properties<'_>> for Vulkan11Properties {
 
 /// Description of Vulkan 1.2 features.
 ///
-/// See
-/// [`VkPhysicalDeviceVulkan12Features`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan12Features.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceVulkan12Features`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan12Features.html).
+#[derive(Clone, Copy, Debug)]
 pub struct Vulkan12Features {
     /// Indicates whether the implementation supports the
     /// `VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE` sampler address mode.
@@ -1678,22 +2070,24 @@ pub struct Vulkan12Features {
     /// PhysicalStorageBuffer storage class with the Block decoration can have 8-bit integer
     /// members.
     ///
-    /// If this feature is not enabled, 8-bit integer members must not be used in such objects. This
-    /// also indicates whether shader modules can declare the StorageBuffer8BitAccess capability.
+    /// If this feature is not enabled, 8-bit integer members must not be used in such objects.
+    /// This also indicates whether shader modules can declare the StorageBuffer8BitAccess
+    /// capability.
     pub storage_buffer8_bit_access: bool,
 
     /// Indicates whether objects in the Uniform storage class with the Block decoration can have
     /// 8-bit integer members.
     ///
-    /// If this feature is not enabled, 8-bit integer members must not be used in such objects. This
-    /// also indicates whether shader modules can declare the UniformAndStorageBuffer8BitAccess
-    /// capability.
+    /// If this feature is not enabled, 8-bit integer members must not be used in such objects.
+    /// This also indicates whether shader modules can declare the
+    /// UniformAndStorageBuffer8BitAccess capability.
     pub uniform_and_storage_buffer8_bit_access: bool,
 
     /// Indicates whether objects in the PushConstant storage class can have 8-bit integer members.
     ///
-    /// If this feature is not enabled, 8-bit integer members must not be used in such objects. This
-    /// also indicates whether shader modules can declare the StoragePushConstant8 capability.
+    /// If this feature is not enabled, 8-bit integer members must not be used in such objects.
+    /// This also indicates whether shader modules can declare the StoragePushConstant8
+    /// capability.
     pub storage_push_constant8: bool,
 
     /// Indicates whether shaders can perform 64-bit unsigned and signed integer atomic operations
@@ -1706,12 +2100,12 @@ pub struct Vulkan12Features {
 
     /// Indicates whether 16-bit floats (halfs) are supported in shader code.
     ///
-    /// This also indicates whether shader modules can declare the Float16 capability. However, this
-    /// only enables a subset of the storage classes that SPIR-V allows for the Float16 SPIR-V
-    /// capability: Declaring and using 16-bit floats in the Private, Workgroup (for non-Block
-    /// variables), and Function storage classes is enabled, while declaring them in the interface
-    /// storage classes (e.g., UniformConstant, Uniform, StorageBuffer, Input, Output, and
-    /// PushConstant) is not enabled.
+    /// This also indicates whether shader modules can declare the Float16 capability. However,
+    /// this only enables a subset of the storage classes that SPIR-V allows for the Float16
+    /// SPIR-V capability: Declaring and using 16-bit floats in the Private, Workgroup (for
+    /// non-Block variables), and Function storage classes is enabled, while declaring them in
+    /// the interface storage classes (e.g., UniformConstant, Uniform, StorageBuffer, Input,
+    /// Output, and PushConstant) is not enabled.
     pub shader_float16: bool,
 
     /// Indicates whether 8-bit integers (signed and unsigned) are supported in shader code.
@@ -1725,12 +2119,12 @@ pub struct Vulkan12Features {
     pub shader_int8: bool,
 
     /// Indicates whether the implementation supports the minimum set of descriptor indexing
-    /// features as described in the [Feature Requirements] section. Enabling the descriptorIndexing
-    /// member when vkCreateDevice is called does not imply the other minimum descriptor indexing
-    /// features are also enabled. Those other descriptor indexing features must be enabled
-    /// individually as needed by the application.
+    /// features as described in the [Feature Requirements] section. Enabling the
+    /// descriptorIndexing member when vkCreateDevice is called does not imply the other
+    /// minimum descriptor indexing features are also enabled. Those other descriptor indexing
+    /// features must be enabled individually as needed by the application.
     ///
-    /// [Feature Requirements]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#features-requirements
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub descriptor_indexing: bool,
 
     /// Indicates whether arrays of input attachments can be indexed by dynamically uniform integer
@@ -1770,14 +2164,14 @@ pub struct Vulkan12Features {
     /// capability.
     pub shader_uniform_buffer_array_non_uniform_indexing: bool,
 
-    /// Indicates whether arrays of samplers or sampled images can be indexed by non-uniform integer
-    /// expressions in shader code.
+    /// Indicates whether arrays of samplers or sampled images can be indexed by non-uniform
+    /// integer expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
     /// VK_DESCRIPTOR_TYPE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, or
-    /// VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE must not be indexed by non-uniform integer expressions when
-    /// aggregated into arrays in shader code. This also indicates whether shader modules can
-    /// declare the SampledImageArrayNonUniformIndexing capability.
+    /// VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE must not be indexed by non-uniform integer expressions
+    /// when aggregated into arrays in shader code. This also indicates whether shader modules
+    /// can declare the SampledImageArrayNonUniformIndexing capability.
     pub shader_sampled_image_array_non_uniform_indexing: bool,
 
     /// Indicates whether arrays of storage buffers can be indexed by non-uniform integer
@@ -1790,13 +2184,13 @@ pub struct Vulkan12Features {
     /// capability.
     pub shader_storage_buffer_array_non_uniform_indexing: bool,
 
-    /// Indicates whether arrays of storage images can be indexed by non-uniform integer expressions
-    /// in shader code.
+    /// Indicates whether arrays of storage images can be indexed by non-uniform integer
+    /// expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_STORAGE_IMAGE must not be indexed by non-uniform integer expressions when
-    /// aggregated into arrays in shader code. This also indicates whether shader modules can
-    /// declare the StorageImageArrayNonUniformIndexing capability.
+    /// VK_DESCRIPTOR_TYPE_STORAGE_IMAGE must not be indexed by non-uniform integer expressions
+    /// when aggregated into arrays in shader code. This also indicates whether shader modules
+    /// can declare the StorageImageArrayNonUniformIndexing capability.
     pub shader_storage_image_array_non_uniform_indexing: bool,
 
     /// Indicates whether arrays of input attachments can be indexed by non-uniform integer
@@ -1829,44 +2223,44 @@ pub struct Vulkan12Features {
     /// Indicates whether the implementation supports updating uniform buffer descriptors after a
     /// set is bound.
     ///
-    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be used
-    /// with VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER.
+    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be
+    /// used with VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER.
     pub descriptor_binding_uniform_buffer_update_after_bind: bool,
 
-    /// Indicates whether the implementation supports updating sampled image descriptors after a set
-    /// is bound.
+    /// Indicates whether the implementation supports updating sampled image descriptors after a
+    /// set is bound.
     ///
-    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be used
-    /// with VK_DESCRIPTOR_TYPE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, or
+    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be
+    /// used with VK_DESCRIPTOR_TYPE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, or
     /// VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE.
     pub descriptor_binding_sampled_image_update_after_bind: bool,
 
-    /// Indicates whether the implementation supports updating storage image descriptors after a set
-    /// is bound.
+    /// Indicates whether the implementation supports updating storage image descriptors after a
+    /// set is bound.
     ///
-    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be used
-    /// with VK_DESCRIPTOR_TYPE_STORAGE_IMAGE.
+    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be
+    /// used with VK_DESCRIPTOR_TYPE_STORAGE_IMAGE.
     pub descriptor_binding_storage_image_update_after_bind: bool,
 
     /// Indicates whether the implementation supports updating storage buffer descriptors after a
     /// set is bound.
     ///
-    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be used
-    /// with VK_DESCRIPTOR_TYPE_STORAGE_BUFFER.
+    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be
+    /// used with VK_DESCRIPTOR_TYPE_STORAGE_BUFFER.
     pub descriptor_binding_storage_buffer_update_after_bind: bool,
 
     /// Indicates whether the implementation supports updating uniform texel buffer descriptors
     /// after a set is bound.
     ///
-    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be used
-    /// with VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER.
+    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be
+    /// used with VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER.
     pub descriptor_binding_uniform_texel_buffer_update_after_bind: bool,
 
     /// Indicates whether the implementation supports updating storage texel buffer descriptors
     /// after a set is bound.
     ///
-    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be used
-    /// with VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER.
+    /// If this feature is not enabled, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT must not be
+    /// used with VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER.
     pub descriptor_binding_storage_texel_buffer_update_after_bind: bool,
 
     /// Indicates whether the implementation supports updating descriptors while the set is in use.
@@ -1881,8 +2275,8 @@ pub struct Vulkan12Features {
     pub descriptor_binding_partially_bound: bool,
 
     /// Indicates whether the implementation supports descriptor sets with a variable-sized last
-    /// binding. If this feature is not enabled, VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
-    /// must not be used.
+    /// binding. If this feature is not enabled,
+    /// VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT must not be used.
     pub descriptor_binding_variable_descriptor_count: bool,
 
     /// Indicates whether the implementation supports the SPIR-V RuntimeDescriptorArray capability.
@@ -1911,7 +2305,7 @@ pub struct Vulkan12Features {
     ///
     /// See [Standard Buffer Layout].
     ///
-    /// [Standard Buffer Layout]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#interfaces-resources-layout
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub uniform_buffer_standard_layout: bool,
 
     /// A boolean specifying whether subgroup operations can use 8-bit integer, 16-bit integer,
@@ -1922,8 +2316,8 @@ pub struct Vulkan12Features {
     /// Indicates whether the implementation supports a VkImageMemoryBarrier for a depth/stencil
     /// image with only one of VK_IMAGE_ASPECT_DEPTH_BIT or VK_IMAGE_ASPECT_STENCIL_BIT set, and
     /// whether VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
-    /// VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL, or VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL can
-    /// be used.
+    /// VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL, or VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL
+    /// can be used.
     pub separate_depth_stencil_layouts: bool,
 
     /// Indicates that the implementation supports resetting queries from the host with
@@ -1953,7 +2347,7 @@ pub struct Vulkan12Features {
     ///
     /// This also indicates whether shader modules can declare the VulkanMemoryModel capability.
     ///
-    /// [Vulkan Memory Model]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#memory-model
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub vulkan_memory_model: bool,
 
     /// Indicates whether the [Vulkan Memory Model] can use Device scope synchronization.
@@ -1961,13 +2355,13 @@ pub struct Vulkan12Features {
     /// This also indicates whether shader modules can declare the VulkanMemoryModelDeviceScope
     /// capability.
     ///
-    /// [Vulkan Memory Model]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#memory-model
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub vulkan_memory_model_device_scope: bool,
 
     /// Indicates whether the [Vulkan Memory Model] can use availability and visibility chains with
     /// more than one element.
     ///
-    /// [Vulkan Memory Model]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#memory-model
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub vulkan_memory_model_availability_visibility_chains: bool,
 
     /// Indicates whether the implementation supports the ShaderViewportIndex SPIR-V capability
@@ -1979,11 +2373,11 @@ pub struct Vulkan12Features {
     pub shader_output_viewport_index: bool,
 
     /// Indicates whether the implementation supports the ShaderLayer SPIR-V capability enabling
-    /// variables decorated with the Layer built-in to be exported from mesh, vertex or tessellation
-    /// evaluation shaders.
+    /// variables decorated with the Layer built-in to be exported from mesh, vertex or
+    /// tessellation evaluation shaders.
     ///
-    /// If this feature is not enabled, the Layer built-in decoration must not be used on outputs in
-    /// mesh, vertex or tessellation evaluation shaders.
+    /// If this feature is not enabled, the Layer built-in decoration must not be used on outputs
+    /// in mesh, vertex or tessellation evaluation shaders.
     pub shader_output_layer: bool,
 
     /// If `true`, the “Id” operand of OpGroupNonUniformBroadcast can be dynamically uniform within
@@ -2092,10 +2486,8 @@ impl From<vk::PhysicalDeviceVulkan12Features<'_>> for Vulkan12Features {
 
 /// Description of Vulkan 1.2 properties.
 ///
-/// See
-/// [`VkPhysicalDeviceVulkan12Properties`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan12Properties.html)
-/// manual page.
-#[derive(Debug)]
+/// See [`VkPhysicalDeviceVulkan12Properties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan12Properties.html).
+#[derive(Clone, Debug)]
 pub struct Vulkan12Properties {
     /// A unique identifier for the driver of the physical device.
     pub driver_id: vk::DriverId,
@@ -2109,7 +2501,7 @@ pub struct Vulkan12Properties {
     pub driver_info: String,
 
     /// The version of the Vulkan conformance test this driver is conformant against (see
-    /// [`VkConformanceVersion`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkConformanceVersion.html)).
+    /// See the [limits chapter](https://docs.vulkan.org/spec/latest/chapters/limits.html).
     pub conformance_version: vk::ConformanceVersion,
 
     /// A `vk::ShaderFloatControlsIndependence` value indicating whether, and how, denorm behavior
@@ -2123,22 +2515,22 @@ pub struct Vulkan12Properties {
     /// A `bool` value indicating whether sign of a zero, Nans and ±∞ can be preserved in 16-bit
     /// floating-point computations.
     ///
-    /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for 16-bit
-    /// floating-point types.
+    /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for
+    /// 16-bit floating-point types.
     pub shader_signed_zero_inf_nan_preserve_float16: bool,
 
     /// A `bool` value indicating whether sign of a zero, Nans and ±∞ can be preserved in 32-bit
     /// floating-point computations.
     ///
-    /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for 32-bit
-    /// floating-point types.
+    /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for
+    /// 32-bit floating-point types.
     pub shader_signed_zero_inf_nan_preserve_float32: bool,
 
     /// A `bool` value indicating whether sign of a zero, Nans and ±∞ can be preserved in 64-bit
     /// floating-point computations.
     ///
-    /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for 64-bit
-    /// floating-point types.
+    /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for
+    /// 64-bit floating-point types.
     pub shader_signed_zero_inf_nan_preserve_float64: bool,
 
     /// A `bool` value indicating whether denormals can be preserved in 16-bit floating-point
@@ -2204,22 +2596,22 @@ pub struct Vulkan12Properties {
     /// floating-point types.
     pub shader_rounding_mode_rte_float64: bool,
 
-    /// A `bool` value indicating whether an implementation supports the round-towards-zero rounding
-    /// mode for 16-bit floating-point arithmetic and conversion instructions.
+    /// A `bool` value indicating whether an implementation supports the round-towards-zero
+    /// rounding mode for 16-bit floating-point arithmetic and conversion instructions.
     ///
     /// It also indicates whether the RoundingModeRTZ execution mode can be used for 16-bit
     /// floating-point types.
     pub shader_rounding_mode_rtz_float16: bool,
 
-    /// A `bool` value indicating whether an implementation supports the round-towards-zero rounding
-    /// mode for 32-bit floating-point arithmetic and conversion instructions.
+    /// A `bool` value indicating whether an implementation supports the round-towards-zero
+    /// rounding mode for 32-bit floating-point arithmetic and conversion instructions.
     ///
     /// It also indicates whether the RoundingModeRTZ execution mode can be used for 32-bit
     /// floating-point types.
     pub shader_rounding_mode_rtz_float32: bool,
 
-    /// A `bool` value indicating whether an implementation supports the round-towards-zero rounding
-    /// mode for 64-bit floating-point arithmetic and conversion instructions.
+    /// A `bool` value indicating whether an implementation supports the round-towards-zero
+    /// rounding mode for 64-bit floating-point arithmetic and conversion instructions.
     ///
     /// It also indicates whether the RoundingModeRTZ execution mode can be used for 64-bit
     /// floating-point types.
@@ -2245,8 +2637,8 @@ pub struct Vulkan12Properties {
     /// indexing.
     ///
     /// If this is `false`, then a single dynamic instance of an instruction that nonuniformly
-    /// indexes an array of samplers or images may execute multiple times in order to access all the
-    /// descriptors.
+    /// indexes an array of samplers or images may execute multiple times in order to access all
+    /// the descriptors.
     pub shader_sampled_image_array_non_uniform_indexing_native: bool,
 
     /// A `bool` value indicating whether storage buffer descriptors natively support nonuniform
@@ -2283,36 +2675,36 @@ pub struct Vulkan12Properties {
     /// update-after-bind features must be disabled.
     pub robust_buffer_access_update_after_bind: bool,
 
-    /// A `bool` value indicating whether implicit level of detail calculations for image operations
-    /// have well-defined results when the image and/or sampler objects used for the instruction are
-    /// not uniform within a quad.
+    /// A `bool` value indicating whether implicit level of detail calculations for image
+    /// operations have well-defined results when the image and/or sampler objects used for the
+    /// instruction are not uniform within a quad.
     ///
-    /// See [Derivative Image Operations](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceVulkan12Properties.html#textures-derivative-image-operations).
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
     pub quad_divergent_implicit_lod: bool,
 
     /// Similar to `maxPerStageDescriptorSamplers` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`
+    /// bit set.
     pub max_per_stage_descriptor_update_after_bind_samplers: u32,
 
-    /// Similar to `maxPerStageDescriptorUniformBuffers` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// Similar to `maxPerStageDescriptorUniformBuffers` but counts descriptors from descriptor
+    /// sets created with or without the
+    /// `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit set.
     pub max_per_stage_descriptor_update_after_bind_uniform_buffers: u32,
 
-    /// Similar to `maxPerStageDescriptorStorageBuffers` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// Similar to `maxPerStageDescriptorStorageBuffers` but counts descriptors from descriptor
+    /// sets created with or without the
+    /// `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit set.
     pub max_per_stage_descriptor_update_after_bind_storage_buffers: u32,
 
     /// Similar to `maxPerStageDescriptorSampledImages` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`
+    /// bit set.
     pub max_per_stage_descriptor_update_after_bind_sampled_images: u32,
 
     /// Similar to `maxPerStageDescriptorStorageImages` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`
+    /// bit set.
     pub max_per_stage_descriptor_update_after_bind_storage_images: u32,
 
     /// Similar to `maxPerStageDescriptorInputAttachments` but counts descriptors from descriptor
@@ -2329,8 +2721,8 @@ pub struct Vulkan12Properties {
     pub max_descriptor_set_update_after_bind_samplers: u32,
 
     /// Similar to `maxDescriptorSetUniformBuffers` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`
+    /// bit set.
     pub max_descriptor_set_update_after_bind_uniform_buffers: u32,
 
     /// Similar to `maxDescriptorSetUniformBuffersDynamic` but counts descriptors from descriptor
@@ -2344,8 +2736,8 @@ pub struct Vulkan12Properties {
     pub max_descriptor_set_update_after_bind_uniform_buffers_dynamic: u32,
 
     /// Similar to `maxDescriptorSetStorageBuffers` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`
+    /// bit set.
     pub max_descriptor_set_update_after_bind_storage_buffers: u32,
 
     /// Similar to `maxDescriptorSetStorageBuffersDynamic` but counts descriptors from descriptor
@@ -2359,18 +2751,18 @@ pub struct Vulkan12Properties {
     pub max_descriptor_set_update_after_bind_storage_buffers_dynamic: u32,
 
     /// Similar to `maxDescriptorSetSampledImages` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`
+    /// bit set.
     pub max_descriptor_set_update_after_bind_sampled_images: u32,
 
     /// Similar to `maxDescriptorSetStorageImages` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`
+    /// bit set.
     pub max_descriptor_set_update_after_bind_storage_images: u32,
 
     /// Similar to `maxDescriptorSetInputAttachments` but counts descriptors from descriptor sets
-    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` bit
-    /// set.
+    /// created with or without the `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`
+    /// bit set.
     pub max_descriptor_set_update_after_bind_input_attachments: u32,
 
     /// A bitmask of `vk::ResolveModeFlagBits` indicating the set of supported depth resolve modes.
@@ -2404,16 +2796,16 @@ pub struct Vulkan12Properties {
     /// filtering.
     pub filter_minmax_single_component_formats: bool,
 
-    /// A `bool` value indicating whether the implementation supports non-identity component mapping
-    /// of the image when doing min/max filtering.
+    /// A `bool` value indicating whether the implementation supports non-identity component
+    /// mapping of the image when doing min/max filtering.
     pub filter_minmax_image_component_mapping: bool,
 
     /// Indicates the maximum difference allowed by the implementation between the current value of
     /// a timeline semaphore and any pending signal or wait operations.
     pub max_timeline_semaphore_value_difference: u64,
 
-    /// A bitmask of `vk::SampleCountFlagBits` indicating the color sample counts that are supported
-    /// for all framebuffer color attachments with integer formats.
+    /// A bitmask of `vk::SampleCountFlagBits` indicating the color sample counts that are
+    /// supported for all framebuffer color attachments with integer formats.
     pub framebuffer_integer_color_sample_counts: vk::SampleCountFlags,
 }
 

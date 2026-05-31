@@ -1,12 +1,25 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
-    inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::{WindowBuilder, WindowError},
     std::sync::Arc,
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::Buffer,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+        },
+        pool::lazy::LazyPool,
+    },
+    vk_graph_window::{Window, WindowError},
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
     winit::dpi::LogicalSize,
 };
 
@@ -15,7 +28,7 @@ fn main() -> Result<(), WindowError> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default()
+    let window = Window::builder()
         .debug(args.debug)
         .window(|window| window.with_inner_size(LogicalSize::new(512, 512)))
         .build()?;
@@ -24,35 +37,44 @@ fn main() -> Result<(), WindowError> {
     let draw_buf = create_indirect_buffer(&window.device)?;
 
     window.run(|frame| {
-        let draw_buf_node = frame.render_graph.bind_node(&draw_buf);
+        let draw_buf_node = frame.graph.bind_resource(&draw_buf);
 
-        let mut pass = frame
-            .render_graph
-            .begin_pass("Test")
+        let mut cmd = frame
+            .graph
+            .begin_cmd()
+            .debug_name("Test")
             .bind_pipeline(&pipeline)
-            .access_node(draw_buf_node, AccessType::IndirectBuffer);
+            .resource_access(draw_buf_node, AccessType::IndirectBuffer);
 
         for (idx, image) in images.iter().enumerate() {
-            let image_node = pass.bind_node(image);
-            pass = pass.read_descriptor((0, [idx as u32]), image_node);
+            let image = cmd.bind_resource(image);
+            cmd.set_shader_resource_access(
+                (0, [idx as u32]),
+                image,
+                AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+            );
         }
 
-        pass.clear_color(0, frame.swapchain_image)
-            .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass.draw_indirect(draw_buf_node, 0, 64, 16);
-            });
+        cmd.color_attachment_image(
+            0,
+            frame.swapchain_image,
+            LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+            StoreOp::Store,
+        )
+        .record_cmd(move |cmd| {
+            cmd.draw_indirect(draw_buf_node, 0, 64, 16);
+        });
     })
 }
 
-fn create_images(device: &Arc<Device>) -> Result<Vec<Arc<Image>>, DriverError> {
+fn create_images(device: &Device) -> Result<Vec<Arc<Image>>, DriverError> {
     let mut textures = Vec::with_capacity(64);
 
     let (b, a) = (0.0, 1.0);
-    let mut graph = RenderGraph::new();
+    let mut graph = Graph::default();
     for y in 0..8 {
         for x in 0..8 {
-            let texture = Arc::new(Image::create(
+            let texture = graph.bind_resource(Image::create(
                 device,
                 ImageInfo::image_2d(
                     100,
@@ -61,22 +83,21 @@ fn create_images(device: &Arc<Device>) -> Result<Vec<Arc<Image>>, DriverError> {
                     vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
                 ),
             )?);
-            let texture_node = graph.bind_node(&texture);
             let r = y as f32 / 7.0;
             let g = x as f32 / 7.0;
-            graph.clear_color_image_value(texture_node, [r, g, b, a]);
-            textures.push(texture);
+            graph.clear_color_image(texture, [r, g, b, a]);
+            textures.push(graph.resource(texture).clone());
         }
     }
 
     let mut pool = LazyPool::new(device);
 
-    graph.resolve().submit(&mut pool, 0, 0)?;
+    graph.into_submission().queue_submit(&mut pool, 0, 0)?;
 
     Ok(textures)
 }
 
-fn create_indirect_buffer(device: &Arc<Device>) -> Result<Arc<Buffer>, DriverError> {
+fn create_indirect_buffer(device: &Device) -> Result<Arc<Buffer>, DriverError> {
     let mut draw_cmds = Vec::with_capacity(64);
     for first_instance in 0..64 {
         draw_cmds.push(DrawIndirectCommand {
@@ -94,64 +115,60 @@ fn create_indirect_buffer(device: &Arc<Device>) -> Result<Arc<Buffer>, DriverErr
     Ok(draw_buf)
 }
 
-fn create_graphic_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
-    Ok(Arc::new(GraphicPipeline::create(
+fn create_graphic_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
-            Shader::new_vertex(
-                inline_spirv!(
-                    r#"
-                    #version 460 core
+            glsl!(
+                r#"
+                #version 460 core
+                #pragma shader_stage(vertex)
 
-                    const vec2 QUAD[] = {
-                        vec2(0, 0),
-                        vec2(0, 1),
-                        vec2(1, 1),
-                        vec2(0, 0),
-                        vec2(1, 1),
-                        vec2(1, 0),
-                    };
+                const vec2 QUAD[] = {
+                    vec2(0, 0),
+                    vec2(0, 1),
+                    vec2(1, 1),
+                    vec2(0, 0),
+                    vec2(1, 1),
+                    vec2(1, 0),
+                };
 
-                    layout(location = 0) out uint instance_index_out;
+                layout(location = 0) out uint instance_index_out;
 
-                    void main() {
-                        uint x = gl_InstanceIndex % 8;
-                        uint y = gl_InstanceIndex / 8;
+                void main() {
+                    uint x = gl_InstanceIndex % 8;
+                    uint y = gl_InstanceIndex / 8;
 
-                        vec2 scale = vec2(1.0 / 8.0);
-                        vec2 offset = vec2((float(x) - 4.0) * scale.x, (float(y) - 4.0) * scale.y);
+                    vec2 scale = vec2(1.0 / 8.0);
+                    vec2 offset = vec2((float(x) - 4.0) * scale.x, (float(y) - 4.0) * scale.y);
 
-                        gl_Position = vec4(QUAD[gl_VertexIndex] * scale + offset, 0, 1);
-                        instance_index_out = gl_InstanceIndex;
-                    }
-                    "#,
-                    vert
-                )
-                .as_slice(),
-            ),
-            Shader::new_fragment(
-                inline_spirv!(
-                    r#"
-                    #version 460 core
-                    #extension GL_EXT_nonuniform_qualifier : require
+                    gl_Position = vec4(QUAD[gl_VertexIndex] * scale + offset, 0, 1);
+                    instance_index_out = gl_InstanceIndex;
+                }
+                "#
+            )
+            .as_slice(),
+            glsl!(
+                r#"
+                #version 460 core
+                #extension GL_EXT_nonuniform_qualifier : require
+                #pragma shader_stage(fragment)
 
-                    layout(set = 0, binding = 0) uniform sampler2D sampler_nnr[];
+                layout(set = 0, binding = 0) uniform sampler2D sampler_nnr[];
 
-                    layout(location = 0) in flat uint instance_index;
+                layout(location = 0) in flat uint instance_index;
 
-                    layout(location = 0) out vec4 color_out;
+                layout(location = 0) out vec4 color_out;
 
-                    void main() {
-                        color_out = texture(sampler_nnr[nonuniformEXT(instance_index)], vec2(0.5, 0.5));
-                    }
-                    "#,
-                    frag
-                )
-                .as_slice(),
-            ),
+                void main() {
+                    color_out = texture(sampler_nnr[nonuniformEXT(instance_index)], vec2(0.5, 0.5));
+                }
+                "#
+            )
+            .as_slice(),
         ],
-    )?))
+    )
 }
 
 #[derive(Parser)]

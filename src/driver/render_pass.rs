@@ -1,13 +1,17 @@
 //! Render pass related types.
 
 use {
-    super::{DepthStencilMode, DriverError, GraphicPipeline, SampleCount, device::Device},
+    super::{
+        DriverError,
+        device::Device,
+        graphic::{DepthStencilInfo, GraphicPipeline},
+        image::SampleCount,
+    },
     ash::vk,
     log::{trace, warn},
     std::{
         collections::{HashMap, hash_map::Entry},
-        ops::Deref,
-        sync::Arc,
+        slice,
         thread::panicking,
     },
 };
@@ -89,41 +93,49 @@ pub(crate) struct FramebufferInfo {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct GraphicPipelineKey {
-    depth_stencil: Option<DepthStencilMode>,
+    depth_stencil: Option<DepthStencilInfo>,
     layout: vk::PipelineLayout,
-    shader_modules: Vec<vk::ShaderModule>,
     subpass_idx: u32,
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
-pub(crate) struct RenderPassInfo {
-    pub attachments: Vec<AttachmentInfo>,
-    pub subpasses: Vec<SubpassInfo>,
-    pub dependencies: Vec<SubpassDependency>,
-}
-
+/// Vulkan render pass state and cached framebuffer/pipeline objects for compatible attachments.
 #[derive(Debug)]
-pub(crate) struct RenderPass {
-    device: Arc<Device>,
+#[read_only::cast]
+pub struct RenderPass {
+    /// The device which owns this render pass resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
     framebuffers: HashMap<FramebufferInfo, vk::Framebuffer>,
     graphic_pipelines: HashMap<GraphicPipelineKey, vk::Pipeline>,
+
+    /// The native Vulkan resource handle of this render pass.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub handle: vk::RenderPass,
+
+    /// Information used to create this render pass resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub info: RenderPassInfo,
-    render_pass: vk::RenderPass,
 }
 
 impl RenderPass {
     #[profiling::function]
-    pub fn create(device: &Arc<Device>, info: RenderPassInfo) -> Result<Self, DriverError> {
-        //trace!("create: \n{:#?}", &info);
+    pub(crate) fn create(device: &Device, info: RenderPassInfo) -> Result<Self, DriverError> {
         trace!("create");
 
-        let device = Arc::clone(device);
+        let device = device.clone();
         let attachments = info
             .attachments
             .iter()
             .copied()
             .map(Into::into)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let correlated_view_masks = if info.subpasses.iter().any(|subpass| subpass.view_mask != 0) {
             {
                 info.subpasses
@@ -139,7 +151,7 @@ impl RenderPass {
             .iter()
             .copied()
             .map(Into::into)
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
 
         let subpass_attachments = info
             .subpasses
@@ -169,7 +181,6 @@ impl RenderPass {
                 subpass.depth_stencil_resolve_attachment.map(
                     |(_, depth_resolve_mode, stencil_resolve_mode)| {
                         vk::SubpassDescriptionDepthStencilResolve::default()
-                            .depth_stencil_resolve_attachment(subpass_attachments.last().unwrap())
                             .depth_resolve_mode(
                                 depth_resolve_mode.map(Into::into).unwrap_or_default(),
                             )
@@ -210,6 +221,9 @@ impl RenderPass {
             }
 
             if let Some(depth_stencil_resolve) = depth_stencil_resolve {
+                *depth_stencil_resolve = depth_stencil_resolve.depth_stencil_resolve_attachment(
+                    &subpass_attachments[depth_stencil_resolve_idx],
+                );
                 desc = desc.push_next(depth_stencil_resolve);
             }
 
@@ -222,40 +236,39 @@ impl RenderPass {
             );
         }
 
-        let render_pass = unsafe {
-            device
-                .create_render_pass2(
-                    &vk::RenderPassCreateInfo2::default()
-                        .attachments(&attachments)
-                        .correlated_view_masks(&correlated_view_masks)
-                        .dependencies(&dependencies)
-                        .subpasses(&subpasses),
-                    None,
-                )
-                .map_err(|err| {
-                    warn!("{err}");
+        let handle = unsafe {
+            device.create_render_pass2(
+                &vk::RenderPassCreateInfo2::default()
+                    .attachments(&attachments)
+                    .correlated_view_masks(&correlated_view_masks)
+                    .dependencies(&dependencies)
+                    .subpasses(&subpasses),
+                None,
+            )
+        }
+        .map_err(|err| {
+            warn!("unable to create render pass: {err}");
 
-                    DriverError::Unsupported
-                })?
-        };
+            DriverError::Unsupported
+        })?;
 
         Ok(Self {
-            info,
             device,
             framebuffers: Default::default(),
             graphic_pipelines: Default::default(),
-            render_pass,
+            handle,
+            info,
         })
     }
 
     #[profiling::function]
-    pub fn framebuffer(
-        this: &mut Self,
+    pub(crate) fn framebuffer(
+        &mut self,
         info: FramebufferInfo,
     ) -> Result<vk::Framebuffer, DriverError> {
         debug_assert!(!info.attachments.is_empty());
 
-        let entry = this.framebuffers.entry(info);
+        let entry = self.framebuffers.entry(info);
         if let Entry::Occupied(entry) = entry {
             return Ok(*entry.get());
         }
@@ -284,27 +297,24 @@ impl RenderPass {
                     .usage(attachment.usage)
                     .view_formats(&attachment.view_formats)
             })
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let mut imageless_info =
             vk::FramebufferAttachmentsCreateInfoKHR::default().attachment_image_infos(&attachments);
         let mut create_info = vk::FramebufferCreateInfo::default()
             .flags(vk::FramebufferCreateFlags::IMAGELESS)
-            .render_pass(this.render_pass)
+            .render_pass(self.handle)
             .width(attachments[0].width)
             .height(attachments[0].height)
             .layers(layers)
             .push_next(&mut imageless_info);
-        create_info.attachment_count = this.info.attachments.len() as _;
+        create_info.attachment_count = self.info.attachments.len() as _;
 
-        let framebuffer = unsafe {
-            this.device
-                .create_framebuffer(&create_info, None)
-                .map_err(|err| {
-                    warn!("{err}");
+        let framebuffer =
+            unsafe { self.device.create_framebuffer(&create_info, None) }.map_err(|err| {
+                warn!("unable to create framebuffer: {err}");
 
-                    DriverError::Unsupported
-                })?
-        };
+                DriverError::Unsupported
+            })?;
 
         entry.insert(framebuffer);
 
@@ -312,18 +322,15 @@ impl RenderPass {
     }
 
     #[profiling::function]
-    pub fn graphic_pipeline(
-        this: &mut Self,
-        pipeline: &Arc<GraphicPipeline>,
-        depth_stencil: Option<DepthStencilMode>,
+    pub(crate) fn pipeline_handle(
+        &mut self,
+        pipeline: &GraphicPipeline,
+        depth_stencil: Option<DepthStencilInfo>,
         subpass_idx: u32,
     ) -> Result<vk::Pipeline, DriverError> {
-        use std::slice::from_ref;
-
-        let entry = this.graphic_pipelines.entry(GraphicPipelineKey {
+        let entry = self.graphic_pipelines.entry(GraphicPipelineKey {
             depth_stencil,
-            layout: pipeline.layout,
-            shader_modules: pipeline.shader_modules.clone(),
+            layout: pipeline.inner.layout,
             subpass_idx,
         });
         if let Entry::Occupied(entry) = entry {
@@ -335,42 +342,32 @@ impl RenderPass {
             _ => unreachable!(),
         };
 
-        let color_blend_attachment_states = this.info.subpasses[subpass_idx as usize]
+        let color_blend_attachment_states = self.info.subpasses[subpass_idx as usize]
             .color_attachments
             .iter()
-            .map(|_| pipeline.info.blend.into())
-            .collect::<Box<[_]>>();
+            .map(|_| pipeline.inner.info.blend.into())
+            .collect::<Box<_>>();
         let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
             .attachments(&color_blend_attachment_states);
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
+            .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
         let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
-            .alpha_to_coverage_enable(pipeline.state.multisample.alpha_to_coverage_enable)
-            .alpha_to_one_enable(pipeline.state.multisample.alpha_to_one_enable)
-            .flags(pipeline.state.multisample.flags)
-            .min_sample_shading(pipeline.state.multisample.min_sample_shading)
-            .rasterization_samples(pipeline.state.multisample.rasterization_samples.into())
-            .sample_shading_enable(pipeline.state.multisample.sample_shading_enable)
-            .sample_mask(&pipeline.state.multisample.sample_mask);
+            .alpha_to_coverage_enable(pipeline.inner.multisample.alpha_to_coverage_enable)
+            .alpha_to_one_enable(pipeline.inner.multisample.alpha_to_one_enable)
+            .flags(pipeline.inner.multisample.flags)
+            .min_sample_shading(pipeline.inner.multisample.min_sample_shading)
+            .rasterization_samples(pipeline.inner.multisample.rasterization_samples.into())
+            .sample_shading_enable(pipeline.inner.multisample.sample_shading_enable)
+            .sample_mask(&pipeline.inner.multisample.sample_mask);
         let specializations = pipeline
-            .state
-            .stages
+            .inner
+            .shader_stages
             .iter()
-            .map(|stage| {
-                stage
-                    .specialization_info
-                    .as_ref()
-                    .map(|specialization_info| {
-                        vk::SpecializationInfo::default()
-                            .map_entries(&specialization_info.map_entries)
-                            .data(&specialization_info.data)
-                    })
-            })
+            .map(|stage| stage.specialization.as_ref().map(Into::into))
             .collect::<Box<_>>();
         let stages = pipeline
-            .state
-            .stages
+            .inner
+            .shader_stages
             .iter()
             .zip(specializations.iter())
             .map(|(stage, specialization)| {
@@ -385,53 +382,50 @@ impl RenderPass {
 
                 info
             })
-            .collect::<Box<[_]>>();
+            .collect::<Box<_>>();
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_attribute_descriptions(
-                &pipeline.state.vertex_input.vertex_attribute_descriptions,
+                &pipeline.inner.vertex_input.vertex_attribute_descriptions,
             )
-            .vertex_binding_descriptions(&pipeline.state.vertex_input.vertex_binding_descriptions);
+            .vertex_binding_descriptions(&pipeline.inner.vertex_input.vertex_binding_descriptions);
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
         let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
-            topology: pipeline.info.topology,
+            topology: pipeline.inner.info.topology,
             ..Default::default()
         };
         let depth_stencil = depth_stencil.map(Into::into).unwrap_or_default();
         let rasterization_state = vk::PipelineRasterizationStateCreateInfo {
-            front_face: pipeline.info.front_face,
+            front_face: pipeline.inner.info.front_face,
             line_width: 1.0,
-            polygon_mode: pipeline.info.polygon_mode,
-            cull_mode: pipeline.info.cull_mode,
+            polygon_mode: pipeline.inner.info.polygon_mode,
+            cull_mode: pipeline.inner.info.cull_mode,
             ..Default::default()
         };
-        let graphic_pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+        let create_info = vk::GraphicsPipelineCreateInfo::default()
             .color_blend_state(&color_blend_state)
             .depth_stencil_state(&depth_stencil)
             .dynamic_state(&dynamic_state)
             .input_assembly_state(&input_assembly_state)
-            .layout(pipeline.state.layout)
+            .layout(pipeline.inner.layout)
             .multisample_state(&multisample_state)
             .rasterization_state(&rasterization_state)
-            .render_pass(this.render_pass)
+            .render_pass(self.handle)
             .stages(&stages)
             .subpass(subpass_idx)
             .vertex_input_state(&vertex_input_state)
             .viewport_state(&viewport_state);
 
         let pipeline = unsafe {
-            this.device.create_graphics_pipelines(
-                Device::pipeline_cache(&this.device),
-                from_ref(&graphic_pipeline_info),
+            self.device.create_graphics_pipelines(
+                Device::pipeline_cache(&self.device),
+                slice::from_ref(&create_info),
                 None,
             )
         }
         .map_err(|(_, err)| {
-            warn!(
-                "create_graphics_pipelines: {err}\n{:#?}",
-                graphic_pipeline_info
-            );
+            warn!("create_graphics_pipelines: {err}\n{:#?}", create_info);
 
             DriverError::Unsupported
         })?[0];
@@ -442,14 +436,6 @@ impl RenderPass {
     }
 }
 
-impl Deref for RenderPass {
-    type Target = vk::RenderPass;
-
-    fn deref(&self) -> &Self::Target {
-        &self.render_pass
-    }
-}
-
 impl Drop for RenderPass {
     #[profiling::function]
     fn drop(&mut self) {
@@ -457,18 +443,30 @@ impl Drop for RenderPass {
             return;
         }
 
-        unsafe {
-            for (_, framebuffer) in self.framebuffers.drain() {
+        for (_, framebuffer) in self.framebuffers.drain() {
+            unsafe {
                 self.device.destroy_framebuffer(framebuffer, None);
             }
+        }
 
-            for (_, pipeline) in self.graphic_pipelines.drain() {
+        for (_, pipeline) in self.graphic_pipelines.drain() {
+            unsafe {
                 self.device.destroy_pipeline(pipeline, None);
             }
+        }
 
-            self.device.destroy_render_pass(self.render_pass, None);
+        unsafe {
+            self.device.destroy_render_pass(self.handle, None);
         }
     }
+}
+
+/// Attachment, subpass, and dependency information used to create a [`RenderPass`].
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct RenderPassInfo {
+    pub(crate) attachments: Vec<AttachmentInfo>,
+    pub(crate) subpasses: Vec<SubpassInfo>,
+    pub(crate) dependencies: Vec<SubpassDependency>,
 }
 
 /// Specifying depth and stencil resolve modes.

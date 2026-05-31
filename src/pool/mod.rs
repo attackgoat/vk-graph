@@ -1,11 +1,11 @@
-//! Resource leasing and pooling types.
+//! Resource pooling, requesting, and caching types.
 //!
-//! _Screen 13_ provides caching for acceleration structure, buffer and image resources which may be
-//! leased from configurable pools using their corresponding information structure. Most programs
-//! will do fine with a single [`FifoPool`](self::fifo::FifoPool).
+//! Resource pools provide caching for buffer, image, and acceleration structure resources. Pooled
+//! resources may be requested from a pool using their corresponding information structure.
 //!
-//! Leased resources may be bound directly to a render graph and used in the same manner as regular
-//! resources. After rendering has finished, the leased resources will return to the pool for reuse.
+//! Leased resources may be bound directly to a [`Graph`](crate::Graph) and used in the same manner
+//! as regular resources. After execution has completed pooled resources are automatically returned
+//! to their pool for reuse.
 //!
 //! # Buckets
 //!
@@ -13,7 +13,7 @@
 //! offering a different strategy which balances performance (_more buckets_) with memory efficiency
 //! (_fewer buckets_).
 //!
-//! _Screen 13_'s pools can be grouped into two major categories:
+//! _vk-graph_'s pools can be grouped into two major categories:
 //!
 //! * Single-bucket: [`FifoPool`](self::fifo::FifoPool)
 //! * Multi-bucket: [`LazyPool`](self::lazy::LazyPool), [`HashPool`](self::hash::HashPool)
@@ -25,17 +25,17 @@
 //! ```no_run
 //! # use std::sync::Arc;
 //! # use ash::vk;
-//! # use screen_13::driver::DriverError;
-//! # use screen_13::driver::device::{Device, DeviceInfo};
-//! # use screen_13::driver::image::{ImageInfo};
-//! # use screen_13::pool::{Pool};
-//! # use screen_13::pool::lazy::{LazyPool};
+//! # use vk_graph::driver::DriverError;
+//! # use vk_graph::driver::device::{Device, DeviceInfo};
+//! # use vk_graph::driver::image::{ImageInfo};
+//! # use vk_graph::pool::{Pool};
+//! # use vk_graph::pool::lazy::{LazyPool};
 //! # fn main() -> Result<(), DriverError> {
-//! # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+//! # let device = Device::new(DeviceInfo::default())?;
 //! let mut pool = LazyPool::new(&device);
 //!
 //! let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
-//! let my_image = pool.lease(info)?;
+//! let my_image = pool.resource(info)?;
 //!
 //! assert!(my_image.info.usage.contains(vk::ImageUsageFlags::STORAGE));
 //! # Ok(()) }
@@ -57,20 +57,19 @@
 //! * High performance is most important
 //! * Resources have consistent attributes each frame
 //!
-//! # When Should You Use Resource Aliasing?
+//! # When Should You Use Resource Caching?
 //!
-//! Wrapping any pool using [`AliasPool::new`](self::alias::AliasPool::new) enables resource
-//! aliasing, which prevents excess resources from being created even when different parts of your
-//! code request new resources.
+//! Wrapping any pool using [`cache::Cache::new`] enables resource caching, which prevents excess
+//! resources from being created even when different parts of your code request compatible
+//! resources.
 //!
-//! **_NOTE:_** Render graph submission will automatically attempt to re-order submitted passes to
+//! **_NOTE:_** Graph submission will automatically attempt to re-order submitted commands to
 //! reduce contention between individual resources.
 //!
-//! **_NOTE:_** In cases where multiple aliased resources using identical request information are
-//! used in the same render graph pass you must ensure the resources are aliased from different
-//! pools. There is currently no tagging or filter which would prevent "ping-pong" rendering of such
-//! resources from being the same actual resources; this causes Vulkan validation warnings when
-//! reading from and writing to the same images, or whatever your operations may be.
+//! **_NOTE:_** In cases where multiple cached resources using identical request information are
+//! used in the same graph command, ensure they come from different cache tags or different pool
+//! wrappers. Otherwise, two requests may resolve to the same underlying resource and trigger
+//! Vulkan validation warnings when reading from and writing to the same images.
 //!
 //! ### Pros:
 //!
@@ -80,22 +79,23 @@
 //!
 //! ### Cons:
 //!
-//! * Non-zero cost: Atomic load and compatibility check per active alias
+//! * Non-zero cost: atomic load and compatibility check per active cached resource
 //! * May cause GPU stalling if there is not enough work being submitted
-//! * Aliased resources are typed `Arc<Lease<T>>` and are not guaranteed to be mutable or unique
+//! * Cached resources are typed `Arc<Lease<T>>` and are not guaranteed to be mutable or unique
 
-pub mod alias;
+pub mod cache;
 pub mod fifo;
 pub mod hash;
 pub mod lazy;
 
 use {
     crate::driver::{
-        CommandBuffer, DriverError,
+        DriverError,
         accel_struct::{
             AccelerationStructure, AccelerationStructureInfo, AccelerationStructureInfoBuilder,
         },
         buffer::{Buffer, BufferInfo, BufferInfoBuilder},
+        cmd_buf::CommandBuffer,
         image::{Image, ImageInfo, ImageInfoBuilder},
     },
     derive_builder::{Builder, UninitializedFieldError},
@@ -120,14 +120,11 @@ type CacheRef<T> = Weak<Mutex<Vec<T>>>;
 fn lease_command_buffer(cache: &mut Vec<CommandBuffer>) -> Option<CommandBuffer> {
     for idx in 0..cache.len() {
         if unsafe {
-            let cmd_buf = cache.get_unchecked(idx);
+            let cmd = cache.get_unchecked(idx);
 
             // Don't lease this command buffer if it is unsignalled; we'll create a new one
             // and wait for this, and those behind it, to signal.
-            cmd_buf
-                .device
-                .get_fence_status(cmd_buf.fence)
-                .unwrap_or_default()
+            cmd.device.get_fence_status(cmd.fence).unwrap_or_default()
         } {
             return Some(cache.swap_remove(idx));
         }
@@ -136,10 +133,21 @@ fn lease_command_buffer(cache: &mut Vec<CommandBuffer>) -> Option<CommandBuffer>
     None
 }
 
-/// Holds a leased resource and implements `Drop` in order to return the resource.
+fn with_cache<T, R>(cache: &Cache<T>, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
+    let cache = cache.lock();
+
+    #[cfg(not(feature = "parking_lot"))]
+    let cache = cache.expect("poisoned cache lock");
+
+    let mut cache = cache;
+
+    f(&mut cache)
+}
+
+/// Holds a pooled resource and implements `Drop` in order to return the resource.
 ///
 /// This simple wrapper type implements only the `AsRef`, `AsMut`, `Deref` and `DerefMut` traits
-/// and provides no other functionality. A freshly leased resource is guaranteed to have no other
+/// and provides no other functionality. A freshly obtained resource is guaranteed to have no other
 /// owners and may be mutably accessed.
 #[derive(Debug)]
 pub struct Lease<T> {
@@ -147,25 +155,42 @@ pub struct Lease<T> {
     item: ManuallyDrop<T>,
 }
 
+// The following debug_name functions take a self of Lease<T> and return Self.
+// This allows pooled resources to have the same `.debug_name("bugs")` chaining
+
+impl Lease<AccelerationStructure> {
+    /// Sets the debugging name assigned to this acceleration structure.
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
+}
+
+impl Lease<Buffer> {
+    /// Sets the debugging name assigned to this buffer.
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
+}
+
+impl Lease<Image> {
+    /// Sets the debugging name assigned to this image.
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
+}
+
 impl<T> Lease<T> {
-    #[inline(always)]
     fn new(cache_ref: CacheRef<T>, item: T) -> Self {
         Self {
             cache_ref,
             item: ManuallyDrop::new(item),
         }
-    }
-}
-
-impl<T> AsRef<T> for Lease<T> {
-    fn as_ref(&self) -> &T {
-        &self.item
-    }
-}
-
-impl<T> AsMut<T> for Lease<T> {
-    fn as_mut(&mut self) -> &mut T {
-        &mut self.item
     }
 }
 
@@ -193,17 +218,13 @@ impl<T> Drop for Lease<T> {
         // If the pool cache has been dropped we must manually drop the item, otherwise it goes back
         // into the pool.
         if let Some(cache) = self.cache_ref.upgrade() {
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut cache = cache.lock();
+            with_cache(&cache, |cache| {
+                if cache.len() >= cache.capacity() {
+                    cache.pop();
+                }
 
-            #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
-
-            if cache.len() == cache.capacity() {
-                cache.pop();
-            }
-
-            cache.push(unsafe { ManuallyDrop::take(&mut self.item) });
+                cache.push(unsafe { ManuallyDrop::take(&mut self.item) });
+            });
         } else {
             unsafe {
                 ManuallyDrop::drop(&mut self.item);
@@ -212,21 +233,30 @@ impl<T> Drop for Lease<T> {
     }
 }
 
-/// Allows leasing of resources using driver information structures.
+/// Allows requesting resources using driver information structures.
 pub trait Pool<I, T> {
-    /// Lease a resource.
-    fn lease(&mut self, info: I) -> Result<Lease<T>, DriverError>;
+    #[deprecated = "use resource function"]
+    #[doc(hidden)]
+    fn lease(&mut self, info: I) -> Result<Lease<T>, DriverError> {
+        self.resource(info)
+    }
+
+    /// Request a resource.
+    fn resource(&mut self, info: I) -> Result<Lease<T>, DriverError>;
 }
 
-// Enable leasing items using their info builder type for convenience
+// Enable requesting items using their info builder type for convenience
 macro_rules! lease_builder {
     ($info:ident => $item:ident) => {
         paste::paste! {
             impl<T> Pool<[<$info Builder>], $item> for T where T: Pool<$info, $item> {
-                fn lease(&mut self, builder: [<$info Builder>]) -> Result<Lease<$item>, DriverError> {
+                fn resource(
+                    &mut self,
+                    builder: [<$info Builder>],
+                ) -> Result<Lease<$item>, DriverError> {
                     let info = builder.build();
 
-                    self.lease(info)
+                    self.resource(info)
                 }
             }
         }
@@ -239,60 +269,63 @@ lease_builder!(ImageInfo => Image);
 
 /// Information used to create a [`FifoPool`](self::fifo::FifoPool),
 /// [`HashPool`](self::hash::HashPool) or [`LazyPool`](self::lazy::LazyPool) instance.
-#[derive(Builder, Clone, Copy, Debug)]
+#[derive(Builder, Clone, Copy, Debug, Eq, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "PoolInfoBuilderError"),
+    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
-pub struct PoolInfo {
+pub struct PoolConfig {
     /// The maximum size of a single bucket of acceleration structure resource instances. The
-    /// default value is [`PoolInfo::DEFAULT_RESOURCE_CAPACITY`].
+    /// default value is [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
     ///
     /// # Note
     ///
-    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the documentation
-    /// of each implementation to understand how this affects total number of stored acceleration
-    /// structure instances.
-    #[builder(default = "PoolInfo::DEFAULT_RESOURCE_CAPACITY", setter(strip_option))]
+    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the
+    /// documentation of each implementation to understand how this affects total number of
+    /// stored acceleration structure instances.
+    #[builder(
+        default = "PoolConfig::DEFAULT_RESOURCE_CAPACITY",
+        setter(strip_option)
+    )]
     pub accel_struct_capacity: usize,
 
     /// The maximum size of a single bucket of buffer resource instances. The default value is
-    /// [`PoolInfo::DEFAULT_RESOURCE_CAPACITY`].
+    /// [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
     ///
     /// # Note
     ///
-    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the documentation
-    /// of each implementation to understand how this affects total number of stored buffer
-    /// instances.
-    #[builder(default = "PoolInfo::DEFAULT_RESOURCE_CAPACITY", setter(strip_option))]
+    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the
+    /// documentation of each implementation to understand how this affects total number of
+    /// stored buffer instances.
+    #[builder(
+        default = "PoolConfig::DEFAULT_RESOURCE_CAPACITY",
+        setter(strip_option)
+    )]
     pub buffer_capacity: usize,
 
     /// The maximum size of a single bucket of image resource instances. The default value is
-    /// [`PoolInfo::DEFAULT_RESOURCE_CAPACITY`].
+    /// [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
     ///
     /// # Note
     ///
-    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the documentation
-    /// of each implementation to understand how this affects total number of stored image
-    /// instances.
-    #[builder(default = "PoolInfo::DEFAULT_RESOURCE_CAPACITY", setter(strip_option))]
+    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the
+    /// documentation of each implementation to understand how this affects total number of
+    /// stored image instances.
+    #[builder(
+        default = "PoolConfig::DEFAULT_RESOURCE_CAPACITY",
+        setter(strip_option)
+    )]
     pub image_capacity: usize,
 }
 
-impl PoolInfo {
+impl PoolConfig {
     /// The maximum size of a single bucket of resource instances.
     pub const DEFAULT_RESOURCE_CAPACITY: usize = 16;
 
-    /// Constructs a new `PoolInfo` with the given acceleration structure, buffer and image resource
-    /// capacity for any single bucket.
-    pub const fn with_capacity(resource_capacity: usize) -> Self {
-        Self {
-            accel_struct_capacity: resource_capacity,
-            buffer_capacity: resource_capacity,
-            image_capacity: resource_capacity,
-        }
+    /// Creates a default `PoolConfigBuilder`.
+    pub fn builder() -> PoolConfigBuilder {
+        Default::default()
     }
 
     fn default_cache<T>() -> Cache<T> {
@@ -304,21 +337,46 @@ impl PoolInfo {
     fn explicit_cache<T>(capacity: usize) -> Cache<T> {
         Cache::new(Mutex::new(Vec::with_capacity(capacity)))
     }
-}
 
-impl Default for PoolInfo {
-    fn default() -> Self {
-        PoolInfoBuilder::default().into()
+    /// Converts a `PoolConfig` into a `PoolConfigBuilder`.
+    pub fn into_builder(self) -> PoolConfigBuilder {
+        PoolConfigBuilder {
+            accel_struct_capacity: Some(self.accel_struct_capacity),
+            buffer_capacity: Some(self.buffer_capacity),
+            image_capacity: Some(self.image_capacity),
+        }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> PoolConfigBuilder {
+        self.into_builder()
+    }
+
+    /// Constructs a new `PoolConfig` with the given acceleration structure, buffer and image
+    /// resource capacity for any single bucket.
+    pub const fn with_capacity(resource_capacity: usize) -> Self {
+        Self {
+            accel_struct_capacity: resource_capacity,
+            buffer_capacity: resource_capacity,
+            image_capacity: resource_capacity,
+        }
     }
 }
 
-impl From<PoolInfoBuilder> for PoolInfo {
-    fn from(info: PoolInfoBuilder) -> Self {
+impl Default for PoolConfig {
+    fn default() -> Self {
+        PoolConfigBuilder::default().into()
+    }
+}
+
+impl From<PoolConfigBuilder> for PoolConfig {
+    fn from(info: PoolConfigBuilder) -> Self {
         info.build()
     }
 }
 
-impl From<usize> for PoolInfo {
+impl From<usize> for PoolConfig {
     fn from(value: usize) -> Self {
         Self {
             accel_struct_capacity: value,
@@ -329,19 +387,84 @@ impl From<usize> for PoolInfo {
 }
 
 // HACK: https://github.com/colin-kiegel/rust-derive-builder/issues/56
-impl PoolInfoBuilder {
-    /// Builds a new `PoolInfo`.
-    pub fn build(self) -> PoolInfo {
-        self.fallible_build()
-            .expect("All required fields set at initialization")
+impl PoolConfigBuilder {
+    /// Builds a new `PoolConfig`.
+    pub fn build(self) -> PoolConfig {
+        self.fallible_build().expect("invalid pool config")
     }
 }
 
-#[derive(Debug)]
-struct PoolInfoBuilderError;
+#[doc(hidden)]
+#[deprecated = "use PoolConfig instead"]
+pub type PoolInfo = PoolConfig;
 
-impl From<UninitializedFieldError> for PoolInfoBuilderError {
-    fn from(_: UninitializedFieldError) -> Self {
-        Self
+#[doc(hidden)]
+#[deprecated = "use PoolConfigBuilder instead"]
+pub type PoolInfoBuilder = PoolConfigBuilder;
+
+mod deprecated {
+    use {
+        crate::pool::Lease,
+        std::convert::{AsMut, AsRef},
+    };
+
+    impl<T> Lease<T> {
+        #[allow(clippy::should_implement_trait)]
+        #[deprecated = "use Deref impl"]
+        #[doc(hidden)]
+        pub fn as_ref(&self) -> &T {
+            &self.item
+        }
+
+        #[allow(clippy::should_implement_trait)]
+        #[deprecated = "use DerefMut impl"]
+        #[doc(hidden)]
+        pub fn as_mut(&mut self) -> &mut T {
+            &mut self.item
+        }
+    }
+
+    impl<T> AsRef<T> for Lease<T> {
+        fn as_ref(&self) -> &T {
+            &self.item
+        }
+    }
+
+    impl<T> AsMut<T> for Lease<T> {
+        fn as_mut(&mut self) -> &mut T {
+            &mut self.item
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    type Info = PoolConfig;
+    type Builder = PoolConfigBuilder;
+
+    #[test]
+    pub fn pool_info() {
+        let info = Info::default();
+        let builder = info.into_builder().build();
+
+        assert_eq!(info, builder);
+    }
+
+    #[test]
+    pub fn pool_info_builder() {
+        let info = Info {
+            accel_struct_capacity: 1,
+            buffer_capacity: 2,
+            image_capacity: 3,
+        };
+        let builder = Builder::default()
+            .accel_struct_capacity(1)
+            .buffer_capacity(2)
+            .image_capacity(3)
+            .build();
+
+        assert_eq!(info, builder);
     }
 }

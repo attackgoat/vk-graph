@@ -1,0 +1,81 @@
+#!/bin/sh
+
+set -eu
+
+ALLOW_DIRTY=0
+MDBOOK_VERSION=0.5.3
+RUN_GPU=1
+RUN_SEMVER=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --allow-dirty)
+            ALLOW_DIRTY=1
+            ;;
+        --no-gpu)
+            RUN_GPU=0
+            ;;
+        --semver)
+            RUN_SEMVER=1
+            ;;
+        *)
+            printf 'unknown argument: %s\n' "$arg" >&2
+            exit 2
+            ;;
+    esac
+done
+
+fail() {
+    printf '%s\n' "$1" >&2
+    exit "${2-1}"
+}
+
+run() {
+    printf '==> %s\n' "$1"
+    shift
+    "$@"
+}
+
+install_mdbook() {
+    version=$(mdbook --version 2>/dev/null | awk '{print $2}' || true)
+
+    if [ "$version" != "$MDBOOK_VERSION" ]; then
+        run "install mdbook ${MDBOOK_VERSION}" cargo install --locked mdbook --version "$MDBOOK_VERSION"
+    fi
+}
+
+if [ "$ALLOW_DIRTY" -ne 1 ]; then
+    git diff --no-ext-diff --quiet || fail "uncommitted changes (pass --allow-dirty to skip this check)"
+fi
+
+# Rust code checks
+run "format check" cargo fmt --all --check
+run "workspace target check" env RUSTFLAGS="-D warnings" cargo check --all-targets --workspace --no-default-features --features loaded
+run "workspace target check (parking_lot)" env RUSTFLAGS="-D warnings" cargo check --all-targets --workspace --features parking_lot
+run "workspace clippy" cargo clippy --all-targets --workspace --no-default-features --features loaded -- -D warnings
+run "workspace clippy (parking_lot)" cargo clippy --all-targets --workspace --features parking_lot -- -D warnings
+run "workspace tests" env RUSTFLAGS="-D warnings" cargo test --all-targets --workspace --no-default-features --features loaded
+
+if [ "$RUN_GPU" -eq 1 ]; then
+    run "gpu smoke tests" env RUSTFLAGS="-D warnings" cargo test --test gpu_smoke cpu_readback -- --ignored --exact --test-threads=1
+fi
+
+run "workspace doctests" env RUSTFLAGS="-D warnings" cargo test --workspace --doc
+run "workspace docs" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+run "guide hot doctests" env RUSTFLAGS="-D warnings" cargo test -p guide --features hot
+
+# Build guide book
+install_mdbook
+run "guide build" mdbook build guide/
+
+if [ "$RUN_SEMVER" -eq 1 ]; then
+    # Check for semver breaking changes: if this fails you must update the crate version or fix the code
+    run "semver check (vk-graph)" cargo semver-checks check-release -p vk-graph --default-features
+    run "semver check (vk-graph-egui)" cargo semver-checks check-release -p vk-graph-egui
+    run "semver check (vk-graph-fx)" cargo semver-checks check-release -p vk-graph-fx
+    run "semver check (vk-graph-hot)" cargo semver-checks check-release -p vk-graph-hot
+    run "semver check (vk-graph-imgui)" cargo semver-checks check-release -p vk-graph-imgui
+    run "semver check (vk-graph-window)" cargo semver-checks check-release -p vk-graph-window
+fi
+
+printf 'OK\n'

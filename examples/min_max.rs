@@ -1,10 +1,24 @@
 use {
+    ash::vk,
     bytemuck::cast_slice,
     clap::Parser,
-    inline_spirv::inline_spirv,
     log::warn,
-    screen_13::prelude::*,
     std::{mem::size_of, sync::Arc},
+    vk_graph::{
+        Graph,
+        driver::{
+            DriverError,
+            buffer::{Buffer, BufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            device::{Device, DeviceInfo},
+            image::{Image, ImageInfo},
+            shader::{SamplerInfo, Shader},
+        },
+        node::ImageNode,
+        pool::hash::HashPool,
+    },
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 // Min/max sampler reduction is commonly used to create depth buffer mip-maps for use with gpu-based
@@ -19,10 +33,10 @@ use {
 fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
-    let mut render_graph = RenderGraph::new();
+    let mut graph = Graph::default();
     let args = Args::parse();
-    let device_info = DeviceInfoBuilder::default().debug(args.debug);
-    let device = Arc::new(Device::create_headless(device_info)?);
+    let device_info = DeviceInfo::builder().debug(args.debug);
+    let device = Device::create(device_info)?;
     let size = 4;
 
     // The 4x4 depth image will have pixels that look like this:
@@ -30,29 +44,29 @@ fn main() -> Result<(), DriverError> {
     //   4.0   5.0   6.0   7.0
     //   8.0   9.0  10.0  11.0
     //  12.0  13.0  14.0  15.0
-    let depth_image = fill_depth_image(&device, &mut render_graph, size)?;
+    let depth_image = fill_depth_image(&device, &mut graph, size)?;
 
     // These 2x2 reduced images have undefined data until we wait on the results later
     let min_reduced_image = reduce_depth_image(
         &device,
-        &mut render_graph,
+        &mut graph,
         depth_image,
         vk::SamplerReductionMode::MIN,
     )?;
     let max_reduced_image = reduce_depth_image(
         &device,
-        &mut render_graph,
+        &mut graph,
         depth_image,
         vk::SamplerReductionMode::MAX,
     )?;
 
     // Create result buffers so we can read back the results
-    let min_result_buf = copy_image_to_buffer(&device, &mut render_graph, min_reduced_image)?;
-    let max_result_buf = copy_image_to_buffer(&device, &mut render_graph, max_reduced_image)?;
+    let min_result_buf = copy_image_to_buffer(&device, &mut graph, min_reduced_image)?;
+    let max_result_buf = copy_image_to_buffer(&device, &mut graph, max_reduced_image)?;
 
-    render_graph
-        .resolve()
-        .submit(&mut HashPool::new(&device), 0, 0)?
+    graph
+        .into_submission()
+        .queue_submit(&mut HashPool::new(&device), 0, 0)?
         .wait_until_executed()?;
 
     // For each image we have reduced each 2x2 pixel group into the min/max values of each group
@@ -86,8 +100,8 @@ fn main() -> Result<(), DriverError> {
 }
 
 fn fill_depth_image(
-    device: &Arc<Device>,
-    render_graph: &mut RenderGraph,
+    device: &Device,
+    graph: &mut Graph,
     size: u32,
 ) -> Result<ImageNode, DriverError> {
     let info = ImageInfo::image_2d(
@@ -107,7 +121,7 @@ fn fill_depth_image(
 
     // Sometimes required because support is not 100% common: Check min/max reduction support
     // https://vulkan.gpuinfo.org/listdevicescoverage.php?extension=VK_EXT_sampler_filter_minmax&platform=all
-    let fmt_props = Device::format_properties(device, fmt);
+    let fmt_props = device.physical_device.format_properties(fmt);
     if !fmt_props.optimal_tiling_features.contains(
         vk::FormatFeatureFlags::SAMPLED_IMAGE
             | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
@@ -129,7 +143,9 @@ fn fill_depth_image(
     );
 
     // Not required, but good practice: Check image format support
-    let image_fmt_props = Device::image_format_properties(device, fmt, ty, tiling, usage, flags)?
+    let image_fmt_props = device
+        .physical_device
+        .image_format_properties(fmt, ty, tiling, usage, flags)?
         .ok_or(DriverError::Unsupported)?;
     if size > image_fmt_props.max_extent.width || size > image_fmt_props.max_extent.height {
         // In this case you might use a smaller image
@@ -142,24 +158,24 @@ fn fill_depth_image(
     // device.physical_device.sampler_filter_minmax_properties.image_component_mapping
 
     let depth_data = (0..size.pow(2)).map(|x| x as f32).collect::<Box<_>>();
-    let depth_data = render_graph.bind_node(Buffer::create_from_slice(
+    let depth_data = graph.bind_resource(Buffer::create_from_slice(
         device,
         vk::BufferUsageFlags::TRANSFER_SRC,
         cast_slice(&depth_data),
     )?);
-    let depth_image = render_graph.bind_node(Image::create(device, info)?);
-    render_graph.copy_buffer_to_image(depth_data, depth_image);
+    let depth_image = graph.bind_resource(Image::create(device, info)?);
+    graph.copy_buffer_to_image(depth_data, depth_image);
 
     Ok(depth_image)
 }
 
 fn reduce_depth_image(
-    device: &Arc<Device>,
-    render_graph: &mut RenderGraph,
+    device: &Device,
+    graph: &mut Graph,
     depth_image: ImageNode,
     reduction_mode: vk::SamplerReductionMode,
 ) -> Result<ImageNode, DriverError> {
-    let depth_info = render_graph.node_info(depth_image);
+    let depth_info = graph.resource(depth_image).info;
 
     assert_eq!(depth_info.width, depth_info.height);
 
@@ -171,16 +187,19 @@ fn reduce_depth_image(
         vk::Format::R32_SFLOAT,
         vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
     );
-    let reduced_image = render_graph.bind_node(Image::create(device, reduced_info)?);
+    let reduced_image = graph.bind_resource(Image::create(device, reduced_info)?);
 
-    render_graph
-        .begin_pass("Reduce depth image")
-        .bind_pipeline(&Arc::new(ComputePipeline::create(
+    graph
+        .begin_cmd()
+        .debug_name("Reduce depth image")
+        .bind_pipeline(ComputePipeline::create(
             device,
             ComputePipelineInfo::default(),
             Shader::new_compute(
-                inline_spirv!(
-                    r#"#version 460 core
+                glsl!(
+                    r#"
+                    #version 460 core
+                    #pragma shader_stage(compute)
                 
                     layout(binding = 0) uniform sampler2D depth_image;
                     layout(binding = 1) writeonly uniform image2D reduced_image;
@@ -192,38 +211,38 @@ fn reduce_depth_image(
 
                         ivec2 store_xy = ivec2(gl_GlobalInvocationID.xy);
                         imageStore(reduced_image, store_xy, sample_val);
-                    }"#,
-                    comp
+                    }
+                    "#
                 )
                 .as_slice(),
             )
             .image_sampler(0, SamplerInfo::LINEAR.reduction_mode(reduction_mode)),
-        )?))
-        .read_descriptor(0, depth_image)
-        .write_descriptor(1, reduced_image)
-        .record_compute(move |compute, _| {
-            compute.dispatch(reduced_info.width, reduced_info.height, 1);
+        )?)
+        .shader_resource_access(0, depth_image, AccessType::ComputeShaderReadOther)
+        .shader_resource_access(1, reduced_image, AccessType::ComputeShaderWrite)
+        .record_cmd(move |cmd| {
+            cmd.dispatch(reduced_info.width, reduced_info.height, 1);
         });
 
     Ok(reduced_image)
 }
 
 fn copy_image_to_buffer(
-    device: &Arc<Device>,
-    render_graph: &mut RenderGraph,
+    device: &Device,
+    graph: &mut Graph,
     reduced_image: ImageNode,
 ) -> Result<Arc<Buffer>, DriverError> {
-    let reduced_info = render_graph.node_info(reduced_image);
+    let reduced_info = graph.resource(reduced_image).info;
     let result_len = (reduced_info.width * reduced_info.height) as vk::DeviceSize
         * size_of::<f32>() as vk::DeviceSize;
-    let result_buf = render_graph.bind_node(Buffer::create(
+    let result_buf = graph.bind_resource(Buffer::create(
         device,
         BufferInfo::host_mem(result_len, vk::BufferUsageFlags::TRANSFER_DST),
     )?);
 
-    render_graph.copy_image_to_buffer(reduced_image, result_buf);
+    graph.copy_image_to_buffer(reduced_image, result_buf);
 
-    Ok(render_graph.unbind_node(result_buf))
+    Ok(graph.resource(result_buf).clone())
 }
 
 #[derive(Parser)]

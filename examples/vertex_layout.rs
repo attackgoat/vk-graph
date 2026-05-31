@@ -1,13 +1,24 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{Pod, Zeroable, cast_slice},
     clap::Parser,
     half::f16,
-    inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::{FrameContext, WindowBuilder},
     std::{mem::size_of, sync::Arc},
+    vk_graph::{
+        cmd::{ClearColorValue, LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            buffer::Buffer,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            shader::{Shader, ShaderBuilder},
+        },
+    },
+    vk_graph_window::{FrameContext, Window},
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 /// This example draws two triangles using two different vertex formats.
@@ -24,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     // https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fxvertex-attrib
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
 
     let f16_pipeline = create_f16_pipeline(&window.device).ok();
     let f16_vertex_buf = {
@@ -80,12 +91,17 @@ fn main() -> anyhow::Result<()> {
     };
 
     window.run(|mut frame| {
-        draw_triangle(&mut frame, &f32_pipeline, &f32_vertex_buf);
+        draw_triangle(
+            &mut frame,
+            &f32_pipeline,
+            &f32_vertex_buf,
+            LoadOp::CLEAR_BLACK_ALPHA_ZERO,
+        );
 
         if let Some(f64_pipeline) = &f64_pipeline {
-            draw_triangle(&mut frame, f64_pipeline, &f64_vertex_buf);
+            draw_triangle(&mut frame, f64_pipeline, &f64_vertex_buf, LoadOp::Load);
         } else if let Some(f16_pipeline) = &f16_pipeline {
-            draw_triangle(&mut frame, f16_pipeline, &f16_vertex_buf);
+            draw_triangle(&mut frame, f16_pipeline, &f16_vertex_buf, LoadOp::Load);
         }
     })?;
 
@@ -94,24 +110,25 @@ fn main() -> anyhow::Result<()> {
 
 fn draw_triangle(
     frame: &mut FrameContext,
-    pipeline: &Arc<GraphicPipeline>,
+    pipeline: &GraphicPipeline,
     vertex_buf: &Arc<Buffer>,
+    load: LoadOp<ClearColorValue>,
 ) {
-    let vertex_buf = frame.render_graph.bind_node(vertex_buf);
+    let vertex_buf = frame.graph.bind_resource(vertex_buf);
 
     frame
-        .render_graph
-        .begin_pass("Triangle")
+        .graph
+        .begin_cmd()
+        .debug_name("Triangle")
         .bind_pipeline(pipeline)
-        .load_color(0, frame.swapchain_image)
-        .store_color(0, frame.swapchain_image)
-        .access_node(vertex_buf, AccessType::VertexBuffer)
-        .record_subpass(move |subpass, _| {
-            subpass.bind_vertex_buffer(vertex_buf).draw(3, 1, 0, 0);
+        .color_attachment_image(0, frame.swapchain_image, load, StoreOp::Store)
+        .resource_access(vertex_buf, AccessType::VertexBuffer)
+        .record_cmd(move |cmd| {
+            cmd.bind_vertex_buffer(0, vertex_buf, 0).draw(3, 1, 0, 0);
         });
 }
 
-fn create_f16_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f16_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     if !supports_vertex_buffer(device, vk::Format::R16G16_SFLOAT) {
         return Err(DriverError::Unsupported);
     }
@@ -144,14 +161,14 @@ fn create_f16_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, Dri
     create_pipeline(device, vertex)
 }
 
-fn create_f32_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f32_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     // Uses automatic vertex input layout
     let vertex = create_vertex_shader(false);
 
     create_pipeline(device, vertex)
 }
 
-fn create_f64_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
+fn create_f64_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
     if !supports_vertex_buffer(device, vk::Format::R64G64_SFLOAT) {
         return Err(DriverError::Unsupported);
     }
@@ -195,26 +212,27 @@ fn create_vertex_shader(is_double: bool) -> ShaderBuilder {
     // dvec2 when using 64-bit positions; and for the purposes of this example we don't want to
     // duplicate this shader code. You probably don't want to do this, or you may have different
     // facilities for generating SPIR-V code - either way ignore the macro unless you're interested
-    // in the inline_spirv! wizardry it contains which is unrelated to this example.
+    // in the include_glsl! wizardry it contains which is unrelated to this example.
     macro_rules! compile_vert {
         ($vec2_ty:literal) => {
-            inline_spirv!(
-            r#"
-            #version 460 core
+            glsl!(
+                define: VEC2_TY $vec2_ty,
+                r#"
+                #version 460 core
+                #pragma shader_stage(vertex)
 
-            layout(location = 0) in VEC2_TY position_in;
-            layout(location = 1) in vec3 color_in;
+                layout(location = 0) in VEC2_TY position_in;
+                layout(location = 1) in vec3 color_in;
 
-            layout(location = 0) out vec3 color_out;
+                layout(location = 0) out vec3 color_out;
 
-            void main() {
-                gl_Position = vec4(position_in, 0, 1);
-                color_out = color_in;
-            }
-            "#,
-            vert,
-            D VEC2_TY = $vec2_ty,
-        )};
+                void main() {
+                    gl_Position = vec4(position_in, 0, 1);
+                    color_out = color_in;
+                }
+                "#
+            )
+        };
     }
 
     let spirv = if is_double {
@@ -226,34 +244,37 @@ fn create_vertex_shader(is_double: bool) -> ShaderBuilder {
     Shader::new_vertex(spirv)
 }
 
-fn create_pipeline(
-    device: &Arc<Device>,
-    vertex: ShaderBuilder,
-) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let fragment_spirv = inline_spirv!(
-        r#"
-        #version 460 core
-
-        layout(location = 0) in vec3 color_in;
-
-        layout(location = 0) out vec4 color_out;
-
-        void main() {
-            color_out = vec4(color_in, 1.0);
-        }
-        "#,
-        frag
-    );
-
-    Ok(Arc::new(GraphicPipeline::create(
+fn create_pipeline(device: &Device, vertex: ShaderBuilder) -> Result<GraphicPipeline, DriverError> {
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
-        [vertex, Shader::new_fragment(fragment_spirv.as_slice())],
-    )?))
+        [
+            vertex,
+            Shader::from_spirv(
+                glsl!(
+                    r#"
+                    #version 460 core
+                    #pragma shader_stage(fragment)
+
+                    layout(location = 0) in vec3 color_in;
+
+                    layout(location = 0) out vec4 color_out;
+
+                    void main() {
+                        color_out = vec4(color_in, 1.0);
+                    }
+                    "#
+                )
+                .as_slice(),
+            ),
+        ],
+    )
 }
 
 fn supports_vertex_buffer(device: &Device, format: vk::Format) -> bool {
-    Device::format_properties(device, format)
+    device
+        .physical_device
+        .format_properties(format)
         .buffer_features
         .contains(vk::FormatFeatureFlags::VERTEX_BUFFER)
 }

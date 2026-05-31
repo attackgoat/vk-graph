@@ -13,18 +13,17 @@ use {
         collections::{HashMap, hash_map::Entry},
         fmt::{Debug, Formatter},
         mem::{replace, take},
-        ops::{Deref, DerefMut},
-        sync::Arc,
+        ops::DerefMut,
         thread::panicking,
     },
     vk_sync::AccessType,
 };
 
 #[cfg(feature = "parking_lot")]
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
 #[cfg(not(feature = "parking_lot"))]
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 #[cfg(debug_assertions)]
 fn assert_aspect_mask_supported(aspect_mask: vk::ImageAspectFlags) {
@@ -67,40 +66,48 @@ pub(crate) fn image_subresource_range_intersects(
 ///
 /// Also contains information about the object.
 ///
-/// ## `Deref` behavior
-///
-/// `Image` automatically dereferences to [`vk::Image`] (via the [`Deref`] trait), so you can
-/// call `vk::Image`'s methods on a value of type `Image`. To avoid name clashes with `vk::Image`'s
-/// methods, the methods of `Image` itself are associated functions, called using
-/// [fully qualified syntax]:
-///
 /// ```no_run
-/// # use std::sync::Arc;
 /// # use ash::vk;
-/// # use screen_13::driver::{AccessType, DriverError};
-/// # use screen_13::driver::device::{Device, DeviceInfo};
-/// # use screen_13::driver::image::{Image, ImageInfo};
+/// # use vk_graph::driver::{AccessType, DriverError};
+/// # use vk_graph::driver::device::{Device, DeviceInfo};
+/// # use vk_graph::driver::image::{Image, ImageInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
-/// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
-/// # let my_image = Image::create(&device, info)?;
-/// # let my_subresource_range = vk::ImageSubresourceRange::default();
-/// let prev = Image::access(&my_image, AccessType::AnyShaderWrite, my_subresource_range);
+/// # let device = Device::new(DeviceInfo::default())?;
+/// let fmt = vk::Format::R8G8B8A8_UNORM;
+/// let usage = vk::ImageUsageFlags::SAMPLED;
+/// let info = ImageInfo::image_2d(320, 200, fmt, usage);
+/// let my_img = Image::create(&device, info)?;
+///
+/// assert_eq!(my_img.info, info);
+/// assert_ne!(my_img.handle, vk::Image::null());
 /// # Ok(()) }
 /// ```
 ///
-/// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkImage.html
-/// [deref]: core::ops::Deref
-/// [fully qualified syntax]: https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#fully-qualified-syntax-for-disambiguation-calling-methods-with-the-same-name
+/// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
+#[read_only::cast]
 pub struct Image {
     accesses: Mutex<ImageAccess<AccessType>>,
     allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
-    pub(super) device: Arc<Device>,
-    image: vk::Image,
+
+    /// The device which owns this image resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
+    /// The native Vulkan resource handle of this image.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub handle: vk::Image,
+
     #[allow(clippy::type_complexity)]
     image_view_cache: Mutex<HashMap<ImageViewInfo, ImageView>>,
 
-    /// Information used to create this object.
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
     pub info: ImageInfo,
 
     /// A name for debugging purposes.
@@ -117,21 +124,26 @@ impl Image {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::image::{Image, ImageInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
-    /// let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
+    /// # let device = Device::new(DeviceInfo::default())?;
+    /// let info = ImageInfo::image_2d(
+    ///     32,
+    ///     32,
+    ///     vk::Format::R8G8B8A8_UNORM,
+    ///     vk::ImageUsageFlags::SAMPLED,
+    /// );
     /// let image = Image::create(&device, info)?;
     ///
-    /// assert_ne!(*image, vk::Image::null());
+    /// assert_ne!(image.handle, vk::Image::null());
     /// assert_eq!(image.info.width, 32);
     /// assert_eq!(image.info.height, 32);
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn create(device: &Arc<Device>, info: impl Into<ImageInfo>) -> Result<Self, DriverError> {
+    pub fn create(device: &Device, info: impl Into<ImageInfo>) -> Result<Self, DriverError> {
         let info: ImageInfo = info.into();
 
         //trace!("create: {:?}", &info);
@@ -145,72 +157,77 @@ impl Image {
 
         let accesses = Mutex::new(ImageAccess::new(info, AccessType::Nothing));
 
-        let device = Arc::clone(device);
+        let device = device.clone();
         let create_info: ImageCreateInfo = info.into();
         let create_info =
             create_info.queue_family_indices(&device.physical_device.queue_family_indices);
-        let image = unsafe {
+        let handle = unsafe {
             device.create_image(&create_info, None).map_err(|err| {
                 warn!("unable to create image: {err}");
 
                 DriverError::Unsupported
             })?
         };
-        let requirements = unsafe { device.get_image_memory_requirements(image) };
+        let requirements = unsafe { device.get_image_memory_requirements(handle) };
+        let allocation_scheme = if info.dedicated {
+            AllocationScheme::DedicatedImage(handle)
+        } else {
+            AllocationScheme::GpuAllocatorManaged
+        };
         let allocation = {
             profiling::scope!("allocate");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = device.allocator.lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut allocator = allocator.unwrap();
-
-            allocator
-                .allocate(&AllocationCreateDesc {
-                    name: "image",
-                    requirements,
-                    location: MemoryLocation::GpuOnly,
-                    linear: false,
-                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-                })
-                .map_err(|err| {
-                    warn!("unable to allocate image memory: {err}");
-
-                    unsafe {
-                        device.destroy_image(image, None);
-                    }
-
-                    DriverError::from_alloc_err(err)
-                })
-                .and_then(|allocation| {
-                    if let Err(err) = unsafe {
-                        device.bind_image_memory(image, allocation.memory(), allocation.offset())
-                    } {
-                        warn!("unable to bind image memory: {err}");
-
-                        if let Err(err) = allocator.free(allocation) {
-                            warn!("unable to free image allocation: {err}")
-                        }
+            Device::with_allocator(&device, |allocator| {
+                allocator
+                    .allocate(&AllocationCreateDesc {
+                        name: "image",
+                        requirements,
+                        location: MemoryLocation::GpuOnly,
+                        linear: false,
+                        allocation_scheme,
+                    })
+                    .map_err(|err| {
+                        warn!("unable to allocate image memory: {err}");
 
                         unsafe {
-                            device.destroy_image(image, None);
+                            device.destroy_image(handle, None);
                         }
 
-                        Err(DriverError::OutOfMemory)
-                    } else {
-                        Ok(allocation)
-                    }
-                })
+                        DriverError::from_alloc_err(err)
+                    })
+                    .and_then(|allocation| {
+                        if let Err(err) = unsafe {
+                            device.bind_image_memory(
+                                handle,
+                                allocation.memory(),
+                                allocation.offset(),
+                            )
+                        } {
+                            warn!("unable to bind image memory: {err}");
+
+                            if let Err(err) = allocator.free(allocation) {
+                                warn!("unable to free image allocation: {err}")
+                            }
+
+                            unsafe {
+                                device.destroy_image(handle, None);
+                            }
+
+                            Err(DriverError::OutOfMemory)
+                        } else {
+                            Ok(allocation)
+                        }
+                    })
+            })
         }?;
 
-        debug_assert_ne!(image, vk::Image::null());
+        debug_assert_ne!(handle, vk::Image::null());
 
         Ok(Self {
             accesses,
             allocation: Some(allocation),
             device,
-            image,
+            handle,
             image_view_cache: Mutex::new(Default::default()),
             info,
             name: None,
@@ -224,7 +241,7 @@ impl Image {
     ///
     /// # Note
     ///
-    /// Used to maintain object state when passing a _Screen 13_-created `vk::Image` handle to
+    /// Used to maintain object state when passing a _vk-graph_-created `vk::Image` handle to
     /// external code such as [_Ash_] or [_Erupt_] bindings.
     ///
     /// # Examples
@@ -234,11 +251,11 @@ impl Image {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::{AccessType, DriverError};
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::image::{Image, ImageInfo};
+    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
     /// # let my_image = Image::create(&device, info)?;
     /// # let my_subresource_range = vk::ImageSubresourceRange::default();
@@ -262,7 +279,7 @@ impl Image {
     /// [_Erupt_]: https://crates.io/crates/erupt
     #[profiling::function]
     pub fn access(
-        this: &Self,
+        &self,
         access: AccessType,
         mut access_range: vk::ImageSubresourceRange,
     ) -> impl Iterator<Item = (AccessType, vk::ImageSubresourceRange)> + '_ {
@@ -270,93 +287,56 @@ impl Image {
         {
             assert_aspect_mask_supported(access_range.aspect_mask);
 
-            assert!(format_aspect_mask(this.info.fmt).contains(access_range.aspect_mask));
+            assert!(format_aspect_mask(self.info.fmt).contains(access_range.aspect_mask));
         }
 
         if access_range.layer_count == vk::REMAINING_ARRAY_LAYERS {
-            debug_assert!(access_range.base_array_layer < this.info.array_layer_count);
+            debug_assert!(access_range.base_array_layer < self.info.array_layer_count);
 
-            access_range.layer_count = this.info.array_layer_count - access_range.base_array_layer
+            access_range.layer_count = self.info.array_layer_count - access_range.base_array_layer
         }
 
         debug_assert!(
-            access_range.base_array_layer + access_range.layer_count <= this.info.array_layer_count
+            access_range.base_array_layer + access_range.layer_count <= self.info.array_layer_count
         );
 
         if access_range.level_count == vk::REMAINING_MIP_LEVELS {
-            debug_assert!(access_range.base_mip_level < this.info.mip_level_count);
+            debug_assert!(access_range.base_mip_level < self.info.mip_level_count);
 
-            access_range.level_count = this.info.mip_level_count - access_range.base_mip_level
+            access_range.level_count = self.info.mip_level_count - access_range.base_mip_level
         }
 
         debug_assert!(
-            access_range.base_mip_level + access_range.level_count <= this.info.mip_level_count
+            access_range.base_mip_level + access_range.level_count <= self.info.mip_level_count
         );
 
-        let accesses = this.accesses.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let accesses = accesses.unwrap();
-
-        ImageAccessIter::new(accesses, access, access_range)
+        ImageAccessIter::new(self.lock_accesses(), access, access_range)
     }
 
-    #[profiling::function]
-    pub(super) fn clone_swapchain(this: &Self) -> Self {
-        // Moves the image view cache from the current instance to the clone!
-        #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-        let mut image_view_cache = this.image_view_cache.lock();
+    /// Sets the debugging name assigned to this image.
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
 
-        #[cfg(not(feature = "parking_lot"))]
-        let mut image_view_cache = image_view_cache.unwrap();
-
-        let image_view_cache = take(&mut *image_view_cache);
-
-        // Does NOT copy over the image accesses!
-        // Force previous access to general to wait for presentation
-        let Self { image, info, .. } = *this;
-        let accesses = ImageAccess::new(info, AccessType::General);
-        let accesses = Mutex::new(accesses);
-
-        Self {
-            accesses,
-            allocation: None,
-            device: Arc::clone(&this.device),
-            image,
-            image_view_cache: Mutex::new(image_view_cache),
-            info,
-            name: this.name.clone(),
-        }
+        self
     }
 
+    /// Drops the given allocation, all views, and the handle.
     #[profiling::function]
-    fn drop_allocation(this: &Self, allocation: Allocation) {
+    fn drop_allocation(&self, allocation: Allocation) {
         {
             profiling::scope!("views");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut image_view_cache = this.image_view_cache.lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut image_view_cache = image_view_cache.unwrap();
-
-            image_view_cache.clear();
+            self.with_image_view_cache(|cache| cache.clear());
         }
 
         unsafe {
-            this.device.destroy_image(this.image, None);
+            self.device.destroy_image(self.handle, None);
         }
 
         {
             profiling::scope!("deallocate");
 
-            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-            let mut allocator = this.device.allocator.lock();
-
-            #[cfg(not(feature = "parking_lot"))]
-            let mut allocator = allocator.unwrap();
-
-            allocator.free(allocation)
+            Device::with_allocator(&self.device, |allocator| allocator.free(allocation))
         }
         .unwrap_or_else(|err| warn!("unable to free image allocation: {err}"));
     }
@@ -366,61 +346,101 @@ impl Image {
     /// The image is not destroyed automatically on drop, unlike images created through the
     /// [`Image::create`] function.
     #[profiling::function]
-    pub fn from_raw(device: &Arc<Device>, image: vk::Image, info: impl Into<ImageInfo>) -> Self {
-        let device = Arc::clone(device);
+    pub fn from_raw(device: &Device, handle: vk::Image, info: impl Into<ImageInfo>) -> Self {
+        let device = device.clone();
         let info = info.into();
 
-        // For now default all image access to general, but maybe make this configurable later.
-        // This helps make sure the first presentation of a swapchain image doesn't throw a
-        // validation error, but it could also be very useful for raw vulkan images from other
-        // sources.
-        let accesses = ImageAccess::new(info, AccessType::General);
+        let accesses = ImageAccess::new(info, AccessType::Nothing);
 
         Self {
             accesses: Mutex::new(accesses),
             allocation: None,
             device,
-            image,
+            handle,
             image_view_cache: Mutex::new(Default::default()),
             info,
             name: None,
         }
     }
 
-    #[profiling::function]
-    pub(crate) fn view(this: &Self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
-        #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
-        let mut image_view_cache = this.image_view_cache.lock();
+    fn lock_accesses(&self) -> MutexGuard<'_, ImageAccess<AccessType>> {
+        let accesses = self.accesses.lock();
 
         #[cfg(not(feature = "parking_lot"))]
-        let mut image_view_cache = image_view_cache.unwrap();
+        let accesses = accesses.expect("poisoned image access lock");
 
-        Ok(match image_view_cache.entry(info) {
-            Entry::Occupied(entry) => entry.get().image_view,
-            Entry::Vacant(entry) => {
-                entry
-                    .insert(ImageView::create(&this.device, info, this.image)?)
-                    .image_view
-            }
+        accesses
+    }
+
+    /// Produces a new `Image` sharing the same Vulkan handle with independent access tracking.
+    ///
+    /// The returned image retains the handle, device, and debug name of `self` but starts with
+    /// no prior access history (`AccessType::Nothing`) and does not claim ownership of the image's
+    /// memory backing. Internal caches are moved out of `self` so they are not duplicated.
+    ///
+    /// This is used to create separate tracking instances for swapchain images that may be
+    /// used concurrently across different graph executions.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the Vulkan image handle remains valid for the lifetime of the
+    /// returned `Image`. This function should only be called on swapchain images or other
+    /// platform or extension images.
+    #[profiling::function]
+    pub unsafe fn to_detached(&self) -> Self {
+        debug_assert!(self.allocation.is_none());
+
+        let image_view_cache = self.with_image_view_cache(take);
+
+        let Self { handle, info, .. } = *self;
+
+        Self {
+            accesses: Mutex::new(ImageAccess::new(info, AccessType::Nothing)),
+            allocation: None,
+            device: self.device.clone(),
+            handle,
+            image_view_cache: Mutex::new(image_view_cache),
+            info,
+            name: self.name.clone(),
+        }
+    }
+
+    #[profiling::function]
+    pub(crate) fn view(&self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
+        self.with_image_view_cache(|cache| {
+            Ok(match cache.entry(info) {
+                Entry::Occupied(entry) => entry.get().image_view,
+                Entry::Vacant(entry) => {
+                    entry
+                        .insert(ImageView::create(&self.device, info, self.handle)?)
+                        .image_view
+                }
+            })
         })
+    }
+
+    fn with_image_view_cache<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<ImageViewInfo, ImageView>) -> R,
+    ) -> R {
+        let cache = self.image_view_cache.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let cache = cache.expect("poisoned image view lock");
+
+        let mut cache = cache;
+
+        f(&mut cache)
     }
 }
 
 impl Debug for Image {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(name) = &self.name {
-            write!(f, "{} ({:?})", name, self.image)
+            write!(f, "{} ({:?})", name, self.handle)
         } else {
-            write!(f, "{:?}", self.image)
+            write!(f, "{:?}", self.handle)
         }
-    }
-}
-
-impl Deref for Image {
-    type Target = vk::Image;
-
-    fn deref(&self) -> &Self::Target {
-        &self.image
     }
 }
 
@@ -436,6 +456,14 @@ impl Drop for Image {
         if let Some(allocation) = self.allocation.take() {
             Self::drop_allocation(self, allocation);
         }
+    }
+}
+
+impl Eq for Image {}
+
+impl PartialEq for Image {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
     }
 }
 
@@ -700,11 +728,17 @@ struct ImageAccessRange {
     derive(Copy, Clone, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct ImageInfo {
     /// The number of layers in the image.
     #[builder(default = "1", setter(strip_option))]
     pub array_layer_count: u32,
+
+    /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the
+    /// internal memory allocation pool transient resources share.
+    ///
+    /// The driver may optimize access to dedicated buffers.
+    #[builder(default)]
+    pub dedicated: bool,
 
     /// Image extent of the Z axis, when describing a three dimensional image.
     #[builder(setter(strip_option))]
@@ -728,7 +762,7 @@ pub struct ImageInfo {
 
     /// Specifies the number of [samples per texel].
     ///
-    /// [samples per texel]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#primsrast-multisampling
+    /// See [`VkImageCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkImageCreateInfo.html).
     #[builder(default = "SampleCount::Type1", setter(strip_option))]
     pub sample_count: SampleCount,
 
@@ -825,6 +859,7 @@ impl ImageInfo {
         usage: vk::ImageUsageFlags,
     ) -> Self {
         Self {
+            dedicated: false,
             ty,
             width,
             height,
@@ -839,8 +874,13 @@ impl ImageInfo {
         }
     }
 
+    /// Creates a default `ImageInfoBuilder`.
+    pub fn builder() -> ImageInfoBuilder {
+        Default::default()
+    }
+
     /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
-    pub fn default_view_info(self) -> ImageViewInfo {
+    pub fn into_image_view(self) -> ImageViewInfo {
         self.into()
     }
 
@@ -864,10 +904,10 @@ impl ImageInfo {
     }
 
     /// Converts an `ImageInfo` into an `ImageInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> ImageInfoBuilder {
+    pub fn into_builder(self) -> ImageInfoBuilder {
         ImageInfoBuilder {
             array_layer_count: Some(self.array_layer_count),
+            dedicated: Some(self.dedicated),
             depth: Some(self.depth),
             flags: Some(self.flags),
             fmt: Some(self.fmt),
@@ -879,6 +919,12 @@ impl ImageInfo {
             usage: Some(self.usage),
             width: Some(self.width),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> ImageInfoBuilder {
+        self.into_builder()
     }
 }
 
@@ -909,6 +955,14 @@ impl From<ImageInfoBuilder> for ImageInfo {
     }
 }
 
+impl From<ImageInfo> for vk::ImageSubresourceRange {
+    fn from(info: ImageInfo) -> Self {
+        let image_view_info: ImageViewInfo = info.into();
+
+        image_view_info.into()
+    }
+}
+
 impl ImageInfoBuilder {
     /// Builds a new `ImageInfo`.
     ///
@@ -928,6 +982,11 @@ impl ImageInfoBuilder {
             Ok(info) => info,
         }
     }
+
+    /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
+    pub fn into_image_view(self) -> ImageViewInfoBuilder {
+        self.build().into_image_view().into_builder()
+    }
 }
 
 #[derive(Debug)]
@@ -939,32 +998,20 @@ impl From<UninitializedFieldError> for ImageInfoBuilderError {
     }
 }
 
-impl From<ImageViewInfo> for vk::ImageSubresourceRange {
-    fn from(info: ImageViewInfo) -> Self {
-        Self {
-            aspect_mask: info.aspect_mask,
-            base_mip_level: info.base_mip_level,
-            base_array_layer: info.base_array_layer,
-            layer_count: info.array_layer_count,
-            level_count: info.mip_level_count,
-        }
-    }
-}
-
 struct ImageView {
-    device: Arc<Device>,
+    device: Device,
     image_view: vk::ImageView,
 }
 
 impl ImageView {
     #[profiling::function]
     fn create(
-        device: &Arc<Device>,
+        device: &Device,
         info: impl Into<ImageViewInfo>,
         image: vk::Image,
     ) -> Result<Self, DriverError> {
         let info = info.into();
-        let device = Arc::clone(device);
+        let device = device.clone();
         let create_info = vk::ImageViewCreateInfo::default()
             .view_type(info.ty)
             .format(info.fmt)
@@ -985,7 +1032,7 @@ impl ImageView {
 
         let image_view =
             unsafe { device.create_image_view(&create_info, None) }.map_err(|err| {
-                warn!("{err}");
+                warn!("unable to create image view: {err}");
 
                 DriverError::Unsupported
             })?;
@@ -1014,7 +1061,6 @@ impl Drop for ImageView {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct ImageViewInfo {
     /// The number of layers that will be contained in the view.
     ///
@@ -1066,8 +1112,7 @@ impl ImageViewInfo {
     }
 
     /// Converts a `ImageViewInfo` into a `ImageViewInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> ImageViewInfoBuilder {
+    pub fn into_builder(self) -> ImageViewInfoBuilder {
         ImageViewInfoBuilder {
             array_layer_count: Some(self.array_layer_count),
             aspect_mask: Some(self.aspect_mask),
@@ -1079,6 +1124,12 @@ impl ImageViewInfo {
         }
     }
 
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> ImageViewInfoBuilder {
+        self.into_builder()
+    }
+
     /// Takes this instance and returns it with a newly specified `ImageViewType`.
     pub fn with_type(mut self, ty: vk::ImageViewType) -> Self {
         self.ty = ty;
@@ -1088,7 +1139,14 @@ impl ImageViewInfo {
 
 impl From<ImageInfo> for ImageViewInfo {
     fn from(info: ImageInfo) -> Self {
-        Self {
+        Self::from_image_info(info).expect("unsupported image type for image view info")
+    }
+}
+
+impl ImageViewInfo {
+    /// Creates an image view description from image creation info.
+    pub fn from_image_info(info: ImageInfo) -> Result<Self, DriverError> {
+        Ok(Self {
             array_layer_count: info.array_layer_count,
             aspect_mask: format_aspect_mask(info.fmt),
             base_array_layer: 0,
@@ -1112,15 +1170,34 @@ impl From<ImageInfo> for ImageViewInfo {
                 }
                 (vk::ImageType::TYPE_2D, _) => vk::ImageViewType::TYPE_2D_ARRAY,
                 (vk::ImageType::TYPE_3D, _) => vk::ImageViewType::TYPE_3D,
-                _ => unimplemented!(),
+                _ => {
+                    warn!(
+                        "invalid image view source info: image type {:?} with {} array layers",
+                        info.ty, info.array_layer_count
+                    );
+
+                    return Err(DriverError::InvalidData);
+                }
             },
-        }
+        })
     }
 }
 
 impl From<ImageViewInfoBuilder> for ImageViewInfo {
     fn from(info: ImageViewInfoBuilder) -> Self {
         info.build()
+    }
+}
+
+impl From<ImageViewInfo> for vk::ImageSubresourceRange {
+    fn from(info: ImageViewInfo) -> Self {
+        Self {
+            aspect_mask: info.aspect_mask,
+            base_mip_level: info.base_mip_level,
+            base_array_layer: info.base_array_layer,
+            layer_count: info.array_layer_count,
+            level_count: info.mip_level_count,
+        }
     }
 }
 
@@ -1209,8 +1286,21 @@ impl From<SampleCount> for vk::SampleCountFlags {
     }
 }
 
+#[allow(unused)]
+mod deprecated {
+    use crate::driver::image::{ImageInfo, ImageViewInfo};
+
+    impl ImageInfo {
+        #[deprecated = "use into_image_view function"]
+        #[doc(hidden)]
+        pub fn default_view_info(self) -> ImageViewInfo {
+            self.into_image_view()
+        }
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod test {
     use {super::*, std::ops::Range};
 
     // ImageSubresourceRange does not implement PartialEq
@@ -2035,7 +2125,7 @@ mod tests {
     #[test]
     pub fn image_info_cube() {
         let info = ImageInfo::cube(42, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2059,7 +2149,7 @@ mod tests {
     #[test]
     pub fn image_info_image_1d() {
         let info = ImageInfo::image_1d(42, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2082,7 +2172,7 @@ mod tests {
     pub fn image_info_image_2d() {
         let info =
             ImageInfo::image_2d(42, 84, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2111,7 +2201,7 @@ mod tests {
             vk::Format::default(),
             vk::ImageUsageFlags::empty(),
         );
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2146,7 +2236,7 @@ mod tests {
             vk::Format::R32_SFLOAT,
             vk::ImageUsageFlags::empty(),
         );
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
@@ -2219,7 +2309,7 @@ mod tests {
         mip_level_count: u32,
     ) -> ImageInfo {
         ImageInfo::image_2d(1, 1, fmt, vk::ImageUsageFlags::empty())
-            .to_builder()
+            .into_builder()
             .array_layer_count(array_layer_count)
             .mip_level_count(mip_level_count)
             .build()
@@ -2293,7 +2383,7 @@ mod tests {
     #[test]
     pub fn image_view_info() {
         let info = ImageViewInfo::new(vk::Format::default(), vk::ImageViewType::TYPE_1D);
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

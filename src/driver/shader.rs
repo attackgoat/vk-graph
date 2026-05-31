@@ -9,6 +9,8 @@ use {
     spirq::{
         ReflectConfig,
         entry_point::EntryPoint,
+        parse::SpirvBinary,
+        spirv::ExecutionModel,
         ty::{DescriptorType, ScalarType, Type, VectorType},
         var::Variable,
     },
@@ -16,26 +18,17 @@ use {
         collections::{BTreeMap, HashMap},
         fmt::{Debug, Formatter},
         iter::repeat_n,
-        mem::size_of_val,
         ops::Deref,
-        sync::Arc,
         thread::panicking,
     },
 };
 
+#[allow(deprecated)]
+#[deprecated = "use SpecializationMap struct"]
+#[doc(hidden)]
+pub type SpecializationInfo = self::deprecated::SpecializationInfo;
+
 pub(crate) type DescriptorBindingMap = HashMap<Descriptor, (DescriptorInfo, vk::ShaderStageFlags)>;
-
-pub(crate) fn align_spriv(code: &[u8]) -> Result<&[u32], DriverError> {
-    let (prefix, code, suffix) = unsafe { code.align_to() };
-
-    if prefix.len() + suffix.len() == 0 {
-        Ok(code)
-    } else {
-        warn!("Invalid SPIR-V code");
-
-        Err(DriverError::InvalidData)
-    }
-}
 
 #[profiling::function]
 fn guess_immutable_sampler(binding_name: &str) -> SamplerInfo {
@@ -198,7 +191,7 @@ pub(crate) struct PipelineDescriptorInfo {
 impl PipelineDescriptorInfo {
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         descriptor_bindings: &DescriptorBindingMap,
     ) -> Result<Self, DriverError> {
         let descriptor_set_count = descriptor_bindings
@@ -295,7 +288,7 @@ impl PipelineDescriptorInfo {
             let mut create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
             // The bindless flags have to be created for every descriptor set layout binding.
-            // [vulkan spec](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkDescriptorSetLayoutBindingFlagsCreateInfo.html)
+            // See [`VkDescriptorSetLayoutBindingFlagsCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorSetLayoutBindingFlagsCreateInfo.html).
             // Maybe using one vector and updating it would be more efficient.
             let bindless_flags = vec![vk::DescriptorBindingFlags::PARTIALLY_BOUND; bindings.len()];
             let mut bindless_flags = if device
@@ -337,14 +330,14 @@ impl PipelineDescriptorInfo {
 }
 
 pub(crate) struct Sampler {
-    device: Arc<Device>,
+    device: Device,
     sampler: vk::Sampler,
 }
 
 impl Sampler {
     #[profiling::function]
-    pub fn create(device: &Arc<Device>, info: impl Into<SamplerInfo>) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
+    pub fn create(device: &Device, info: impl Into<SamplerInfo>) -> Result<Self, DriverError> {
+        let device = device.clone();
         let info = info.into();
 
         let sampler = unsafe {
@@ -373,13 +366,15 @@ impl Sampler {
                         ),
                     None,
                 )
-                .map_err(|err| {
-                    warn!("{err}");
-
-                    match err {
-                        vk::Result::ERROR_OUT_OF_HOST_MEMORY
-                        | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DriverError::OutOfMemory,
-                        _ => DriverError::Unsupported,
+                .map_err(|err| match err {
+                    vk::Result::ERROR_OUT_OF_HOST_MEMORY
+                    | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                        warn!("unable to create sampler: {err}");
+                        DriverError::OutOfMemory
+                    }
+                    _ => {
+                        warn!("unsupported sampler creation: {err}");
+                        DriverError::Unsupported
                     }
                 })?
         };
@@ -422,7 +417,6 @@ impl Drop for Sampler {
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-#[non_exhaustive]
 pub struct SamplerInfo {
     /// Bitmask specifying additional parameters of a sampler.
     #[builder(default)]
@@ -464,15 +458,15 @@ pub struct SamplerInfo {
     #[builder(default)]
     pub address_mode_w: vk::SamplerAddressMode,
 
-    /// The bias to be added to mipmap LOD calculation and bias provided by image sampling functions
-    /// in SPIR-V, as described in the
-    /// [LOD Operation](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-level-of-detail-operation)
+    /// The bias to be added to mipmap LOD calculation and bias provided by image sampling
+    /// functions in SPIR-V, as described in the
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     /// section.
     #[builder(default, setter(into))]
     pub mip_lod_bias: OrderedFloat<f32>,
 
     /// Enables anisotropic filtering, as described in the
-    /// [Texel Anisotropic Filtering](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-texel-anisotropic-filtering)
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     /// section
     #[builder(default)]
     pub anisotropy_enable: bool,
@@ -489,18 +483,18 @@ pub struct SamplerInfo {
 
     /// Specifies the comparison operator to apply to fetched data before filtering as described in
     /// the
-    /// [Depth Compare Operation](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-depth-compare-operation)
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     /// section.
     #[builder(default)]
     pub compare_op: vk::CompareOp,
 
     /// Used to clamp the
-    /// [minimum of the computed LOD value](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-level-of-detail-operation).
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     #[builder(default, setter(into))]
     pub min_lod: OrderedFloat<f32>,
 
     /// Used to clamp the
-    /// [maximum of the computed LOD value](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-level-of-detail-operation).
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     ///
     /// To avoid clamping the maximum value, set maxLod to the constant `vk::LOD_CLAMP_NONE`.
     #[builder(default, setter(into))]
@@ -521,7 +515,7 @@ pub struct SamplerInfo {
     /// When set to `false` the range of image coordinates is zero to one.
     ///
     /// See
-    /// [requirements](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkSamplerCreateInfo.html).
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     #[builder(default)]
     pub unnormalized_coordinates: bool,
 
@@ -533,7 +527,7 @@ pub struct SamplerInfo {
     /// The default value is [`vk::SamplerReductionMode::WEIGHTED_AVERAGE`]
     ///
     /// See
-    /// [requirements](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkSamplerCreateInfo.html).
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     #[builder(default)]
     pub reduction_mode: vk::SamplerReductionMode,
 }
@@ -587,12 +581,16 @@ impl SamplerInfo {
     #[deprecated = "Use SamplerInfo::default()"]
     #[doc(hidden)]
     pub fn new() -> SamplerInfoBuilder {
-        Self::default().to_builder()
+        Self::default().into_builder()
+    }
+
+    /// Creates a default `SamplerInfoBuilder`.
+    pub fn builder() -> SamplerInfoBuilder {
+        Default::default()
     }
 
     /// Converts a `SamplerInfo` into a `SamplerInfoBuilder`.
-    #[inline(always)]
-    pub fn to_builder(self) -> SamplerInfoBuilder {
+    pub fn into_builder(self) -> SamplerInfoBuilder {
         SamplerInfoBuilder {
             flags: Some(self.flags),
             mag_filter: Some(self.mag_filter),
@@ -612,6 +610,12 @@ impl SamplerInfo {
             unnormalized_coordinates: Some(self.unnormalized_coordinates),
             reduction_mode: Some(self.reduction_mode),
         }
+    }
+
+    #[deprecated = "use into_builder function"]
+    #[doc(hidden)]
+    pub fn to_builder(self) -> SamplerInfoBuilder {
+        self.into_builder()
     }
 }
 
@@ -643,15 +647,7 @@ impl SamplerInfoBuilder {
     /// Builds a new `SamplerInfo`.
     #[inline(always)]
     pub fn build(self) -> SamplerInfo {
-        let res = self.fallible_build();
-
-        #[cfg(test)]
-        let res = res.unwrap();
-
-        #[cfg(not(test))]
-        let res = unsafe { res.unwrap_unchecked() };
-
-        res
+        self.fallible_build().expect("invalid sampler info")
     }
 }
 
@@ -682,7 +678,7 @@ pub struct Shader {
     /// The name of the entry point which will be executed by this shader.
     ///
     /// The default value is `main`.
-    #[builder(default = "\"main\".to_owned()")]
+    #[builder(default = "\"main\".to_owned()", setter(into))]
     pub entry_name: String,
 
     /// Data about Vulkan specialization constants.
@@ -692,10 +688,11 @@ pub struct Shader {
     /// Basic usage (GLSL):
     ///
     /// ```
-    /// # inline_spirv::inline_spirv!(r#"
+    /// # vk_shader_macros::glsl!(r#"
     /// #version 460 core
+    /// #pragma shader_stage(compute)
     ///
-    /// // Defaults to 6 if not set using Shader specialization_info!
+    /// // Defaults to 6 if not set using Shader specialization!
     /// layout(constant_id = 0) const uint MY_COUNT = 6;
     ///
     /// layout(set = 0, binding = 0) uniform sampler2D my_samplers[MY_COUNT];
@@ -704,39 +701,36 @@ pub struct Shader {
     /// {
     ///     // Code uses MY_COUNT number of my_samplers here
     /// }
-    /// # "#, comp);
+    /// # "#);
     /// ```
     ///
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use screen_13::driver::DriverError;
-    /// # use screen_13::driver::device::{Device, DeviceInfo};
-    /// # use screen_13::driver::shader::{Shader, SpecializationInfo};
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::shader::{Shader, SpecializationMap};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Arc::new(Device::create_headless(DeviceInfo::default())?);
+    /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_shader_code = [0u8; 1];
     /// // We instead specify 42 for MY_COUNT:
     /// let shader = Shader::new_fragment(my_shader_code.as_slice())
-    ///     .specialization_info(SpecializationInfo::new(
-    ///         [vk::SpecializationMapEntry {
-    ///             constant_id: 0,
-    ///             offset: 0,
-    ///             size: 4,
-    ///         }],
-    ///         42u32.to_ne_bytes()
-    ///     ));
+    ///     .specialization(
+    ///         SpecializationMap::new(42u32.to_ne_bytes())
+    ///             .constant(0, 0, 4)
+    ///     );
     /// # Ok(()) }
     /// ```
     #[builder(default, setter(strip_option))]
-    pub specialization_info: Option<SpecializationInfo>,
+    pub specialization: Option<SpecializationMap>,
 
     /// Shader code.
     ///
     /// Although SPIR-V code is specified as `u32` values, this field uses `u8` in order to make
     /// loading from file simpler. You should always have a SPIR-V code length which is a multiple
     /// of four bytes, or an error will be returned during pipeline creation.
-    pub spirv: Vec<u8>,
+    #[builder(setter(into))]
+    pub spirv: SpirvBinary,
 
     /// The shader stage this structure applies to.
     pub stage: vk::ShaderStageFlags,
@@ -752,12 +746,10 @@ pub struct Shader {
 }
 
 impl Shader {
-    /// Specifies a shader with the given `stage` and shader code values.
+    /// Specifies a shader with the given `stage` and shader code.
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(stage: vk::ShaderStageFlags, spirv: impl ShaderCode) -> ShaderBuilder {
-        ShaderBuilder::default()
-            .spirv(spirv.into_vec())
-            .stage(stage)
+    pub fn new(stage: vk::ShaderStageFlags, spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+        ShaderBuilder::default().spirv(spirv).stage(stage)
     }
 
     /// Creates a new ray trace shader.
@@ -765,7 +757,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_any_hit(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_any_hit(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::ANY_HIT_KHR, spirv)
     }
 
@@ -774,7 +766,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_callable(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_callable(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::CALLABLE_KHR, spirv)
     }
 
@@ -783,7 +775,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_closest_hit(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_closest_hit(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::CLOSEST_HIT_KHR, spirv)
     }
 
@@ -792,7 +784,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_compute(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_compute(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::COMPUTE, spirv)
     }
 
@@ -801,7 +793,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_fragment(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_fragment(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::FRAGMENT, spirv)
     }
 
@@ -810,7 +802,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_geometry(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_geometry(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::GEOMETRY, spirv)
     }
 
@@ -819,7 +811,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_intersection(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_intersection(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::INTERSECTION_KHR, spirv)
     }
 
@@ -828,7 +820,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid.
-    pub fn new_mesh(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_mesh(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::MESH_EXT, spirv)
     }
 
@@ -837,7 +829,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_miss(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_miss(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::MISS_KHR, spirv)
     }
 
@@ -846,7 +838,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_ray_gen(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_ray_gen(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::RAYGEN_KHR, spirv)
     }
 
@@ -855,26 +847,38 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid.
-    pub fn new_task(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_task(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TASK_EXT, spirv)
     }
 
-    /// Creates a new tesselation control shader.
+    /// Creates a new tessellation control shader.
     ///
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tesselation_ctrl(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_tessellation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, spirv)
     }
 
-    /// Creates a new tesselation evaluation shader.
+    #[deprecated = "use new_tessellation_ctrl function"]
+    #[doc(hidden)]
+    pub fn new_tesselation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+        Self::new_tessellation_ctrl(spirv)
+    }
+
+    /// Creates a new tessellation evaluation shader.
     ///
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tesselation_eval(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_tessellation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, spirv)
+    }
+
+    #[deprecated = "use new_tessellation_eval function"]
+    #[doc(hidden)]
+    pub fn new_tesselation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+        Self::new_tessellation_eval(spirv)
     }
 
     /// Creates a new vertex shader.
@@ -882,7 +886,7 @@ impl Shader {
     /// # Panics
     ///
     /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_vertex(spirv: impl ShaderCode) -> ShaderBuilder {
+    pub fn new_vertex(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::VERTEX, spirv)
     }
 
@@ -907,6 +911,11 @@ impl Shader {
                 _ => None,
             }),
         )
+    }
+
+    /// Creates a default `ShaderBuilder`.
+    pub fn builder() -> ShaderBuilder {
+        Default::default()
     }
 
     #[profiling::function]
@@ -984,6 +993,11 @@ impl Shader {
         }
 
         res
+    }
+
+    /// Specifies a shader with the given shader code.
+    pub fn from_spirv(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+        ShaderBuilder::default().spirv(spirv)
     }
 
     fn image_sampler(&self, descriptor: Descriptor, name: &str) -> (SamplerInfo, bool) {
@@ -1158,23 +1172,28 @@ impl Shader {
     #[profiling::function]
     fn reflect_entry_point(
         entry_name: &str,
-        spirv: &[u8],
-        specialization_info: Option<&SpecializationInfo>,
+        spirv: impl Into<SpirvBinary>,
+        specialization: Option<&SpecializationMap>,
     ) -> Result<EntryPoint, DriverError> {
         let mut config = ReflectConfig::new();
         config.ref_all_rscs(true).spv(spirv);
 
-        if let Some(spec_info) = specialization_info {
-            for spec in &spec_info.map_entries {
+        if let Some(specialization) = specialization {
+            for &vk::SpecializationMapEntry {
+                constant_id,
+                offset,
+                size,
+            } in &specialization.entries
+            {
                 config.specialize(
-                    spec.constant_id,
-                    spec_info.data[spec.offset as usize..spec.offset as usize + spec.size].into(),
+                    constant_id,
+                    specialization.data[offset as usize..offset as usize + size].into(),
                 );
             }
         }
 
         let entry_points = config.reflect().map_err(|err| {
-            error!("Unable to reflect spirv: {err}");
+            error!("invalid spirv reflection data: {err}");
 
             DriverError::InvalidData
         })?;
@@ -1182,7 +1201,7 @@ impl Shader {
             .into_iter()
             .find(|entry_point| entry_point.name == entry_name)
             .ok_or_else(|| {
-                error!("Entry point not found");
+                error!("invalid shader entry point: not found");
 
                 DriverError::InvalidData
             })?;
@@ -1191,64 +1210,64 @@ impl Shader {
     }
 
     #[profiling::function]
-    pub(super) fn vertex_input(&self) -> VertexInputState {
+    pub(super) fn try_vertex_input(&self) -> Result<VertexInputState, DriverError> {
         // Check for manually-specified vertex layout descriptions
         if let Some(vertex_input) = &self.vertex_input_state {
-            return vertex_input.clone();
+            return Ok(vertex_input.clone());
         }
 
-        fn scalar_format(ty: &ScalarType) -> vk::Format {
+        fn scalar_format(ty: &ScalarType) -> Option<vk::Format> {
             match *ty {
                 ScalarType::Float { bits } => match bits {
-                    u8::BITS => vk::Format::R8_SNORM,
-                    u16::BITS => vk::Format::R16_SFLOAT,
-                    u32::BITS => vk::Format::R32_SFLOAT,
-                    u64::BITS => vk::Format::R64_SFLOAT,
-                    _ => unimplemented!("{bits}-bit float"),
+                    u8::BITS => Some(vk::Format::R8_SNORM),
+                    u16::BITS => Some(vk::Format::R16_SFLOAT),
+                    u32::BITS => Some(vk::Format::R32_SFLOAT),
+                    u64::BITS => Some(vk::Format::R64_SFLOAT),
+                    _ => None,
                 },
                 ScalarType::Integer {
                     bits,
                     is_signed: false,
                 } => match bits {
-                    u8::BITS => vk::Format::R8_UINT,
-                    u16::BITS => vk::Format::R16_UINT,
-                    u32::BITS => vk::Format::R32_UINT,
-                    u64::BITS => vk::Format::R64_UINT,
-                    _ => unimplemented!("{bits}-bit unsigned integer"),
+                    u8::BITS => Some(vk::Format::R8_UINT),
+                    u16::BITS => Some(vk::Format::R16_UINT),
+                    u32::BITS => Some(vk::Format::R32_UINT),
+                    u64::BITS => Some(vk::Format::R64_UINT),
+                    _ => None,
                 },
                 ScalarType::Integer {
                     bits,
                     is_signed: true,
                 } => match bits {
-                    u8::BITS => vk::Format::R8_SINT,
-                    u16::BITS => vk::Format::R16_SINT,
-                    u32::BITS => vk::Format::R32_SINT,
-                    u64::BITS => vk::Format::R64_SINT,
-                    _ => unimplemented!("{bits}-bit signed integer"),
+                    u8::BITS => Some(vk::Format::R8_SINT),
+                    u16::BITS => Some(vk::Format::R16_SINT),
+                    u32::BITS => Some(vk::Format::R32_SINT),
+                    u64::BITS => Some(vk::Format::R64_SINT),
+                    _ => None,
                 },
-                _ => unimplemented!("{ty:?}"),
+                _ => None,
             }
         }
 
-        fn vector_format(ty: &VectorType) -> vk::Format {
+        fn vector_format(ty: &VectorType) -> Option<vk::Format> {
             match *ty {
                 VectorType {
                     scalar_ty: ScalarType::Float { bits },
                     nscalar,
                 } => match (bits, nscalar) {
-                    (u8::BITS, 2) => vk::Format::R8G8_SNORM,
-                    (u8::BITS, 3) => vk::Format::R8G8B8_SNORM,
-                    (u8::BITS, 4) => vk::Format::R8G8B8A8_SNORM,
-                    (u16::BITS, 2) => vk::Format::R16G16_SFLOAT,
-                    (u16::BITS, 3) => vk::Format::R16G16B16_SFLOAT,
-                    (u16::BITS, 4) => vk::Format::R16G16B16A16_SFLOAT,
-                    (u32::BITS, 2) => vk::Format::R32G32_SFLOAT,
-                    (u32::BITS, 3) => vk::Format::R32G32B32_SFLOAT,
-                    (u32::BITS, 4) => vk::Format::R32G32B32A32_SFLOAT,
-                    (u64::BITS, 2) => vk::Format::R64G64_SFLOAT,
-                    (u64::BITS, 3) => vk::Format::R64G64B64_SFLOAT,
-                    (u64::BITS, 4) => vk::Format::R64G64B64A64_SFLOAT,
-                    _ => unimplemented!("{bits}-bit vec{nscalar} float"),
+                    (u8::BITS, 2) => Some(vk::Format::R8G8_SNORM),
+                    (u8::BITS, 3) => Some(vk::Format::R8G8B8_SNORM),
+                    (u8::BITS, 4) => Some(vk::Format::R8G8B8A8_SNORM),
+                    (u16::BITS, 2) => Some(vk::Format::R16G16_SFLOAT),
+                    (u16::BITS, 3) => Some(vk::Format::R16G16B16_SFLOAT),
+                    (u16::BITS, 4) => Some(vk::Format::R16G16B16A16_SFLOAT),
+                    (u32::BITS, 2) => Some(vk::Format::R32G32_SFLOAT),
+                    (u32::BITS, 3) => Some(vk::Format::R32G32B32_SFLOAT),
+                    (u32::BITS, 4) => Some(vk::Format::R32G32B32A32_SFLOAT),
+                    (u64::BITS, 2) => Some(vk::Format::R64G64_SFLOAT),
+                    (u64::BITS, 3) => Some(vk::Format::R64G64B64_SFLOAT),
+                    (u64::BITS, 4) => Some(vk::Format::R64G64B64A64_SFLOAT),
+                    _ => None,
                 },
                 VectorType {
                     scalar_ty:
@@ -1258,19 +1277,19 @@ impl Shader {
                         },
                     nscalar,
                 } => match (bits, nscalar) {
-                    (u8::BITS, 2) => vk::Format::R8G8_UINT,
-                    (u8::BITS, 3) => vk::Format::R8G8B8_UINT,
-                    (u8::BITS, 4) => vk::Format::R8G8B8A8_UINT,
-                    (u16::BITS, 2) => vk::Format::R16G16_UINT,
-                    (u16::BITS, 3) => vk::Format::R16G16B16_UINT,
-                    (u16::BITS, 4) => vk::Format::R16G16B16A16_UINT,
-                    (u32::BITS, 2) => vk::Format::R32G32_UINT,
-                    (u32::BITS, 3) => vk::Format::R32G32B32_UINT,
-                    (u32::BITS, 4) => vk::Format::R32G32B32A32_UINT,
-                    (u64::BITS, 2) => vk::Format::R64G64_UINT,
-                    (u64::BITS, 3) => vk::Format::R64G64B64_UINT,
-                    (u64::BITS, 4) => vk::Format::R64G64B64A64_UINT,
-                    _ => unimplemented!("{bits}-bit vec{nscalar} unsigned integer"),
+                    (u8::BITS, 2) => Some(vk::Format::R8G8_UINT),
+                    (u8::BITS, 3) => Some(vk::Format::R8G8B8_UINT),
+                    (u8::BITS, 4) => Some(vk::Format::R8G8B8A8_UINT),
+                    (u16::BITS, 2) => Some(vk::Format::R16G16_UINT),
+                    (u16::BITS, 3) => Some(vk::Format::R16G16B16_UINT),
+                    (u16::BITS, 4) => Some(vk::Format::R16G16B16A16_UINT),
+                    (u32::BITS, 2) => Some(vk::Format::R32G32_UINT),
+                    (u32::BITS, 3) => Some(vk::Format::R32G32B32_UINT),
+                    (u32::BITS, 4) => Some(vk::Format::R32G32B32A32_UINT),
+                    (u64::BITS, 2) => Some(vk::Format::R64G64_UINT),
+                    (u64::BITS, 3) => Some(vk::Format::R64G64B64_UINT),
+                    (u64::BITS, 4) => Some(vk::Format::R64G64B64A64_UINT),
+                    _ => None,
                 },
                 VectorType {
                     scalar_ty:
@@ -1280,21 +1299,21 @@ impl Shader {
                         },
                     nscalar,
                 } => match (bits, nscalar) {
-                    (u8::BITS, 2) => vk::Format::R8G8_SINT,
-                    (u8::BITS, 3) => vk::Format::R8G8B8_SINT,
-                    (u8::BITS, 4) => vk::Format::R8G8B8A8_SINT,
-                    (u16::BITS, 2) => vk::Format::R16G16_SINT,
-                    (u16::BITS, 3) => vk::Format::R16G16B16_SINT,
-                    (u16::BITS, 4) => vk::Format::R16G16B16A16_SINT,
-                    (u32::BITS, 2) => vk::Format::R32G32_SINT,
-                    (u32::BITS, 3) => vk::Format::R32G32B32_SINT,
-                    (u32::BITS, 4) => vk::Format::R32G32B32A32_SINT,
-                    (u64::BITS, 2) => vk::Format::R64G64_SINT,
-                    (u64::BITS, 3) => vk::Format::R64G64B64_SINT,
-                    (u64::BITS, 4) => vk::Format::R64G64B64A64_SINT,
-                    _ => unimplemented!("{bits}-bit vec{nscalar} signed integer"),
+                    (u8::BITS, 2) => Some(vk::Format::R8G8_SINT),
+                    (u8::BITS, 3) => Some(vk::Format::R8G8B8_SINT),
+                    (u8::BITS, 4) => Some(vk::Format::R8G8B8A8_SINT),
+                    (u16::BITS, 2) => Some(vk::Format::R16G16_SINT),
+                    (u16::BITS, 3) => Some(vk::Format::R16G16B16_SINT),
+                    (u16::BITS, 4) => Some(vk::Format::R16G16B16A16_SINT),
+                    (u32::BITS, 2) => Some(vk::Format::R32G32_SINT),
+                    (u32::BITS, 3) => Some(vk::Format::R32G32B32_SINT),
+                    (u32::BITS, 4) => Some(vk::Format::R32G32B32A32_SINT),
+                    (u64::BITS, 2) => Some(vk::Format::R64G64_SINT),
+                    (u64::BITS, 3) => Some(vk::Format::R64G64B64_SINT),
+                    (u64::BITS, 4) => Some(vk::Format::R64G64B64A64_SINT),
+                    _ => None,
                 },
-                _ => unimplemented!("{ty:?}"),
+                _ => None,
             }
         }
 
@@ -1309,7 +1328,7 @@ impl Shader {
                 .as_ref()
                 .filter(|name| name.contains("_ibind") || name.contains("_vbind"))
                 .map(|name| {
-                    let binding = name[name.rfind("bind").unwrap()..]
+                    let binding = name[name.rfind("bind").expect("missing bind suffix")..]
                         .parse()
                         .unwrap_or_default();
                     let rate = if name.contains("_ibind") {
@@ -1333,14 +1352,21 @@ impl Shader {
 
             //trace!("{location} {:?} is {byte_stride} bytes", name);
 
+            let format = match ty {
+                Type::Scalar(ty) => scalar_format(ty),
+                Type::Vector(ty) => vector_format(ty),
+                _ => None,
+            }
+            .ok_or_else(|| {
+                warn!("unsupported reflected vertex input type: {ty:?}");
+
+                DriverError::Unsupported
+            })?;
+
             vertex_attribute_descriptions.push(vk::VertexInputAttributeDescription {
                 location,
                 binding,
-                format: match ty {
-                    Type::Scalar(ty) => scalar_format(ty),
-                    Type::Vector(ty) => vector_format(ty),
-                    _ => unimplemented!("{:?}", ty),
-                },
+                format,
                 offset: byte_stride, // Figured out below - this data is iter'd in an unknown order
             });
         }
@@ -1385,10 +1411,16 @@ impl Shader {
             });
         }
 
-        VertexInputState {
+        Ok(VertexInputState {
             vertex_attribute_descriptions,
             vertex_binding_descriptions,
-        }
+        })
+    }
+
+    #[profiling::function]
+    pub(super) fn vertex_input(&self) -> VertexInputState {
+        self.try_vertex_input()
+            .expect("unsupported reflected vertex input layout")
     }
 }
 
@@ -1406,6 +1438,15 @@ impl From<ShaderBuilder> for Shader {
     }
 }
 
+impl<T> From<T> for Shader
+where
+    T: Into<SpirvBinary>,
+{
+    fn from(spirv: T) -> Self {
+        Shader::from_spirv(spirv).build()
+    }
+}
+
 // HACK: https://github.com/colin-kiegel/rust-derive-builder/issues/56
 impl ShaderBuilder {
     /// Specifies a shader with the given `stage` and shader code values.
@@ -1414,22 +1455,12 @@ impl ShaderBuilder {
     }
 
     /// Builds a new `Shader`.
-    pub fn build(mut self) -> Shader {
-        let entry_name = self.entry_name.as_deref().unwrap_or("main");
-        self.entry_point = Some(
-            Shader::reflect_entry_point(
-                entry_name,
-                self.spirv.as_deref().unwrap(),
-                self.specialization_info
-                    .as_ref()
-                    .map(|opt| opt.as_ref())
-                    .unwrap_or_default(),
-            )
-            .unwrap_or_else(|_| panic!("invalid shader code for entry name \'{entry_name}\'")),
-        );
+    pub fn build(self) -> Shader {
+        let entry_name = self.entry_name.clone().unwrap_or_else(|| "main".to_owned());
 
-        self.fallible_build()
-            .expect("All required fields set at initialization")
+        self.try_build().unwrap_or_else(|_| {
+            panic!("invalid or unsupported shader code for entry name '{entry_name}'")
+        })
     }
 
     /// Specifies a manually-defined image sampler.
@@ -1466,10 +1497,67 @@ impl ShaderBuilder {
 
         self.image_samplers
             .as_mut()
-            .unwrap()
+            .expect("missing image samplers")
             .insert(descriptor, info);
 
         self
+    }
+
+    /// Attempts to build a new `Shader`.
+    pub fn try_build(mut self) -> Result<Shader, DriverError> {
+        let entry_name = self.entry_name.as_deref().unwrap_or("main");
+        let entry_point = Shader::reflect_entry_point(
+            entry_name,
+            self.spirv
+                .as_ref()
+                .map(|spirv| spirv.words())
+                .expect("missing spirv code"),
+            self.specialization
+                .as_ref()
+                .map(|opt| opt.as_ref())
+                .unwrap_or_default(),
+        )
+        .map_err(|err| {
+            warn!("invalid shader reflection entry point: {err}");
+
+            DriverError::InvalidData
+        })?;
+
+        if self.stage.unwrap_or_default().is_empty() {
+            self.stage = Some(match entry_point.exec_model {
+                ExecutionModel::Vertex => vk::ShaderStageFlags::VERTEX,
+                ExecutionModel::TessellationControl => vk::ShaderStageFlags::TESSELLATION_CONTROL,
+                ExecutionModel::TessellationEvaluation => {
+                    vk::ShaderStageFlags::TESSELLATION_EVALUATION
+                }
+                ExecutionModel::Geometry => vk::ShaderStageFlags::GEOMETRY,
+                ExecutionModel::Fragment => vk::ShaderStageFlags::FRAGMENT,
+                ExecutionModel::GLCompute => vk::ShaderStageFlags::COMPUTE,
+                ExecutionModel::Kernel => {
+                    warn!("unsupported shader execution model: kernel");
+
+                    return Err(DriverError::Unsupported);
+                }
+                ExecutionModel::TaskNV => vk::ShaderStageFlags::TASK_EXT,
+                ExecutionModel::MeshNV => vk::ShaderStageFlags::MESH_EXT,
+                ExecutionModel::RayGenerationNV => vk::ShaderStageFlags::RAYGEN_KHR,
+                ExecutionModel::IntersectionNV => vk::ShaderStageFlags::INTERSECTION_KHR,
+                ExecutionModel::AnyHitNV => vk::ShaderStageFlags::ANY_HIT_KHR,
+                ExecutionModel::ClosestHitNV => vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                ExecutionModel::MissNV => vk::ShaderStageFlags::MISS_KHR,
+                ExecutionModel::CallableNV => vk::ShaderStageFlags::CALLABLE_KHR,
+                ExecutionModel::TaskEXT => vk::ShaderStageFlags::TASK_EXT,
+                ExecutionModel::MeshEXT => vk::ShaderStageFlags::MESH_EXT,
+            })
+        }
+
+        self.entry_point = Some(entry_point);
+
+        self.fallible_build().map_err(|err| {
+            warn!("invalid shader builder state: {err:?}");
+
+            DriverError::InvalidData
+        })
     }
 
     /// Specifies a manually-defined vertex input layout.
@@ -1506,74 +1594,91 @@ impl From<UninitializedFieldError> for ShaderBuilderError {
     }
 }
 
-/// Trait for types which can be converted into shader code.
-pub trait ShaderCode {
-    /// Converts the instance into SPIR-V shader code specified as a byte array.
-    fn into_vec(self) -> Vec<u8>;
-}
-
-impl ShaderCode for &[u8] {
-    fn into_vec(self) -> Vec<u8> {
-        debug_assert_eq!(self.len() % 4, 0, "invalid spir-v code");
-
-        self.to_vec()
-    }
-}
-
-impl ShaderCode for &[u32] {
-    fn into_vec(self) -> Vec<u8> {
-        pub fn into_u8_slice<T>(t: &[T]) -> &[u8]
-        where
-            T: Sized,
-        {
-            use std::slice::from_raw_parts;
-
-            unsafe { from_raw_parts(t.as_ptr() as *const _, size_of_val(t)) }
-        }
-
-        into_u8_slice(self).into_vec()
-    }
-}
-
-impl ShaderCode for Vec<u8> {
-    fn into_vec(self) -> Vec<u8> {
-        debug_assert_eq!(self.len() % 4, 0, "invalid spir-v code");
-
-        self
-    }
-}
-
-impl ShaderCode for Vec<u32> {
-    fn into_vec(self) -> Vec<u8> {
-        self.as_slice().into_vec()
-    }
-}
-
 /// Describes specialized constant values.
-#[derive(Clone, Debug)]
-pub struct SpecializationInfo {
+#[derive(Clone, Debug, Default)]
+pub struct SpecializationMap {
     /// A buffer of data which holds the constant values.
     pub data: Vec<u8>,
 
-    /// Mapping of locations within the constant value data which describe each individual constant.
-    pub map_entries: Vec<vk::SpecializationMapEntry>,
+    /// Mapping of locations within the constant value data which describe each individual
+    /// constant.
+    pub entries: Vec<vk::SpecializationMapEntry>,
 }
 
-impl SpecializationInfo {
-    /// Constructs a new `SpecializationInfo`.
-    pub fn new(
-        map_entries: impl Into<Vec<vk::SpecializationMapEntry>>,
-        data: impl Into<Vec<u8>>,
-    ) -> Self {
+impl SpecializationMap {
+    /// Constructs a new `SpecializationMap`.
+    pub fn new(data: impl Into<Vec<u8>>) -> Self {
         Self {
             data: data.into(),
-            map_entries: map_entries.into(),
+            entries: Default::default(),
+        }
+    }
+
+    /// Adds a single constant offset and size to the map and returns the map for further building.
+    pub fn constant(mut self, constant_id: u32, offset: u32, size: usize) -> Self {
+        self.set_constant(constant_id, offset, size);
+        self
+    }
+
+    /// Adds a single constant offset and size to the map and returns the map for further building.
+    pub fn set_constant(&mut self, constant_id: u32, offset: u32, size: usize) {
+        self.entries.push(vk::SpecializationMapEntry {
+            constant_id,
+            offset,
+            size,
+        });
+    }
+}
+
+impl<'a> From<&'a SpecializationMap> for vk::SpecializationInfo<'a> {
+    fn from(value: &'a SpecializationMap) -> Self {
+        vk::SpecializationInfo::default()
+            .map_entries(&value.entries)
+            .data(&value.data)
+    }
+}
+
+mod deprecated {
+    use {
+        crate::driver::shader::{ShaderBuilder, SpecializationMap},
+        ash::vk,
+    };
+
+    #[derive(Clone, Debug)]
+    pub struct SpecializationInfo {
+        pub data: Vec<u8>,
+        pub map_entries: Vec<vk::SpecializationMapEntry>,
+    }
+
+    impl SpecializationInfo {
+        pub fn new(
+            map_entries: impl Into<Vec<vk::SpecializationMapEntry>>,
+            data: impl Into<Vec<u8>>,
+        ) -> Self {
+            Self {
+                data: data.into(),
+                map_entries: map_entries.into(),
+            }
+        }
+    }
+
+    impl ShaderBuilder {
+        #[deprecated = "use specialization function"]
+        #[doc(hidden)]
+        pub fn specialization_info(self, info: SpecializationInfo) -> Self {
+            let mut specialization = SpecializationMap::new(info.data);
+
+            for entry in &info.map_entries {
+                specialization.set_constant(entry.constant_id, entry.offset, entry.size);
+            }
+
+            self.specialization(specialization)
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     type Info = SamplerInfo;
@@ -1582,7 +1687,7 @@ mod tests {
     #[test]
     pub fn sampler_info() {
         let info = Info::default();
-        let builder = info.to_builder().build();
+        let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }

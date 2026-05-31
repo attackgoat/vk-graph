@@ -1,15 +1,30 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     clap::Parser,
     hassle_rs::compile_hlsl,
-    inline_spirv::inline_spirv,
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
+    log::info,
     std::{
         path::{Path, PathBuf},
         sync::Arc,
+        time::Instant,
     },
+    vk_graph::{
+        Graph,
+        cmd::{LoadOp, StoreOp},
+        driver::{
+            buffer::Buffer,
+            device::Device,
+            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            image::{Image, ImageInfo},
+            shader::{SamplerInfo, Shader},
+        },
+        pool::hash::HashPool,
+    },
+    vk_graph_window::Window,
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 /// Displays a sequence of image samplers.
@@ -31,49 +46,69 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let gulf_image = read_image(&window.device, "examples/res/image/gulf.jpg")?;
 
     // Sampler info contains the full definition of Vulkan sampler settings using a builder struct
-    let edge_edge = SamplerInfoBuilder::default()
+    let edge_edge = SamplerInfo::builder()
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-    let border_edge_black = SamplerInfoBuilder::default()
+    let border_edge_black = SamplerInfo::builder()
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_BORDER)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .border_color(vk::BorderColor::FLOAT_OPAQUE_BLACK);
-    let edge_border_white = SamplerInfoBuilder::default()
+    let edge_border_white = SamplerInfo::builder()
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_BORDER)
         .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE);
 
     // Image samplers are part of the shader pipeline and so we will create three pipelines total
-    let pipelines = [edge_edge, border_edge_black, edge_border_white]
+    let pipeline_modes = [
+        ("edge_edge", edge_edge),
+        ("border_edge_black", border_edge_black),
+        ("edge_border_white", edge_border_white),
+    ];
+    let pipelines = pipeline_modes
         .into_iter()
-        .map(|sampler_info| create_pipeline(&window.device, sampler_info))
+        .map(|(_, sampler_info)| create_pipeline(&window.device, sampler_info))
         .collect::<Result<Box<_>, _>>()?;
+    let pipeline_names = pipeline_modes.map(|(name, _)| name);
     let mut pipeline_index = 0;
     let mut pipeline_time = 0.0;
+    let mut prev_frame_at = Instant::now();
+
+    info!("active sampler mode: {}", pipeline_names[pipeline_index]);
 
     window.run(|frame| {
+        let now = Instant::now();
+
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
         // Periodically change the active pipeline index
-        pipeline_time += 0.016;
-        if pipeline_time > 2.0 {
+        pipeline_time += dt.as_secs_f32();
+        if pipeline_time > 5.0 {
             pipeline_time = 0.0;
             pipeline_index += 1;
             pipeline_index %= pipelines.len();
+            info!("active sampler mode: {}", pipeline_names[pipeline_index]);
         }
 
         // Draw gulf.jpg using the active pipeline
-        let gulf_image = frame.render_graph.bind_node(&gulf_image);
+        let gulf_image = frame.graph.bind_resource(&gulf_image);
         frame
-            .render_graph
-            .begin_pass("Draw gulf image to swapchain")
+            .graph
+            .begin_cmd()
+            .debug_name("Draw gulf image to swapchain")
             .bind_pipeline(&pipelines[pipeline_index])
-            .read_descriptor(0, gulf_image)
-            .store_color(0, frame.swapchain_image)
-            .record_subpass(|subpass, _| {
-                subpass.draw(3, 1, 0, 0);
+            .shader_resource_access(
+                0,
+                gulf_image,
+                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            )
+            .color_attachment_image(0, frame.swapchain_image, LoadOp::DontCare, StoreOp::Store)
+            .record_cmd(|cmd| {
+                cmd.draw(3, 1, 0, 0);
             });
     })?;
 
@@ -81,86 +116,94 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn create_pipeline(
-    device: &Arc<Device>,
+    device: &Device,
     sampler_info: impl Into<SamplerInfo>,
-) -> anyhow::Result<Arc<GraphicPipeline>> {
+) -> anyhow::Result<GraphicPipeline> {
     let args = Args::parse();
 
     let mut frag_shader = match (args.hlsl, args.separate) {
         (true, true) => {
             // HLSL separate image sampler
             Shader::new_fragment(
-                inline_spirv!(
+                compile_hlsl(
+                    "fragment.hlsl",
                     r#"
-                struct FullscreenVertexOutput
-                {
-                    float4 position : SV_Position;
-                    [[vk::location(0)]] float2 uv : TEXCOORD0;
-                };
+                    struct FullscreenVertexOutput
+                    {
+                        float4 position : SV_Position;
+                        [[vk::location(0)]] float2 uv : TEXCOORD0;
+                    };
 
-                [[vk::binding(0, 0)]] Texture2D screenTexture : register(t0);
-                [[vk::binding(1, 0)]] SamplerState textureSampler : register(s0);
+                    [[vk::binding(0, 0)]] Texture2D<float4> screenTexture : register(t0);
+                    [[vk::binding(1, 0)]] SamplerState textureSampler : register(s1);
 
-                float4 main(FullscreenVertexOutput input)
-                    : SV_Target
-                {
-                    return screenTexture.Sample(textureSampler, input.uv);
-                }
-                "#,
-                    frag,
-                    hlsl
-                )
+                    float4 main(FullscreenVertexOutput input)
+                        : SV_Target
+                    {
+                        return screenTexture.Sample(textureSampler, input.uv);
+                    }
+                    "#,
+                    "main",
+                    "ps_5_0",
+                    &["-spirv"],
+                    &[],
+                )?
                 .as_slice(),
             )
         }
         (true, false) => {
-            // HLSL combined image sampler: inline_spirv uses shaderc which does not support this, so
-            // we are using hassle_rs which uses dxc. You must follow the instructions listed here to
-            // use hassle_rs:
+            // HLSL combined image sampler: include_glsl uses shaderc which does not support this,
+            // so we are using hassle_rs which uses dxc. You must follow the
+            // instructions listed here to use hassle_rs:
             // See: https://github.com/Traverse-Research/hassle-rs
             // See: https://github.com/microsoft/DirectXShaderCompiler/wiki/Vulkan-combined-image-sampler-type
             // See: https://github.com/google/shaderc/issues/1310
             Shader::new_fragment(
-            compile_hlsl(
-                "fragment.hlsl",
-                r#"
-                struct FullscreenVertexOutput
-                {
-                    float4 position : SV_Position;
-                    [[vk::location(0)]] float2 uv : TEXCOORD0;
-                };
+                compile_hlsl(
+                    "fragment.hlsl",
+                    r#"
+                    struct FullscreenVertexOutput
+                    {
+                        float4 position : SV_Position;
+                        [[vk::location(0)]] float2 uv : TEXCOORD0;
+                    };
 
-                [[vk::combinedImageSampler]][[vk::binding(0, 0)]]  Texture2D<float4> screenTexture : register(t0);
-                [[vk::combinedImageSampler]][[vk::binding(0, 0)]]  SamplerState textureSampler : register(s0);
+                    [[vk::combinedImageSampler]][[vk::binding(0, 0)]]
+                    Texture2D<float4> screenTexture : register(t0);
+                    [[vk::combinedImageSampler]][[vk::binding(0, 0)]]
+                    SamplerState textureSampler : register(s0);
 
-                float4 main(FullscreenVertexOutput input)
-                    : SV_Target
-                {
-                    return screenTexture.Sample(textureSampler, input.uv);
-                }
-                "#,
-                "main", "ps_5_0", &["-spirv"], &[],
-            )?
-            .as_slice(),
-        )
+                    float4 main(FullscreenVertexOutput input)
+                        : SV_Target
+                    {
+                        return screenTexture.Sample(textureSampler, input.uv);
+                    }
+                    "#,
+                    "main",
+                    "ps_5_0",
+                    &["-spirv"],
+                    &[],
+                )?
+                .as_slice(),
+            )
         }
         (false, true) => {
             // GLSL separate image sampler
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
-                #version 460 core
+                    #version 460 core
+                    #pragma shader_stage(fragment)
 
-                layout(binding = 0) uniform texture2D image;
-                layout(binding = 1) uniform sampler image_sampler;
-                layout(location = 0) in vec2 vk_TexCoord;
-                layout(location = 0) out vec4 vk_Color;
+                    layout(binding = 0) uniform texture2D image;
+                    layout(binding = 1) uniform sampler image_sampler;
+                    layout(location = 0) in vec2 vk_TexCoord;
+                    layout(location = 0) out vec4 vk_Color;
 
-                void main() {
-                    vk_Color = texture(sampler2D(image, image_sampler), vk_TexCoord);
-                }
-                "#,
-                    frag
+                    void main() {
+                        vk_Color = texture(sampler2D(image, image_sampler), vk_TexCoord);
+                    }
+                    "#
                 )
                 .as_slice(),
             )
@@ -168,9 +211,10 @@ fn create_pipeline(
         (false, false) => {
             // GLSL combined image sampler
             Shader::new_fragment(
-                inline_spirv!(
+                glsl!(
                     r#"
-                #version 460 core
+                    #version 460 core
+                    #pragma shader_stage(fragment)
 
                     layout(binding = 0) uniform sampler2D image;
                     layout(location = 0) in vec2 vk_TexCoord;
@@ -179,8 +223,7 @@ fn create_pipeline(
                     void main() {
                         vk_Color = texture(image, vk_TexCoord);
                     }
-                "#,
-                    frag
+                    "#
                 )
                 .as_slice(),
             )
@@ -192,14 +235,15 @@ fn create_pipeline(
     let sampler_binding = args.separate as u32;
     frag_shader = frag_shader.image_sampler(sampler_binding, sampler_info);
 
-    Ok(Arc::new(GraphicPipeline::create(
+    Ok(GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(
-                inline_spirv!(
+                glsl!(
                     r#"
                     #version 460 core
+                    #pragma shader_stage(vertex)
 
                     const vec2[3] VERTICES = {
                         vec2(-1, -1),
@@ -213,18 +257,17 @@ fn create_pipeline(
                         gl_Position = vec4(VERTICES[gl_VertexIndex], 0, 1);
                         vk_TexCoord = 0.75 * gl_Position.xy + vec2(0.5);
                     }
-                    "#,
-                    vert
+                    "#
                 )
                 .as_slice(),
             ),
             frag_shader,
         ],
-    )?))
+    )?)
 }
 
-fn read_image(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Arc<Image>> {
-    // For another way to loading images, see screen_13_fx::ImageLoader
+fn read_image(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Arc<Image>> {
+    // For another way to loading images, see vk_graph_fx::ImageLoader
     let gulf_jpg = image::open(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path))?;
     let image = Arc::new(Image::create(
         device,
@@ -237,17 +280,17 @@ fn read_image(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Ar
     )?);
 
     {
-        let mut render_graph = RenderGraph::new();
-        let image = render_graph.bind_node(&image);
-        let image_buf = render_graph.bind_node(Buffer::create_from_slice(
+        let mut graph = Graph::default();
+        let image = graph.bind_resource(&image);
+        let image_buf = graph.bind_resource(Buffer::create_from_slice(
             device,
             vk::BufferUsageFlags::TRANSFER_SRC,
-            gulf_jpg.into_rgba8().into_vec(),
+            gulf_jpg.into_rgba8().into_vec().as_slice(),
         )?);
-        render_graph.copy_buffer_to_image(image_buf, image);
-        render_graph
-            .resolve()
-            .submit(&mut HashPool::new(device), 0, 0)?;
+        graph.copy_buffer_to_image(image_buf, image);
+        graph
+            .into_submission()
+            .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
         // Note: There is no need to call wait_until_executed() here
     }

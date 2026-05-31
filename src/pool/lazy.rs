@@ -1,14 +1,16 @@
-//! Pool which leases by looking for compatibile information before creating new resources.
+//! Pool which requests by looking for compatibile information before creating new resources.
 
 use {
-    super::{Cache, Lease, Pool, PoolInfo, lease_command_buffer},
+    super::{Cache, Lease, Pool, PoolConfig, lease_command_buffer},
     crate::driver::{
-        CommandBuffer, CommandBufferInfo, DescriptorPool, DescriptorPoolInfo, DriverError,
-        RenderPass, RenderPassInfo,
+        DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
         buffer::{Buffer, BufferInfo},
+        cmd_buf::{CommandBuffer, CommandBufferInfo},
+        descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         device::Device,
         image::{Image, ImageInfo, SampleCount},
+        render_pass::{RenderPass, RenderPassInfo},
     },
     ash::vk,
     log::debug,
@@ -46,7 +48,7 @@ impl From<ImageInfo> for ImageKey {
 
 /// A balanced resource allocator.
 ///
-/// The information for each lease request is compared against the stored resources for
+/// The information for each resource request is compared against the stored resources for
 /// compatibility. If no acceptable resources are stored for the information provided a new resource
 /// is created and returned.
 ///
@@ -58,46 +60,59 @@ impl From<ImageInfo> for ImageKey {
 ///
 /// # Bucket Strategy
 ///
-/// The information for each lease request is the key for a `HashMap` of buckets. If no bucket
+/// The information for each resource request is the key for a `HashMap` of buckets. If no bucket
 /// exists with compatible information a new bucket is created.
 ///
-/// In practice this means that for a [`PoolInfo::image_capacity`] of `4`, requests for a 1024x1024
-/// image with certain attributes will store a maximum of `4` such images. Requests for any image
-/// having a different size or incompatible attributes will store an additional maximum of `4`
-/// images.
+/// In practice this means that for a [`PoolConfig::image_capacity`] of `4`, requests for a
+/// 1024x1024 image with certain attributes will store a maximum of `4` such images. Requests for
+/// any image having a different size or incompatible attributes will store an additional maximum of
+/// `4` images.
 ///
 /// # Memory Management
 ///
 /// If requests for varying resources is common [`LazyPool::clear_images_by_info`] and other memory
 /// management functions are nessecery in order to avoid using all available device memory.
 #[derive(Debug)]
+#[read_only::cast]
 pub struct LazyPool {
     accel_struct_cache: HashMap<vk::AccelerationStructureTypeKHR, Cache<AccelerationStructure>>,
     buffer_cache: HashMap<(bool, vk::DeviceSize), Cache<Buffer>>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: Cache<DescriptorPool>,
-    device: Arc<Device>,
+
+    /// The device which owns this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
     image_cache: HashMap<ImageKey, Cache<Image>>,
-    info: PoolInfo,
+
+    /// Information used to create this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub info: PoolConfig,
+
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
 
 impl LazyPool {
     /// Constructs a new `LazyPool`.
-    pub fn new(device: &Arc<Device>) -> Self {
-        Self::with_capacity(device, PoolInfo::default())
+    pub fn new(device: &Device) -> Self {
+        Self::with_capacity(device, PoolConfig::default())
     }
 
     /// Constructs a new `LazyPool` with the given capacity information.
-    pub fn with_capacity(device: &Arc<Device>, info: impl Into<PoolInfo>) -> Self {
-        let info: PoolInfo = info.into();
-        let device = Arc::clone(device);
+    pub fn with_capacity(device: &Device, info: impl Into<PoolConfig>) -> Self {
+        let info: PoolConfig = info.into();
+        let device = device.clone();
 
         Self {
             accel_struct_cache: Default::default(),
             buffer_cache: Default::default(),
             command_buffer_cache: Default::default(),
-            descriptor_pool_cache: PoolInfo::default_cache(),
+            descriptor_pool_cache: PoolConfig::default_cache(),
             device,
             image_cache: Default::default(),
             info,
@@ -158,14 +173,14 @@ impl LazyPool {
 
 impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
     #[profiling::function]
-    fn lease(
+    fn resource(
         &mut self,
         info: AccelerationStructureInfo,
     ) -> Result<Lease<AccelerationStructure>, DriverError> {
         let cache = self
             .accel_struct_cache
             .entry(info.ty)
-            .or_insert_with(|| PoolInfo::explicit_cache(self.info.accel_struct_capacity));
+            .or_insert_with(|| PoolConfig::explicit_cache(self.info.accel_struct_capacity));
         let cache_ref = Arc::downgrade(cache);
 
         {
@@ -175,7 +190,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
             let mut cache = cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             // Look for a compatible acceleration structure (big enough)
             for idx in 0..cache.len() {
@@ -198,11 +213,11 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
 
 impl Pool<BufferInfo, Buffer> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
+    fn resource(&mut self, info: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
         let cache = self
             .buffer_cache
-            .entry((info.mappable, info.alignment))
-            .or_insert_with(|| PoolInfo::explicit_cache(self.info.buffer_capacity));
+            .entry((info.host_read | info.host_write, info.alignment))
+            .or_insert_with(|| PoolConfig::explicit_cache(self.info.buffer_capacity));
         let cache_ref = Arc::downgrade(cache);
 
         {
@@ -212,12 +227,18 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
             let mut cache = cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             // Look for a compatible buffer (big enough and superset of usage flags)
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
-                if item.info.size >= info.size && item.info.usage.contains(info.usage) {
+                if (item.info.dedicated & info.dedicated) == info.dedicated
+                    && (item.info.host_read & info.host_read) == info.host_read
+                    && (item.info.host_write & info.host_write) == info.host_write
+                    && item.info.alignment >= info.alignment
+                    && item.info.size >= info.size
+                    && item.info.usage.contains(info.usage)
+                {
                     let item = cache.swap_remove(idx);
 
                     return Ok(Lease::new(cache_ref, item));
@@ -235,17 +256,17 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
 
 impl Pool<CommandBufferInfo, CommandBuffer> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: CommandBufferInfo) -> Result<Lease<CommandBuffer>, DriverError> {
+    fn resource(&mut self, info: CommandBufferInfo) -> Result<Lease<CommandBuffer>, DriverError> {
         let cache_ref = self
             .command_buffer_cache
             .entry(info.queue_family_index)
-            .or_insert_with(PoolInfo::default_cache);
-        let mut item = {
+            .or_insert_with(PoolConfig::default_cache);
+        let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             lease_command_buffer(&mut cache)
         }
@@ -257,7 +278,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for LazyPool {
         })?;
 
         // Drop anything we were holding from the last submission
-        CommandBuffer::drop_fenced(&mut item);
+        //item.wait_until_executed()?;
 
         Ok(Lease::new(Arc::downgrade(cache_ref), item))
     }
@@ -265,7 +286,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for LazyPool {
 
 impl Pool<DescriptorPoolInfo, DescriptorPool> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: DescriptorPoolInfo) -> Result<Lease<DescriptorPool>, DriverError> {
+    fn resource(&mut self, info: DescriptorPoolInfo) -> Result<Lease<DescriptorPool>, DriverError> {
         let cache_ref = Arc::downgrade(&self.descriptor_pool_cache);
 
         {
@@ -275,7 +296,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for LazyPool {
             let mut cache = self.descriptor_pool_cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             // Look for a compatible descriptor pool (has enough sets and descriptors)
             for idx in 0..cache.len() {
@@ -311,11 +332,11 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for LazyPool {
 
 impl Pool<ImageInfo, Image> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: ImageInfo) -> Result<Lease<Image>, DriverError> {
+    fn resource(&mut self, info: ImageInfo) -> Result<Lease<Image>, DriverError> {
         let cache = self
             .image_cache
             .entry(info.into())
-            .or_insert_with(|| PoolInfo::explicit_cache(self.info.image_capacity));
+            .or_insert_with(|| PoolConfig::explicit_cache(self.info.image_capacity));
         let cache_ref = Arc::downgrade(cache);
 
         {
@@ -325,7 +346,7 @@ impl Pool<ImageInfo, Image> for LazyPool {
             let mut cache = cache.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             // Look for a compatible image (superset of creation flags and usage flags)
             for idx in 0..cache.len() {
@@ -348,21 +369,21 @@ impl Pool<ImageInfo, Image> for LazyPool {
 
 impl Pool<RenderPassInfo, RenderPass> for LazyPool {
     #[profiling::function]
-    fn lease(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
+    fn resource(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
         let cache_ref = if let Some(cache) = self.render_pass_cache.get(&info) {
             cache
         } else {
             // We tried to get the cache first in order to avoid this clone
             self.render_pass_cache
                 .entry(info.clone())
-                .or_insert_with(PoolInfo::default_cache)
+                .or_insert_with(PoolConfig::default_cache)
         };
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
 
             #[cfg(not(feature = "parking_lot"))]
-            let mut cache = cache.unwrap();
+            let mut cache = cache.expect("poisoned cache lock");
 
             cache.pop()
         }

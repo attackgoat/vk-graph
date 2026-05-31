@@ -1,22 +1,43 @@
 mod profile_with_puffin;
 
 use {
+    ash::vk,
     bytemuck::{Pod, Zeroable, bytes_of, cast_slice},
     clap::Parser,
     glam::{Mat4, Vec3, Vec4, vec3, vec4},
-    inline_spirv::inline_spirv,
     log::info,
     meshopt::remap::{generate_vertex_remap, remap_index_buffer, remap_vertex_buffer},
-    screen_13::prelude::*,
-    screen_13_window::WindowBuilder,
     std::{
         env::current_exe,
         fs::{metadata, write},
         mem::size_of,
         path::{Path, PathBuf},
         sync::Arc,
+        time::Instant,
     },
     tobj::{GPU_LOAD_OPTIONS, load_obj},
+    vk_graph::{
+        Graph,
+        cmd::{BuildAccelerationStructureInfo, LoadOp, StoreOp},
+        driver::{
+            DriverError,
+            accel_struct::{
+                AccelerationStructure, AccelerationStructureGeometry,
+                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
+                AccelerationStructureInfo,
+            },
+            buffer::{Buffer, BufferInfo},
+            device::Device,
+            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            image::ImageInfo,
+            shader::Shader,
+        },
+        node::AccelerationStructureLeaseNode,
+        pool::{Pool as _, lazy::LazyPool},
+    },
+    vk_graph_window::Window,
+    vk_shader_macros::glsl,
+    vk_sync::AccessType,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -24,7 +45,7 @@ fn main() -> anyhow::Result<()> {
     profile_with_puffin::init();
 
     let args = Args::parse();
-    let window = WindowBuilder::default().debug(args.debug).build()?;
+    let window = Window::builder().debug(args.debug).build()?;
     let mut pool = LazyPool::new(&window.device);
 
     let depth_fmt = best_2d_optimal_format(
@@ -41,20 +62,24 @@ fn main() -> anyhow::Result<()> {
     let gfx_pipeline = create_pipeline(&window.device)?;
 
     let mut angle = 0f32;
+    let mut prev_frame_at = Instant::now();
 
     window.run(|frame| {
-        angle += 0.016;
+        let now = Instant::now();
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
 
-        let scene_tlas =
-            create_tlas(frame.device, &mut pool, frame.render_graph, &scene_blas).unwrap();
+        angle += dt.as_secs_f32();
 
-        let ground_mesh_index_buf = frame.render_graph.bind_node(&ground_mesh.index_buf);
-        let ground_mesh_vertex_buf = frame.render_graph.bind_node(&ground_mesh.vertex_buf);
-        let model_mesh_index_buf = frame.render_graph.bind_node(&model_mesh.index_buf);
-        let model_mesh_vertex_buf = frame.render_graph.bind_node(&model_mesh.vertex_buf);
+        let scene_tlas = create_tlas(frame.device, &mut pool, frame.graph, &scene_blas).unwrap();
 
-        let depth_image = frame.render_graph.bind_node(
-            pool.lease(ImageInfo::image_2d(
+        let ground_mesh_index_buf = frame.graph.bind_resource(&ground_mesh.index_buf);
+        let ground_mesh_vertex_buf = frame.graph.bind_resource(&ground_mesh.vertex_buf);
+        let model_mesh_index_buf = frame.graph.bind_resource(&model_mesh.index_buf);
+        let model_mesh_vertex_buf = frame.graph.bind_resource(&model_mesh.vertex_buf);
+
+        let depth_image = frame.graph.bind_resource(
+            pool.resource(ImageInfo::image_2d(
                 frame.width,
                 frame.height,
                 depth_fmt,
@@ -62,15 +87,14 @@ fn main() -> anyhow::Result<()> {
             ))
             .unwrap(),
         );
-        let camera_buf = frame.render_graph.bind_node({
+        let camera_buf = frame.graph.bind_resource({
             let mut buf = pool
-                .lease(BufferInfo::host_mem(
+                .resource(BufferInfo::host_mem(
                     size_of::<Camera>() as _,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                 ))
                 .unwrap();
-            Buffer::copy_from_slice(
-                &mut buf,
+            buf.copy_from_slice(
                 0,
                 bytes_of(&Camera {
                     projection: Mat4::perspective_rh(
@@ -89,32 +113,39 @@ fn main() -> anyhow::Result<()> {
         });
 
         frame
-            .render_graph
-            .begin_pass("Mesh with ray-query shadows")
+            .graph
+            .begin_cmd()
+            .debug_name("Mesh with ray-query shadows")
             .bind_pipeline(&gfx_pipeline)
-            .access_node(ground_mesh_index_buf, AccessType::IndexBuffer)
-            .access_node(ground_mesh_vertex_buf, AccessType::VertexBuffer)
-            .access_node(model_mesh_index_buf, AccessType::IndexBuffer)
-            .access_node(model_mesh_vertex_buf, AccessType::VertexBuffer)
-            .access_descriptor(0, camera_buf, AccessType::AnyShaderReadUniformBuffer)
-            .access_descriptor(
+            .resource_access(ground_mesh_index_buf, AccessType::IndexBuffer)
+            .resource_access(ground_mesh_vertex_buf, AccessType::VertexBuffer)
+            .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
+            .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
+            .shader_resource_access(0, camera_buf, AccessType::AnyShaderReadUniformBuffer)
+            .shader_resource_access(
                 1,
                 scene_tlas,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            .set_depth_stencil(DepthStencilMode::DEPTH_WRITE)
-            .clear_depth_stencil(depth_image)
-            .clear_color_value(0, frame.swapchain_image, [0xff, 0xff, 0xff, 0xff])
-            .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass, _| {
-                subpass
-                    .bind_index_buffer(model_mesh_index_buf, vk::IndexType::UINT32)
-                    .bind_vertex_buffer(model_mesh_vertex_buf)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .depth_stencil_attachment_image(
+                depth_image,
+                LoadOp::CLEAR_ONE_STENCIL_ZERO,
+                StoreOp::DontCare,
+            )
+            .color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_WHITE_ALPHA_ONE,
+                StoreOp::Store,
+            )
+            .record_cmd(move |cmd| {
+                cmd.bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
+                    .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
                     .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
 
-                subpass
-                    .bind_index_buffer(ground_mesh_index_buf, vk::IndexType::UINT32)
-                    .bind_vertex_buffer(ground_mesh_vertex_buf)
+                cmd.bind_index_buffer(ground_mesh_index_buf, 0, vk::IndexType::UINT32)
+                    .bind_vertex_buffer(0, ground_mesh_vertex_buf, 0)
                     .draw_indexed(ground_mesh.index_count, 1, 0, 0, 0);
             });
     })?;
@@ -129,8 +160,7 @@ fn best_2d_optimal_format(
     flags: vk::ImageCreateFlags,
 ) -> vk::Format {
     for format in formats {
-        let format_props = Device::image_format_properties(
-            device,
+        let format_props = device.physical_device.image_format_properties(
             *format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -147,7 +177,7 @@ fn best_2d_optimal_format(
 }
 
 fn create_blas(
-    device: &Arc<Device>,
+    device: &Device,
     models: &[&Model],
 ) -> Result<Arc<AccelerationStructure>, DriverError> {
     let info = AccelerationStructureGeometryInfo::blas(
@@ -159,11 +189,11 @@ fn create_blas(
                         max_primitive_count: model.index_count / 3,
                         flags: vk::GeometryFlagsKHR::OPAQUE,
                         geometry: AccelerationStructureGeometryData::triangles(
-                            Buffer::device_address(&model.index_buf),
+                            model.index_buf.device_address(),
                             vk::IndexType::UINT32,
                             model.vertex_count,
                             None,
-                            Buffer::device_address(&model.vertex_buf),
+                            model.vertex_buf.device_address(),
                             vk::Format::R32G32B32_SFLOAT,
                             24,
                         ),
@@ -177,8 +207,8 @@ fn create_blas(
     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
     let size = AccelerationStructure::size_of(device, &info);
 
-    let mut render_graph = RenderGraph::new();
-    let blas = render_graph.bind_node(AccelerationStructure::create(
+    let mut graph = Graph::default();
+    let blas = graph.bind_resource(AccelerationStructure::create(
         device,
         AccelerationStructureInfo::blas(size.create_size),
     )?);
@@ -190,46 +220,51 @@ fn create_blas(
         .unwrap()
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
-    let scratch_buf = render_graph.bind_node(Buffer::create(
+    let scratch_buf = graph.bind_resource(Buffer::create(
         device,
         BufferInfo::device_mem(
             size.build_size,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
-        .to_builder()
+        .into_builder()
         .alignment(accel_struct_scratch_offset_alignment),
     )?);
-    let scratch_data = render_graph.node_device_address(scratch_buf);
+    let scratch_addr = graph.resource(scratch_buf).device_address();
 
-    let mut pass = render_graph.begin_pass("Build BLAS");
+    let mut cmd = graph.begin_cmd().debug_name("Build BLAS");
 
     for model in models.iter().copied() {
-        let index_buf = pass.bind_node(&model.index_buf);
-        let vertex_buf = pass.bind_node(&model.vertex_buf);
+        let index_buf = cmd.bind_resource(&model.index_buf);
+        let vertex_buf = cmd.bind_resource(&model.vertex_buf);
 
-        pass.access_node_mut(index_buf, AccessType::AccelerationStructureBuildRead);
-        pass.access_node_mut(vertex_buf, AccessType::AccelerationStructureBuildRead);
+        cmd.set_resource_access(index_buf, AccessType::AccelerationStructureBuildRead);
+        cmd.set_resource_access(vertex_buf, AccessType::AccelerationStructureBuildRead);
     }
 
-    pass.access_node(blas, AccessType::AccelerationStructureBuildWrite)
-        .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-        .record_acceleration(move |accel, _| {
-            accel.build_structure(&info, blas, scratch_data);
+    cmd.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
+        .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+        .record_cmd(move |cmd| {
+            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+                blas,
+                scratch_addr,
+                info,
+            )]);
         });
 
-    let blas = render_graph.unbind_node(blas);
+    let blas = graph.resource(blas).clone();
 
-    render_graph
-        .resolve()
-        .submit(&mut LazyPool::new(device), 0, 0)?;
+    graph
+        .into_submission()
+        .queue_submit(&mut LazyPool::new(device), 0, 0)?;
 
     Ok(blas)
 }
 
-fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverError> {
-    let vert = inline_spirv!(
+fn create_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+    let vert = glsl!(
         r#"
         #version 460 core
+        #pragma shader_stage(vertex)
 
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec3 inNormal;
@@ -257,15 +292,15 @@ fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverE
             outLightVec = normalize(ubo.lightPos - inPos);
             outViewVec = -pos.xyz;
         }
-        "#,
-        vert,
-        vulkan1_2
+        "#
     );
-    let frag = inline_spirv!(
+    let frag = glsl!(
+        target: vulkan1_2,
         r#"
         #version 460 core
         #extension GL_EXT_ray_tracing : enable
         #extension GL_EXT_ray_query : enable
+        #pragma shader_stage(fragment)
 
         layout (binding = 1) uniform accelerationStructureEXT topLevelAS;
 
@@ -289,35 +324,45 @@ fn create_pipeline(device: &Arc<Device>) -> Result<Arc<GraphicPipeline>, DriverE
             outFragColor = vec4(diffuse, 1.0);
 
             rayQueryEXT rayQuery;
-            rayQueryInitializeEXT(rayQuery, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, inWorldPos, 0.01, L, 1000.0);
+            rayQueryInitializeEXT(
+                rayQuery,
+                topLevelAS,
+                gl_RayFlagsTerminateOnFirstHitEXT,
+                0xFF,
+                inWorldPos,
+                0.01,
+                L,
+                1000.0
+            );
 
-            // Traverse the acceleration structure and store information about the first intersection (if any)
+            // Traverse the acceleration structure and store the first intersection, if any.
             rayQueryProceedEXT(rayQuery);
 
             // If the intersection has hit a triangle, the fragment is shadowed
-            if (rayQueryGetIntersectionTypeEXT(rayQuery, true) == gl_RayQueryCommittedIntersectionTriangleEXT ) {
+            if (
+                rayQueryGetIntersectionTypeEXT(rayQuery, true)
+                    == gl_RayQueryCommittedIntersectionTriangleEXT
+            ) {
                 outFragColor *= 0.1;
             }
         }
-        "#,
-        frag,
-        vulkan1_2
+        "#
     );
 
-    Ok(Arc::new(GraphicPipeline::create(
+    GraphicPipeline::create(
         device,
         GraphicPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()),
         ],
-    )?))
+    )
 }
 
 fn create_tlas(
-    device: &Arc<Device>,
+    device: &Device,
     pool: &mut LazyPool,
-    render_graph: &mut RenderGraph,
+    graph: &mut Graph,
     blas: &Arc<AccelerationStructure>,
 ) -> Result<AccelerationStructureLeaseNode, DriverError> {
     let instances = [vk::AccelerationStructureInstanceKHR {
@@ -348,7 +393,7 @@ fn create_tlas(
                     | vk::BufferUsageFlags::STORAGE_BUFFER,
             ),
         )?;
-        Buffer::copy_from_slice(&mut buffer, 0, instance_data);
+        buffer.copy_from_slice(0, instance_data);
 
         buffer
     });
@@ -356,14 +401,14 @@ fn create_tlas(
     let info = AccelerationStructureGeometryInfo::tlas([(
         AccelerationStructureGeometry::opaque(
             2,
-            AccelerationStructureGeometryData::instances(Buffer::device_address(&instance_buf)),
+            AccelerationStructureGeometryData::instances(instance_buf.device_address()),
         ),
         vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
     )])
     .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
     let size = AccelerationStructure::size_of(device, &info);
     let tlas =
-        render_graph.bind_node(pool.lease(AccelerationStructureInfo::tlas(size.create_size))?);
+        graph.bind_resource(pool.resource(AccelerationStructureInfo::tlas(size.create_size))?);
 
     let accel_struct_scratch_offset_alignment = device
         .physical_device
@@ -372,28 +417,33 @@ fn create_tlas(
         .unwrap()
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
-    let scratch_buf = render_graph.bind_node(
-        pool.lease(
+    let scratch_buf = graph.bind_resource(
+        pool.resource(
             BufferInfo::device_mem(
                 size.build_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             )
-            .to_builder()
+            .into_builder()
             .alignment(accel_struct_scratch_offset_alignment),
         )?,
     );
-    let scratch_data = render_graph.node_device_address(scratch_buf);
-    let blas = render_graph.bind_node(blas);
-    let instance_buf = render_graph.bind_node(instance_buf);
+    let scratch_addr = graph.resource(scratch_buf).device_address();
+    let blas = graph.bind_resource(blas);
+    let instance_buf = graph.bind_resource(instance_buf);
 
-    render_graph
-        .begin_pass("Build TLAS")
-        .access_node(blas, AccessType::AccelerationStructureBuildRead)
-        .access_node(instance_buf, AccessType::AccelerationStructureBuildRead)
-        .access_node(scratch_buf, AccessType::AccelerationStructureBufferWrite)
-        .access_node(tlas, AccessType::AccelerationStructureBuildWrite)
-        .record_acceleration(move |accel, _| {
-            accel.build_structure(&info, tlas, scratch_data);
+    graph
+        .begin_cmd()
+        .debug_name("Build TLAS")
+        .resource_access(blas, AccessType::AccelerationStructureBuildRead)
+        .resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
+        .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+        .resource_access(tlas, AccessType::AccelerationStructureBuildWrite)
+        .record_cmd(move |cmd| {
+            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+                tlas,
+                scratch_addr,
+                info,
+            )]);
         });
 
     Ok(tlas)
@@ -418,7 +468,7 @@ fn download_model_from_github(model_name: &str) -> anyhow::Result<PathBuf> {
     Ok(model_path)
 }
 
-fn load_ground_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
+fn load_ground_mesh(device: &Device) -> Result<Model, DriverError> {
     let extent = 100f32;
     let v0 = [-extent, 0.0, -extent];
     let v1 = [extent, 0.0, -extent];
@@ -450,7 +500,7 @@ fn load_ground_mesh(device: &Arc<Device>) -> Result<Model, DriverError> {
 }
 
 fn load_model<T>(
-    device: &Arc<Device>,
+    device: &Device,
     path: impl AsRef<Path>,
     face_fn: fn(a: Vec3, b: Vec3, c: Vec3) -> [T; 3],
 ) -> anyhow::Result<Model>
@@ -525,7 +575,7 @@ where
 }
 
 /// Loads an .obj model as indexed position and normal vertices
-fn load_model_mesh(device: &Arc<Device>, path: impl AsRef<Path>) -> anyhow::Result<Model> {
+fn load_model_mesh(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Model> {
     #[repr(C)]
     #[derive(Clone, Copy, Default, Pod, Zeroable)]
     struct Vertex {

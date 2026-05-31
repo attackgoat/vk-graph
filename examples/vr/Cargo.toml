@@ -1,25 +1,29 @@
 [package]
 name = "vr"
-version = "0.1.0"
 authors = ["John Wells <john@attackgoat.com>"]
-edition = "2021"
-license = "MIT OR Apache-2.0"
-readme = "README.md"
+edition.workspace = true
+license.workspace = true
+publish = false
+readme.workspace = true
+repository.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["loaded"]
+loaded = ["openxr/loaded", "vk-graph/loaded"]
+linked = ["openxr/linked", "vk-graph/linked"]
 
 [dependencies]
 anyhow = "1.0"
-bytemuck = { version = "1.14", features = ["derive"] }
+bytemuck = { version = "1.25", features = ["derive"] }
 ctrlc = "3.4"
-glam = { version = "0.27", features = ["bytemuck", "mint"] }
+glam = { version = "0.32", features = ["bytemuck", "mint"] }
 image = "0.25"
-log = "0.4"
-meshopt = "0.2"
-mikktspace = "0.3"
+log.workspace = true
+meshopt = "0.6"
+mikktspace = { version = "1.0", package = "bevy_mikktspace" }
 mint = "0.5"
-openxr = { version = "0.18", features = ["mint", "static"] }
+openxr = { version = "0.21", default-features = false, features = ["mint"] }
 pretty_env_logger = "0.5"
-screen-13 = { path = "../.." }
-screen-13-hot = { path = "../../contrib/screen-13-hot" }
+vk-graph.workspace = true
+vk-graph-hot.workspace = true
 tobj = "4.0"

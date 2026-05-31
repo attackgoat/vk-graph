@@ -2,10 +2,10 @@
 
 # Animation Example
 
-Demonstrates loading and rendering skeletal mesh animation using [`pak`] and [`screen-13`].
+Demonstrates loading and rendering skeletal mesh animation using [`pak`] and [`vk-graph`].
 
 [`pak`]: https://github.com/attackgoat/pak
-[`screen-13`]: https://github.com/attackgoat/screen-13
+[`vk-graph`]: https://github.com/attackgoat/vk-graph
 
 # Assets
 

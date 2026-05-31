@@ -2,44 +2,34 @@ use {
     super::{DriverError, device::Device},
     ash::vk,
     log::warn,
-    std::{ops::Deref, sync::Arc, thread::panicking},
+    std::thread::panicking,
 };
 
 #[derive(Debug)]
+#[read_only::cast]
 pub struct DescriptorSetLayout {
-    device: Arc<Device>,
-    descriptor_set_layout: vk::DescriptorSetLayout,
+    pub device: Device,
+    pub handle: vk::DescriptorSetLayout,
 }
 
 impl DescriptorSetLayout {
     #[profiling::function]
     pub fn create(
-        device: &Arc<Device>,
+        device: &Device,
         info: &vk::DescriptorSetLayoutCreateInfo,
     ) -> Result<Self, DriverError> {
-        let device = Arc::clone(device);
-        let descriptor_set_layout = unsafe {
+        let device = device.clone();
+        let handle = unsafe {
             device
                 .create_descriptor_set_layout(info, None)
                 .map_err(|err| {
-                    warn!("{err}");
+                    warn!("unable to create descriptor set layout: {err}");
 
                     DriverError::Unsupported
                 })
         }?;
 
-        Ok(Self {
-            device,
-            descriptor_set_layout,
-        })
-    }
-}
-
-impl Deref for DescriptorSetLayout {
-    type Target = vk::DescriptorSetLayout;
-
-    fn deref(&self) -> &Self::Target {
-        &self.descriptor_set_layout
+        Ok(Self { device, handle })
     }
 }
 
@@ -51,8 +41,7 @@ impl Drop for DescriptorSetLayout {
         }
 
         unsafe {
-            self.device
-                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device.destroy_descriptor_set_layout(self.handle, None);
         }
     }
 }
