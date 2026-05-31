@@ -91,6 +91,63 @@ graph
 # Ok(()) }
 ```
 
+## MSAA Resolve
+
+Use `color_attachment_image` for the multisampled target and `color_attachment_resolve_image`
+for the single-sampled resolve target.
+
+```no_run
+# use vk_graph::cmd::{LoadOp, StoreOp};
+# use vk_graph::driver::ash::vk;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+# use vk_graph::driver::image::{Image, ImageInfo, SampleCount};
+# use vk_graph::driver::shader::Shader;
+# use vk_graph::Graph;
+# fn main() -> Result<(), vk_graph::driver::DriverError> {
+# let device = Device::create(DeviceInfo::default())?;
+# let pipeline = GraphicPipeline::create(
+#     &device,
+#     GraphicPipelineInfo::default(),
+#     [
+#         Shader::new_vertex([0u8; 4].as_slice()),
+#         Shader::new_fragment([0u8; 4].as_slice()),
+#     ],
+# )?;
+# let mut graph = Graph::default();
+# let msaa_color = Image::create(
+#     &device,
+#     ImageInfo::image_2d(
+#         1280,
+#         720,
+#         vk::Format::R8G8B8A8_UNORM,
+#         vk::ImageUsageFlags::COLOR_ATTACHMENT,
+#     )
+#     .into_builder()
+#     .sample_count(SampleCount::Type4),
+# )?;
+# let resolve_color = Image::create(
+#     &device,
+#     ImageInfo::image_2d(
+#         1280,
+#         720,
+#         vk::Format::R8G8B8A8_UNORM,
+#         vk::ImageUsageFlags::COLOR_ATTACHMENT,
+#     ),
+# )?;
+# let msaa_color = graph.bind_resource(msaa_color);
+# let resolve_color = graph.bind_resource(resolve_color);
+graph
+    .begin_cmd()
+    .bind_pipeline(&pipeline)
+    .color_attachment_image(0, msaa_color, LoadOp::DontCare, StoreOp::DontCare)
+    .color_attachment_resolve_image(0, 1, resolve_color)
+    .record_cmd(|cmd| {
+        cmd.draw(3, 1, 0, 0);
+    });
+# Ok(()) }
+```
+
 ## Dynamic Viewports And Scissors
 
 The default viewport covers the full attachment extent and the default scissor does not clip.

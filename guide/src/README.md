@@ -7,6 +7,9 @@ modern Vulkan commands[^modern].
 This guide book will walk you through the mental model of this crate and help explain how it maps to
 Vulkan API usage.
 
+Source code and issues live on the [GitHub repository](https://github.com/attackgoat/vk-graph).
+If you find a problem in this guide, please [open an issue](https://github.com/attackgoat/vk-graph/issues).
+
 > [!IMPORTANT]
 > Users should be familiar with the Vulkan
 [_specification_](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html)
