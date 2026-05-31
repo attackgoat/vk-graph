@@ -511,12 +511,6 @@ impl SwapchainInfo {
             width: Some(self.width),
         }
     }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> SwapchainInfoBuilder {
-        self.into_builder()
-    }
 }
 
 impl From<SwapchainInfoBuilder> for SwapchainInfo {

@@ -57,13 +57,13 @@ impl RayTracePipeline {
     /// # };
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let my_rgen_code = [0u8; 1];
     /// # let my_chit_code = [0u8; 1];
     /// # let my_miss_code = [0u8; 1];
     /// # let my_shadow_code = [0u8; 1];
     /// // shader code is raw SPIR-V code as bytes
-    /// let info = RayTracePipelineInfo::default().to_builder().max_ray_recursion_depth(1);
+    /// let info = RayTracePipelineInfo::default().into_builder().max_ray_recursion_depth(1);
     /// let pipeline = RayTracePipeline::create(
     ///     &device,
     ///     info,
@@ -415,7 +415,7 @@ pub struct RayTracePipelineInfo {
     /// Allow [setting the stack size dynamically] for a ray trace pipeline.
     ///
     /// When set, you must manually set the stack size during ray trace passes using
-    /// [`RayTrace::set_stack_size`](crate::graph::pass_ref::RayTrace::set_stack_size).
+    /// [`RayTraceCommandRef::set_stack_size`](crate::cmd::RayTraceCommandRef::set_stack_size).
     ///
     /// See [`vkCmdSetRayTracingPipelineStackSizeKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetRayTracingPipelineStackSizeKHR.html).
     #[builder(default)]
@@ -443,12 +443,6 @@ impl RayTracePipelineInfo {
             dynamic_stack_size: Some(self.dynamic_stack_size),
             max_ray_recursion_depth: Some(self.max_ray_recursion_depth),
         }
-    }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> RayTracePipelineInfoBuilder {
-        self.into_builder()
     }
 }
 
@@ -637,18 +631,6 @@ impl From<RayTraceShaderGroupType> for vk::RayTracingShaderGroupTypeKHR {
             RayTraceShaderGroupType::TrianglesHitGroup => {
                 vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP
             }
-        }
-    }
-}
-
-mod deprecated {
-    use crate::driver::ray_trace::RayTracePipeline;
-
-    impl RayTracePipeline {
-        #[deprecated = "use with_debug_name function"]
-        #[doc(hidden)]
-        pub fn with_name(this: Self, name: impl Into<String>) -> Self {
-            this.with_debug_name(name)
         }
     }
 }

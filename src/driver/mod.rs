@@ -68,10 +68,6 @@ pub use {
     vk_sync::{self as sync},
 };
 
-#[deprecated = "Use driver::render_pass::ResolveMode instead"]
-#[doc(hidden)]
-pub type ResolveMode = self::render_pass::ResolveMode;
-
 pub(crate) use self::{
     descriptor_set::DescriptorSet,
     descriptor_set_layout::DescriptorSetLayout,
@@ -96,11 +92,6 @@ use {
         fmt::{Display, Formatter},
     },
 };
-
-// When removing, fix all the extra-overly-qualiified references in this file
-#[deprecated = "use from sync module"]
-#[doc(hidden)]
-pub type AccessType = self::sync::AccessType;
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
     match fmt {

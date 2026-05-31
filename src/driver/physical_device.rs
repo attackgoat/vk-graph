@@ -237,174 +237,11 @@ pub struct PhysicalDevice {
 }
 
 impl PhysicalDevice {
-    /// Creates a physical device wrapper which reports features and properties.
-    #[profiling::function]
-    pub(super) fn new(
-        instance: Instance,
-        physical_device: vk::PhysicalDevice,
-    ) -> Result<Self, DriverError> {
-        if physical_device == vk::PhysicalDevice::null() {
-            warn!("invalid physical device handle: null");
-
-            return Err(DriverError::InvalidData);
-        }
-
-        let (memory_properties, queue_families) = unsafe {
-            (
-                instance.get_physical_device_memory_properties(physical_device),
-                instance.get_physical_device_queue_family_properties(physical_device),
-            )
-        };
-
-        let mut queue_family_indices = Vec::with_capacity(queue_families.len());
-        for idx in 0..queue_families.len() as u32 {
-            queue_family_indices.push(idx);
-        }
-
-        let queue_families = queue_families.into();
-        let queue_family_indices = queue_family_indices.into();
-
-        let ash::InstanceFnV1_1 {
-            get_physical_device_features2,
-            get_physical_device_properties2,
-            ..
-        } = instance.fp_v1_1();
-
-        // Gather required features of the physical device
-        let mut features_v1_1 = vk::PhysicalDeviceVulkan11Features::default();
-        let mut features_v1_2 = vk::PhysicalDeviceVulkan12Features::default();
-        let mut acceleration_structure_features =
-            vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
-        let mut index_type_u8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
-        let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-        let mut ray_trace_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
-        let mut features = vk::PhysicalDeviceFeatures2::default()
-            .push_next(&mut features_v1_1)
-            .push_next(&mut features_v1_2)
-            .push_next(&mut acceleration_structure_features)
-            .push_next(&mut index_type_u8_features)
-            .push_next(&mut ray_query_features)
-            .push_next(&mut ray_trace_features);
-        unsafe {
-            get_physical_device_features2(physical_device, &mut features);
-        }
-        let features_v1_0 = features.features.into();
-        let features_v1_1 = features_v1_1.into();
-        let features_v1_2 = features_v1_2.into();
-
-        // Gather required properties of the physical device
-        let mut properties_v1_1 = vk::PhysicalDeviceVulkan11Properties::default();
-        let mut properties_v1_2 = vk::PhysicalDeviceVulkan12Properties::default();
-        let mut accel_struct_properties =
-            vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
-        let mut depth_stencil_resolve_properties =
-            vk::PhysicalDeviceDepthStencilResolveProperties::default();
-        let mut ray_trace_properties = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
-        let mut sampler_filter_minmax_properties =
-            vk::PhysicalDeviceSamplerFilterMinmaxProperties::default();
-        let mut properties = vk::PhysicalDeviceProperties2::default()
-            .push_next(&mut properties_v1_1)
-            .push_next(&mut properties_v1_2)
-            .push_next(&mut accel_struct_properties)
-            .push_next(&mut depth_stencil_resolve_properties)
-            .push_next(&mut ray_trace_properties)
-            .push_next(&mut sampler_filter_minmax_properties);
-        unsafe {
-            get_physical_device_properties2(physical_device, &mut properties);
-        }
-        let properties_v1_0: Vulkan10Properties = properties.properties.into();
-        let properties_v1_1 = properties_v1_1.into();
-        let properties_v1_2 = properties_v1_2.into();
-        let depth_stencil_resolve_properties = depth_stencil_resolve_properties.into();
-        let sampler_filter_minmax_properties = sampler_filter_minmax_properties.into();
-
-        let extension_properties = unsafe {
-            instance
-                .enumerate_device_extension_properties(physical_device)
-                .map_err(|err| {
-                    error!("unable to enumerate device extensions: {err}");
-
-                    DriverError::Unsupported
-                })?
-        };
-
-        debug!("physical device: {}", &properties_v1_0.device_name);
-
-        for prop in &extension_properties {
-            let extension_name = prop.extension_name.as_ptr();
-
-            if extension_name.is_null() {
-                warn!("invalid device extension name pointer: null");
-
-                return Err(DriverError::InvalidData);
-            }
-
-            let extension_name = unsafe { CStr::from_ptr(extension_name) };
-
-            debug!("extension {:?} v{}", extension_name, prop.spec_version);
-        }
-
-        // Check for supported extensions
-        let extension_names = extension_properties
-            .iter()
-            .map(|prop| prop.extension_name.as_ptr())
-            .filter(|extension_name| !extension_name.is_null())
-            .map(|extension_name| unsafe { CStr::from_ptr(extension_name) })
-            .collect::<HashSet<_>>();
-        let supports_accel_struct = extension_names.contains(khr::acceleration_structure::NAME)
-            && extension_names.contains(khr::deferred_host_operations::NAME);
-        let supports_index_type_uint8 = extension_names.contains(ext::index_type_uint8::NAME);
-        let supports_ray_query = extension_names.contains(khr::ray_query::NAME);
-        let supports_ray_trace = extension_names.contains(khr::ray_tracing_pipeline::NAME);
-        let swapchain_ext = extension_names.contains(khr::swapchain::NAME) && instance.surface_ext;
-
-        // Gather optional features and properties of the physical device
-        let index_type_uint8_features = if supports_index_type_uint8 {
-            index_type_u8_features.into()
-        } else {
-            Default::default()
-        };
-        let ray_query_features = if supports_ray_query {
-            ray_query_features.into()
-        } else {
-            Default::default()
-        };
-        let ray_trace_features = if supports_ray_trace {
-            ray_trace_features.into()
-        } else {
-            Default::default()
-        };
-        let accel_struct_properties = supports_accel_struct.then(|| accel_struct_properties.into());
-        let ray_trace_properties = supports_ray_trace.then(|| ray_trace_properties.into());
-
-        Ok(Self {
-            accel_struct_properties,
-            depth_stencil_resolve_properties,
-            features_v1_0,
-            features_v1_1,
-            features_v1_2,
-            handle: physical_device,
-            index_type_uint8_features,
-            instance,
-            memory_properties,
-            properties_v1_0,
-            properties_v1_1,
-            properties_v1_2,
-            queue_families,
-            queue_family_indices,
-            ray_query_features,
-            ray_trace_features,
-            ray_trace_properties,
-            sampler_filter_minmax_properties,
-            swapchain_ext,
-        })
-    }
-
     /// Prepares device creation information and calls the provided callback to allow an application
     /// to control the device creation process.
     ///
     /// _Note:_  This is only useful for interoperating with other libraries as device creation is
-    /// normally handled by the [`Device::create_display`] and [`Device::new`]
+    /// normally handled by the [`Device::try_from_display`] and [`Device::create`]
     /// functions.
     ///
     /// # Safety
@@ -557,6 +394,168 @@ impl PhysicalDevice {
                 }
             }
         }
+    }
+
+    /// Creates a physical device wrapper which reports features and properties.
+    pub fn try_from_ash(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<Self, DriverError> {
+        if physical_device == vk::PhysicalDevice::null() {
+            warn!("invalid physical device handle: null");
+
+            return Err(DriverError::InvalidData);
+        }
+
+        let (memory_properties, queue_families) = unsafe {
+            (
+                instance.get_physical_device_memory_properties(physical_device),
+                instance.get_physical_device_queue_family_properties(physical_device),
+            )
+        };
+
+        let mut queue_family_indices = Vec::with_capacity(queue_families.len());
+        for idx in 0..queue_families.len() as u32 {
+            queue_family_indices.push(idx);
+        }
+
+        let queue_families = queue_families.into();
+        let queue_family_indices = queue_family_indices.into();
+
+        let ash::InstanceFnV1_1 {
+            get_physical_device_features2,
+            get_physical_device_properties2,
+            ..
+        } = instance.fp_v1_1();
+
+        // Gather required features of the physical device
+        let mut features_v1_1 = vk::PhysicalDeviceVulkan11Features::default();
+        let mut features_v1_2 = vk::PhysicalDeviceVulkan12Features::default();
+        let mut acceleration_structure_features =
+            vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let mut index_type_u8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
+        let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+        let mut ray_trace_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+        let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut features_v1_1)
+            .push_next(&mut features_v1_2)
+            .push_next(&mut acceleration_structure_features)
+            .push_next(&mut index_type_u8_features)
+            .push_next(&mut ray_query_features)
+            .push_next(&mut ray_trace_features);
+        unsafe {
+            get_physical_device_features2(physical_device, &mut features);
+        }
+        let features_v1_0 = features.features.into();
+        let features_v1_1 = features_v1_1.into();
+        let features_v1_2 = features_v1_2.into();
+
+        // Gather required properties of the physical device
+        let mut properties_v1_1 = vk::PhysicalDeviceVulkan11Properties::default();
+        let mut properties_v1_2 = vk::PhysicalDeviceVulkan12Properties::default();
+        let mut accel_struct_properties =
+            vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+        let mut depth_stencil_resolve_properties =
+            vk::PhysicalDeviceDepthStencilResolveProperties::default();
+        let mut ray_trace_properties = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
+        let mut sampler_filter_minmax_properties =
+            vk::PhysicalDeviceSamplerFilterMinmaxProperties::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default()
+            .push_next(&mut properties_v1_1)
+            .push_next(&mut properties_v1_2)
+            .push_next(&mut accel_struct_properties)
+            .push_next(&mut depth_stencil_resolve_properties)
+            .push_next(&mut ray_trace_properties)
+            .push_next(&mut sampler_filter_minmax_properties);
+        unsafe {
+            get_physical_device_properties2(physical_device, &mut properties);
+        }
+        let properties_v1_0: Vulkan10Properties = properties.properties.into();
+        let properties_v1_1 = properties_v1_1.into();
+        let properties_v1_2 = properties_v1_2.into();
+        let depth_stencil_resolve_properties = depth_stencil_resolve_properties.into();
+        let sampler_filter_minmax_properties = sampler_filter_minmax_properties.into();
+
+        let extension_properties = unsafe {
+            instance
+                .enumerate_device_extension_properties(physical_device)
+                .map_err(|err| {
+                    error!("unable to enumerate device extensions: {err}");
+
+                    DriverError::Unsupported
+                })?
+        };
+
+        debug!("physical device: {}", &properties_v1_0.device_name);
+
+        for prop in &extension_properties {
+            let extension_name = prop.extension_name.as_ptr();
+
+            if extension_name.is_null() {
+                warn!("invalid device extension name pointer: null");
+
+                return Err(DriverError::InvalidData);
+            }
+
+            let extension_name = unsafe { CStr::from_ptr(extension_name) };
+
+            debug!("extension {:?} v{}", extension_name, prop.spec_version);
+        }
+
+        // Check for supported extensions
+        let extension_names = extension_properties
+            .iter()
+            .map(|prop| prop.extension_name.as_ptr())
+            .filter(|extension_name| !extension_name.is_null())
+            .map(|extension_name| unsafe { CStr::from_ptr(extension_name) })
+            .collect::<HashSet<_>>();
+        let supports_accel_struct = extension_names.contains(khr::acceleration_structure::NAME)
+            && extension_names.contains(khr::deferred_host_operations::NAME);
+        let supports_index_type_uint8 = extension_names.contains(ext::index_type_uint8::NAME);
+        let supports_ray_query = extension_names.contains(khr::ray_query::NAME);
+        let supports_ray_trace = extension_names.contains(khr::ray_tracing_pipeline::NAME);
+        let swapchain_ext = extension_names.contains(khr::swapchain::NAME) && instance.surface_ext;
+
+        // Gather optional features and properties of the physical device
+        let index_type_uint8_features = if supports_index_type_uint8 {
+            index_type_u8_features.into()
+        } else {
+            Default::default()
+        };
+        let ray_query_features = if supports_ray_query {
+            ray_query_features.into()
+        } else {
+            Default::default()
+        };
+        let ray_trace_features = if supports_ray_trace {
+            ray_trace_features.into()
+        } else {
+            Default::default()
+        };
+        let accel_struct_properties = supports_accel_struct.then(|| accel_struct_properties.into());
+        let ray_trace_properties = supports_ray_trace.then(|| ray_trace_properties.into());
+
+        Ok(Self {
+            accel_struct_properties,
+            depth_stencil_resolve_properties,
+            features_v1_0,
+            features_v1_1,
+            features_v1_2,
+            handle: physical_device,
+            index_type_uint8_features,
+            instance: instance.clone(),
+            memory_properties,
+            properties_v1_0,
+            properties_v1_1,
+            properties_v1_2,
+            queue_families,
+            queue_family_indices,
+            ray_query_features,
+            ray_trace_features,
+            ray_trace_properties,
+            sampler_filter_minmax_properties,
+            swapchain_ext,
+        })
     }
 
     /// Creates a logical [`Device`] from this selected physical device.

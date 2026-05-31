@@ -68,11 +68,12 @@ pub(crate) fn image_subresource_range_intersects(
 ///
 /// ```no_run
 /// # use ash::vk;
-/// # use vk_graph::driver::{AccessType, DriverError};
+/// # use vk_sync::AccessType;
+/// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::image::{Image, ImageInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
+/// # let device = Device::create(DeviceInfo::default())?;
 /// let fmt = vk::Format::R8G8B8A8_UNORM;
 /// let usage = vk::ImageUsageFlags::SAMPLED;
 /// let info = ImageInfo::image_2d(320, 200, fmt, usage);
@@ -128,7 +129,7 @@ impl Image {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// let info = ImageInfo::image_2d(
     ///     32,
     ///     32,
@@ -251,11 +252,12 @@ impl Image {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
     /// # let my_image = Image::create(&device, info)?;
     /// # let my_subresource_range = vk::ImageSubresourceRange::default();
@@ -920,12 +922,6 @@ impl ImageInfo {
             width: Some(self.width),
         }
     }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> ImageInfoBuilder {
-        self.into_builder()
-    }
 }
 
 impl From<ImageInfo> for vk::ImageCreateInfo<'_> {
@@ -1124,12 +1120,6 @@ impl ImageViewInfo {
         }
     }
 
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> ImageViewInfoBuilder {
-        self.into_builder()
-    }
-
     /// Takes this instance and returns it with a newly specified `ImageViewType`.
     pub fn with_type(mut self, ty: vk::ImageViewType) -> Self {
         self.ty = ty;
@@ -1282,19 +1272,6 @@ impl From<SampleCount> for vk::SampleCountFlags {
             SampleCount::Type16 => Self::TYPE_16,
             SampleCount::Type32 => Self::TYPE_32,
             SampleCount::Type64 => Self::TYPE_64,
-        }
-    }
-}
-
-#[allow(unused)]
-mod deprecated {
-    use crate::driver::image::{ImageInfo, ImageViewInfo};
-
-    impl ImageInfo {
-        #[deprecated = "use into_image_view function"]
-        #[doc(hidden)]
-        pub fn default_view_info(self) -> ImageViewInfo {
-            self.into_image_view()
         }
     }
 }

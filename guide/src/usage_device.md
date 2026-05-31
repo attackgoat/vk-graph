@@ -77,7 +77,7 @@ The entrypoint is an `Instance` from which the available hardware is enumerated 
 # use vk_graph::driver::device::Device;
 # use vk_graph::driver::instance::{Instance, InstanceInfo};
 # fn test() -> Result<(), DriverError> {
-let instance = Instance::new(InstanceInfo::default())?;
+let instance = Instance::create(InstanceInfo::default())?;
 let physical_devices = Instance::physical_devices(&instance)?;
 
 for physical_device in physical_devices {
@@ -103,6 +103,7 @@ use by `vk-graph`:
 # use vk_graph::driver::ash::{self, vk};
 # use vk_graph::driver::device::Device;
 # use vk_graph::driver::instance::Instance;
+# use vk_graph::driver::physical_device::PhysicalDevice;
 # fn test() -> Result<(), DriverError> {
 // Native ash types from somewhere else
 let entry: ash::Entry = todo!();
@@ -110,8 +111,8 @@ let instance: vk::Instance = todo!();
 let physical_device: vk::PhysicalDevice = todo!();
 
 // vk-graph types
-let instance = Instance::from_entry(entry, instance)?;
-let physical_device = Instance::physical_device(&instance, physical_device)?;
+let instance = Instance::try_from_entry(entry, instance)?;
+let physical_device = PhysicalDevice::try_from_ash(&instance, physical_device)?;
 
 // Use our PhysicalDevice to create a native ash::Device (OpenXR requires this)
 let device: ash::Device = unsafe {
@@ -129,7 +130,7 @@ let device: ash::Device = unsafe {
 }.unwrap();
 
 // Create a Device from their native stuff
-let device = Device::try_from_ash_device(device, physical_device)?;
+let device = Device::try_from_ash(device, physical_device)?;
 # Ok(()) }
 ```
 

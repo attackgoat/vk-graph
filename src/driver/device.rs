@@ -68,12 +68,6 @@ pub struct Device {
 }
 
 impl Device {
-    #[deprecated = "use create"]
-    #[doc(hidden)]
-    pub fn new(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
-        Self::create(info)
-    }
-
     /// Begins recording a command buffer on this device.
     ///
     /// This is a thin wrapper around [`ash::Device::begin_command_buffer`] that maps Vulkan errors
@@ -254,7 +248,7 @@ impl Device {
 
     /// Loads and existing `ash` Vulkan device that may have been created by other means.
     #[profiling::function]
-    pub fn try_from_ash_device(
+    pub fn try_from_ash(
         device: ash::Device,
         physical_device: PhysicalDevice,
     ) -> Result<Self, DriverError> {
@@ -370,7 +364,7 @@ impl Device {
 
         info!("created {}", physical_device.properties_v1_0.device_name);
 
-        Self::try_from_ash_device(device, physical_device)
+        Self::try_from_ash(device, physical_device)
     }
 
     #[profiling::function]
@@ -534,12 +528,6 @@ impl DeviceInfo {
             physical_device_index: Some(self.physical_device_index),
         }
     }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> DeviceInfoBuilder {
-        self.into_builder()
-    }
 }
 
 impl From<DeviceInfoBuilder> for DeviceInfo {
@@ -614,83 +602,6 @@ impl Deref for ReadOnlyDevice {
 
     fn deref(&self) -> &Self::Target {
         &self.inner.device
-    }
-}
-
-#[allow(deprecated)]
-#[allow(unused)]
-pub(crate) mod deprecated {
-    use {
-        crate::driver::{
-            DriverError,
-            device::{Device, DeviceInfo, DeviceInfoBuilder},
-        },
-        ash::vk,
-        log::warn,
-        raw_window_handle::HasDisplayHandle,
-        std::any::Any,
-    };
-
-    impl Device {
-        #[deprecated = "use from_display function"]
-        #[doc(hidden)]
-        pub fn create_display(
-            info: impl Into<DeviceInfo>,
-            display_handle: &impl HasDisplayHandle,
-        ) -> Result<Self, DriverError> {
-            Self::try_from_display(display_handle, info)
-        }
-
-        #[deprecated = "use new function"]
-        #[doc(hidden)]
-        pub fn create_headless(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
-            Self::new(info)
-        }
-        #[deprecated = "use format_properties function of physical_device field"]
-        #[doc(hidden)]
-        pub fn format_properties(this: &Self, format: vk::Format) -> vk::FormatProperties {
-            this.physical_device.format_properties(format)
-        }
-
-        #[deprecated = "use image_format_properties function of physical_device field"]
-        #[doc(hidden)]
-        pub fn image_format_properties(
-            this: &Self,
-            format: vk::Format,
-            ty: vk::ImageType,
-            tiling: vk::ImageTiling,
-            usage: vk::ImageUsageFlags,
-            flags: vk::ImageCreateFlags,
-        ) -> Result<Option<vk::ImageFormatProperties>, DriverError> {
-            this.physical_device
-                .image_format_properties(format, ty, tiling, usage, flags)
-        }
-    }
-
-    impl DeviceInfo {
-        #[deprecated = "no effect; use physical_device_index"]
-        #[doc(hidden)]
-        pub fn integrated_gpu() {
-            warn!("invalid deprecated device selection hint: integrated_gpu has no effect");
-        }
-
-        #[deprecated = "no effect; use physical_device_index"]
-        #[doc(hidden)]
-        pub fn discrete_gpu() {
-            warn!("invalid deprecated device selection hint: discrete_gpu has no effect");
-        }
-    }
-
-    impl DeviceInfoBuilder {
-        #[deprecated = "no effect; use physical_device_index"]
-        #[doc(hidden)]
-        pub fn select_physical_device(self, _: Box<dyn Fn()>) -> Self {
-            warn!(
-                "invalid deprecated device selection callback: select_physical_device has no effect"
-            );
-
-            self
-        }
     }
 }
 

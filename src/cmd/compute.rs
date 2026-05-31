@@ -46,7 +46,7 @@ impl PipelineCommand<'_, ComputePipeline> {
 /// # use vk_graph::driver::shader::{Shader};
 /// # use vk_graph::Graph;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
+/// # let device = Device::create(DeviceInfo::default())?;
 /// # let info = ComputePipelineInfo::default();
 /// # let shader = Shader::new_compute([0u8; 1].as_slice());
 /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
@@ -92,14 +92,15 @@ impl ComputeCommandRef<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::STORAGE_BUFFER);
     /// # let my_buf = Buffer::create(&device, buf_info)?;
     /// # let info = ComputePipelineInfo::default();
@@ -183,14 +184,15 @@ impl ComputeCommandRef<'_> {
     /// ```no_run
     /// # use ash::vk;
     /// # use bytemuck::{bytes_of, Pod, Zeroable};
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::STORAGE_BUFFER);
     /// # let my_buf = Buffer::create(&device, buf_info)?;
     /// # let info = ComputePipelineInfo::default();
@@ -287,7 +289,7 @@ impl ComputeCommandRef<'_> {
     /// # use vk_graph::driver::shader::{Shader};
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let info = ComputePipelineInfo::default();
     /// # let shader = Shader::new_compute([0u8; 1].as_slice());
     /// # let my_compute_pipeline = ComputePipeline::create(&device, info, shader)?;
@@ -323,108 +325,5 @@ impl<'a> Deref for ComputeCommandRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         &self.cmd
-    }
-}
-
-#[allow(unused)]
-mod deprecated {
-    use {
-        crate::{
-            Node,
-            cmd::{
-                Binding, PipelineCommand, Subresource, SubresourceRange, ViewInfo,
-                compute::ComputeCommandRef,
-            },
-            driver::compute::ComputePipeline,
-        },
-        std::any::Any,
-        vk_sync::AccessType,
-    };
-
-    impl ComputeCommandRef<'_> {
-        #[deprecated = "use push_constants function"]
-        #[doc(hidden)]
-        pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
-            self.push_constants(offset, data)
-        }
-    }
-
-    impl PipelineCommand<'_, ComputePipeline> {
-        #[deprecated = "use shader_resource_access with ComputeShaderReadOther"]
-        #[doc(hidden)]
-        pub fn read_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_resource_access(descriptor, node, AccessType::ComputeShaderReadOther)
-        }
-
-        #[deprecated = "use shader_subresource_access with ComputeShaderReadOther"]
-        #[doc(hidden)]
-        pub fn read_descriptor_as<N>(
-            self,
-            descriptor: impl Into<Binding>,
-            node: N,
-            node_view: impl Into<N::Info>,
-        ) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_subresource_access(
-                descriptor,
-                node,
-                node_view,
-                AccessType::ComputeShaderReadOther,
-            )
-        }
-
-        #[deprecated = "use record_cmd function"]
-        #[doc(hidden)]
-        pub fn record_compute(
-            self,
-            func: impl FnOnce(ComputeCommandRef<'_>, ()) + Send + 'static,
-        ) -> Self {
-            self.record_cmd(|cmd| func(cmd, ()))
-        }
-
-        #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderWrite"]
-        #[doc(hidden)]
-        pub fn write_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_resource_access(descriptor, node, AccessType::ComputeShaderWrite)
-        }
-
-        #[deprecated = "use shader_subresource_access function with AccessType::ComputeShaderWrite"]
-        #[doc(hidden)]
-        pub fn write_descriptor_as<N>(
-            self,
-            descriptor: impl Into<Binding>,
-            node: N,
-            node_view: impl Into<N::Info>,
-        ) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_subresource_access(
-                descriptor,
-                node,
-                node_view,
-                AccessType::ComputeShaderWrite,
-            )
-        }
     }
 }

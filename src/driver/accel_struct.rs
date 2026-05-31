@@ -29,7 +29,7 @@ use std::sync::Mutex;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
+/// # let device = Device::create(DeviceInfo::default())?;
 /// let info = AccelerationStructureInfo::blas(0);
 /// let accel_struct = AccelerationStructure::create(&device, info)?;
 /// let addr = accel_struct.device_address();
@@ -81,7 +81,7 @@ impl AccelerationStructure {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// const SIZE: vk::DeviceSize = 1024;
     /// let info = AccelerationStructureInfo::blas(SIZE);
     /// let accel_struct = AccelerationStructure::create(&device, info)?;
@@ -162,11 +162,12 @@ impl AccelerationStructure {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # const SIZE: vk::DeviceSize = 1024;
     /// # let info = AccelerationStructureInfo::blas(SIZE);
     /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
@@ -209,11 +210,12 @@ impl AccelerationStructure {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use ash::vk;
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # const SIZE: vk::DeviceSize = 1024;
     /// # let info = AccelerationStructureInfo::blas(SIZE);
     /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
@@ -261,7 +263,7 @@ impl AccelerationStructure {
     /// #     DeviceOrHostAddress,
     /// # };
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let my_geom_triangles = AccelerationStructureGeometryData::Triangles {
     /// #     index_addr: DeviceOrHostAddress::DeviceAddress(0),
     /// #     index_type: vk::IndexType::UINT32,
@@ -710,12 +712,6 @@ impl AccelerationStructureInfo {
             ty: Some(self.ty),
             size: Some(self.size),
         }
-    }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> AccelerationStructureInfoBuilder {
-        self.into_builder()
     }
 }
 

@@ -31,7 +31,7 @@
 //! # use vk_graph::pool::{Pool};
 //! # use vk_graph::pool::lazy::{LazyPool};
 //! # fn main() -> Result<(), DriverError> {
-//! # let device = Device::new(DeviceInfo::default())?;
+//! # let device = Device::create(DeviceInfo::default())?;
 //! let mut pool = LazyPool::new(&device);
 //!
 //! let info = ImageInfo::image_2d(8, 8, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::STORAGE);
@@ -235,12 +235,6 @@ impl<T> Drop for Lease<T> {
 
 /// Allows requesting resources using driver information structures.
 pub trait Pool<I, T> {
-    #[deprecated = "use resource function"]
-    #[doc(hidden)]
-    fn lease(&mut self, info: I) -> Result<Lease<T>, DriverError> {
-        self.resource(info)
-    }
-
     /// Request a resource.
     fn resource(&mut self, info: I) -> Result<Lease<T>, DriverError>;
 }
@@ -347,12 +341,6 @@ impl PoolConfig {
         }
     }
 
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> PoolConfigBuilder {
-        self.into_builder()
-    }
-
     /// Constructs a new `PoolConfig` with the given acceleration structure, buffer and image
     /// resource capacity for any single bucket.
     pub const fn with_capacity(resource_capacity: usize) -> Self {
@@ -391,49 +379,6 @@ impl PoolConfigBuilder {
     /// Builds a new `PoolConfig`.
     pub fn build(self) -> PoolConfig {
         self.fallible_build().expect("invalid pool config")
-    }
-}
-
-#[doc(hidden)]
-#[deprecated = "use PoolConfig instead"]
-pub type PoolInfo = PoolConfig;
-
-#[doc(hidden)]
-#[deprecated = "use PoolConfigBuilder instead"]
-pub type PoolInfoBuilder = PoolConfigBuilder;
-
-mod deprecated {
-    use {
-        crate::pool::Lease,
-        std::convert::{AsMut, AsRef},
-    };
-
-    impl<T> Lease<T> {
-        #[allow(clippy::should_implement_trait)]
-        #[deprecated = "use Deref impl"]
-        #[doc(hidden)]
-        pub fn as_ref(&self) -> &T {
-            &self.item
-        }
-
-        #[allow(clippy::should_implement_trait)]
-        #[deprecated = "use DerefMut impl"]
-        #[doc(hidden)]
-        pub fn as_mut(&mut self) -> &mut T {
-            &mut self.item
-        }
-    }
-
-    impl<T> AsRef<T> for Lease<T> {
-        fn as_ref(&self) -> &T {
-            &self.item
-        }
-    }
-
-    impl<T> AsMut<T> for Lease<T> {
-        fn as_mut(&mut self) -> &mut T {
-            &mut self.item
-        }
     }
 }
 

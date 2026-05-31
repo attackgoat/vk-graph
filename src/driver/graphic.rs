@@ -21,14 +21,6 @@ use {
     },
 };
 
-#[deprecated = "use BlendInfo instead"]
-#[doc(hidden)]
-pub type BlendMode = BlendInfo;
-
-#[deprecated = "use DepthStencilInfo instead"]
-#[doc(hidden)]
-pub type DepthStencilMode = DepthStencilInfo;
-
 const RGBA_COLOR_COMPONENTS: vk::ColorComponentFlags = vk::ColorComponentFlags::from_raw(
     vk::ColorComponentFlags::R.as_raw()
         | vk::ColorComponentFlags::G.as_raw()
@@ -274,12 +266,6 @@ impl DepthStencilInfo {
         Default::default()
     }
 
-    #[deprecated = "use builder function"]
-    #[doc(hidden)]
-    pub fn build() -> DepthStencilInfoBuilder {
-        Self::builder()
-    }
-
     /// Converts a `DepthStencilInfo` into a `DepthStencilInfoBuilder`.
     pub fn into_builder(self) -> DepthStencilInfoBuilder {
         DepthStencilInfoBuilder {
@@ -351,7 +337,7 @@ impl GraphicPipeline {
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// // shader code is raw SPIR-V code as bytes
@@ -702,12 +688,6 @@ impl GraphicPipelineInfo {
             samples: Some(self.samples),
         }
     }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> GraphicPipelineInfoBuilder {
-        self.into_builder()
-    }
 }
 
 impl Default for GraphicPipelineInfo {
@@ -861,70 +841,6 @@ impl From<StencilMode> for vk::StencilOpState {
 pub(crate) struct VertexInputState {
     pub vertex_binding_descriptions: Vec<vk::VertexInputBindingDescription>,
     pub vertex_attribute_descriptions: Vec<vk::VertexInputAttributeDescription>,
-}
-
-mod deprecated {
-    use {
-        crate::driver::graphic::{
-            BlendInfo, BlendInfoBuilder, DepthStencilInfo, GraphicPipeline, StencilMode,
-        },
-        ash::vk,
-        ordered_float::OrderedFloat,
-    };
-
-    impl BlendInfo {
-        #[allow(clippy::new_ret_no_self)]
-        #[deprecated = "use builder function or BlendInfoBuilder"]
-        #[doc(hidden)]
-        pub fn new() -> BlendInfoBuilder {
-            Default::default()
-        }
-    }
-
-    impl DepthStencilInfo {
-        /// A commonly used depth/stencil mode
-        #[deprecated = "use constructor or builder function"]
-        pub const DEPTH_READ: Self = Self {
-            back: StencilMode::IGNORE,
-            bounds_test: true,
-            compare_op: vk::CompareOp::LESS,
-            depth_test: true,
-            depth_write: false,
-            front: StencilMode::IGNORE,
-            min: OrderedFloat(0.0),
-            max: OrderedFloat(1.0),
-            stencil_test: false,
-        };
-
-        /// A commonly used depth/stencil mode
-        #[deprecated = "use DEPTH_WRITE_LESS_IGNORE_STENCIL"]
-        pub const DEPTH_WRITE: Self = Self {
-            back: StencilMode::IGNORE,
-            bounds_test: true,
-            compare_op: vk::CompareOp::LESS,
-            depth_test: true,
-            depth_write: true,
-            front: StencilMode::IGNORE,
-            min: OrderedFloat(0.0),
-            max: OrderedFloat(1.0),
-            stencil_test: false,
-        };
-
-        #[allow(clippy::new_ret_no_self)]
-        #[deprecated = "use builder function or DepthStencilInfoBuilder"]
-        #[doc(hidden)]
-        pub fn new() -> BlendInfoBuilder {
-            Default::default()
-        }
-    }
-
-    impl GraphicPipeline {
-        #[deprecated = "use with_debug_name function"]
-        #[doc(hidden)]
-        pub fn with_name(this: Self, name: impl Into<String>) -> Self {
-            this.with_debug_name(name)
-        }
-    }
 }
 
 #[cfg(test)]

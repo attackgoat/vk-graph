@@ -1,15 +1,21 @@
 use {
     super::{AttachmentIndex, cmd_ref::CommandRef, pipeline::PipelineCommand},
     crate::{
+        Attachment, Node, SubresourceAccess,
+        cmd::SubresourceRange,
         driver::{
             graphic::{DepthStencilInfo, GraphicPipeline},
-            image::ImageViewInfo,
+            image::{
+                ImageInfo, ImageViewInfo, image_subresource_range_contains,
+                image_subresource_range_intersects,
+            },
             render_pass::ResolveMode,
         },
         node::{AnyBufferNode, AnyImageNode},
     },
     ash::vk,
     std::{cell::RefCell, ops::Deref, slice},
+    vk_sync::AccessType,
 };
 
 impl PipelineCommand<'_, GraphicPipeline> {
@@ -250,21 +256,20 @@ impl PipelineCommand<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
 
-        #[allow(deprecated)]
-        {
-            match load {
-                LoadOp::Clear(color) => {
-                    self.set_clear_color_value_as(color_attachment, image, color, image_view_info)
-                }
-                LoadOp::DontCare => {
-                    self.set_attach_color_as(color_attachment, image, image_view_info)
-                }
-                LoadOp::Load => self.set_load_color_as(color_attachment, image, image_view_info),
-            };
-
-            if let StoreOp::Store = store {
-                self.set_store_color_as(color_attachment, image, image_view_info);
+        match load {
+            LoadOp::Clear(color) => {
+                self.clear_color_value(color_attachment, image, color, image_view_info);
             }
+            LoadOp::DontCare => {
+                self.attach_color(image, color_attachment, image_view_info);
+            }
+            LoadOp::Load => {
+                self.load_color(image, color_attachment, image_view_info);
+            }
+        }
+
+        if let StoreOp::Store = store {
+            self.store_color(image, color_attachment, image_view_info);
         }
 
         self
@@ -301,8 +306,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
 
-        #[allow(deprecated)]
-        self.set_resolve_color_as(msaa_attachment, color_attachment, image, image_view_info);
+        self.resolve_color(image, msaa_attachment, color_attachment, image_view_info);
 
         self
     }
@@ -346,22 +350,20 @@ impl PipelineCommand<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
 
-        #[allow(deprecated)]
-        {
-            match load {
-                LoadOp::Clear(color) => self.set_clear_depth_stencil_value_as(
-                    image,
-                    color.depth,
-                    color.stencil,
-                    image_view_info,
-                ),
-                LoadOp::DontCare => self.set_attach_depth_stencil_as(image, image_view_info),
-                LoadOp::Load => self.set_load_depth_stencil_as(image, image_view_info),
-            };
-
-            if let StoreOp::Store = store {
-                self.set_store_depth_stencil_as(image, image_view_info);
+        match load {
+            LoadOp::Clear(color) => {
+                self.clear_depth_stencil_value(image, color.depth, color.stencil, image_view_info);
             }
+            LoadOp::DontCare => {
+                self.attach_depth_stencil(image, image_view_info);
+            }
+            LoadOp::Load => {
+                self.load_depth_stencil(image, image_view_info);
+            }
+        }
+
+        if let StoreOp::Store = store {
+            self.store_depth_stencil(image, image_view_info);
         }
 
         self
@@ -401,10 +403,9 @@ impl PipelineCommand<'_, GraphicPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
 
-        #[allow(deprecated)]
-        self.set_resolve_depth_stencil_as(
-            depth_stencil_attachment,
+        self.resolve_depth_stencil(
             image,
+            depth_stencil_attachment,
             image_view_info,
             depth_mode,
             stencil_mode,
@@ -427,6 +428,1130 @@ impl PipelineCommand<'_, GraphicPipeline> {
     /// See [`Self::render_area`]
     pub fn set_render_area(&mut self, area: vk::Rect2D) -> &mut Self {
         self.cmd.cmd_mut().expect_last_exec_mut().render_area = Some(area);
+        self
+    }
+}
+
+impl PipelineCommand<'_, GraphicPipeline> {
+    fn attach_color(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        attachment_idx: AttachmentIndex,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        debug_assert!(
+            !self
+                .cmd
+                .cmd()
+                .expect_last_exec()
+                .color_clears
+                .contains_key(&attachment_idx),
+            "color attachment {attachment_idx} already attached via clear"
+        );
+        debug_assert!(
+            !self
+                .cmd
+                .cmd()
+                .expect_last_exec()
+                .color_loads
+                .contains_key(&attachment_idx),
+            "color attachment {attachment_idx} already attached via load"
+        );
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .color_attachments
+            .insert(
+                attachment_idx,
+                Attachment::new(image_view_info, sample_count, node_idx),
+            );
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_resolves
+                    .get(&attachment_idx)
+                    .map(|(attachment, _)| *attachment),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_attachments
+                    .get(&attachment_idx)
+                    .copied()
+            ),
+            "color attachment {attachment_idx} incompatible with existing resolve"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_stores
+                    .get(&attachment_idx)
+                    .copied(),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_attachments
+                    .get(&attachment_idx)
+                    .copied()
+            ),
+            "color attachment {attachment_idx} incompatible with existing store"
+        );
+
+        self.cmd.push_subresource_access(
+            image,
+            SubresourceRange::Image(image_view_info.into()),
+            AccessType::ColorAttachmentWrite,
+        );
+
+        self
+    }
+
+    fn attach_depth_stencil(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        debug_assert!(
+            self.cmd
+                .cmd()
+                .expect_last_exec()
+                .depth_stencil_clear
+                .is_none(),
+            "depth/stencil attachment already attached via clear"
+        );
+        debug_assert!(
+            self.cmd
+                .cmd()
+                .expect_last_exec()
+                .depth_stencil_load
+                .is_none(),
+            "depth/stencil attachment already attached via load"
+        );
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .depth_stencil_attachment =
+            Some(Attachment::new(image_view_info, sample_count, node_idx));
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .depth_stencil_resolve
+                    .map(|(attachment, ..)| attachment),
+                self.cmd.cmd().expect_last_exec().depth_stencil_attachment
+            ),
+            "depth/stencil attachment incompatible with existing resolve"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd.cmd().expect_last_exec().depth_stencil_store,
+                self.cmd.cmd().expect_last_exec().depth_stencil_attachment
+            ),
+            "depth/stencil attachment incompatible with existing store"
+        );
+
+        self.cmd.push_subresource_access(
+            image,
+            SubresourceRange::Image(image_view_info.into()),
+            if image_view_info
+                .aspect_mask
+                .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
+            {
+                AccessType::DepthStencilAttachmentWrite
+            } else if image_view_info
+                .aspect_mask
+                .contains(vk::ImageAspectFlags::DEPTH)
+            {
+                AccessType::DepthAttachmentWriteStencilReadOnly
+            } else {
+                AccessType::StencilAttachmentWriteDepthReadOnly
+            },
+        );
+
+        self
+    }
+
+    fn clear_color_value(
+        &mut self,
+        attachment_idx: AttachmentIndex,
+        image: impl Into<AnyImageNode>,
+        color: impl Into<ClearColorValue>,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        let color = color.into();
+        let color: vk::ClearColorValue = color.into();
+        let color = unsafe { color.float32 };
+
+        debug_assert!(
+            !self
+                .cmd
+                .cmd()
+                .expect_last_exec()
+                .color_attachments
+                .contains_key(&attachment_idx),
+            "color attachment {attachment_idx} already attached"
+        );
+        debug_assert!(
+            !self
+                .cmd
+                .cmd()
+                .expect_last_exec()
+                .color_loads
+                .contains_key(&attachment_idx),
+            "color attachment {attachment_idx} already attached via load"
+        );
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .color_clears
+            .insert(
+                attachment_idx,
+                (
+                    Attachment::new(image_view_info, sample_count, node_idx),
+                    color,
+                ),
+            );
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_resolves
+                    .get(&attachment_idx)
+                    .map(|(attachment, _)| *attachment),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_clears
+                    .get(&attachment_idx)
+                    .map(|(attachment, _)| *attachment)
+            ),
+            "color attachment {attachment_idx} clear incompatible with existing resolve"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_stores
+                    .get(&attachment_idx)
+                    .copied(),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_clears
+                    .get(&attachment_idx)
+                    .map(|(attachment, _)| *attachment)
+            ),
+            "color attachment {attachment_idx} clear incompatible with existing store"
+        );
+
+        let mut image_access = AccessType::ColorAttachmentWrite;
+        let image_range = image_view_info.into();
+
+        if let Some(accesses) = self
+            .cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .accesses
+            .get_mut(&node_idx)
+        {
+            for SubresourceAccess {
+                access,
+                subresource,
+            } in accesses
+            {
+                let access_image_range = *subresource.expect_image();
+                if !image_subresource_range_intersects(access_image_range, image_range) {
+                    continue;
+                }
+
+                image_access = match *access {
+                    AccessType::ColorAttachmentRead | AccessType::ColorAttachmentReadWrite => {
+                        AccessType::ColorAttachmentReadWrite
+                    }
+                    AccessType::ColorAttachmentWrite => AccessType::ColorAttachmentWrite,
+                    _ => continue,
+                };
+
+                *access = image_access;
+
+                if image_subresource_range_contains(access_image_range, image_range) {
+                    return self;
+                }
+            }
+        }
+
+        self.cmd
+            .push_subresource_access(image, SubresourceRange::Image(image_range), image_access);
+
+        self
+    }
+
+    fn clear_depth_stencil_value(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        depth: f32,
+        stencil: u32,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        debug_assert!(
+            self.cmd
+                .cmd()
+                .expect_last_exec()
+                .depth_stencil_attachment
+                .is_none(),
+            "depth/stencil attachment already attached"
+        );
+        debug_assert!(
+            self.cmd
+                .cmd()
+                .expect_last_exec()
+                .depth_stencil_load
+                .is_none(),
+            "depth/stencil attachment already attached via load"
+        );
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .depth_stencil_clear = Some((
+            Attachment::new(image_view_info, sample_count, node_idx),
+            vk::ClearDepthStencilValue { depth, stencil },
+        ));
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .depth_stencil_resolve
+                    .map(|(attachment, ..)| attachment),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .depth_stencil_clear
+                    .map(|(attachment, _)| attachment)
+            ),
+            "depth/stencil attachment clear incompatible with existing resolve"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd.cmd().expect_last_exec().depth_stencil_store,
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .depth_stencil_clear
+                    .map(|(attachment, _)| attachment)
+            ),
+            "depth/stencil attachment clear incompatible with existing store"
+        );
+
+        let mut image_access = if image_view_info
+            .aspect_mask
+            .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
+        {
+            AccessType::DepthStencilAttachmentWrite
+        } else if image_view_info
+            .aspect_mask
+            .contains(vk::ImageAspectFlags::DEPTH)
+        {
+            AccessType::DepthAttachmentWriteStencilReadOnly
+        } else {
+            debug_assert!(
+                image_view_info
+                    .aspect_mask
+                    .contains(vk::ImageAspectFlags::STENCIL)
+            );
+
+            AccessType::StencilAttachmentWriteDepthReadOnly
+        };
+        let image_range = image_view_info.into();
+
+        if let Some(accesses) = self
+            .cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .accesses
+            .get_mut(&node_idx)
+        {
+            for SubresourceAccess {
+                access,
+                subresource,
+            } in accesses
+            {
+                let access_image_range = *subresource.expect_image();
+                if !image_subresource_range_intersects(access_image_range, image_range) {
+                    continue;
+                }
+
+                image_access = match *access {
+                    AccessType::DepthAttachmentWriteStencilReadOnly => {
+                        if image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::STENCIL)
+                        {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        } else {
+                            AccessType::DepthAttachmentWriteStencilReadOnly
+                        }
+                    }
+                    AccessType::DepthStencilAttachmentRead => {
+                        if !image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::DEPTH)
+                        {
+                            AccessType::StencilAttachmentWriteDepthReadOnly
+                        } else {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        }
+                    }
+                    AccessType::DepthStencilAttachmentWrite => {
+                        AccessType::DepthStencilAttachmentWrite
+                    }
+                    AccessType::StencilAttachmentWriteDepthReadOnly => {
+                        if image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::DEPTH)
+                        {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        } else {
+                            AccessType::StencilAttachmentWriteDepthReadOnly
+                        }
+                    }
+                    _ => continue,
+                };
+
+                *access = image_access;
+
+                if image_subresource_range_contains(access_image_range, image_range) {
+                    return self;
+                }
+            }
+        }
+
+        self.cmd
+            .push_subresource_access(image, SubresourceRange::Image(image_range), image_access);
+
+        self
+    }
+
+    fn load_color(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        attachment_idx: AttachmentIndex,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        debug_assert!(
+            !self
+                .cmd
+                .cmd()
+                .expect_last_exec()
+                .color_attachments
+                .contains_key(&attachment_idx),
+            "color attachment {attachment_idx} already attached"
+        );
+        debug_assert!(
+            !self
+                .cmd
+                .cmd()
+                .expect_last_exec()
+                .color_clears
+                .contains_key(&attachment_idx),
+            "color attachment {attachment_idx} already attached via clear"
+        );
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .color_loads
+            .insert(
+                attachment_idx,
+                Attachment::new(image_view_info, sample_count, node_idx),
+            );
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_resolves
+                    .get(&attachment_idx)
+                    .map(|(attachment, _)| *attachment),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_loads
+                    .get(&attachment_idx)
+                    .copied()
+            ),
+            "color attachment {attachment_idx} load incompatible with existing resolve"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_stores
+                    .get(&attachment_idx)
+                    .copied(),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_loads
+                    .get(&attachment_idx)
+                    .copied()
+            ),
+            "color attachment {attachment_idx} load incompatible with existing store"
+        );
+
+        let mut image_access = AccessType::ColorAttachmentRead;
+        let image_range = image_view_info.into();
+
+        if let Some(accesses) = self
+            .cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .accesses
+            .get_mut(&node_idx)
+        {
+            for SubresourceAccess {
+                access,
+                subresource,
+            } in accesses
+            {
+                let access_image_range = *subresource.expect_image();
+                if !image_subresource_range_intersects(access_image_range, image_range) {
+                    continue;
+                }
+
+                image_access = match *access {
+                    AccessType::ColorAttachmentRead => AccessType::ColorAttachmentRead,
+                    AccessType::ColorAttachmentReadWrite | AccessType::ColorAttachmentWrite => {
+                        AccessType::ColorAttachmentReadWrite
+                    }
+                    _ => continue,
+                };
+
+                *access = image_access;
+
+                if image_subresource_range_contains(access_image_range, image_range) {
+                    return self;
+                }
+            }
+        }
+
+        self.cmd
+            .push_subresource_access(image, SubresourceRange::Image(image_range), image_access);
+
+        self
+    }
+
+    fn load_depth_stencil(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        debug_assert!(
+            self.cmd
+                .cmd()
+                .expect_last_exec()
+                .depth_stencil_attachment
+                .is_none(),
+            "depth/stencil attachment already attached"
+        );
+        debug_assert!(
+            self.cmd
+                .cmd()
+                .expect_last_exec()
+                .depth_stencil_clear
+                .is_none(),
+            "depth/stencil attachment already attached via clear"
+        );
+
+        self.cmd.cmd_mut().expect_last_exec_mut().depth_stencil_load =
+            Some(Attachment::new(image_view_info, sample_count, node_idx));
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .depth_stencil_resolve
+                    .map(|(attachment, ..)| attachment),
+                self.cmd.cmd().expect_last_exec().depth_stencil_load
+            ),
+            "depth/stencil attachment load incompatible with existing resolve"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd.cmd().expect_last_exec().depth_stencil_store,
+                self.cmd.cmd().expect_last_exec().depth_stencil_load
+            ),
+            "depth/stencil attachment load incompatible with existing store"
+        );
+
+        let mut image_access = AccessType::DepthStencilAttachmentRead;
+        let image_range = image_view_info.into();
+
+        if let Some(accesses) = self
+            .cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .accesses
+            .get_mut(&node_idx)
+        {
+            for SubresourceAccess {
+                access,
+                subresource,
+            } in accesses
+            {
+                let access_image_range = *subresource.expect_image();
+                if !image_subresource_range_intersects(access_image_range, image_range) {
+                    continue;
+                }
+
+                image_access = match *access {
+                    AccessType::DepthAttachmentWriteStencilReadOnly => {
+                        AccessType::DepthAttachmentWriteStencilReadOnly
+                    }
+                    AccessType::DepthStencilAttachmentRead => {
+                        AccessType::DepthStencilAttachmentRead
+                    }
+                    AccessType::DepthStencilAttachmentWrite => {
+                        AccessType::DepthStencilAttachmentReadWrite
+                    }
+                    AccessType::StencilAttachmentWriteDepthReadOnly => {
+                        AccessType::DepthStencilAttachmentReadWrite
+                    }
+                    _ => continue,
+                };
+
+                *access = image_access;
+
+                if image_subresource_range_contains(access_image_range, image_range) {
+                    return self;
+                }
+            }
+        }
+
+        self.cmd
+            .push_subresource_access(image, SubresourceRange::Image(image_range), image_access);
+
+        self
+    }
+
+    fn store_color(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        attachment_idx: AttachmentIndex,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .color_stores
+            .insert(
+                attachment_idx,
+                Attachment::new(image_view_info, sample_count, node_idx),
+            );
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_attachments
+                    .get(&attachment_idx)
+                    .copied(),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_stores
+                    .get(&attachment_idx)
+                    .copied()
+            ),
+            "color attachment {attachment_idx} store incompatible with existing attachment"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_clears
+                    .get(&attachment_idx)
+                    .map(|(attachment, _)| *attachment),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_stores
+                    .get(&attachment_idx)
+                    .copied()
+            ),
+            "color attachment {attachment_idx} store incompatible with existing clear"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_loads
+                    .get(&attachment_idx)
+                    .copied(),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_stores
+                    .get(&attachment_idx)
+                    .copied()
+            ),
+            "color attachment {attachment_idx} store incompatible with existing load"
+        );
+
+        let mut image_access = AccessType::ColorAttachmentWrite;
+        let image_range = image_view_info.into();
+
+        if let Some(accesses) = self
+            .cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .accesses
+            .get_mut(&node_idx)
+        {
+            for SubresourceAccess {
+                access,
+                subresource,
+            } in accesses
+            {
+                let access_image_range = *subresource.expect_image();
+                if !image_subresource_range_intersects(access_image_range, image_range) {
+                    continue;
+                }
+
+                image_access = match *access {
+                    AccessType::ColorAttachmentRead | AccessType::ColorAttachmentReadWrite => {
+                        AccessType::ColorAttachmentReadWrite
+                    }
+                    AccessType::ColorAttachmentWrite => AccessType::ColorAttachmentWrite,
+                    _ => continue,
+                };
+
+                *access = image_access;
+
+                if image_subresource_range_contains(access_image_range, image_range) {
+                    return self;
+                }
+            }
+        }
+
+        self.cmd
+            .push_subresource_access(image, SubresourceRange::Image(image_range), image_access);
+
+        self
+    }
+
+    fn store_depth_stencil(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .depth_stencil_store = Some(Attachment::new(image_view_info, sample_count, node_idx));
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd.cmd().expect_last_exec().depth_stencil_attachment,
+                self.cmd.cmd().expect_last_exec().depth_stencil_store
+            ),
+            "depth/stencil attachment store incompatible with existing attachment"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .depth_stencil_clear
+                    .map(|(attachment, _)| attachment),
+                self.cmd.cmd().expect_last_exec().depth_stencil_store
+            ),
+            "depth/stencil attachment store incompatible with existing clear"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd.cmd().expect_last_exec().depth_stencil_load,
+                self.cmd.cmd().expect_last_exec().depth_stencil_store
+            ),
+            "depth/stencil attachment store incompatible with existing load"
+        );
+
+        let mut image_access = if image_view_info
+            .aspect_mask
+            .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
+        {
+            AccessType::DepthStencilAttachmentWrite
+        } else if image_view_info
+            .aspect_mask
+            .contains(vk::ImageAspectFlags::DEPTH)
+        {
+            AccessType::DepthAttachmentWriteStencilReadOnly
+        } else {
+            debug_assert!(
+                image_view_info
+                    .aspect_mask
+                    .contains(vk::ImageAspectFlags::STENCIL)
+            );
+
+            AccessType::StencilAttachmentWriteDepthReadOnly
+        };
+        let image_range = image_view_info.into();
+
+        if let Some(accesses) = self
+            .cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .accesses
+            .get_mut(&node_idx)
+        {
+            for SubresourceAccess {
+                access,
+                subresource,
+            } in accesses
+            {
+                let access_image_range = *subresource.expect_image();
+                if !image_subresource_range_intersects(access_image_range, image_range) {
+                    continue;
+                }
+
+                image_access = match *access {
+                    AccessType::DepthAttachmentWriteStencilReadOnly => {
+                        if image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::STENCIL)
+                        {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        } else {
+                            AccessType::DepthAttachmentWriteStencilReadOnly
+                        }
+                    }
+                    AccessType::DepthStencilAttachmentRead => {
+                        if !image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::DEPTH)
+                        {
+                            AccessType::StencilAttachmentWriteDepthReadOnly
+                        } else {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        }
+                    }
+                    AccessType::DepthStencilAttachmentWrite => {
+                        AccessType::DepthStencilAttachmentWrite
+                    }
+                    AccessType::StencilAttachmentWriteDepthReadOnly => {
+                        if image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::DEPTH)
+                        {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        } else {
+                            AccessType::StencilAttachmentWriteDepthReadOnly
+                        }
+                    }
+                    _ => continue,
+                };
+
+                *access = image_access;
+
+                if image_subresource_range_contains(access_image_range, image_range) {
+                    return self;
+                }
+            }
+        }
+
+        self.cmd
+            .push_subresource_access(image, SubresourceRange::Image(image_range), image_access);
+
+        self
+    }
+
+    fn resolve_color(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        src_attachment_idx: AttachmentIndex,
+        dst_attachment_idx: AttachmentIndex,
+        image_view_info: impl Into<ImageViewInfo>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .color_resolves
+            .insert(
+                dst_attachment_idx,
+                (
+                    Attachment::new(image_view_info, sample_count, node_idx),
+                    src_attachment_idx,
+                ),
+            );
+
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_attachments
+                    .get(&dst_attachment_idx)
+                    .copied(),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_resolves
+                    .get(&dst_attachment_idx)
+                    .map(|(attachment, _)| *attachment)
+            ),
+            "color attachment {dst_attachment_idx} resolve conflict",
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_clears
+                    .get(&dst_attachment_idx)
+                    .map(|(attachment, _)| *attachment),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_resolves
+                    .get(&dst_attachment_idx)
+                    .map(|(attachment, _)| *attachment)
+            ),
+            "color attachment {dst_attachment_idx} resolve incompatible with existing clear"
+        );
+        debug_assert!(
+            Attachment::are_compatible(
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_loads
+                    .get(&dst_attachment_idx)
+                    .copied(),
+                self.cmd
+                    .cmd()
+                    .expect_last_exec()
+                    .color_resolves
+                    .get(&dst_attachment_idx)
+                    .map(|(attachment, _)| *attachment)
+            ),
+            "color attachment {dst_attachment_idx} resolve incompatible with existing load"
+        );
+
+        let mut image_access = AccessType::ColorAttachmentWrite;
+        let image_range = image_view_info.into();
+
+        if let Some(accesses) = self
+            .cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .accesses
+            .get_mut(&node_idx)
+        {
+            for SubresourceAccess {
+                access,
+                subresource,
+            } in accesses
+            {
+                let access_image_range = *subresource.expect_image();
+                if !image_subresource_range_intersects(access_image_range, image_range) {
+                    continue;
+                }
+
+                image_access = match *access {
+                    AccessType::ColorAttachmentRead | AccessType::ColorAttachmentReadWrite => {
+                        AccessType::ColorAttachmentReadWrite
+                    }
+                    AccessType::ColorAttachmentWrite => AccessType::ColorAttachmentWrite,
+                    _ => continue,
+                };
+
+                *access = image_access;
+
+                if image_subresource_range_contains(access_image_range, image_range) {
+                    return self;
+                }
+            }
+        }
+
+        self.cmd
+            .push_subresource_access(image, SubresourceRange::Image(image_range), image_access);
+
+        self
+    }
+
+    fn resolve_depth_stencil(
+        &mut self,
+        image: impl Into<AnyImageNode>,
+        dst_attachment_idx: AttachmentIndex,
+        image_view_info: impl Into<ImageViewInfo>,
+        depth_mode: Option<ResolveMode>,
+        stencil_mode: Option<ResolveMode>,
+    ) -> &mut Self {
+        let image = image.into();
+        let image_view_info = image_view_info.into();
+        let node_idx = image.index();
+        let ImageInfo { sample_count, .. } = self.resource(image).info;
+
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .depth_stencil_resolve = Some((
+            Attachment::new(image_view_info, sample_count, node_idx),
+            dst_attachment_idx,
+            depth_mode,
+            stencil_mode,
+        ));
+
+        let mut image_access = if image_view_info
+            .aspect_mask
+            .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
+        {
+            AccessType::DepthStencilAttachmentWrite
+        } else if image_view_info
+            .aspect_mask
+            .contains(vk::ImageAspectFlags::DEPTH)
+        {
+            AccessType::DepthAttachmentWriteStencilReadOnly
+        } else {
+            debug_assert!(
+                image_view_info
+                    .aspect_mask
+                    .contains(vk::ImageAspectFlags::STENCIL)
+            );
+
+            AccessType::StencilAttachmentWriteDepthReadOnly
+        };
+        let image_range = image_view_info.into();
+
+        if let Some(accesses) = self
+            .cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .accesses
+            .get_mut(&node_idx)
+        {
+            for SubresourceAccess {
+                access,
+                subresource,
+            } in accesses
+            {
+                let access_image_range = *subresource.expect_image();
+                if !image_subresource_range_intersects(access_image_range, image_range) {
+                    continue;
+                }
+
+                image_access = match *access {
+                    AccessType::DepthAttachmentWriteStencilReadOnly => {
+                        if image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::STENCIL)
+                        {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        } else {
+                            AccessType::DepthAttachmentWriteStencilReadOnly
+                        }
+                    }
+                    AccessType::DepthStencilAttachmentRead => {
+                        if !image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::DEPTH)
+                        {
+                            AccessType::StencilAttachmentWriteDepthReadOnly
+                        } else {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        }
+                    }
+                    AccessType::DepthStencilAttachmentWrite => {
+                        AccessType::DepthStencilAttachmentWrite
+                    }
+                    AccessType::StencilAttachmentWriteDepthReadOnly => {
+                        if image_view_info
+                            .aspect_mask
+                            .contains(vk::ImageAspectFlags::DEPTH)
+                        {
+                            AccessType::DepthStencilAttachmentReadWrite
+                        } else {
+                            AccessType::StencilAttachmentWriteDepthReadOnly
+                        }
+                    }
+                    _ => continue,
+                };
+
+                *access = image_access;
+
+                if image_subresource_range_contains(access_image_range, image_range) {
+                    return self;
+                }
+            }
+        }
+
+        self.cmd
+            .push_subresource_access(image, SubresourceRange::Image(image_range), image_access);
+
         self
     }
 }
@@ -554,7 +1679,7 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 /// # use vk_graph::Graph;
 /// # use vk_graph::driver::shader::Shader;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
+/// # let device = Device::create(DeviceInfo::default())?;
 /// # let my_frag_code = [0u8; 1];
 /// # let my_vert_code = [0u8; 1];
 /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
@@ -598,7 +1723,8 @@ impl GraphicCommandRef<'_> {
     /// ```no_run
     /// # use ash::vk;
     /// # use vk_graph::cmd::{LoadOp, StoreOp};
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -606,7 +1732,7 @@ impl GraphicCommandRef<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
@@ -672,7 +1798,8 @@ impl GraphicCommandRef<'_> {
     /// ```no_run
     /// # use ash::vk;
     /// # use vk_graph::cmd::{LoadOp, StoreOp};
-    /// # use vk_graph::driver::{sync::AccessType, DriverError};
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -680,7 +1807,7 @@ impl GraphicCommandRef<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::VERTEX_BUFFER);
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
     /// # let my_frag_code = [0u8; 1];
@@ -858,7 +1985,8 @@ impl GraphicCommandRef<'_> {
     /// # use std::mem::size_of;
     /// # use ash::vk;
     /// # use vk_graph::cmd::{LoadOp, StoreOp};
-    /// # use vk_graph::driver::{AccessType, DriverError};
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
@@ -866,7 +1994,7 @@ impl GraphicCommandRef<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
@@ -1093,7 +2221,7 @@ impl GraphicCommandRef<'_> {
     /// # use vk_graph::Graph;
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let my_frag_code = [0u8; 1];
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
@@ -1242,1803 +2370,4 @@ pub enum StoreOp {
 
     /// The attachment will be preserved in memory.
     Store,
-}
-
-#[allow(unused)]
-mod deprecated {
-    use {
-        crate::{
-            Attachment, Node, SubresourceAccess,
-            cmd::{
-                AttachmentIndex, Binding, ClearColorValue, PipelineCommand, Subresource,
-                SubresourceRange, ViewInfo, graphic::GraphicCommandRef,
-            },
-            driver::{
-                graphic::GraphicPipeline,
-                image::{
-                    ImageInfo, ImageViewInfo, image_subresource_range_contains,
-                    image_subresource_range_intersects,
-                },
-                render_pass::ResolveMode,
-            },
-            node::AnyImageNode,
-        },
-        ash::vk,
-        vk_sync::AccessType,
-    };
-
-    impl GraphicCommandRef<'_> {
-        #[deprecated = "use push_constants function"]
-        #[doc(hidden)]
-        pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
-            self.push_constants(offset, data)
-        }
-    }
-
-    // Attachment functions from previous version
-    impl PipelineCommand<'_, GraphicPipeline> {
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn attach_color(
-            self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> Self {
-            let image = image.into();
-            let image_info = self.resource(image).info;
-            let image_view_info: ImageViewInfo = image_info.into();
-
-            #[allow(deprecated)]
-            self.attach_color_as(attachment_idx, image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn attach_color_as(
-            mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_attach_color_as(attachment_idx, image, image_view_info);
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn attach_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.attach_depth_stencil_as(image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn attach_depth_stencil_as(
-            mut self,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_attach_depth_stencil_as(image, image_view_info);
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn clear_color(
-            self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.clear_color_value(attachment_idx, image, [0.0, 0.0, 0.0, 0.0])
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn clear_color_value(
-            self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColorValue>,
-        ) -> Self {
-            let image = image.into();
-            let image_info = self.resource(image).info;
-            let image_view_info: ImageViewInfo = image_info.into();
-
-            #[allow(deprecated)]
-            self.clear_color_value_as(attachment_idx, image, color, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn clear_color_value_as(
-            mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColorValue>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_clear_color_value_as(attachment_idx, image, color, image_view_info);
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn clear_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
-            #[allow(deprecated)]
-            self.clear_depth_stencil_value(image, 1.0, 0)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn clear_depth_stencil_value(
-            self,
-            image: impl Into<AnyImageNode>,
-            depth: f32,
-            stencil: u32,
-        ) -> Self {
-            let image = image.into();
-            let image_info = self.resource(image).info;
-            let image_view_info: ImageViewInfo = image_info.into();
-
-            #[allow(deprecated)]
-            self.clear_depth_stencil_value_as(image, depth, stencil, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn clear_depth_stencil_value_as(
-            mut self,
-            image: impl Into<AnyImageNode>,
-            depth: f32,
-            stencil: u32,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_clear_depth_stencil_value_as(image, depth, stencil, image_view_info);
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn load_color(
-            self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> Self {
-            let image = image.into();
-            let image_info = self.resource(image).info;
-
-            // Use the plain node information as the whole view of the node
-            let image_view_info = image_info;
-
-            #[allow(deprecated)]
-            self.load_color_as(attachment_idx, image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn load_color_as(
-            mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_load_color_as(attachment_idx, image, image_view_info);
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn load_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.load_depth_stencil_as(image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn load_depth_stencil_as(
-            mut self,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_load_depth_stencil_as(image, image_view_info);
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn store_color(
-            self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.store_color_as(attachment_idx, image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn store_color_as(
-            mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_store_color_as(attachment_idx, image, image_view_info);
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn store_depth_stencil(self, image: impl Into<AnyImageNode>) -> Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.store_depth_stencil_as(image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn store_depth_stencil_as(
-            mut self,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_store_depth_stencil_as(image, image_view_info);
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn resolve_color(
-            self,
-            src_attachment_idx: AttachmentIndex,
-            dst_attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.resolve_color_as(
-                src_attachment_idx,
-                dst_attachment_idx,
-                image,
-                image_view_info,
-            )
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn resolve_color_as(
-            mut self,
-            src_attachment_idx: AttachmentIndex,
-            dst_attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_resolve_color_as(
-                src_attachment_idx,
-                dst_attachment_idx,
-                image,
-                image_view_info,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn resolve_depth_stencil(
-            self,
-            dst_attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            depth_mode: Option<ResolveMode>,
-            stencil_mode: Option<ResolveMode>,
-        ) -> Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.resolve_depth_stencil_as(
-                dst_attachment_idx,
-                image,
-                image_view_info,
-                depth_mode,
-                stencil_mode,
-            )
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn resolve_depth_stencil_as(
-            mut self,
-            dst_attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-            depth_mode: Option<ResolveMode>,
-            stencil_mode: Option<ResolveMode>,
-        ) -> Self {
-            #[allow(deprecated)]
-            self.set_resolve_depth_stencil_as(
-                dst_attachment_idx,
-                image,
-                image_view_info,
-                depth_mode,
-                stencil_mode,
-            );
-
-            self
-        }
-    }
-
-    // Attachment functions as setters
-    impl PipelineCommand<'_, GraphicPipeline> {
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_attach_color(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_info = self.resource(image).info;
-            let image_view_info: ImageViewInfo = image_info.into();
-
-            #[allow(deprecated)]
-            self.set_attach_color_as(attachment_idx, image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_attach_color_as(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            debug_assert!(
-                !self
-                    .cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_clears
-                    .contains_key(&attachment_idx),
-                "color attachment {attachment_idx} already attached via clear"
-            );
-            debug_assert!(
-                !self
-                    .cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_loads
-                    .contains_key(&attachment_idx),
-                "color attachment {attachment_idx} already attached via load"
-            );
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .color_attachments
-                .insert(
-                    attachment_idx,
-                    Attachment::new(image_view_info, sample_count, node_idx),
-                );
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_resolves
-                        .get(&attachment_idx)
-                        .map(|(attachment, _)| *attachment),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_attachments
-                        .get(&attachment_idx)
-                        .copied()
-                ),
-                "color attachment {attachment_idx} incompatible with existing resolve"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_stores
-                        .get(&attachment_idx)
-                        .copied(),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_attachments
-                        .get(&attachment_idx)
-                        .copied()
-                ),
-                "color attachment {attachment_idx} incompatible with existing store"
-            );
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_view_info.into()),
-                AccessType::ColorAttachmentWrite,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_attach_depth_stencil(&mut self, image: impl Into<AnyImageNode>) -> &mut Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.set_attach_depth_stencil_as(image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_attach_depth_stencil_as(
-            &mut self,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            debug_assert!(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_clear
-                    .is_none(),
-                "depth/stencil attachment already attached via clear"
-            );
-            debug_assert!(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_load
-                    .is_none(),
-                "depth/stencil attachment already attached via load"
-            );
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .depth_stencil_attachment =
-                Some(Attachment::new(image_view_info, sample_count, node_idx));
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .depth_stencil_resolve
-                        .map(|(attachment, ..)| attachment),
-                    self.cmd.cmd().expect_last_exec().depth_stencil_attachment
-                ),
-                "depth/stencil attachment incompatible with existing resolve"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd.cmd().expect_last_exec().depth_stencil_store,
-                    self.cmd.cmd().expect_last_exec().depth_stencil_attachment
-                ),
-                "depth/stencil attachment incompatible with existing store"
-            );
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_view_info.into()),
-                if image_view_info
-                    .aspect_mask
-                    .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
-                {
-                    AccessType::DepthStencilAttachmentWrite
-                } else if image_view_info
-                    .aspect_mask
-                    .contains(vk::ImageAspectFlags::DEPTH)
-                {
-                    AccessType::DepthAttachmentWriteStencilReadOnly
-                } else {
-                    AccessType::StencilAttachmentWriteDepthReadOnly
-                },
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_clear_color(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> &mut Self {
-            #[allow(deprecated)]
-            self.set_clear_color_value(attachment_idx, image, [0.0, 0.0, 0.0, 0.0])
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_clear_color_value(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColorValue>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_info = self.resource(image).info;
-            let image_view_info: ImageViewInfo = image_info.into();
-
-            #[allow(deprecated)]
-            self.set_clear_color_value_as(attachment_idx, image, color, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_clear_color_value_as(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            color: impl Into<ClearColorValue>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            let color = color.into();
-            let color: vk::ClearColorValue = color.into();
-            let color = unsafe { color.float32 };
-
-            debug_assert!(
-                !self
-                    .cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_attachments
-                    .contains_key(&attachment_idx),
-                "color attachment {attachment_idx} already attached"
-            );
-            debug_assert!(
-                !self
-                    .cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_loads
-                    .contains_key(&attachment_idx),
-                "color attachment {attachment_idx} already attached via load"
-            );
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .color_clears
-                .insert(
-                    attachment_idx,
-                    (
-                        Attachment::new(image_view_info, sample_count, node_idx),
-                        color,
-                    ),
-                );
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_resolves
-                        .get(&attachment_idx)
-                        .map(|(attachment, _)| *attachment),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_clears
-                        .get(&attachment_idx)
-                        .map(|(attachment, _)| *attachment)
-                ),
-                "color attachment {attachment_idx} clear incompatible with existing resolve"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_stores
-                        .get(&attachment_idx)
-                        .copied(),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_clears
-                        .get(&attachment_idx)
-                        .map(|(attachment, _)| *attachment)
-                ),
-                "color attachment {attachment_idx} clear incompatible with existing store"
-            );
-
-            let mut image_access = AccessType::ColorAttachmentWrite;
-            let image_range = image_view_info.into();
-
-            // Upgrade existing read access to read-write
-            if let Some(accesses) = self
-                .cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .accesses
-                .get_mut(&node_idx)
-            {
-                for SubresourceAccess {
-                    access,
-                    subresource,
-                } in accesses
-                {
-                    let access_image_range = *subresource.expect_image();
-                    if !image_subresource_range_intersects(access_image_range, image_range) {
-                        continue;
-                    }
-
-                    image_access = match *access {
-                        AccessType::ColorAttachmentRead | AccessType::ColorAttachmentReadWrite => {
-                            AccessType::ColorAttachmentReadWrite
-                        }
-                        AccessType::ColorAttachmentWrite => AccessType::ColorAttachmentWrite,
-                        _ => continue,
-                    };
-
-                    *access = image_access;
-
-                    // If the clear access is a subset of the existing access range there is no need
-                    // to push a new access
-                    if image_subresource_range_contains(access_image_range, image_range) {
-                        return self;
-                    }
-                }
-            }
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_range),
-                image_access,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_clear_depth_stencil(&mut self, image: impl Into<AnyImageNode>) -> &mut Self {
-            #[allow(deprecated)]
-            self.set_clear_depth_stencil_value(image, 1.0, 0)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_clear_depth_stencil_value(
-            &mut self,
-            image: impl Into<AnyImageNode>,
-            depth: f32,
-            stencil: u32,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_info = self.resource(image).info;
-            let image_view_info: ImageViewInfo = image_info.into();
-
-            #[allow(deprecated)]
-            self.set_clear_depth_stencil_value_as(image, depth, stencil, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_clear_depth_stencil_value_as(
-            &mut self,
-            image: impl Into<AnyImageNode>,
-            depth: f32,
-            stencil: u32,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            debug_assert!(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_attachment
-                    .is_none(),
-                "depth/stencil attachment already attached"
-            );
-            debug_assert!(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_load
-                    .is_none(),
-                "depth/stencil attachment already attached via load"
-            );
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .depth_stencil_clear = Some((
-                Attachment::new(image_view_info, sample_count, node_idx),
-                vk::ClearDepthStencilValue { depth, stencil },
-            ));
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .depth_stencil_resolve
-                        .map(|(attachment, ..)| attachment),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .depth_stencil_clear
-                        .map(|(attachment, _)| attachment)
-                ),
-                "depth/stencil attachment clear incompatible with existing resolve"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd.cmd().expect_last_exec().depth_stencil_store,
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .depth_stencil_clear
-                        .map(|(attachment, _)| attachment)
-                ),
-                "depth/stencil attachment clear incompatible with existing store"
-            );
-
-            let mut image_access = if image_view_info
-                .aspect_mask
-                .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
-            {
-                AccessType::DepthStencilAttachmentWrite
-            } else if image_view_info
-                .aspect_mask
-                .contains(vk::ImageAspectFlags::DEPTH)
-            {
-                AccessType::DepthAttachmentWriteStencilReadOnly
-            } else {
-                debug_assert!(
-                    image_view_info
-                        .aspect_mask
-                        .contains(vk::ImageAspectFlags::STENCIL)
-                );
-
-                AccessType::StencilAttachmentWriteDepthReadOnly
-            };
-            let image_range = image_view_info.into();
-
-            // Upgrade existing read access to read-write
-            if let Some(accesses) = self
-                .cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .accesses
-                .get_mut(&node_idx)
-            {
-                for SubresourceAccess {
-                    access,
-                    subresource,
-                } in accesses
-                {
-                    let access_image_range = *subresource.expect_image();
-                    if !image_subresource_range_intersects(access_image_range, image_range) {
-                        continue;
-                    }
-
-                    image_access = match *access {
-                        AccessType::DepthAttachmentWriteStencilReadOnly => {
-                            if image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::STENCIL)
-                            {
-                                AccessType::DepthStencilAttachmentReadWrite
-                            } else {
-                                AccessType::DepthAttachmentWriteStencilReadOnly
-                            }
-                        }
-                        AccessType::DepthStencilAttachmentRead => {
-                            if !image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::DEPTH)
-                            {
-                                AccessType::StencilAttachmentWriteDepthReadOnly
-                            } else {
-                                AccessType::DepthAttachmentWriteStencilReadOnly
-                            }
-                        }
-                        AccessType::DepthStencilAttachmentWrite => {
-                            AccessType::DepthStencilAttachmentWrite
-                        }
-                        AccessType::StencilAttachmentWriteDepthReadOnly => {
-                            if image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::DEPTH)
-                            {
-                                AccessType::DepthStencilAttachmentReadWrite
-                            } else {
-                                AccessType::StencilAttachmentWriteDepthReadOnly
-                            }
-                        }
-                        _ => continue,
-                    };
-
-                    *access = image_access;
-
-                    // If the clear access is a subset of the existing access range there is no need
-                    // to push a new access
-                    if image_subresource_range_contains(access_image_range, image_range) {
-                        return self;
-                    }
-                }
-            }
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_range),
-                image_access,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_load_color(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_info = self.resource(image).info;
-
-            // Use the plain node information as the whole view of the node
-            let image_view_info = image_info;
-
-            #[allow(deprecated)]
-            self.set_load_color_as(attachment_idx, image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_load_color_as(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            debug_assert!(
-                !self
-                    .cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_attachments
-                    .contains_key(&attachment_idx),
-                "color attachment {attachment_idx} already attached"
-            );
-            debug_assert!(
-                !self
-                    .cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_clears
-                    .contains_key(&attachment_idx),
-                "color attachment {attachment_idx} already attached via clear"
-            );
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .color_loads
-                .insert(
-                    attachment_idx,
-                    Attachment::new(image_view_info, sample_count, node_idx),
-                );
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_resolves
-                        .get(&attachment_idx)
-                        .map(|(attachment, _)| *attachment),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_loads
-                        .get(&attachment_idx)
-                        .copied()
-                ),
-                "color attachment {attachment_idx} load incompatible with existing resolve"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_stores
-                        .get(&attachment_idx)
-                        .copied(),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_loads
-                        .get(&attachment_idx)
-                        .copied()
-                ),
-                "color attachment {attachment_idx} load incompatible with existing store"
-            );
-
-            let mut image_access = AccessType::ColorAttachmentRead;
-            let image_range = image_view_info.into();
-
-            // Upgrade existing write access to read-write
-            if let Some(accesses) = self
-                .cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .accesses
-                .get_mut(&node_idx)
-            {
-                for SubresourceAccess {
-                    access,
-                    subresource,
-                } in accesses
-                {
-                    let access_image_range = *subresource.expect_image();
-                    if !image_subresource_range_intersects(access_image_range, image_range) {
-                        continue;
-                    }
-
-                    image_access = match *access {
-                        AccessType::ColorAttachmentRead => AccessType::ColorAttachmentRead,
-                        AccessType::ColorAttachmentReadWrite | AccessType::ColorAttachmentWrite => {
-                            AccessType::ColorAttachmentReadWrite
-                        }
-                        _ => continue,
-                    };
-
-                    *access = image_access;
-
-                    // If the load access is a subset of the existing access range there is no need
-                    // to push a new access
-                    if image_subresource_range_contains(access_image_range, image_range) {
-                        return self;
-                    }
-                }
-            }
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_range),
-                image_access,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_load_depth_stencil(&mut self, image: impl Into<AnyImageNode>) -> &mut Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.set_load_depth_stencil_as(image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_load_depth_stencil_as(
-            &mut self,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            debug_assert!(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_attachment
-                    .is_none(),
-                "depth/stencil attachment already attached"
-            );
-            debug_assert!(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_clear
-                    .is_none(),
-                "depth/stencil attachment already attached via clear"
-            );
-
-            self.cmd.cmd_mut().expect_last_exec_mut().depth_stencil_load =
-                Some(Attachment::new(image_view_info, sample_count, node_idx));
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .depth_stencil_resolve
-                        .map(|(attachment, ..)| attachment),
-                    self.cmd.cmd().expect_last_exec().depth_stencil_load
-                ),
-                "depth/stencil attachment load incompatible with existing resolve"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd.cmd().expect_last_exec().depth_stencil_store,
-                    self.cmd.cmd().expect_last_exec().depth_stencil_load
-                ),
-                "depth/stencil attachment load incompatible with existing store"
-            );
-
-            let mut image_access = AccessType::DepthStencilAttachmentRead;
-            let image_range = image_view_info.into();
-
-            // Upgrade existing write access to read-write
-            if let Some(accesses) = self
-                .cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .accesses
-                .get_mut(&node_idx)
-            {
-                for SubresourceAccess {
-                    access,
-                    subresource,
-                } in accesses
-                {
-                    let access_image_range = *subresource.expect_image();
-                    if !image_subresource_range_intersects(access_image_range, image_range) {
-                        continue;
-                    }
-
-                    image_access = match *access {
-                        AccessType::DepthAttachmentWriteStencilReadOnly => {
-                            AccessType::DepthAttachmentWriteStencilReadOnly
-                        }
-                        AccessType::DepthStencilAttachmentRead => {
-                            AccessType::DepthStencilAttachmentRead
-                        }
-                        AccessType::DepthStencilAttachmentWrite => {
-                            AccessType::DepthStencilAttachmentReadWrite
-                        }
-                        AccessType::StencilAttachmentWriteDepthReadOnly => {
-                            AccessType::StencilAttachmentWriteDepthReadOnly
-                        }
-                        _ => continue,
-                    };
-
-                    *access = image_access;
-
-                    // If the load access is a subset of the existing access range there is no need
-                    // to push a new access
-                    if image_subresource_range_contains(access_image_range, image_range) {
-                        return self;
-                    }
-                }
-            }
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_range),
-                image_access,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_store_color(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.set_store_color_as(attachment_idx, image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_store_color_as(
-            &mut self,
-            attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .color_stores
-                .insert(
-                    attachment_idx,
-                    Attachment::new(image_view_info, sample_count, node_idx),
-                );
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_attachments
-                        .get(&attachment_idx)
-                        .copied(),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_stores
-                        .get(&attachment_idx)
-                        .copied()
-                ),
-                "color attachment {attachment_idx} store incompatible with existing attachment"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_clears
-                        .get(&attachment_idx)
-                        .map(|(attachment, _)| *attachment),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_stores
-                        .get(&attachment_idx)
-                        .copied()
-                ),
-                "color attachment {attachment_idx} store incompatible with existing clear"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_loads
-                        .get(&attachment_idx)
-                        .copied(),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_stores
-                        .get(&attachment_idx)
-                        .copied()
-                ),
-                "color attachment {attachment_idx} store incompatible with existing load"
-            );
-
-            let mut image_access = AccessType::ColorAttachmentWrite;
-            let image_range = image_view_info.into();
-
-            // Upgrade existing read access to read-write
-            if let Some(accesses) = self
-                .cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .accesses
-                .get_mut(&node_idx)
-            {
-                for SubresourceAccess {
-                    access,
-                    subresource,
-                } in accesses
-                {
-                    let access_image_range = *subresource.expect_image();
-                    if !image_subresource_range_intersects(access_image_range, image_range) {
-                        continue;
-                    }
-
-                    image_access = match *access {
-                        AccessType::ColorAttachmentRead | AccessType::ColorAttachmentReadWrite => {
-                            AccessType::ColorAttachmentReadWrite
-                        }
-                        AccessType::ColorAttachmentWrite => AccessType::ColorAttachmentWrite,
-                        _ => continue,
-                    };
-
-                    *access = image_access;
-
-                    // If the store access is a subset of the existing access range there is no need
-                    // to push a new access
-                    if image_subresource_range_contains(access_image_range, image_range) {
-                        return self;
-                    }
-                }
-            }
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_range),
-                image_access,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_store_depth_stencil(&mut self, image: impl Into<AnyImageNode>) -> &mut Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.set_store_depth_stencil_as(image, image_view_info)
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_store_depth_stencil_as(
-            &mut self,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .depth_stencil_store =
-                Some(Attachment::new(image_view_info, sample_count, node_idx));
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd.cmd().expect_last_exec().depth_stencil_attachment,
-                    self.cmd.cmd().expect_last_exec().depth_stencil_store
-                ),
-                "depth/stencil attachment store incompatible with existing attachment"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .depth_stencil_clear
-                        .map(|(attachment, _)| attachment),
-                    self.cmd.cmd().expect_last_exec().depth_stencil_store
-                ),
-                "depth/stencil attachment store incompatible with existing clear"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd.cmd().expect_last_exec().depth_stencil_load,
-                    self.cmd.cmd().expect_last_exec().depth_stencil_store
-                ),
-                "depth/stencil attachment store incompatible with existing load"
-            );
-
-            let mut image_access = if image_view_info
-                .aspect_mask
-                .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
-            {
-                AccessType::DepthStencilAttachmentWrite
-            } else if image_view_info
-                .aspect_mask
-                .contains(vk::ImageAspectFlags::DEPTH)
-            {
-                AccessType::DepthAttachmentWriteStencilReadOnly
-            } else {
-                debug_assert!(
-                    image_view_info
-                        .aspect_mask
-                        .contains(vk::ImageAspectFlags::STENCIL)
-                );
-
-                AccessType::StencilAttachmentWriteDepthReadOnly
-            };
-            let image_range = image_view_info.into();
-
-            // Upgrade existing read access to read-write
-            if let Some(accesses) = self
-                .cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .accesses
-                .get_mut(&node_idx)
-            {
-                for SubresourceAccess {
-                    access,
-                    subresource,
-                } in accesses
-                {
-                    let access_image_range = *subresource.expect_image();
-                    if !image_subresource_range_intersects(access_image_range, image_range) {
-                        continue;
-                    }
-
-                    image_access = match *access {
-                        AccessType::DepthAttachmentWriteStencilReadOnly => {
-                            if image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::STENCIL)
-                            {
-                                AccessType::DepthStencilAttachmentReadWrite
-                            } else {
-                                AccessType::DepthAttachmentWriteStencilReadOnly
-                            }
-                        }
-                        AccessType::DepthStencilAttachmentRead => {
-                            if !image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::DEPTH)
-                            {
-                                AccessType::StencilAttachmentWriteDepthReadOnly
-                            } else {
-                                AccessType::DepthStencilAttachmentReadWrite
-                            }
-                        }
-                        AccessType::DepthStencilAttachmentWrite => {
-                            AccessType::DepthStencilAttachmentWrite
-                        }
-                        AccessType::StencilAttachmentWriteDepthReadOnly => {
-                            if image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::DEPTH)
-                            {
-                                AccessType::DepthStencilAttachmentReadWrite
-                            } else {
-                                AccessType::StencilAttachmentWriteDepthReadOnly
-                            }
-                        }
-                        _ => continue,
-                    };
-
-                    *access = image_access;
-
-                    // If the store access is a subset of the existing access range there is no need
-                    // to push a new access
-                    if image_subresource_range_contains(access_image_range, image_range) {
-                        return self;
-                    }
-                }
-            }
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_range),
-                image_access,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_resolve_color(
-            &mut self,
-            src_attachment_idx: AttachmentIndex,
-            dst_attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.set_resolve_color_as(
-                src_attachment_idx,
-                dst_attachment_idx,
-                image,
-                image_view_info,
-            )
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_resolve_color_as(
-            &mut self,
-            src_attachment_idx: AttachmentIndex,
-            dst_attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .color_resolves
-                .insert(
-                    dst_attachment_idx,
-                    (
-                        Attachment::new(image_view_info, sample_count, node_idx),
-                        src_attachment_idx,
-                    ),
-                );
-
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_attachments
-                        .get(&dst_attachment_idx)
-                        .copied(),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_resolves
-                        .get(&dst_attachment_idx)
-                        .map(|(attachment, _)| *attachment)
-                ),
-                "color attachment {dst_attachment_idx} resolve conflict",
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_clears
-                        .get(&dst_attachment_idx)
-                        .map(|(attachment, _)| *attachment),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_resolves
-                        .get(&dst_attachment_idx)
-                        .map(|(attachment, _)| *attachment)
-                ),
-                "color attachment {dst_attachment_idx} resolve incompatible with existing clear"
-            );
-            debug_assert!(
-                Attachment::are_compatible(
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_loads
-                        .get(&dst_attachment_idx)
-                        .copied(),
-                    self.cmd
-                        .cmd()
-                        .expect_last_exec()
-                        .color_resolves
-                        .get(&dst_attachment_idx)
-                        .map(|(attachment, _)| *attachment)
-                ),
-                "color attachment {dst_attachment_idx} resolve incompatible with existing load"
-            );
-
-            let mut image_access = AccessType::ColorAttachmentWrite;
-            let image_range = image_view_info.into();
-
-            // Upgrade existing read access to read-write
-            if let Some(accesses) = self
-                .cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .accesses
-                .get_mut(&node_idx)
-            {
-                for SubresourceAccess {
-                    access,
-                    subresource,
-                } in accesses
-                {
-                    let access_image_range = *subresource.expect_image();
-                    if !image_subresource_range_intersects(access_image_range, image_range) {
-                        continue;
-                    }
-
-                    image_access = match *access {
-                        AccessType::ColorAttachmentRead | AccessType::ColorAttachmentReadWrite => {
-                            AccessType::ColorAttachmentReadWrite
-                        }
-                        AccessType::ColorAttachmentWrite => AccessType::ColorAttachmentWrite,
-                        _ => continue,
-                    };
-
-                    *access = image_access;
-
-                    // If the resolve access is a subset of the existing access range there is no
-                    // need to push a new access
-                    if image_subresource_range_contains(access_image_range, image_range) {
-                        return self;
-                    }
-                }
-            }
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_range),
-                image_access,
-            );
-
-            self
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_resolve_depth_stencil(
-            &mut self,
-            dst_attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            depth_mode: Option<ResolveMode>,
-            stencil_mode: Option<ResolveMode>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = self.resource(image).info;
-
-            #[allow(deprecated)]
-            self.set_resolve_depth_stencil_as(
-                dst_attachment_idx,
-                image,
-                image_view_info,
-                depth_mode,
-                stencil_mode,
-            )
-        }
-
-        #[deprecated = "upgrade guide: https://github.com/attackgoat/vk-graph/pull/107"]
-        #[doc(hidden)]
-        pub fn set_resolve_depth_stencil_as(
-            &mut self,
-            dst_attachment_idx: AttachmentIndex,
-            image: impl Into<AnyImageNode>,
-            image_view_info: impl Into<ImageViewInfo>,
-            depth_mode: Option<ResolveMode>,
-            stencil_mode: Option<ResolveMode>,
-        ) -> &mut Self {
-            let image = image.into();
-            let image_view_info = image_view_info.into();
-            let node_idx = image.index();
-            let ImageInfo { sample_count, .. } = self.resource(image).info;
-
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .depth_stencil_resolve = Some((
-                Attachment::new(image_view_info, sample_count, node_idx),
-                dst_attachment_idx,
-                depth_mode,
-                stencil_mode,
-            ));
-
-            let mut image_access = if image_view_info
-                .aspect_mask
-                .contains(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
-            {
-                AccessType::DepthStencilAttachmentWrite
-            } else if image_view_info
-                .aspect_mask
-                .contains(vk::ImageAspectFlags::DEPTH)
-            {
-                AccessType::DepthAttachmentWriteStencilReadOnly
-            } else {
-                debug_assert!(
-                    image_view_info
-                        .aspect_mask
-                        .contains(vk::ImageAspectFlags::STENCIL)
-                );
-
-                AccessType::StencilAttachmentWriteDepthReadOnly
-            };
-            let image_range = image_view_info.into();
-
-            // Upgrade existing read access to read-write
-            if let Some(accesses) = self
-                .cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .accesses
-                .get_mut(&node_idx)
-            {
-                for SubresourceAccess {
-                    access,
-                    subresource,
-                } in accesses
-                {
-                    let access_image_range = *subresource.expect_image();
-                    if !image_subresource_range_intersects(access_image_range, image_range) {
-                        continue;
-                    }
-
-                    image_access = match *access {
-                        AccessType::DepthAttachmentWriteStencilReadOnly => {
-                            if image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::STENCIL)
-                            {
-                                AccessType::DepthStencilAttachmentReadWrite
-                            } else {
-                                AccessType::DepthAttachmentWriteStencilReadOnly
-                            }
-                        }
-                        AccessType::DepthStencilAttachmentRead => {
-                            if !image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::DEPTH)
-                            {
-                                AccessType::StencilAttachmentWriteDepthReadOnly
-                            } else {
-                                AccessType::DepthStencilAttachmentReadWrite
-                            }
-                        }
-                        AccessType::DepthStencilAttachmentWrite => {
-                            AccessType::DepthStencilAttachmentWrite
-                        }
-                        AccessType::StencilAttachmentWriteDepthReadOnly => {
-                            if image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::DEPTH)
-                            {
-                                AccessType::DepthStencilAttachmentReadWrite
-                            } else {
-                                AccessType::StencilAttachmentWriteDepthReadOnly
-                            }
-                        }
-                        _ => continue,
-                    };
-
-                    *access = image_access;
-
-                    // If the resolve access is a subset of the existing access range there is no
-                    // need to push a new access
-                    if image_subresource_range_contains(access_image_range, image_range) {
-                        return self;
-                    }
-                }
-            }
-
-            self.cmd.push_subresource_access(
-                image,
-                SubresourceRange::Image(image_range),
-                image_access,
-            );
-
-            self
-        }
-    }
-
-    // Resource functions
-    impl PipelineCommand<'_, GraphicPipeline> {
-        #[deprecated = "use shader_resource_access"]
-        #[doc(hidden)]
-        pub fn read_descriptor<N>(self, binding: impl Into<Binding>, node: N) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_resource_access(
-                binding,
-                node,
-                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
-            )
-        }
-
-        #[deprecated = "use shader_subresource_access"]
-        #[doc(hidden)]
-        pub fn read_descriptor_as<N>(
-            self,
-            descriptor: impl Into<Binding>,
-            node: N,
-            node_view: impl Into<N::Info>,
-        ) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_subresource_access(
-                descriptor,
-                node,
-                node_view,
-                AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
-            )
-        }
-
-        #[deprecated = "use record_cmd function"]
-        #[doc(hidden)]
-        pub fn record_subpass(
-            self,
-            func: impl FnOnce(GraphicCommandRef<'_>, ()) + Send + 'static,
-        ) -> Self {
-            self.record_cmd(|cmd| {
-                func(cmd, ());
-            })
-        }
-
-        #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]
-        #[doc(hidden)]
-        pub fn write_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_resource_access(descriptor, node, AccessType::AnyShaderWrite)
-        }
-
-        #[deprecated = "use shader_subresource_access function with AccessType::AnyShaderWrite"]
-        #[doc(hidden)]
-        pub fn write_descriptor_as<N>(
-            self,
-            descriptor: impl Into<Binding>,
-            node: N,
-            node_view: impl Into<N::Info>,
-        ) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_subresource_access(descriptor, node, node_view, AccessType::AnyShaderWrite)
-        }
-    }
 }

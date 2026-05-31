@@ -209,12 +209,6 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, path)
     }
 
-    #[deprecated = "use new_tessellation_ctrl function"]
-    #[doc(hidden)]
-    pub fn new_tesselation_ctrl(path: impl AsRef<Path>) -> HotShaderBuilder {
-        Self::new_tessellation_ctrl(path)
-    }
-
     /// Creates a new tessellation evaluation shader.
     ///
     /// # Panics
@@ -222,12 +216,6 @@ impl HotShader {
     /// If the shader code is invalid.
     pub fn new_tessellation_eval(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, path)
-    }
-
-    #[deprecated = "use new_tessellation_eval function"]
-    #[doc(hidden)]
-    pub fn new_tesselation_eval(path: impl AsRef<Path>) -> HotShaderBuilder {
-        Self::new_tessellation_eval(path)
     }
 
     /// Creates a new vertex shader.

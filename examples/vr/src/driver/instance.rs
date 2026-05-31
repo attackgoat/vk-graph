@@ -13,7 +13,8 @@ use {
             vk::{self, Handle as _},
         },
         device::Device,
-        instance::Instance as VkInstance,
+        instance::Instance,
+        physical_device::PhysicalDevice,
     },
 };
 
@@ -157,7 +158,7 @@ impl XrInstance {
                     })?;
                 let vk_instance = vk::Instance::from_raw(vk_instance as _);
 
-                VkInstance::try_from_entry(entry, vk_instance).map_err(|err| {
+                Instance::try_from_entry(entry, vk_instance).map_err(|err| {
                     error!("Vulkan instance load: {err}");
 
                     InstanceCreateError::VulkanUnsupported
@@ -173,7 +174,7 @@ impl XrInstance {
                         InstanceCreateError::OpenXRUnsupported
                     })? as _,
             );
-            let physical_device = VkInstance::physical_device(&vk_instance, physical_device)
+            let physical_device = PhysicalDevice::try_from_ash(&vk_instance, physical_device)
                 .map_err(|err| {
                     error!("Vulkan physical device: {err}");
 
@@ -204,12 +205,11 @@ impl XrInstance {
 
                     InstanceCreateError::VulkanUnsupported
                 })?;
-            let device =
-                Device::try_from_ash_device(ash_device, physical_device).map_err(|err| {
-                    error!("Vulkan device: {err}");
+            let device = Device::try_from_ash(ash_device, physical_device).map_err(|err| {
+                error!("Vulkan device: {err}");
 
-                    InstanceCreateError::VulkanUnsupported
-                })?;
+                InstanceCreateError::VulkanUnsupported
+            })?;
             let event_buf = xr::EventDataBuffer::new();
 
             Ok(Self {

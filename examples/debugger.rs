@@ -181,7 +181,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             signal it's OK to proceed without panicking.
 
             Here is a fixed line 180:
-                .write_descriptor(42, frame.swapchain_image)
+                .shader_resource_access(42, frame.swapchain_image, AccessType::ComputeShaderWrite)
         */
         frame
             .graph

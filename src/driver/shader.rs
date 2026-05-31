@@ -23,11 +23,6 @@ use {
     },
 };
 
-#[allow(deprecated)]
-#[deprecated = "use SpecializationMap struct"]
-#[doc(hidden)]
-pub type SpecializationInfo = self::deprecated::SpecializationInfo;
-
 pub(crate) type DescriptorBindingMap = HashMap<Descriptor, (DescriptorInfo, vk::ShaderStageFlags)>;
 
 #[profiling::function]
@@ -577,14 +572,6 @@ impl SamplerInfo {
     };
 
     /// Creates a default `SamplerInfoBuilder`.
-    #[allow(clippy::new_ret_no_self)]
-    #[deprecated = "Use SamplerInfo::default()"]
-    #[doc(hidden)]
-    pub fn new() -> SamplerInfoBuilder {
-        Self::default().into_builder()
-    }
-
-    /// Creates a default `SamplerInfoBuilder`.
     pub fn builder() -> SamplerInfoBuilder {
         Default::default()
     }
@@ -610,12 +597,6 @@ impl SamplerInfo {
             unnormalized_coordinates: Some(self.unnormalized_coordinates),
             reduction_mode: Some(self.reduction_mode),
         }
-    }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> SamplerInfoBuilder {
-        self.into_builder()
     }
 }
 
@@ -711,7 +692,7 @@ pub struct Shader {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::shader::{Shader, SpecializationMap};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let my_shader_code = [0u8; 1];
     /// // We instead specify 42 for MY_COUNT:
     /// let shader = Shader::new_fragment(my_shader_code.as_slice())
@@ -860,12 +841,6 @@ impl Shader {
         Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, spirv)
     }
 
-    #[deprecated = "use new_tessellation_ctrl function"]
-    #[doc(hidden)]
-    pub fn new_tesselation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new_tessellation_ctrl(spirv)
-    }
-
     /// Creates a new tessellation evaluation shader.
     ///
     /// # Panics
@@ -873,12 +848,6 @@ impl Shader {
     /// If the shader code is invalid or not a multiple of four bytes in length.
     pub fn new_tessellation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, spirv)
-    }
-
-    #[deprecated = "use new_tessellation_eval function"]
-    #[doc(hidden)]
-    pub fn new_tesselation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new_tessellation_eval(spirv)
     }
 
     /// Creates a new vertex shader.
@@ -1635,45 +1604,6 @@ impl<'a> From<&'a SpecializationMap> for vk::SpecializationInfo<'a> {
         vk::SpecializationInfo::default()
             .map_entries(&value.entries)
             .data(&value.data)
-    }
-}
-
-mod deprecated {
-    use {
-        crate::driver::shader::{ShaderBuilder, SpecializationMap},
-        ash::vk,
-    };
-
-    #[derive(Clone, Debug)]
-    pub struct SpecializationInfo {
-        pub data: Vec<u8>,
-        pub map_entries: Vec<vk::SpecializationMapEntry>,
-    }
-
-    impl SpecializationInfo {
-        pub fn new(
-            map_entries: impl Into<Vec<vk::SpecializationMapEntry>>,
-            data: impl Into<Vec<u8>>,
-        ) -> Self {
-            Self {
-                data: data.into(),
-                map_entries: map_entries.into(),
-            }
-        }
-    }
-
-    impl ShaderBuilder {
-        #[deprecated = "use specialization function"]
-        #[doc(hidden)]
-        pub fn specialization_info(self, info: SpecializationInfo) -> Self {
-            let mut specialization = SpecializationMap::new(info.data);
-
-            for entry in &info.map_entries {
-                specialization.set_constant(entry.constant_id, entry.offset, entry.size);
-            }
-
-            self.specialization(specialization)
-        }
     }
 }
 

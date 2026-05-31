@@ -63,7 +63,7 @@ impl PipelineCommand<'_, RayTracePipeline> {
 /// # use vk_graph::driver::shader::Shader;
 /// # use vk_graph::Graph;
 /// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::new(DeviceInfo::default())?;
+/// # let device = Device::create(DeviceInfo::default())?;
 /// # let info = RayTracePipelineInfo::default();
 /// # let my_miss_code = [0u8; 1];
 /// # let my_ray_trace_pipeline = RayTracePipeline::create(&device, info,
@@ -137,7 +137,7 @@ impl RayTraceCommandRef<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let shader = [0u8; 1];
     /// # let info = RayTracePipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
@@ -234,7 +234,7 @@ impl RayTraceCommandRef<'_> {
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let shader = [0u8; 1];
     /// # let info = RayTracePipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
@@ -343,108 +343,5 @@ impl<'a> Deref for RayTraceCommandRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         &self.cmd
-    }
-}
-
-#[allow(unused)]
-mod deprecated {
-    use {
-        crate::{
-            Node,
-            cmd::{
-                Binding, PipelineCommand, Subresource, SubresourceRange, ViewInfo,
-                ray_trace::RayTraceCommandRef,
-            },
-            driver::ray_trace::RayTracePipeline,
-        },
-        vk_sync::AccessType,
-    };
-
-    impl RayTraceCommandRef<'_> {
-        #[deprecated = "use push_constants function"]
-        #[doc(hidden)]
-        pub fn push_constants_offset(&self, offset: u32, data: &[u8]) -> &Self {
-            self.push_constants(offset, data)
-        }
-    }
-
-    impl PipelineCommand<'_, RayTracePipeline> {
-        #[deprecated = "use shader_resource_access"]
-        #[doc(hidden)]
-        pub fn read_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_resource_access(
-                descriptor,
-                node,
-                AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
-            )
-        }
-
-        #[deprecated = "use shader_subresource_access"]
-        #[doc(hidden)]
-        pub fn read_descriptor_as<N>(
-            self,
-            descriptor: impl Into<Binding>,
-            node: N,
-            node_view: impl Into<N::Info>,
-        ) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_subresource_access(
-                descriptor,
-                node,
-                node_view,
-                AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
-            )
-        }
-
-        #[deprecated = "use record_cmd function"]
-        #[doc(hidden)]
-        pub fn record_ray_trace(
-            self,
-            func: impl FnOnce(RayTraceCommandRef<'_>, ()) + Send + 'static,
-        ) -> Self {
-            self.record_cmd(|cmd| {
-                func(cmd, ());
-            })
-        }
-
-        #[deprecated = "use shader_resource_access function with AccessType::AnyShaderWrite"]
-        #[doc(hidden)]
-        pub fn write_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_resource_access(descriptor, node, AccessType::AnyShaderWrite)
-        }
-
-        #[deprecated = "use shader_subresource_access function with AccessType::AnyShaderWrite"]
-        #[doc(hidden)]
-        pub fn write_descriptor_as<N>(
-            self,
-            descriptor: impl Into<Binding>,
-            node: N,
-            node_view: impl Into<N::Info>,
-        ) -> Self
-        where
-            N: Node + Subresource,
-            N::Info: Copy,
-            SubresourceRange: From<N::Info>,
-            ViewInfo: From<N::Info>,
-        {
-            self.shader_subresource_access(descriptor, node, node_view, AccessType::AnyShaderWrite)
-        }
     }
 }

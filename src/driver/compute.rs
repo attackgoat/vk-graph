@@ -45,7 +45,7 @@ impl ComputePipeline {
     /// # use vk_graph::driver::compute::{ComputePipeline, ComputePipelineInfo};
     /// # use vk_graph::driver::shader::{Shader};
     /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::new(DeviceInfo::default())?;
+    /// # let device = Device::create(DeviceInfo::default())?;
     /// # let my_shader_code = [0u8; 1];
     /// // my_shader_code is raw SPIR-V code as bytes
     /// let shader = Shader::new_compute(my_shader_code.as_slice());
@@ -259,12 +259,6 @@ impl ComputePipelineInfo {
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
         }
     }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> ComputePipelineInfoBuilder {
-        self.into_builder()
-    }
 }
 
 impl Default for ComputePipelineInfo {
@@ -312,18 +306,6 @@ impl Drop for ComputePipelineInner {
         unsafe {
             self.device.destroy_pipeline(self.handle, None);
             self.device.destroy_pipeline_layout(self.layout, None);
-        }
-    }
-}
-
-mod deprecated {
-    use crate::driver::compute::ComputePipeline;
-
-    impl ComputePipeline {
-        #[deprecated = "use with_debug_name function"]
-        #[doc(hidden)]
-        pub fn with_name(this: Self, name: impl Into<String>) -> Self {
-            this.with_debug_name(name)
         }
     }
 }

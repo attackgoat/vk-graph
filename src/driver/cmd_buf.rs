@@ -211,12 +211,6 @@ impl CommandBufferInfo {
             queue_family_index: Some(self.queue_family_index),
         }
     }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> CommandBufferInfoBuilder {
-        self.into_builder()
-    }
 }
 
 impl From<CommandBufferInfoBuilder> for CommandBufferInfo {

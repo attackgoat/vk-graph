@@ -317,12 +317,6 @@ impl Instance {
     /// The most recent supported version of Vulkan.
     pub const LATEST_API_VERSION: ApiVersion = ApiVersion::Vulkan13;
 
-    #[deprecated = "use create"]
-    #[doc(hidden)]
-    pub fn new(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
-        Self::create(info)
-    }
-
     /// Creates a new Vulkan instance.
     ///
     /// This constructor is intended for headless or manually managed setups. It does not infer or
@@ -510,33 +504,6 @@ impl Instance {
         &this.inner.entry
     }
 
-    #[deprecated = "use try_from_entry"]
-    #[doc(hidden)]
-    pub fn from_entry(entry: ash::Entry, instance: vk::Instance) -> Result<Self, DriverError> {
-        Self::try_from_entry(entry, instance)
-    }
-
-    /// Returns a wrapper structure for a physical device of this instance.
-    #[profiling::function]
-    pub fn physical_device(
-        this: &Self,
-        physical_device: vk::PhysicalDevice,
-    ) -> Result<PhysicalDevice, DriverError> {
-        let physical_device = PhysicalDevice::new(this.clone(), physical_device)?;
-        if let Err(err) =
-            ApiVersion::try_parse_vk_api_version(physical_device.properties_v1_0.api_version)
-        {
-            warn!(
-                "unsupported physical device `{}`: {err}",
-                physical_device.properties_v1_0.device_name
-            );
-
-            return Err(DriverError::Unsupported);
-        }
-
-        Ok(physical_device)
-    }
-
     /// Returns the available physical devices of this instance.
     #[profiling::function]
     pub fn physical_devices(
@@ -563,7 +530,7 @@ impl Instance {
             .into_iter()
             .enumerate()
             .filter_map(|(idx, physical_device)| {
-                let res = PhysicalDevice::new(this.clone(), physical_device);
+                let res = PhysicalDevice::try_from_ash(this, physical_device);
 
                 if let Err(err) = &res {
                     warn!("unsupported physical device #{idx}: {err}");
@@ -715,12 +682,6 @@ impl InstanceInfo {
             debug: Some(self.debug),
             extension_names: Some(self.extension_names),
         }
-    }
-
-    #[deprecated = "use into_builder function"]
-    #[doc(hidden)]
-    pub fn to_builder(self) -> InstanceInfoBuilder {
-        self.into_builder()
     }
 }
 
