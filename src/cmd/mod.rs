@@ -100,9 +100,12 @@ impl<'a> Command<'a> {
     ///
     /// `P`|`P::Command`
     /// -|-
-    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_, ComputePipeline>`]
-    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_, GraphicPipeline>`]
-    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_, RayTracePipeline>`]
+    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_,
+    /// ComputePipeline>`]
+    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_,
+    /// GraphicPipeline>`]
+    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_,
+    /// RayTracePipeline>`]
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'a>,
@@ -262,7 +265,8 @@ impl<'a> Command<'a> {
     /// Informs the command that the next recorded command buffer will read or write the
     /// `subresource` of `resource` using `access`.
     ///
-    /// An access function must be called for `resource` before it is used within a `record_`-function.
+    /// An access function must be called for `resource` before it is used within a
+    /// `record_`-function.
     pub fn subresource_access<N>(
         mut self,
         resource_node: N,

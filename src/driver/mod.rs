@@ -36,11 +36,12 @@
 //! Pipelines are immutable. All pipeline types contain useful public methods, for
 //! example:
 //!
-//! [`ComputePipeline`](compute::ComputePipeline) Method|`->`
+//! [`ComputePipeline`](compute::ComputePipeline) Method | `->`
 //! -|-
 //! [`device(&self)`](compute::ComputePipeline::device)|[`Device`](device::Device)
 //! [`handle(&self)`](compute::ComputePipeline::handle)|[`vk::Pipeline`]
-//! [`info(&self)`](compute::ComputePipeline::info)|[`ComputePipelineInfo`](compute::ComputePipelineInfo)
+//! [`info(&self)`](compute::ComputePipeline::info)
+//! | [`ComputePipelineInfo`](compute::ComputePipelineInfo)
 
 pub mod accel_struct;
 pub mod buffer;
@@ -116,8 +117,11 @@ pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags 
     }
 }
 
-/// Returns number of bytes used to store one texel block (a single addressable element of an uncompressed image, or a single compressed block of a compressed image)
-/// See [Representation and Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
+/// Returns number of bytes used to store one texel block (a single addressable element of an
+/// uncompressed image, or a single compressed block of a compressed image).
+///
+/// See the [Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
+/// section of the Vulkan specification.
 pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
     match fmt {
         vk::Format::UNDEFINED => 0,
@@ -375,7 +379,9 @@ pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
 
 /// Returns the extent of a block of texels for the given Vulkan format.
 /// Uncompressed formats typically have a block extent of `(1, 1)`.
-/// See [Representation and Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
+///
+/// See the [Texel Block Size](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#texel-block-size)
+/// section of the Vulkan specification.
 pub const fn format_texel_block_extent(vk_format: vk::Format) -> (u32, u32) {
     match vk_format {
         vk::Format::UNDEFINED => (1, 1),

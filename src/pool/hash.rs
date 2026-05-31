@@ -1,7 +1,7 @@
-//! Pool which leases by exactly matching the information before creating new resources.
+//! Pool which requests by exactly matching the information before creating new resources.
 
 use {
-    super::{Cache, Lease, Pool, PoolInfo, lease_command_buffer},
+    super::{Cache, Lease, Pool, PoolConfig, lease_command_buffer},
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -27,12 +27,12 @@ use std::sync::Mutex;
 ///
 /// # Bucket Strategy
 ///
-/// The information for each lease request is the key for a `HashMap` of buckets. If no bucket
+/// The information for each resource request is the key for a `HashMap` of buckets. If no bucket
 /// exists with the exact information provided a new bucket is created.
 ///
-/// In practice this means that for a [`PoolInfo::image_capacity`] of `4`, requests for a 1024x1024
-/// image with certain attributes will store a maximum of `4` such images. Requests for any image
-/// having a different size or attributes will store an additional maximum of `4` images.
+/// In practice this means that for a [`PoolConfig::image_capacity`] of `4`, requests for a
+/// 1024x1024 image with certain attributes will store a maximum of `4` such images. Requests for
+/// any image having a different size or attributes will store an additional maximum of `4` images.
 ///
 /// # Memory Management
 ///
@@ -58,7 +58,7 @@ pub struct HashPool {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub info: PoolInfo,
+    pub info: PoolConfig,
 
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
@@ -66,12 +66,12 @@ pub struct HashPool {
 impl HashPool {
     /// Constructs a new `HashPool`.
     pub fn new(device: &Device) -> Self {
-        Self::with_capacity(device, PoolInfo::default())
+        Self::with_capacity(device, PoolConfig::default())
     }
 
     /// Constructs a new `HashPool` with the given capacity information.
-    pub fn with_capacity(device: &Device, info: impl Into<PoolInfo>) -> Self {
-        let info: PoolInfo = info.into();
+    pub fn with_capacity(device: &Device, info: impl Into<PoolConfig>) -> Self {
+        let info: PoolConfig = info.into();
         let device = device.clone();
 
         Self {
@@ -147,7 +147,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
         let cache_ref = self
             .command_buffer_cache
             .entry(info.queue_family_index)
-            .or_insert_with(PoolInfo::default_cache);
+            .or_insert_with(PoolConfig::default_cache);
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
@@ -177,7 +177,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for HashPool {
         let cache_ref = self
             .descriptor_pool_cache
             .entry(info.clone())
-            .or_insert_with(PoolInfo::default_cache);
+            .or_insert_with(PoolConfig::default_cache);
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
@@ -207,7 +207,7 @@ impl Pool<RenderPassInfo, RenderPass> for HashPool {
             // We tried to get the cache first in order to avoid this clone
             self.render_pass_cache
                 .entry(info.clone())
-                .or_insert_with(PoolInfo::default_cache)
+                .or_insert_with(PoolConfig::default_cache)
         };
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
@@ -229,7 +229,7 @@ impl Pool<RenderPassInfo, RenderPass> for HashPool {
     }
 }
 
-// Enable leasing items using their basic info
+// Enable requesting items using their basic info
 macro_rules! lease {
     ($info:ident => $item:ident, $capacity:ident) => {
         paste::paste! {

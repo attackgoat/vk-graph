@@ -146,9 +146,12 @@ fn main() -> anyhow::Result<()> {
     let woolly_mammoth_dir = example_assets_dir.join("woolly-mammoth");
 
     if metadata(&lincoln_hands_dir).is_err() {
-        panic!(
-            "Asset submodule missing! You must first initialize the submodules and then update them using:\ngit submodule init\ngit submodule update"
-        );
+        panic!(concat!(
+            "Asset submodule missing! You must first initialize the submodules and then update ",
+            "them using:\n",
+            "git submodule init\n",
+            "git submodule update"
+        ));
     }
 
     // Load a model and textures for the left hand

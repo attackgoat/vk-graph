@@ -260,13 +260,17 @@ macro_rules! pipeline {
     ($name:ident) => {
         ::paste::paste! {
             impl [<Hot $name Pipeline>] {
-                fn cache(&self) -> ::std::sync::RwLockReadGuard<'_, HotPipeline<[<$name Pipeline>]>> {
+                fn cache(
+                    &self,
+                ) -> ::std::sync::RwLockReadGuard<'_, HotPipeline<[<$name Pipeline>]>> {
                     self.cache
                         .read()
                         .expect("poisoned hot pipeline lock")
                 }
 
-                fn cache_mut(&self) -> ::std::sync::RwLockWriteGuard<'_, HotPipeline<[<$name Pipeline>]>> {
+                fn cache_mut(
+                    &self,
+                ) -> ::std::sync::RwLockWriteGuard<'_, HotPipeline<[<$name Pipeline>]>> {
                     self.cache
                         .write()
                         .expect("poisoned hot pipeline lock")
@@ -296,8 +300,8 @@ macro_rules! pipeline {
 
                 /// Sets the debugging name assigned to this pipeline.
                 ///
-                /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
-                /// previously set name value.
+                /// _Note:_ The pipeline name may only be assigned once.
+                /// Subsequent calls will not update the previously set name value.
                 pub fn set_debug_name(&mut self, name: impl Into<String>) {
                     self.cache_mut()
                         .pipeline
@@ -306,8 +310,8 @@ macro_rules! pipeline {
 
                 /// Sets the debugging name assigned to this pipeline.
                 ///
-                /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
-                /// previously set name value.
+                /// _Note:_ The pipeline name may only be assigned once.
+                /// Subsequent calls will not update the previously set name value.
                 pub fn with_debug_name(mut self, name: impl Into<String>) -> Self {
                     self.set_debug_name(name);
 

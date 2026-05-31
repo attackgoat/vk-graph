@@ -50,7 +50,11 @@ impl RayTracePipeline {
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+    /// # use vk_graph::driver::ray_trace::{
+    /// #     RayTracePipeline,
+    /// #     RayTracePipelineInfo,
+    /// #     RayTraceShaderGroup,
+    /// # };
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::new(DeviceInfo::default())?;
@@ -240,12 +244,12 @@ impl RayTracePipeline {
             let push_constants = merge_push_constant_ranges(&push_constants).into_boxed_slice();
 
             // SAFETY:
-            // According to [vulkan spec](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkGetRayTracingShaderGroupHandlesKHR.html)
+            // See [`vkGetRayTracingShaderGroupHandlesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetRayTracingShaderGroupHandlesKHR.html).
             // Valid usage of this function requires:
             // 1. pipeline must be raytracing pipeline.
             // 2. first_group must be less than the number of shader groups in the pipeline.
-            // 3. the sum of first group and group_count must be less or equal to the number of shader
-            //    modules in the pipeline.
+            // 3. the sum of first group and group_count must be less or equal to the number of
+            //    shader modules in the pipeline.
             // 4. data_size must be at least shader_group_handle_size * group_count.
             // 5. pipeline must not have been created with VK_PIPELINE_CREATE_LIBRARY_BIT_KHR.
             //
@@ -413,7 +417,7 @@ pub struct RayTracePipelineInfo {
     /// When set, you must manually set the stack size during ray trace passes using
     /// [`RayTrace::set_stack_size`](crate::graph::pass_ref::RayTrace::set_stack_size).
     ///
-    /// [setting the stack size dynamically]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdSetRayTracingPipelineStackSizeKHR.html
+    /// See [`vkCmdSetRayTracingPipelineStackSizeKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetRayTracingPipelineStackSizeKHR.html).
     #[builder(default)]
     pub dynamic_stack_size: bool,
 
@@ -421,7 +425,7 @@ pub struct RayTracePipelineInfo {
     ///
     /// The default is `16`.
     ///
-    /// [maximum recursion depth]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#ray-tracing-recursion-depth
+    /// See [`VkRayTracingPipelineCreateInfoKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRayTracingPipelineCreateInfoKHR.html).
     #[builder(default = "16")]
     pub max_ray_recursion_depth: u32,
 }
@@ -503,8 +507,7 @@ impl Drop for RayTracePipelineInner {
 /// Describes the set of the shader stages to be included in each shader group in the ray trace
 /// pipeline.
 ///
-/// See
-/// [VkRayTracingShaderGroupCreateInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#VkRayTracingShaderGroupCreateInfoKHR).
+/// See [`VkRayTracingShaderGroupCreateInfoKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRayTracingShaderGroupCreateInfoKHR.html).
 #[derive(Clone, Copy, Debug)]
 pub struct RayTraceShaderGroup {
     /// The optional index of the any-hit shader in the group if the shader group has type of
@@ -578,8 +581,8 @@ impl RayTraceShaderGroup {
         )
     }
 
-    /// Creates a new triangles-type shader group with the given closest-hit shader and optional any-hit
-    /// shader.
+    /// Creates a new triangles-type shader group with the given closest-hit shader and optional
+    /// any-hit shader.
     pub fn new_triangles(closest_hit_shader: u32, any_hit_shader: impl Into<Option<u32>>) -> Self {
         Self::new(
             RayTraceShaderGroupType::TrianglesHitGroup,

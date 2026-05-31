@@ -108,7 +108,8 @@ pub enum Transition {
         /// Number of total bars/columns
         bars: i32,
 
-        /// Multiplier for speed ratio. 0 = no variation when going down, higher = some elements go much faster
+        /// Multiplier for speed ratio. 0 = no variation when going down, higher = some elements go
+        /// much faster
         amplitude: f32,
 
         /// Further variations in speed. 0 = no noise, 1 = super noisy (ignore frequency)
@@ -117,7 +118,8 @@ pub enum Transition {
         /// Speed variation horizontally. the bigger the value, the shorter the waves
         frequency: f32,
 
-        /// How much the bars seem to "run" from the middle of the screen first (sticking to the sides). 0 = no drip, 1 = curved drip
+        /// How much the bars seem to "run" from the middle of the screen first (sticking to the
+        /// sides). 0 = no drip, 1 = curved drip
         drip_scale: f32,
     },
     Doorway {
@@ -141,7 +143,8 @@ pub enum Transition {
     },
     Fade,
     FadeGrayscale {
-        /// if 0.0, the image directly turn grayscale, if 0.9, the grayscale transition phase is very important
+        /// if 0.0, the image directly turn grayscale, if 0.9, the grayscale transition phase is
+        /// very important
         intensity: f32,
     },
     FilmBurn {
@@ -415,7 +418,7 @@ impl TransitionPipeline {
         }
     }
 
-    /// Applies a transition between two images and returns a leased destination image.
+    /// Applies a transition between two images and returns a pooled destination image.
     pub fn apply(
         &mut self,
         graph: &mut Graph,

@@ -150,12 +150,12 @@ impl Swapchain {
     ///
     /// # Parameters
     ///
-    /// * `timeout` — Maximum time to wait in nanoseconds before the operation times out.
-    ///   Pass [`u64::MAX`] to wait indefinitely. A short timeout may return
+    /// * `timeout` — Maximum time to wait in nanoseconds before the operation times out. Pass
+    ///   [`u64::MAX`] to wait indefinitely. A short timeout may return
     ///   [`SwapchainError::Suboptimal`] without acquiring an image.
-    /// * `acquired` — A semaphore that will be signaled when the acquired image is ready
-    ///   for use. The caller must wait on this semaphore before submitting commands that
-    ///   write to the returned image.
+    /// * `acquired` — A semaphore that will be signaled when the acquired image is ready for use.
+    ///   The caller must wait on this semaphore before submitting commands that write to the
+    ///   returned image.
     ///
     /// # Errors
     ///
@@ -721,46 +721,50 @@ pub struct SwapchainInfo {
     /// The initial height of the surface.
     pub height: u32,
 
-    /// The minimum number of presentable images that the application needs. The implementation will
-    /// either create the swapchain with at least that many images, or it will fail to create the
-    /// swapchain.
+    /// The minimum number of presentable images that the application needs. The implementation
+    /// will either create the swapchain with at least that many images, or it will fail to
+    /// create the swapchain.
     ///
     /// More images introduce more display lag, but smoother animation.
     #[builder(default = "2")]
     pub min_image_count: u32,
 
-    /// `vk::PresentModeKHR` determines timing and queueing with which frames are actually displayed
-    /// to the user.
+    /// `vk::PresentModeKHR` determines timing and queueing with which frames are actually
+    /// displayed to the user.
     ///
-    /// `vk::PresentModeKHR::FIFO` - Presentation frames are kept in a First-In-First-Out queue approximately 3 frames
-    /// long. Every vertical blanking period, the presentation engine will pop a frame off the queue to display. If
-    /// there is no frame to display, it will present the same frame again until the next vblank.
+    /// `vk::PresentModeKHR::FIFO` - Presentation frames are kept in a First-In-First-Out queue
+    /// approximately 3 frames long. Every vertical blanking period, the presentation engine
+    /// will pop a frame off the queue to display. If there is no frame to display, it will
+    /// present the same frame again until the next vblank.
     ///
     /// When a present command is executed on the GPU, the presented image is added on the queue.
     ///
     /// * **Tearing:** No tearing will be observed.
     /// * **Also known as**: "Vsync On"
     ///
-    /// `vk::PresentModeKHR::FIFO_RELAXED` - Presentation frames are kept in a First-In-First-Out queue approximately 3
-    /// frames long. Every vertical blanking period, the presentation engine will pop a frame off the queue to display.
-    /// If there is no frame to display, it will present the same frame until there is a frame in the queue. The moment
-    /// there is a frame in the queue, it will immediately pop the frame off the queue.
+    /// `vk::PresentModeKHR::FIFO_RELAXED` - Presentation frames are kept in a First-In-First-Out
+    /// queue approximately 3 frames long. Every vertical blanking period, the presentation
+    /// engine will pop a frame off the queue to display. If there is no frame to display, it
+    /// will present the same frame until there is a frame in the queue. The moment there is a
+    /// frame in the queue, it will immediately pop the frame off the queue.
     ///
     /// When a present command is executed on the GPU, the presented image is added on the queue.
     ///
-    /// * **Tearing**:
-    ///   Tearing will be observed if frames last more than one vblank as the front buffer.
+    /// * **Tearing**: Tearing will be observed if frames last more than one vblank as the front
+    ///   buffer.
     /// * **Also known as**: "Adaptive Vsync"
     ///
-    /// `vk::PresentModeKHR::IMMEDIATE` - Presentation frames are not queued at all. The moment a present command is
-    /// executed on the GPU, the presented image is swapped onto the front buffer immediately.
+    /// `vk::PresentModeKHR::IMMEDIATE` - Presentation frames are not queued at all. The moment a
+    /// present command is executed on the GPU, the presented image is swapped onto the front
+    /// buffer immediately.
     ///
     /// * **Tearing**: Tearing can be observed.
     /// * **Also known as**: "Vsync Off"
     ///
-    /// `vk::PresentModeKHR::MAILBOX` - Presentation frames are kept in a single-frame queue. Every vertical blanking
-    /// period, the presentation engine will pop a frame from the queue. If there is no frame to display, it will
-    /// present the same frame again until the next vblank.
+    /// `vk::PresentModeKHR::MAILBOX` - Presentation frames are kept in a single-frame queue. Every
+    /// vertical blanking period, the presentation engine will pop a frame from the queue. If
+    /// there is no frame to display, it will present the same frame again until the next
+    /// vblank.
     ///
     /// When a present command is executed on the GPU, the frame will be put into the queue.
     /// If there was already a frame in the queue, the new frame will _replace_ the old frame.

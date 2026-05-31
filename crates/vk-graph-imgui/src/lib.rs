@@ -96,7 +96,8 @@ impl ImGui {
         }
     }
 
-    // TODO: This produces an image which is RGBA8 UNORM and has STORAGE set. *We* don't need storage here and should instead ask the user what settings to give the output image.....
+    // TODO: This produces an image which is RGBA8 UNORM and has STORAGE set. *We* don't need
+    // storage here and should instead ask the user what settings to give the output image.....
     /// Builds a frame, records the necessary draw commands, and returns the rendered image.
     pub fn draw<P>(
         &mut self,
@@ -148,7 +149,8 @@ impl ImGui {
                         | vk::ImageUsageFlags::SAMPLED
                         | vk::ImageUsageFlags::STORAGE
                         | vk::ImageUsageFlags::TRANSFER_DST
-                        | vk::ImageUsageFlags::TRANSFER_SRC, // TODO: Make TRANSFER_SRC an "extra flags"
+                        | vk::ImageUsageFlags::TRANSFER_SRC, /* TODO: Make TRANSFER_SRC an
+                                                              * "extra flags" */
                 ))
                 .expect("missing imgui output image");
             image.name = Some("ImGui Output".to_string());

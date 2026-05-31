@@ -129,7 +129,12 @@ impl Image {
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::new(DeviceInfo::default())?;
-    /// let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
+    /// let info = ImageInfo::image_2d(
+    ///     32,
+    ///     32,
+    ///     vk::Format::R8G8B8A8_UNORM,
+    ///     vk::ImageUsageFlags::SAMPLED,
+    /// );
     /// let image = Image::create(&device, info)?;
     ///
     /// assert_ne!(image.handle, vk::Image::null());
@@ -728,8 +733,8 @@ pub struct ImageInfo {
     #[builder(default = "1", setter(strip_option))]
     pub array_layer_count: u32,
 
-    /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the internal
-    /// memory allocation pool transient resources share.
+    /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the
+    /// internal memory allocation pool transient resources share.
     ///
     /// The driver may optimize access to dedicated buffers.
     #[builder(default)]
@@ -757,7 +762,7 @@ pub struct ImageInfo {
 
     /// Specifies the number of [samples per texel].
     ///
-    /// [samples per texel]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#primsrast-multisampling
+    /// See [`VkImageCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkImageCreateInfo.html).
     #[builder(default = "SampleCount::Type1", setter(strip_option))]
     pub sample_count: SampleCount,
 

@@ -180,7 +180,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
     /// Sets multiview view and correlation masks used by any subsequent command buffer recordings
     /// of the current graph command.
     ///
-    /// See [`VkRenderPassMultiviewCreateInfo`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkRenderPassMultiviewCreateInfo.html#_description).
+    /// See [`VkRenderPassMultiviewCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRenderPassMultiviewCreateInfo.html).
     pub fn multiview(mut self, view_mask: u32, correlated_view_mask: u32) -> Self {
         self.set_multiview(view_mask, correlated_view_mask);
         self
@@ -206,7 +206,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
         });
     }
 
-    /// Sets the [`renderArea`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkRenderPassBeginInfo.html#_c_specification)
+    /// See [`VkRenderPassBeginInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRenderPassBeginInfo.html).
     /// field when beginning a render pass used by any subsequent command buffer recordings
     /// of the current graph command.
     ///
@@ -562,7 +562,12 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 /// # let info = GraphicPipelineInfo::default();
 /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
 /// # let mut my_graph = Graph::default();
-/// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
+/// # let info = ImageInfo::image_2d(
+/// #     32,
+/// #     32,
+/// #     vk::Format::R8G8B8A8_UNORM,
+/// #     vk::ImageUsageFlags::SAMPLED,
+/// # );
 /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
 /// my_graph
 ///     .begin_cmd()
@@ -609,7 +614,12 @@ impl GraphicCommandRef<'_> {
     /// # let info = GraphicPipelineInfo::default();
     /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
-    /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
+    /// # let info = ImageInfo::image_2d(
+    /// #     32,
+    /// #     32,
+    /// #     vk::Format::R8G8B8A8_UNORM,
+    /// #     vk::ImageUsageFlags::SAMPLED,
+    /// # );
     /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::INDEX_BUFFER);
     /// # let my_idx_buf = Buffer::create(&device, buf_info)?;
@@ -680,7 +690,12 @@ impl GraphicCommandRef<'_> {
     /// # let info = GraphicPipelineInfo::default();
     /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
-    /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
+    /// # let info = ImageInfo::image_2d(
+    /// #     32,
+    /// #     32,
+    /// #     vk::Format::R8G8B8A8_UNORM,
+    /// #     vk::ImageUsageFlags::SAMPLED,
+    /// # );
     /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
     /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
     /// my_graph
@@ -865,7 +880,12 @@ impl GraphicCommandRef<'_> {
     /// # let my_vtx_buf = Buffer::create(&device, buf_info)?;
     /// # let my_idx_buf = my_graph.bind_resource(my_idx_buf);
     /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
-    /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
+    /// # let info = ImageInfo::image_2d(
+    /// #     32,
+    /// #     32,
+    /// #     vk::Format::R8G8B8A8_UNORM,
+    /// #     vk::ImageUsageFlags::SAMPLED,
+    /// # );
     /// # let swapchain_image = my_graph.bind_resource(Image::create(&device, info)?);
     /// const CMD_SIZE: usize = size_of::<vk::DrawIndexedIndirectCommand>();
     ///
@@ -1080,7 +1100,12 @@ impl GraphicCommandRef<'_> {
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
     /// # let info = GraphicPipelineInfo::default();
     /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
-    /// # let info = ImageInfo::image_2d(32, 32, vk::Format::R8G8B8A8_UNORM, vk::ImageUsageFlags::SAMPLED);
+    /// # let info = ImageInfo::image_2d(
+    /// #     32,
+    /// #     32,
+    /// #     vk::Format::R8G8B8A8_UNORM,
+    /// #     vk::ImageUsageFlags::SAMPLED,
+    /// # );
     /// # let swapchain_image = Image::create(&device, info)?;
     /// # let mut my_graph = Graph::default();
     /// # let swapchain_image = my_graph.bind_resource(swapchain_image);
@@ -1097,7 +1122,7 @@ impl GraphicCommandRef<'_> {
     /// # Ok(()) }
     /// ```
     ///
-    /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
+    /// See [`vkCmdPushConstants`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdPushConstants.html).
     #[profiling::function]
     pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
         self.cmd_push_constants(
@@ -2708,7 +2733,7 @@ mod deprecated {
                         .get(&dst_attachment_idx)
                         .map(|(attachment, _)| *attachment)
                 ),
-                "color attachment {dst_attachment_idx} resolve incompatible with existing attachment"
+                "color attachment {dst_attachment_idx} resolve conflict",
             );
             debug_assert!(
                 Attachment::are_compatible(
@@ -2776,8 +2801,8 @@ mod deprecated {
 
                     *access = image_access;
 
-                    // If the resolve access is a subset of the existing access range there is no need
-                    // to push a new access
+                    // If the resolve access is a subset of the existing access range there is no
+                    // need to push a new access
                     if image_subresource_range_contains(access_image_range, image_range) {
                         return self;
                     }
@@ -2918,8 +2943,8 @@ mod deprecated {
 
                     *access = image_access;
 
-                    // If the resolve access is a subset of the existing access range there is no need
-                    // to push a new access
+                    // If the resolve access is a subset of the existing access range there is no
+                    // need to push a new access
                     if image_subresource_range_contains(access_image_range, image_range) {
                         return self;
                     }
@@ -2938,7 +2963,7 @@ mod deprecated {
 
     // Resource functions
     impl PipelineCommand<'_, GraphicPipeline> {
-        #[deprecated = "use shader_resource_access function with AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer"]
+        #[deprecated = "use shader_resource_access"]
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, binding: impl Into<Binding>, node: N) -> Self
         where
@@ -2954,7 +2979,7 @@ mod deprecated {
             )
         }
 
-        #[deprecated = "use shader_subresource_access function with AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer"]
+        #[deprecated = "use shader_subresource_access"]
         #[doc(hidden)]
         pub fn read_descriptor_as<N>(
             self,

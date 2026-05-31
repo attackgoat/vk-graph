@@ -106,9 +106,12 @@ impl<'c, T> PipelineCommand<'c, T> {
     ///
     /// `P`|`P::Command`
     /// -|-
-    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_, ComputePipeline>`]
-    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_, GraphicPipeline>`]
-    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_, RayTracePipeline>`]
+    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_,
+    /// ComputePipeline>`]
+    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_,
+    /// GraphicPipeline>`]
+    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_,
+    /// RayTracePipeline>`]
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'c>,
@@ -169,8 +172,8 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the `resource_node`
-    /// at the specified shader `binding` using `access`.
+    /// Informs the command that the next recorded command buffer will read or write the
+    /// `resource_node` at the specified shader `binding` using `access`.
     ///
     /// An access function must be called for `resource_node` before it is used within a
     /// `record_`-function.

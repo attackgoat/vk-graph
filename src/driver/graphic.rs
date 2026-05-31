@@ -39,8 +39,7 @@ const RGBA_COLOR_COMPONENTS: vk::ColorComponentFlags = vk::ColorComponentFlags::
 /// Specifies color blend state used when rasterization is enabled for any color attachments
 /// accessed during rendering.
 ///
-/// See
-/// [VkPipelineColorBlendAttachmentState](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipelineColorBlendAttachmentState.html).
+/// See [`VkPipelineColorBlendAttachmentState`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineColorBlendAttachmentState.html).
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
@@ -82,8 +81,7 @@ pub struct BlendInfo {
     pub alpha_blend_op: vk::BlendOp,
 
     /// A bitmask of specifying which of the R, G, B, and/or A components are enabled for writing,
-    /// as described for the
-    /// [Color Write Mask](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#framebuffer-color-write-mask).
+    /// as described for [`VkPipelineColorBlendAttachmentState`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineColorBlendAttachmentState.html).
     #[builder(default = "RGBA_COLOR_COMPONENTS")]
     pub color_write_mask: vk::ColorComponentFlags,
 }
@@ -178,9 +176,7 @@ impl BlendInfoBuilder {
 // TODO: This could be simplified (bounds_test controsl min/max etc)
 /// Specifies the [depth bounds tests], [stencil test], and [depth test] pipeline state.
 ///
-/// [depth bounds tests]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
-/// [stencil test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-stencil
-/// [depth test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth
+/// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
@@ -194,21 +190,20 @@ pub struct DepthStencilInfo {
 
     /// Controls whether [depth bounds testing] is enabled.
     ///
-    /// [depth bounds testing]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
+    /// See [`VkPipelineMultisampleStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineMultisampleStateCreateInfo.html).
     #[builder(default)]
     pub bounds_test: bool,
 
     /// A value specifying the comparison operator to use in the [depth comparison] step of the
     /// [depth test].
     ///
-    /// [depth comparison]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth-comparison
-    /// [depth test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth
+    /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
     #[builder(default)]
     pub compare_op: vk::CompareOp,
 
     /// Controls whether [depth testing] is enabled.
     ///
-    /// [depth testing]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth
+    /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
     #[builder(default)]
     pub depth_test: bool,
 
@@ -216,7 +211,7 @@ pub struct DepthStencilInfo {
     ///
     /// Depth writes are always disabled when `depth_test` is `false`.
     ///
-    /// [depth writes]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-depth-write
+    /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
     #[builder(default)]
     pub depth_write: bool,
 
@@ -227,20 +222,20 @@ pub struct DepthStencilInfo {
     // Note: Using setter(into) so caller does not need our version of OrderedFloat
     /// Minimum depth bound used in the [depth bounds test].
     ///
-    /// [depth bounds test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
+    /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
     #[builder(default, setter(into))]
     pub min: OrderedFloat<f32>,
 
     // Note: Using setter(into) so caller does not need our version of OrderedFloat
     /// Maximum depth bound used in the [depth bounds test].
     ///
-    /// [depth bounds test]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-dbt
+    /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
     #[builder(default, setter(into))]
     pub max: OrderedFloat<f32>,
 
     /// Controls whether [stencil testing] is enabled.
     ///
-    /// [stencil testing]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-stencil
+    /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
     #[builder(default)]
     pub stencil_test: bool,
 }
@@ -607,8 +602,8 @@ impl PartialEq for GraphicPipeline {
     pattern = "owned"
 )]
 pub struct GraphicPipelineInfo {
-    /// Controls whether a temporary coverage value is generated based on the alpha component of the
-    /// fragment’s first color output.
+    /// Controls whether a temporary coverage value is generated based on the alpha component of
+    /// the fragment’s first color output.
     #[builder(default)]
     pub alpha_to_coverage: bool,
 
@@ -681,7 +676,7 @@ pub struct GraphicPipelineInfo {
     ///
     /// The default value is `SampleCount::Type1`.
     ///
-    /// See [multisampling](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#primsrast-multisampling).
+    /// See [`VkPipelineMultisampleStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineMultisampleStateCreateInfo.html).
     #[builder(default = "SampleCount::Type1")]
     pub samples: SampleCount,
 }
@@ -802,8 +797,7 @@ pub(crate) struct ShaderStage {
 
 /// Specifies stencil mode during rasterization.
 ///
-/// See
-/// [stencil test](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#fragops-stencil).
+/// See [`VkStencilOpState`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkStencilOpState.html).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct StencilMode {
     /// The action performed on samples that fail the stencil test.
@@ -825,7 +819,8 @@ pub struct StencilMode {
     /// framebuffer attachment.
     pub write_mask: u32,
 
-    /// An unsigned integer stencil reference value that is used in the unsigned stencil comparison.
+    /// An unsigned integer stencil reference value that is used in the unsigned stencil
+    /// comparison.
     pub reference: u32,
 }
 

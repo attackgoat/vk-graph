@@ -1076,7 +1076,12 @@ fn create_shadow_pipeline_with_geometry_shader(
         #version 450 core
         #pragma shader_stage(geometry)
 
-        #define CLIP mat4(1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5, 1.0)
+        const mat4 CLIP = mat4(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, -1.0, 0.0, 0.0,
+            0.0, 0.0, 0.5, 0.0,
+            0.0, 0.0, 0.5, 1.0
+        );
 
         struct ViewPositions {
             vec4 positions[6];

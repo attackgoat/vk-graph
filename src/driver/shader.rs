@@ -288,7 +288,7 @@ impl PipelineDescriptorInfo {
             let mut create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
             // The bindless flags have to be created for every descriptor set layout binding.
-            // [vulkan spec](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkDescriptorSetLayoutBindingFlagsCreateInfo.html)
+            // See [`VkDescriptorSetLayoutBindingFlagsCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorSetLayoutBindingFlagsCreateInfo.html).
             // Maybe using one vector and updating it would be more efficient.
             let bindless_flags = vec![vk::DescriptorBindingFlags::PARTIALLY_BOUND; bindings.len()];
             let mut bindless_flags = if device
@@ -458,15 +458,15 @@ pub struct SamplerInfo {
     #[builder(default)]
     pub address_mode_w: vk::SamplerAddressMode,
 
-    /// The bias to be added to mipmap LOD calculation and bias provided by image sampling functions
-    /// in SPIR-V, as described in the
-    /// [LOD Operation](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-level-of-detail-operation)
+    /// The bias to be added to mipmap LOD calculation and bias provided by image sampling
+    /// functions in SPIR-V, as described in the
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     /// section.
     #[builder(default, setter(into))]
     pub mip_lod_bias: OrderedFloat<f32>,
 
     /// Enables anisotropic filtering, as described in the
-    /// [Texel Anisotropic Filtering](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-texel-anisotropic-filtering)
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     /// section
     #[builder(default)]
     pub anisotropy_enable: bool,
@@ -483,18 +483,18 @@ pub struct SamplerInfo {
 
     /// Specifies the comparison operator to apply to fetched data before filtering as described in
     /// the
-    /// [Depth Compare Operation](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-depth-compare-operation)
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     /// section.
     #[builder(default)]
     pub compare_op: vk::CompareOp,
 
     /// Used to clamp the
-    /// [minimum of the computed LOD value](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-level-of-detail-operation).
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     #[builder(default, setter(into))]
     pub min_lod: OrderedFloat<f32>,
 
     /// Used to clamp the
-    /// [maximum of the computed LOD value](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#textures-level-of-detail-operation).
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     ///
     /// To avoid clamping the maximum value, set maxLod to the constant `vk::LOD_CLAMP_NONE`.
     #[builder(default, setter(into))]
@@ -515,7 +515,7 @@ pub struct SamplerInfo {
     /// When set to `false` the range of image coordinates is zero to one.
     ///
     /// See
-    /// [requirements](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkSamplerCreateInfo.html).
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     #[builder(default)]
     pub unnormalized_coordinates: bool,
 
@@ -527,7 +527,7 @@ pub struct SamplerInfo {
     /// The default value is [`vk::SamplerReductionMode::WEIGHTED_AVERAGE`]
     ///
     /// See
-    /// [requirements](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkSamplerCreateInfo.html).
+    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     #[builder(default)]
     pub reduction_mode: vk::SamplerReductionMode,
 }
@@ -1600,7 +1600,8 @@ pub struct SpecializationMap {
     /// A buffer of data which holds the constant values.
     pub data: Vec<u8>,
 
-    /// Mapping of locations within the constant value data which describe each individual constant.
+    /// Mapping of locations within the constant value data which describe each individual
+    /// constant.
     pub entries: Vec<vk::SpecializationMapEntry>,
 }
 

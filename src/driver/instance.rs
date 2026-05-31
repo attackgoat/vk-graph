@@ -113,9 +113,7 @@ unsafe extern "system" fn debug_callback(
         .map(|value| !matches!(value.as_str(), "" | "0" | "false" | "False" | "FALSE"))
         .unwrap_or(false)
     {
-        warn!(
-            "validation callback park skipped by {SKIP_VALIDATION_PARK_ENV}; execution will continue"
-        );
+        warn!("validation callback park skipped; execution will continue");
         logger().flush();
 
         return vk::FALSE;
@@ -776,16 +774,16 @@ impl Drop for InstanceInner {
 /// Data returned when attempting to parse a Vulkan API version number.
 #[derive(Clone, Copy, Debug)]
 pub struct ParseApiVersionError {
-    /// The _major_ version indicates a significant change in the API, which will encompass a wholly
-    /// new version of the specification.
+    /// The _major_ version indicates a significant change in the API, which will encompass a
+    /// wholly new version of the specification.
     pub major: u32,
 
     /// The _minor_ version indicates the incorporation of new functionality into the core
     /// specification.
     pub minor: u32,
 
-    /// The _patch_ version indicates bug fixes, clarifications, and language improvements have been
-    /// incorporated into the specification.
+    /// The _patch_ version indicates bug fixes, clarifications, and language improvements have
+    /// been incorporated into the specification.
     pub patch: u32,
 
     /// The _variant_ indicates the variant of the Vulkan API supported by the implementation. This

@@ -54,7 +54,7 @@ graph data structures.
 
 ## Pooling Resources
 
-Pooled resources are leased from `Pool` implementations. Dropped leases return to the pool.
+Pooled resources are requested from `Pool` implementations. Dropped resources return to the pool.
 
 The `Lease<T>` type otherwise acts identically to an owned resource.
 

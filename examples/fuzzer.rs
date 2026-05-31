@@ -356,7 +356,8 @@ fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
                     layout(offset = 0) float offset;
                 } push_const;
 
-                layout(set = 0, binding = 0) uniform sampler2D layer_images_sampler_llr[LAYER_COUNT];
+                layout(set = 0, binding = 0) uniform sampler2D
+                    layer_images_sampler_llr[LAYER_COUNT];
 
                 void main() {
                 }
@@ -364,7 +365,7 @@ fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
             )
             .as_slice(),
         )
-        .specialization(SpecializationMap::new(5u32.to_ne_bytes()).constant(0,0,4)),
+        .specialization(SpecializationMap::new(5u32.to_ne_bytes()).constant(0, 0, 4)),
     );
 
     let image_info = ImageInfo::image_2d(

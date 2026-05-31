@@ -668,13 +668,13 @@ pub(crate) mod deprecated {
     }
 
     impl DeviceInfo {
-        #[deprecated = "no effect; use physical_device_index or enumerate Instance::physical_devices explicitly"]
+        #[deprecated = "no effect; use physical_device_index"]
         #[doc(hidden)]
         pub fn integrated_gpu() {
             warn!("invalid deprecated device selection hint: integrated_gpu has no effect");
         }
 
-        #[deprecated = "no effect; use physical_device_index or enumerate Instance::physical_devices explicitly"]
+        #[deprecated = "no effect; use physical_device_index"]
         #[doc(hidden)]
         pub fn discrete_gpu() {
             warn!("invalid deprecated device selection hint: discrete_gpu has no effect");
@@ -682,7 +682,7 @@ pub(crate) mod deprecated {
     }
 
     impl DeviceInfoBuilder {
-        #[deprecated = "no effect; use physical_device_index or enumerate Instance::physical_devices explicitly"]
+        #[deprecated = "no effect; use physical_device_index"]
         #[doc(hidden)]
         pub fn select_physical_device(self, _: Box<dyn Fn()>) -> Self {
             warn!(

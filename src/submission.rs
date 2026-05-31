@@ -362,7 +362,6 @@ impl Submission {
         false
     }
 
-    // See https://vulkan.lunarg.com/doc/view/1.3.204.1/linux/1.3-extensions/vkspec.html#attachment-type-imagelayout
     fn attachment_layout(
         aspect_mask: vk::ImageAspectFlags,
         is_random_access: bool,
@@ -446,7 +445,10 @@ impl Submission {
         );
 
         thread_local! {
-            static CLEARS_VIEWS: RefCell<(Vec<vk::ClearValue>, Vec<vk::ImageView>)> = Default::default();
+            static CLEARS_VIEWS: RefCell<(
+                Vec<vk::ClearValue>,
+                Vec<vk::ImageView>,
+            )> = Default::default();
         }
 
         CLEARS_VIEWS.with_borrow_mut(|(clear_values, image_views)| {
@@ -779,8 +781,9 @@ impl Submission {
                     }
                     _ => {
                         warn!(
-                            "unsupported descriptor type {descriptor_ty:?} while sizing descriptor pool for pass \"{}\"",
-                            pass.name()
+                            "unsupported descriptor type {:?} for pass {}",
+                            descriptor_ty,
+                            pass.name(),
                         );
 
                         return Err(DriverError::Unsupported);
@@ -1096,7 +1099,7 @@ impl Submission {
             for attachment_idx in pipeline.inner.input_attachments.iter() {
                 debug_assert!(
                     !exec.color_clears.contains_key(attachment_idx),
-                    "cannot clear color attachment index {attachment_idx} because it uses subpass input",
+                    "cannot clear color attachment {attachment_idx} because it uses subpass input",
                 );
 
                 let exec_attachment = exec
@@ -1254,8 +1257,9 @@ impl Submission {
                         {
                             if let Some(accesses) = prev_exec.accesses.get(node_idx) {
                                 for &SubresourceAccess { access, .. } in accesses {
-                                    // Is this previous execution access dependent on anything the current
-                                    // execution access is dependent upon?
+                                    // Is this previous execution access dependent on anything the
+                                    // current execution access
+                                    // is dependent upon?
                                     let (mut prev_stages, prev_access) =
                                         pipeline_stage_access_flags(access);
                                     if prev_stages.contains(vk::PipelineStageFlags::ALL_COMMANDS) {
@@ -1300,8 +1304,8 @@ impl Submission {
                                     curr_stages &= !common_stages;
                                     curr_access &= !prev_access;
 
-                                    // Have we found all dependencies for this stage? If so no need to
-                                    // check external passes
+                                    // Have we found all dependencies for this stage? If so no need
+                                    // to check external passes
                                     if curr_stages.is_empty() {
                                         continue 'accesses;
                                     }
@@ -1317,8 +1321,9 @@ impl Submission {
                         {
                             if let Some(accesses) = prev_subpass.accesses.get(node_idx) {
                                 for &SubresourceAccess { access, .. } in accesses {
-                                    // Is this previous subpass access dependent on anything the current
-                                    // subpass access is dependent upon?
+                                    // Is this previous subpass access dependent on anything the
+                                    // current subpass access is
+                                    // dependent upon?
                                     let (prev_stages, prev_access) =
                                         pipeline_stage_access_flags(access);
                                     let common_stages = curr_stages & prev_stages;
@@ -1359,8 +1364,8 @@ impl Submission {
                                     curr_stages &= !common_stages;
                                     curr_access &= !prev_access;
 
-                                    // If we found all dependencies for this stage there is no need to check
-                                    // external passes
+                                    // If we found all dependencies for this stage there is no need
+                                    // to check external passes
                                     if curr_stages.is_empty() {
                                         continue 'accesses;
                                     }
@@ -1702,7 +1707,7 @@ impl Submission {
             // only care about one pass at a time here
             let pass = &mut self.graph.cmds[pass_idx];
 
-            trace!("leasing [{pass_idx}: {}]", pass.name());
+            trace!("requesting [{pass_idx}: {}]", pass.name());
 
             let descriptor_pool = Self::lease_descriptor_pool(pool, pass)?;
             let mut exec_descriptor_sets = HashMap::with_capacity(
@@ -1967,8 +1972,8 @@ impl Submission {
             tls.next_accesses.clear();
             tls.prev_accesses.clear();
 
-            // Map remaining accesses into vk_sync barriers (some accesses may have been removed by the
-            // render pass leasing function)
+            // Map remaining accesses into vk_sync barriers (some accesses may have been removed by
+            // the render pass request function)
 
             for (node_idx, accesses) in accesses {
                 let resource = &resources[*node_idx];
@@ -2252,8 +2257,9 @@ impl Submission {
 
                                 #[cfg(not(debug_assertions))]
                                 unsafe {
-                                    // This cannot be reached because PassRef enforces the subrange is
-                                    // of type N::Subresource where N is the image node type
+                                    // This cannot be reached because PassRef enforces the subrange
+                                    // is of type N::Subresource
+                                    // where N is the image node type
                                     unreachable_unchecked()
                                 }
                             };
@@ -2290,8 +2296,9 @@ impl Submission {
 
                                 #[cfg(not(debug_assertions))]
                                 unsafe {
-                                    // This cannot be reached because PassRef enforces the subrange is
-                                    // of type N::Subresource where N is the image node type
+                                    // This cannot be reached because PassRef enforces the subrange
+                                    // is of type N::Subresource
+                                    // where N is the image node type
                                     unreachable_unchecked()
                                 }
                             };
@@ -2411,7 +2418,7 @@ impl Submission {
             "Unsorted schedule"
         );
 
-        // Optimize the schedule; leasing the required stuff it needs
+        // Optimize the schedule; requesting the required resources it needs
         Self::reorder_scheduled_passes(schedule, end_pass_idx);
         self.merge_scheduled_passes(&mut schedule.passes);
         self.lease_scheduled_resources(pool, &schedule.passes)?;
@@ -2650,7 +2657,8 @@ impl Submission {
                         .interdependent_passes(*pass_idx, end_pass_idx)
                     {
                         if unscheduled[other_pass_idx] {
-                            // This pass can't be the candidate because it depends on unfinished work
+                            // This pass can't be the candidate because it depends on unfinished
+                            // work
                             break;
                         }
 
@@ -2686,7 +2694,9 @@ impl Submission {
         type UnscheduledUnresolvedUnchecked = (Vec<bool>, Vec<bool>, VecDeque<(usize, usize)>);
 
         thread_local! {
-            static UNSCHEDULED_UNRESOLVED_UNCHECKED: RefCell<UnscheduledUnresolvedUnchecked> = Default::default();
+            static UNSCHEDULED_UNRESOLVED_UNCHECKED: RefCell<
+                UnscheduledUnresolvedUnchecked,
+            > = Default::default();
         }
 
         UNSCHEDULED_UNRESOLVED_UNCHECKED.with_borrow_mut(|(unscheduled, unresolved, unchecked)| {
@@ -2972,9 +2982,10 @@ impl Submission {
     /// Records any pending render graph passes that are required by the given node, but does not
     /// record any passes that actually contain the given node.
     ///
-    /// As a side effect, the graph is optimized for the given node. Future calls may further optimize
-    /// the graph, but only on top of the existing optimizations. This only matters if you are pulling
-    /// multiple images out and you care - in that case pull the "most important" image first.
+    /// As a side effect, the graph is optimized for the given node. Future calls may further
+    /// optimize the graph, but only on top of the existing optimizations. This only matters if
+    /// you are pulling multiple images out and you care - in that case pull the "most
+    /// important" image first.
     #[profiling::function]
     pub fn queue_resource_dependencies<P>(
         &mut self,
@@ -3038,10 +3049,19 @@ impl Submission {
             // Write the manually bound things (access, read, and write functions)
             for (descriptor, (node_idx, view_info)) in exec.bindings.iter() {
                 let (descriptor_set_idx, dst_binding, binding_offset) = descriptor.into_tuple();
-                let (descriptor_info, _) = pipeline
-                        .descriptor_bindings()
-                        .get(&Descriptor { set: descriptor_set_idx, binding: dst_binding })
-                        .unwrap_or_else(|| panic!("descriptor {descriptor_set_idx}.{dst_binding}[{binding_offset}] specified in recorded execution of pass \"{}\" was not discovered through shader reflection", pass.name()));
+                let Some((descriptor_info, _)) = pipeline.descriptor_bindings().get(&Descriptor {
+                    set: descriptor_set_idx,
+                    binding: dst_binding,
+                }) else {
+                    warn!(
+                        "binding {}.{}[{}] not found in shader reflection for pass \"{}\"",
+                        descriptor_set_idx,
+                        dst_binding,
+                        binding_offset,
+                        pass.name(),
+                    );
+                    return Err(DriverError::InvalidData);
+                };
                 let descriptor_type = descriptor_info.descriptor_type();
                 let bound_node = &bindings[*node_idx];
                 if let Some(image) = bound_node.as_image() {
@@ -3077,7 +3097,7 @@ impl Submission {
                         vk::DescriptorType::STORAGE_IMAGE => vk::ImageLayout::GENERAL,
                         _ => {
                             warn!(
-                                "invalid image descriptor type {descriptor_type:?} at binding {}.{}[{}] in pass \"{}\"",
+                                "invalid image descriptor type at binding {}.{}[{}] in pass \"{}\"",
                                 descriptor_set_idx,
                                 dst_binding,
                                 binding_offset,

@@ -214,58 +214,63 @@ fn create_reduce_pipeline(device: &Device) -> Result<ComputePipeline, DriverErro
 
 fn create_exclusive_sum_pipeline(device: &Device) -> Result<ComputePipeline, DriverError> {
     ComputePipeline::create(
-            device,
-            ComputePipelineInfo::default(),
-            Shader::new_compute(glsl!(
-                target: vulkan1_2,
-                r#"
-                #version 460 core
-                #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
-                #extension GL_KHR_shader_subgroup_arithmetic : require
-                #pragma shader_stage(compute)
+        device,
+        ComputePipelineInfo::default(),
+        Shader::new_compute(
+            glsl!(
+                    target: vulkan1_2,
+                    r#"
+                    #version 460 core
+                    #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+                    #extension GL_KHR_shader_subgroup_arithmetic : require
+                    #pragma shader_stage(compute)
 
-                layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+                    layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-                layout(binding = 0) restrict readonly buffer WorkgroupBuffer {
-                    uint32_t workgroup_buf[];
-                };
+                    layout(binding = 0) restrict readonly buffer WorkgroupBuffer {
+                        uint32_t workgroup_buf[];
+                    };
 
-                layout(binding = 1) restrict readonly buffer InputBuffer {
-                    uint32_t input_buf[];
-                };
+                    layout(binding = 1) restrict readonly buffer InputBuffer {
+                        uint32_t input_buf[];
+                    };
 
-                layout(binding = 2) restrict writeonly buffer OutputBuffer {
-                    uint32_t output_buf[];
-                };
+                    layout(binding = 2) restrict writeonly buffer OutputBuffer {
+                        uint32_t output_buf[];
+                    };
 
-                void main() {
-                    uint32_t subgroup_sum = subgroupExclusiveAdd(input_buf[gl_GlobalInvocationID.x]);
-                    uint32_t workgroup_sum = 0;
+                    void main() {
+                        uint32_t subgroup_sum =
+                            subgroupExclusiveAdd(input_buf[gl_GlobalInvocationID.x]);
+                        uint32_t workgroup_sum = 0;
 
-                    uint workgroups_per_subgroup_invocation = (gl_NumWorkGroups.x + gl_SubgroupSize - 1) / gl_SubgroupSize;
-                    uint start = gl_SubgroupInvocationID * workgroups_per_subgroup_invocation;
-                    uint end = min(start + workgroups_per_subgroup_invocation, gl_WorkGroupID.x);
-                    for (uint workgroup_id = start; workgroup_id < end; workgroup_id++) {
-                        workgroup_sum += workgroup_buf[workgroup_id];
+                        uint workgroups_per_subgroup_invocation =
+                            (gl_NumWorkGroups.x + gl_SubgroupSize - 1) / gl_SubgroupSize;
+                        uint start = gl_SubgroupInvocationID * workgroups_per_subgroup_invocation;
+                        uint end = min(start + workgroups_per_subgroup_invocation, gl_WorkGroupID.x);
+                        for (uint workgroup_id = start; workgroup_id < end; workgroup_id++) {
+                            workgroup_sum += workgroup_buf[workgroup_id];
+                        }
+
+                        workgroup_sum = subgroupAdd(workgroup_sum);
+
+                        output_buf[gl_GlobalInvocationID.x] = subgroup_sum + workgroup_sum;
                     }
-
-                    workgroup_sum = subgroupAdd(workgroup_sum);
-
-                    output_buf[gl_GlobalInvocationID.x] = subgroup_sum + workgroup_sum;
-                }
-                "#
-        ).as_slice())
-            .specialization(
-                SpecializationMap::new(
-                    device
-                        .physical_device
-                        .properties_v1_1
-                        .subgroup_size
-                        .to_ne_bytes(),
-                )
-                .constant(0, 0, 4),
-            ),
+                    "#
+            )
+            .as_slice(),
         )
+        .specialization(
+            SpecializationMap::new(
+                device
+                    .physical_device
+                    .properties_v1_1
+                    .subgroup_size
+                    .to_ne_bytes(),
+            )
+            .constant(0, 0, 4),
+        ),
+    )
 }
 
 #[derive(Parser)]

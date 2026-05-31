@@ -346,8 +346,8 @@ impl Animation {
 
             // Uncomment to show how to manually target a bone (this twists the chest to the right)
             // let animation_transform = if joint.name.as_str() == "Chest" {
-            //     self.joints[joint.parent_index].inverse_bind * joint.inverse_bind.inverse() * Mat4::from_rotation_y(90f32.to_radians())
-            // } else {
+            //     self.joints[joint.parent_index].inverse_bind * joint.inverse_bind.inverse() *
+            // Mat4::from_rotation_y(90f32.to_radians()) } else {
             //     animation_transform
             // };
 

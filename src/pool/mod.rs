@@ -1,10 +1,10 @@
-//! Resource pooling, leasing, and aliasing types.
+//! Resource pooling, requesting, and aliasing types.
 //!
 //! Resource pools provide caching for buffer, image, and acceleration structure resources. Pooled
-//! resources may be leased from a pool using their corresponding information structure.
+//! resources may be requested from a pool using their corresponding information structure.
 //!
 //! Leased resources may be bound directly to a [`Graph`](crate::Graph) and used in the same manner
-//! as regular resources. After execution has completed leased resources are automatically returned
+//! as regular resources. After execution has completed pooled resources are automatically returned
 //! to their pool for reuse.
 //!
 //! # Buckets
@@ -145,10 +145,10 @@ fn with_cache<T, R>(cache: &Cache<T>, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
     f(&mut cache)
 }
 
-/// Holds a leased resource and implements `Drop` in order to return the resource.
+/// Holds a pooled resource and implements `Drop` in order to return the resource.
 ///
 /// This simple wrapper type implements only the `AsRef`, `AsMut`, `Deref` and `DerefMut` traits
-/// and provides no other functionality. A freshly leased resource is guaranteed to have no other
+/// and provides no other functionality. A freshly obtained resource is guaranteed to have no other
 /// owners and may be mutably accessed.
 #[derive(Debug)]
 pub struct Lease<T> {
@@ -157,7 +157,7 @@ pub struct Lease<T> {
 }
 
 // The following debug_name functions take a self of Lease<T> and return Self.
-// This allows leased resources to have the same `.debug_name("bugs")` chaining
+// This allows pooled resources to have the same `.debug_name("bugs")` chaining
 
 impl Lease<AccelerationStructure> {
     /// Sets the debugging name assigned to this acceleration structure.
@@ -234,7 +234,7 @@ impl<T> Drop for Lease<T> {
     }
 }
 
-/// Allows leasing of resources using driver information structures.
+/// Allows requesting resources using driver information structures.
 pub trait Pool<I, T> {
     #[deprecated = "use resource function"]
     #[doc(hidden)]
@@ -242,16 +242,19 @@ pub trait Pool<I, T> {
         self.resource(info)
     }
 
-    /// Lease a resource.
+    /// Request a resource.
     fn resource(&mut self, info: I) -> Result<Lease<T>, DriverError>;
 }
 
-// Enable leasing items using their info builder type for convenience
+// Enable requesting items using their info builder type for convenience
 macro_rules! lease_builder {
     ($info:ident => $item:ident) => {
         paste::paste! {
             impl<T> Pool<[<$info Builder>], $item> for T where T: Pool<$info, $item> {
-                fn resource(&mut self, builder: [<$info Builder>]) -> Result<Lease<$item>, DriverError> {
+                fn resource(
+                    &mut self,
+                    builder: [<$info Builder>],
+                ) -> Result<Lease<$item>, DriverError> {
                     let info = builder.build();
 
                     self.resource(info)
@@ -273,47 +276,56 @@ lease_builder!(ImageInfo => Image);
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-pub struct PoolInfo {
+pub struct PoolConfig {
     /// The maximum size of a single bucket of acceleration structure resource instances. The
-    /// default value is [`PoolInfo::DEFAULT_RESOURCE_CAPACITY`].
+    /// default value is [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
     ///
     /// # Note
     ///
-    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the documentation
-    /// of each implementation to understand how this affects total number of stored acceleration
-    /// structure instances.
-    #[builder(default = "PoolInfo::DEFAULT_RESOURCE_CAPACITY", setter(strip_option))]
+    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the
+    /// documentation of each implementation to understand how this affects total number of
+    /// stored acceleration structure instances.
+    #[builder(
+        default = "PoolConfig::DEFAULT_RESOURCE_CAPACITY",
+        setter(strip_option)
+    )]
     pub accel_struct_capacity: usize,
 
     /// The maximum size of a single bucket of buffer resource instances. The default value is
-    /// [`PoolInfo::DEFAULT_RESOURCE_CAPACITY`].
+    /// [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
     ///
     /// # Note
     ///
-    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the documentation
-    /// of each implementation to understand how this affects total number of stored buffer
-    /// instances.
-    #[builder(default = "PoolInfo::DEFAULT_RESOURCE_CAPACITY", setter(strip_option))]
+    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the
+    /// documentation of each implementation to understand how this affects total number of
+    /// stored buffer instances.
+    #[builder(
+        default = "PoolConfig::DEFAULT_RESOURCE_CAPACITY",
+        setter(strip_option)
+    )]
     pub buffer_capacity: usize,
 
     /// The maximum size of a single bucket of image resource instances. The default value is
-    /// [`PoolInfo::DEFAULT_RESOURCE_CAPACITY`].
+    /// [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
     ///
     /// # Note
     ///
-    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the documentation
-    /// of each implementation to understand how this affects total number of stored image
-    /// instances.
-    #[builder(default = "PoolInfo::DEFAULT_RESOURCE_CAPACITY", setter(strip_option))]
+    /// Individual [`Pool`] implementations store varying numbers of buckets. Read the
+    /// documentation of each implementation to understand how this affects total number of
+    /// stored image instances.
+    #[builder(
+        default = "PoolConfig::DEFAULT_RESOURCE_CAPACITY",
+        setter(strip_option)
+    )]
     pub image_capacity: usize,
 }
 
-impl PoolInfo {
+impl PoolConfig {
     /// The maximum size of a single bucket of resource instances.
     pub const DEFAULT_RESOURCE_CAPACITY: usize = 16;
 
-    /// Creates a default `PoolInfoBuilder`.
-    pub fn builder() -> PoolInfoBuilder {
+    /// Creates a default `PoolConfigBuilder`.
+    pub fn builder() -> PoolConfigBuilder {
         Default::default()
     }
 
@@ -327,9 +339,9 @@ impl PoolInfo {
         Cache::new(Mutex::new(Vec::with_capacity(capacity)))
     }
 
-    /// Converts a `PoolInfo` into a `PoolInfoBuilder`.
-    pub fn into_builder(self) -> PoolInfoBuilder {
-        PoolInfoBuilder {
+    /// Converts a `PoolConfig` into a `PoolConfigBuilder`.
+    pub fn into_builder(self) -> PoolConfigBuilder {
+        PoolConfigBuilder {
             accel_struct_capacity: Some(self.accel_struct_capacity),
             buffer_capacity: Some(self.buffer_capacity),
             image_capacity: Some(self.image_capacity),
@@ -338,12 +350,12 @@ impl PoolInfo {
 
     #[deprecated = "use into_builder function"]
     #[doc(hidden)]
-    pub fn to_builder(self) -> PoolInfoBuilder {
+    pub fn to_builder(self) -> PoolConfigBuilder {
         self.into_builder()
     }
 
-    /// Constructs a new `PoolInfo` with the given acceleration structure, buffer and image resource
-    /// capacity for any single bucket.
+    /// Constructs a new `PoolConfig` with the given acceleration structure, buffer and image
+    /// resource capacity for any single bucket.
     pub const fn with_capacity(resource_capacity: usize) -> Self {
         Self {
             accel_struct_capacity: resource_capacity,
@@ -353,19 +365,19 @@ impl PoolInfo {
     }
 }
 
-impl Default for PoolInfo {
+impl Default for PoolConfig {
     fn default() -> Self {
-        PoolInfoBuilder::default().into()
+        PoolConfigBuilder::default().into()
     }
 }
 
-impl From<PoolInfoBuilder> for PoolInfo {
-    fn from(info: PoolInfoBuilder) -> Self {
+impl From<PoolConfigBuilder> for PoolConfig {
+    fn from(info: PoolConfigBuilder) -> Self {
         info.build()
     }
 }
 
-impl From<usize> for PoolInfo {
+impl From<usize> for PoolConfig {
     fn from(value: usize) -> Self {
         Self {
             accel_struct_capacity: value,
@@ -376,12 +388,20 @@ impl From<usize> for PoolInfo {
 }
 
 // HACK: https://github.com/colin-kiegel/rust-derive-builder/issues/56
-impl PoolInfoBuilder {
-    /// Builds a new `PoolInfo`.
-    pub fn build(self) -> PoolInfo {
-        self.fallible_build().expect("invalid pool info")
+impl PoolConfigBuilder {
+    /// Builds a new `PoolConfig`.
+    pub fn build(self) -> PoolConfig {
+        self.fallible_build().expect("invalid pool config")
     }
 }
+
+#[doc(hidden)]
+#[deprecated = "use PoolConfig instead"]
+pub type PoolInfo = PoolConfig;
+
+#[doc(hidden)]
+#[deprecated = "use PoolConfigBuilder instead"]
+pub type PoolInfoBuilder = PoolConfigBuilder;
 
 mod deprecated {
     use {
@@ -422,8 +442,8 @@ mod deprecated {
 mod test {
     use super::*;
 
-    type Info = PoolInfo;
-    type Builder = PoolInfoBuilder;
+    type Info = PoolConfig;
+    type Builder = PoolConfigBuilder;
 
     #[test]
     pub fn pool_info() {

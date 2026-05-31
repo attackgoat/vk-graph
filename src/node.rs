@@ -13,14 +13,13 @@ use crate::{
 
 use super::{AnyResource, NodeIndex};
 
-/// Specifies either an owned acceleration structure or an acceleration structure leased from a
-/// pool.
+/// Specifies either an owned acceleration structure or one obtained from a pool.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyAccelerationStructureNode {
     /// An owned acceleration structure.
     AccelerationStructure(AccelerationStructureNode),
 
-    /// An acceleration structure leased from a pool.
+    /// An acceleration structure obtained from a pool.
     AccelerationStructureLease(AccelerationStructureLeaseNode),
 }
 
@@ -51,13 +50,13 @@ impl Node for AnyAccelerationStructureNode {
     }
 }
 
-/// Specifies either an owned buffer or a buffer leased from a pool.
+/// Specifies either an owned buffer or one obtained from a pool.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyBufferNode {
     /// An owned buffer.
     Buffer(BufferNode),
 
-    /// A buffer leased from a pool.
+    /// A buffer obtained from a pool.
     BufferLease(BufferLeaseNode),
 }
 
@@ -88,7 +87,7 @@ impl Node for AnyBufferNode {
     }
 }
 
-/// Specifies either an owned image or an image leased from a pool.
+/// Specifies either an owned image or one obtained from a pool.
 ///
 /// The image may also be a special swapchain type of image.
 #[derive(Clone, Copy, Debug)]
@@ -96,7 +95,7 @@ pub enum AnyImageNode {
     /// An owned image.
     Image(ImageNode),
 
-    /// An image leased from a pool.
+    /// An image obtained from a pool.
     ImageLease(ImageLeaseNode),
 
     /// A special swapchain image.

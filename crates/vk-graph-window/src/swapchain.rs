@@ -1,4 +1,4 @@
-//! Resource leasing and pooling types.
+//! Window swapchain creation, acquisition, and presentation helpers.
 
 use {
     derive_builder::{Builder, UninitializedFieldError},
@@ -114,9 +114,8 @@ impl Swapchain {
 
     /// Acquires the next available swapchain image for rendering.
     ///
-    /// This is a high-level wrapper around
-    /// [`Swapchain::acquire_next_image`](vk_graph::driver::swapchain::Swapchain::acquire_next_image)
-    /// that manages the internal execution slot, fence, and semaphore lifecycle automatically.
+    /// This is a high-level wrapper around [`Swapchain::acquire_next_image`].
+    /// It manages the internal execution slot, fence, and semaphore lifecycle automatically.
     ///
     /// The returned [`SwapchainImage`] (if `Some`) has already had its acquire semaphore
     /// submitted to the associated queue for this frame. The caller should record and
@@ -125,12 +124,11 @@ impl Swapchain {
     /// # Returns
     ///
     /// * `Ok(Some(image))` — An image was acquired and may be rendered to.
-    /// * `Ok(None)` — The swapchain is suboptimal (e.g. the window was resized).
-    ///   Render nothing for this frame and call [`acquire_next_image`][Self::acquire_next_image]
-    ///   again next frame.
+    /// * `Ok(None)` — The swapchain is suboptimal (e.g. the window was resized). Render nothing for
+    ///   this frame and call [`acquire_next_image`][Self::acquire_next_image] again next frame.
     /// * `Err(SwapchainError::DeviceLost)` — The Vulkan device has been lost.
-    /// * `Err(SwapchainError::Driver(_))` — The surface was lost or another
-    ///   unrecoverable driver error occurred.
+    /// * `Err(SwapchainError::Driver(_))` — The surface was lost or another unrecoverable driver
+    ///   error occurred.
     ///
     /// # Internal behavior
     ///
@@ -310,8 +308,8 @@ impl Swapchain {
             queue_index,
         )?;
 
-        // Store the resolved graph because it contains bindings, leases, and other shared resources
-        // that need to be kept alive until the fence is waited upon.
+        // Store the resolved graph because it contains bindings, pooled resources, and other shared
+        // resources that need to be kept alive until the fence is waited upon.
         exec.cmd.drop_after_executed(submission);
 
         Ok(())
@@ -421,46 +419,50 @@ pub struct SwapchainInfo {
     /// The initial height of the surface.
     pub height: u32,
 
-    /// The minimum number of presentable images that the application needs. The implementation will
-    /// either create the swapchain with at least that many images, or it will fail to create the
-    /// swapchain.
+    /// The minimum number of presentable images that the application needs. The implementation
+    /// will either create the swapchain with at least that many images, or it will fail to
+    /// create the swapchain.
     ///
     /// More images introduce more display lag, but smoother animation.
     #[builder(default = "2")]
     pub min_image_count: u32,
 
-    /// `vk::PresentModeKHR` determines timing and queueing with which frames are actually displayed
-    /// to the user.
+    /// `vk::PresentModeKHR` determines timing and queueing with which frames are actually
+    /// displayed to the user.
     ///
-    /// `vk::PresentModeKHR::FIFO` - Presentation frames are kept in a First-In-First-Out queue approximately 3 frames
-    /// long. Every vertical blanking period, the presentation engine will pop a frame off the queue to display. If
-    /// there is no frame to display, it will present the same frame again until the next vblank.
+    /// `vk::PresentModeKHR::FIFO` - Presentation frames are kept in a First-In-First-Out queue
+    /// approximately 3 frames long. Every vertical blanking period, the presentation engine
+    /// will pop a frame off the queue to display. If there is no frame to display, it will
+    /// present the same frame again until the next vblank.
     ///
     /// When a present command is executed on the GPU, the presented image is added on the queue.
     ///
     /// * **Tearing:** No tearing will be observed.
     /// * **Also known as**: "Vsync On"
     ///
-    /// `vk::PresentModeKHR::FIFO_RELAXED` - Presentation frames are kept in a First-In-First-Out queue approximately 3
-    /// frames long. Every vertical blanking period, the presentation engine will pop a frame off the queue to display.
-    /// If there is no frame to display, it will present the same frame until there is a frame in the queue. The moment
-    /// there is a frame in the queue, it will immediately pop the frame off the queue.
+    /// `vk::PresentModeKHR::FIFO_RELAXED` - Presentation frames are kept in a First-In-First-Out
+    /// queue approximately 3 frames long. Every vertical blanking period, the presentation
+    /// engine will pop a frame off the queue to display. If there is no frame to display, it
+    /// will present the same frame until there is a frame in the queue. The moment there is a
+    /// frame in the queue, it will immediately pop the frame off the queue.
     ///
     /// When a present command is executed on the GPU, the presented image is added on the queue.
     ///
-    /// * **Tearing**:
-    ///   Tearing will be observed if frames last more than one vblank as the front buffer.
+    /// * **Tearing**: Tearing will be observed if frames last more than one vblank as the front
+    ///   buffer.
     /// * **Also known as**: "Adaptive Vsync"
     ///
-    /// `vk::PresentModeKHR::IMMEDIATE` - Presentation frames are not queued at all. The moment a present command is
-    /// executed on the GPU, the presented image is swapped onto the front buffer immediately.
+    /// `vk::PresentModeKHR::IMMEDIATE` - Presentation frames are not queued at all. The moment a
+    /// present command is executed on the GPU, the presented image is swapped onto the front
+    /// buffer immediately.
     ///
     /// * **Tearing**: Tearing can be observed.
     /// * **Also known as**: "Vsync Off"
     ///
-    /// `vk::PresentModeKHR::MAILBOX` - Presentation frames are kept in a single-frame queue. Every vertical blanking
-    /// period, the presentation engine will pop a frame from the queue. If there is no frame to display, it will
-    /// present the same frame again until the next vblank.
+    /// `vk::PresentModeKHR::MAILBOX` - Presentation frames are kept in a single-frame queue. Every
+    /// vertical blanking period, the presentation engine will pop a frame from the queue. If
+    /// there is no frame to display, it will present the same frame again until the next
+    /// vblank.
     ///
     /// When a present command is executed on the GPU, the frame will be put into the queue.
     /// If there was already a frame in the queue, the new frame will _replace_ the old frame.

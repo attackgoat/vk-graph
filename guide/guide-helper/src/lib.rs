@@ -261,12 +261,42 @@ mod test {
 
     #[test]
     fn hidden_lines_are_removed_from_code_fences() {
-        let input = "```rust\n# use vk_graph::Graph;\nlet graph = Graph::new();\n# let _ = graph;\n```\n\n```text\n# keep this line\n```\n\n```toml\n# Cargo.toml\n[dependencies]\n```\n\n```bash\n# See: \"Shader Compilation\"\nrun-example\n```\n";
+        let input = concat!(
+            "```rust\n",
+            "# use vk_graph::Graph;\n",
+            "let graph = Graph::new();\n",
+            "# let _ = graph;\n",
+            "```\n\n",
+            "```text\n",
+            "# keep this line\n",
+            "```\n\n",
+            "```toml\n",
+            "# Cargo.toml\n",
+            "[dependencies]\n",
+            "```\n\n",
+            "```bash\n",
+            "# See: \"Shader Compilation\"\n",
+            "run-example\n",
+            "```\n",
+        );
         let output = hide_hidden_lines_in_markdown(input);
 
         assert_eq!(
             output,
-            "```rust\nlet graph = Graph::new();\n```\n\n```text\n# keep this line\n```\n\n```toml\n[dependencies]\n```\n\n```bash\nrun-example\n```\n"
+            concat!(
+                "```rust\n",
+                "let graph = Graph::new();\n",
+                "```\n\n",
+                "```text\n",
+                "# keep this line\n",
+                "```\n\n",
+                "```toml\n",
+                "[dependencies]\n",
+                "```\n\n",
+                "```bash\n",
+                "run-example\n",
+                "```\n",
+            )
         );
     }
 }

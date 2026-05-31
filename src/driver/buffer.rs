@@ -433,7 +433,11 @@ impl Buffer {
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::new(DeviceInfo::default())?;
     /// # const DATA: [u8; 4] = [0; 4];
-    /// # let mut my_buf = Buffer::create_from_slice(&device, vk::BufferUsageFlags::empty(), &DATA)?;
+    /// # let mut my_buf = Buffer::create_from_slice(
+    /// #     &device,
+    /// #     vk::BufferUsageFlags::empty(),
+    /// #     &DATA,
+    /// # )?;
     /// let mut data = Buffer::mapped_slice_mut(&mut my_buf);
     /// data.copy_from_slice(&42f32.to_be_bytes());
     ///
@@ -734,8 +738,8 @@ pub struct BufferInfo {
     #[builder(default = "1")]
     pub alignment: vk::DeviceSize,
 
-    /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the internal
-    /// memory allocation pool transient resources share.
+    /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the
+    /// internal memory allocation pool transient resources share.
     ///
     /// The driver may optimize access to dedicated buffers.
     #[builder(default)]

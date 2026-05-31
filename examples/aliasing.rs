@@ -9,12 +9,12 @@ use {
             device::{Device, DeviceInfo},
             image::ImageInfo,
         },
-        pool::{Pool as _, cache::Cache, hash::HashPool},
+        pool::{cache::Cache, hash::HashPool},
     },
 };
 
 /// This example demonstrates resource aliasing. Aliasing is a memory-efficiency optimization that
-/// may be used anywhere resources are leased and used in a graph. Aliasing allows complex
+/// may be used anywhere resources are requested and used in a graph. Aliasing allows complex
 /// graphs to require fewer individual resources.
 ///
 /// The performance overhead of aliasing is an atomic load for each actively aliased item and one
@@ -22,11 +22,10 @@ use {
 ///
 /// Acceleration structures, buffers and images may be "aliased" by different parts of any one or
 /// more graphs. The process involves wrapping any pool type (FifoPool, LazyPool, HashPool)
-/// in a Cache container. Cache offers `accel_struct`, `buffer` and `image` functions which operate
-/// exactly the same as a regular pool resource(..) except that the result is wrapped in an
-/// Arc<>.
+/// in a Cache container. Cache tags let you create independent aliasing groups, and each tagged
+/// view offers `resource(...)` for aliasing requests that return an `Arc<>`.
 ///
-/// Cache derefs to the base pool type and so leasing may be used normally too.
+/// Cache derefs to the base pool type so pooled resources may be requested normally too.
 fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
@@ -45,9 +44,15 @@ fn main() -> Result<(), DriverError> {
         vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
     );
 
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    enum CacheTag {
+        Shadow,
+        Ui,
+    }
+
     // Any two compatible images aliased from the same pool will be the same physical image
-    let image1 = cache.image(image_info)?;
-    let image2 = cache.image(image_info)?;
+    let image1 = cache.tag(CacheTag::Shadow).resource(image_info)?;
+    let image2 = cache.tag(CacheTag::Shadow).resource(image_info)?;
     assert!(Arc::ptr_eq(&image1, &image2));
 
     let mut graph = Graph::default();
@@ -75,11 +80,11 @@ fn main() -> Result<(), DriverError> {
     );
 
     // We alias the compatible information and still produce the same physical image and node
-    let image3_node = graph.bind_resource(cache.image(image_info)?);
+    let image3_node = graph.bind_resource(cache.tag(CacheTag::Shadow).resource(image_info)?);
     assert_eq!(image1_node, image3_node);
 
-    // Using the same information for a new LEASE will generate an entirely different image!!
-    let image4_node = graph.bind_resource(cache.resource(image_info)?);
+    // Using a different tag for the same request produces an entirely different image.
+    let image4_node = graph.bind_resource(cache.tag(CacheTag::Ui).resource(image_info)?);
     assert_ne!(image1_node, image4_node);
 
     Ok(())

@@ -178,8 +178,9 @@ impl Window {
                                             monitor.video_modes().find(|mode| {
                                                 let mode_size = mode.size();
 
-                                                // Don't pick a mode which has greater resolution than the monitor is
-                                                // currently using: it causes a panic on x11 in winit
+                                                // Don't pick a mode with greater resolution
+                                                // than the monitor.
+                                                // It can panic on x11 in winit.
                                                 mode_size.height <= monitor_size.height
                                                     && mode_size.width <= monitor_size.width
                                             })
@@ -197,7 +198,7 @@ impl Window {
 
                                         winit::window::Fullscreen::Exclusive(video_mode)
                                     } else {
-                                        warn!("unsupported exclusive fullscreen mode: using borderless fullscreen");
+                                        warn!("unsupported exclusive fullscreen mode");
 
                                         inner_size = None;
 

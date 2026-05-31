@@ -71,9 +71,8 @@ impl<'a> CommandRef<'a> {
     ///
     /// - Flags must include [`vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS`]
     /// - Size must be equal to or greater than the `build_size` value returned by
-    ///   [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)
-    ///   aligned to `min_accel_struct_scratch_offset_alignment` of
-    ///   [`PhysicalDevice::accel_struct_properties`](crate::driver::physical_device::PhysicalDevice::accel_struct_properties).
+    ///   `AccelerationStructure::size_of`, aligned to `min_accel_struct_scratch_offset_alignment`
+    ///   of `PhysicalDevice::accel_struct_properties`.
     ///
     /// # Examples
     ///
@@ -84,7 +83,14 @@ impl<'a> CommandRef<'a> {
     /// # use vk_graph::cmd::BuildAccelerationStructureInfo;
     /// # use vk_graph::driver::{sync::AccessType, DriverError};
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, AccelerationStructureInfo, DeviceOrHostAddress};
+    /// # use vk_graph::driver::accel_struct::{
+    /// #     AccelerationStructure,
+    /// #     AccelerationStructureGeometry,
+    /// #     AccelerationStructureGeometryData,
+    /// #     AccelerationStructureGeometryInfo,
+    /// #     AccelerationStructureInfo,
+    /// #     DeviceOrHostAddress,
+    /// # };
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::Graph;
     /// # use vk_graph::driver::shader::Shader;
@@ -94,7 +100,8 @@ impl<'a> CommandRef<'a> {
     /// # let info = AccelerationStructureInfo::blas(1);
     /// # let blas_accel_struct = AccelerationStructure::create(&device, info)?;
     /// # let blas_node = my_graph.bind_resource(blas_accel_struct);
-    /// # let scratch_buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+    /// # let scratch_buf_info =
+    /// #     BufferInfo::device_mem(8, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
     /// # let scratch_buf = Buffer::create(&device, scratch_buf_info)?;
     /// # let scratch_buf = my_graph.bind_resource(scratch_buf);
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::INDEX_BUFFER);
@@ -147,7 +154,6 @@ impl<'a> CommandRef<'a> {
     /// - [`examples/ray_omni.rs`](/examples/ray_omni.rs)
     /// - [`examples/ray_trace.rs`](/examples/ray_trace.rs)
     /// - [`examples/rt_triangle.rs`](/examples/rt_triangle.rs)
-    ///
     pub fn build_accel_struct(&self, infos: &[BuildAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
@@ -343,9 +349,8 @@ impl<'a> CommandRef<'a> {
     ///
     /// - Flags must include [`vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS`]
     /// - Size must be equal to or greater than the `update_size` value returned by
-    ///   [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)
-    ///   aligned to `min_accel_struct_scratch_offset_alignment` of
-    ///   [`PhysicalDevice::accel_struct_properties`](crate::driver::physical_device::PhysicalDevice::accel_struct_properties).
+    ///   `AccelerationStructure::size_of`, aligned to `min_accel_struct_scratch_offset_alignment`
+    ///   of `PhysicalDevice::accel_struct_properties`.
     pub fn update_accel_struct(&self, infos: &[UpdateAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {
@@ -536,9 +541,7 @@ impl<'a> Deref for CommandRef<'a> {
 
 /// Specifies the information and data used to build an acceleration structure.
 ///
-/// See
-/// [VkAccelerationStructureBuildGeometryInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureBuildGeometryInfoKHR.html)
-/// for more information.
+/// See [`vkCmdBuildAccelerationStructuresKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdBuildAccelerationStructuresKHR.html).
 #[derive(Clone, Debug)]
 pub struct BuildAccelerationStructureInfo {
     /// The acceleration structure to be written.
@@ -551,7 +554,7 @@ pub struct BuildAccelerationStructureInfo {
     )>,
 
     /// The temporary buffer or host address (with enough capacity per
-    /// [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)).
+    /// `AccelerationStructure::size_of`).
     pub scratch_addr: DeviceOrHostAddress,
 }
 
@@ -579,9 +582,7 @@ impl BuildAccelerationStructureInfo {
 /// Specifies the information and data used to build an acceleration structure with some parameters
 /// sourced on the device.
 ///
-/// See
-/// [VkAccelerationStructureBuildGeometryInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureBuildGeometryInfoKHR.html)
-/// for more information.
+/// See [`vkCmdBuildAccelerationStructuresKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdBuildAccelerationStructuresKHR.html).
 #[derive(Clone, Debug)]
 pub struct BuildAccelerationStructureIndirectInfo {
     /// The acceleration structure to be written.
@@ -599,7 +600,7 @@ pub struct BuildAccelerationStructureIndirectInfo {
     pub range_stride: u32,
 
     /// The temporary buffer or host address (with enough capacity per
-    /// [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)).
+    /// `AccelerationStructure::size_of`).
     pub scratch_data: DeviceOrHostAddress,
 }
 
@@ -628,9 +629,7 @@ impl BuildAccelerationStructureIndirectInfo {
 /// Specifies the information and data used to update an acceleration structure with some parameters
 /// sourced on the device.
 ///
-/// See
-/// [VkAccelerationStructureBuildGeometryInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureBuildGeometryInfoKHR.html)
-/// for more information.
+/// See [`vkCmdBuildAccelerationStructuresKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdBuildAccelerationStructuresKHR.html).
 #[derive(Clone, Debug)]
 pub struct UpdateAccelerationStructureIndirectInfo {
     /// The acceleration structure to be written.
@@ -645,7 +644,7 @@ pub struct UpdateAccelerationStructureIndirectInfo {
     pub range_stride: u32,
 
     /// The temporary buffer or host address (with enough capacity per
-    /// [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)).
+    /// `AccelerationStructure::size_of`).
     pub scratch_addr: DeviceOrHostAddress,
 
     /// The source acceleration structure to be read.
@@ -681,17 +680,13 @@ impl UpdateAccelerationStructureIndirectInfo {
 }
 
 /// Specifies the information and data used to update an acceleration structure.
-///
-/// See
-/// [VkAccelerationStructureBuildGeometryInfoKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureBuildGeometryInfoKHR.html)
-/// for more information.
 #[derive(Clone, Debug)]
 pub struct UpdateAccelerationStructureInfo {
     /// The acceleration structure to be written.
     pub dst_accel_struct: AnyAccelerationStructureNode,
 
     /// The temporary buffer or host address (with enough capacity per
-    /// [`AccelerationStructure::size_of`](crate::driver::accel_struct::AccelerationStructure::size_of)).
+    /// `AccelerationStructure::size_of`).
     pub scratch_addr: DeviceOrHostAddress,
 
     /// The source acceleration structure to be read.

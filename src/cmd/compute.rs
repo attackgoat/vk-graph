@@ -118,7 +118,7 @@ impl ComputeCommandRef<'_> {
     /// # Ok(()) }
     /// ```
     ///
-    /// [Dispatch]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdDispatch.html
+    /// See [`vkCmdDispatch`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdDispatch.html).
     #[profiling::function]
     pub fn dispatch(&self, group_count_x: u32, group_count_y: u32, group_count_z: u32) -> &Self {
         unsafe {
@@ -143,7 +143,7 @@ impl ComputeCommandRef<'_> {
     /// [`Self::dispatch`] is equivalent to
     /// `dispatch_base(0, 0, 0, group_count_x, group_count_y, group_count_z)`.
     ///
-    /// [Dispatch]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdDispatchBase.html
+    /// See [`vkCmdDispatchBase`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdDispatchBase.html).
     #[profiling::function]
     pub fn dispatch_base(
         &self,
@@ -223,8 +223,7 @@ impl ComputeCommandRef<'_> {
     /// # Ok(()) }
     /// ```
     ///
-    /// [Dispatch]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdDispatchIndirect.html
-    /// [VkDispatchIndirectCommand]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkDispatchIndirectCommand.html
+    /// See [`vkCmdDispatchIndirect`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdDispatchIndirect.html).
     #[profiling::function]
     pub fn dispatch_indirect(
         &self,
@@ -305,7 +304,7 @@ impl ComputeCommandRef<'_> {
     /// # Ok(()) }
     /// ```
     ///
-    /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
+    /// See [`vkCmdPushConstants`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdPushConstants.html).
     #[profiling::function]
     pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
         self.cmd_push_constants(
@@ -351,7 +350,7 @@ mod deprecated {
     }
 
     impl PipelineCommand<'_, ComputePipeline> {
-        #[deprecated = "use shader_resource_access function with AccessType::ComputeShaderReadOther"]
+        #[deprecated = "use shader_resource_access with ComputeShaderReadOther"]
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
         where
@@ -363,7 +362,7 @@ mod deprecated {
             self.shader_resource_access(descriptor, node, AccessType::ComputeShaderReadOther)
         }
 
-        #[deprecated = "use shader_subresource_access function with AccessType::ComputeShaderReadOther"]
+        #[deprecated = "use shader_subresource_access with ComputeShaderReadOther"]
         #[doc(hidden)]
         pub fn read_descriptor_as<N>(
             self,

@@ -1,7 +1,7 @@
-//! Pool which leases from a single bucket per resource type.
+//! Pool which requests from a single bucket per resource type.
 
 use {
-    super::{Cache, Lease, Pool, PoolInfo, lease_command_buffer, with_cache},
+    super::{Cache, Lease, Pool, PoolConfig, lease_command_buffer, with_cache},
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -18,7 +18,7 @@ use {
 
 /// A memory-efficient resource allocator.
 ///
-/// The information for each lease request is compared against the stored resources for
+/// The information for each resource request is compared against the stored resources for
 /// compatibility. If no acceptable resources are stored for the information provided a new resource
 /// is created and returned.
 ///
@@ -33,8 +33,8 @@ use {
 /// All resources are stored in a single bucket per resource type, regardless of their individual
 /// attributes.
 ///
-/// In practice this means that for a [`PoolInfo::image_capacity`] of `4`, a maximum of `4` images
-/// will be stored. Requests to lease an image or other resource will first look for a compatible
+/// In practice this means that for a [`PoolConfig::image_capacity`] of `4`, a maximum of `4` images
+/// will be stored. Requests to obtain an image or other resource will first look for a compatible
 /// resource in the bucket and create a new resource as needed.
 ///
 /// # Memory Management
@@ -62,7 +62,7 @@ pub struct FifoPool {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub info: PoolInfo,
+    pub info: PoolConfig,
 
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
@@ -70,21 +70,21 @@ pub struct FifoPool {
 impl FifoPool {
     /// Constructs a new `FifoPool`.
     pub fn new(device: &Device) -> Self {
-        Self::with_capacity(device, PoolInfo::default())
+        Self::with_capacity(device, PoolConfig::default())
     }
 
     /// Constructs a new `FifoPool` with the given capacity information.
-    pub fn with_capacity(device: &Device, info: impl Into<PoolInfo>) -> Self {
-        let info: PoolInfo = info.into();
+    pub fn with_capacity(device: &Device, info: impl Into<PoolConfig>) -> Self {
+        let info: PoolConfig = info.into();
         let device = device.clone();
 
         Self {
-            accel_struct_cache: PoolInfo::explicit_cache(info.accel_struct_capacity),
-            buffer_cache: PoolInfo::explicit_cache(info.buffer_capacity),
+            accel_struct_cache: PoolConfig::explicit_cache(info.accel_struct_capacity),
+            buffer_cache: PoolConfig::explicit_cache(info.buffer_capacity),
             command_buffer_cache: Default::default(),
-            descriptor_pool_cache: PoolInfo::default_cache(),
+            descriptor_pool_cache: PoolConfig::default_cache(),
             device,
-            image_cache: PoolInfo::explicit_cache(info.image_capacity),
+            image_cache: PoolConfig::explicit_cache(info.image_capacity),
             info,
             render_pass_cache: Default::default(),
         }
@@ -99,17 +99,17 @@ impl FifoPool {
 
     /// Clears the pool of acceleration structure resources.
     pub fn clear_accel_structs(&mut self) {
-        self.accel_struct_cache = PoolInfo::explicit_cache(self.info.accel_struct_capacity);
+        self.accel_struct_cache = PoolConfig::explicit_cache(self.info.accel_struct_capacity);
     }
 
     /// Clears the pool of buffer resources.
     pub fn clear_buffers(&mut self) {
-        self.buffer_cache = PoolInfo::explicit_cache(self.info.buffer_capacity);
+        self.buffer_cache = PoolConfig::explicit_cache(self.info.buffer_capacity);
     }
 
     /// Clears the pool of image resources.
     pub fn clear_images(&mut self) {
-        self.image_cache = PoolInfo::explicit_cache(self.info.image_capacity);
+        self.image_cache = PoolConfig::explicit_cache(self.info.image_capacity);
     }
 }
 
@@ -158,8 +158,8 @@ impl Pool<BufferInfo, Buffer> for FifoPool {
             profiling::scope!("check cache");
 
             if let Some(item) = with_cache(&self.buffer_cache, |cache| {
-                // Look for a compatible buffer (compatible alignment, same mapping mode, big enough and
-                // superset of usage flags)
+                // Look for a compatible buffer (compatible alignment, same mapping mode, big enough
+                // and superset of usage flags)
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
                     if (item.info.dedicated & info.dedicated) == info.dedicated
@@ -195,7 +195,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for FifoPool {
         let cache_ref = self
             .command_buffer_cache
             .entry(info.queue_family_index)
-            .or_insert_with(PoolInfo::default_cache);
+            .or_insert_with(PoolConfig::default_cache);
 
         let item = with_cache(cache_ref, lease_command_buffer)
             .map(Ok)
@@ -271,8 +271,8 @@ impl Pool<ImageInfo, Image> for FifoPool {
             profiling::scope!("check cache");
 
             if let Some(item) = with_cache(&self.image_cache, |cache| {
-                // Look for a compatible image (same properties, superset of creation flags and usage
-                // flags)
+                // Look for a compatible image (same properties, superset of creation flags and
+                // usage flags)
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
                     if item.info.array_layer_count == info.array_layer_count
@@ -317,7 +317,7 @@ impl Pool<RenderPassInfo, RenderPass> for FifoPool {
             // We tried to get the cache first in order to avoid this clone
             self.render_pass_cache
                 .entry(info.clone())
-                .or_insert_with(PoolInfo::default_cache)
+                .or_insert_with(PoolConfig::default_cache)
         };
         let item = with_cache(cache_ref, |cache| cache.pop())
             .map(Ok)

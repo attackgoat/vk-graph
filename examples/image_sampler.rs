@@ -152,35 +152,40 @@ fn create_pipeline(
             )
         }
         (true, false) => {
-            // HLSL combined image sampler: include_glsl uses shaderc which does not support this, so
-            // we are using hassle_rs which uses dxc. You must follow the instructions listed here to
-            // use hassle_rs:
+            // HLSL combined image sampler: include_glsl uses shaderc which does not support this,
+            // so we are using hassle_rs which uses dxc. You must follow the
+            // instructions listed here to use hassle_rs:
             // See: https://github.com/Traverse-Research/hassle-rs
             // See: https://github.com/microsoft/DirectXShaderCompiler/wiki/Vulkan-combined-image-sampler-type
             // See: https://github.com/google/shaderc/issues/1310
             Shader::new_fragment(
-            compile_hlsl(
-                "fragment.hlsl",
-                r#"
-                struct FullscreenVertexOutput
-                {
-                    float4 position : SV_Position;
-                    [[vk::location(0)]] float2 uv : TEXCOORD0;
-                };
+                compile_hlsl(
+                    "fragment.hlsl",
+                    r#"
+                    struct FullscreenVertexOutput
+                    {
+                        float4 position : SV_Position;
+                        [[vk::location(0)]] float2 uv : TEXCOORD0;
+                    };
 
-                [[vk::combinedImageSampler]][[vk::binding(0, 0)]]  Texture2D<float4> screenTexture : register(t0);
-                [[vk::combinedImageSampler]][[vk::binding(0, 0)]]  SamplerState textureSampler : register(s0);
+                    [[vk::combinedImageSampler]][[vk::binding(0, 0)]]
+                    Texture2D<float4> screenTexture : register(t0);
+                    [[vk::combinedImageSampler]][[vk::binding(0, 0)]]
+                    SamplerState textureSampler : register(s0);
 
-                float4 main(FullscreenVertexOutput input)
-                    : SV_Target
-                {
-                    return screenTexture.Sample(textureSampler, input.uv);
-                }
-                "#,
-                "main", "ps_5_0", &["-spirv"], &[],
-            )?
-            .as_slice(),
-        )
+                    float4 main(FullscreenVertexOutput input)
+                        : SV_Target
+                    {
+                        return screenTexture.Sample(textureSampler, input.uv);
+                    }
+                    "#,
+                    "main",
+                    "ps_5_0",
+                    &["-spirv"],
+                    &[],
+                )?
+                .as_slice(),
+            )
         }
         (false, true) => {
             // GLSL separate image sampler

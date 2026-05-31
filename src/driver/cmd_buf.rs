@@ -186,10 +186,9 @@ impl Drop for CommandBuffer {
     pattern = "owned"
 )]
 pub struct CommandBufferInfo {
-    /// Designates a queue family as described in section
-    /// [Queue Family Properties](https://docs.vulkan.org/spec/latest/chapters/devsandqueues.html#devsandqueues-queueprops).
-    /// All command buffers allocated from this command pool must be submitted on queues from the
-    /// same queue family
+    /// Designates the queue family used by the command pool that allocates this command buffer.
+    ///
+    /// See [`VkCommandPoolCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkCommandPoolCreateInfo.html).
     pub queue_family_index: u32,
 }
 

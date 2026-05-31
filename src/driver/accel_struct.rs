@@ -39,7 +39,7 @@ use std::sync::Mutex;
 /// # Ok(()) }
 /// ```
 ///
-/// [acceleration structure]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureKHR.html
+/// See [`VkAccelerationStructureKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureKHR.html).
 #[derive(Debug)]
 #[read_only::cast]
 pub struct AccelerationStructure {
@@ -253,7 +253,13 @@ impl AccelerationStructure {
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureGeometryData, AccelerationStructureGeometryInfo, DeviceOrHostAddress};
+    /// # use vk_graph::driver::accel_struct::{
+    /// #     AccelerationStructure,
+    /// #     AccelerationStructureGeometry,
+    /// #     AccelerationStructureGeometryData,
+    /// #     AccelerationStructureGeometryInfo,
+    /// #     DeviceOrHostAddress,
+    /// # };
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::new(DeviceInfo::default())?;
     /// # let my_geom_triangles = AccelerationStructureGeometryData::Triangles {
@@ -371,9 +377,7 @@ impl PartialEq for AccelerationStructure {
 
 /// Structure specifying geometries to be built into an acceleration structure.
 ///
-/// See
-/// [VkAccelerationStructureGeometryKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureGeometryKHR.html)
-/// for more information.
+/// See [`VkAccelerationStructureGeometryKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureGeometryKHR.html).
 #[derive(Clone, Copy, Debug)]
 pub struct AccelerationStructureGeometry {
     /// The number of primitives built into each geometry.
@@ -435,16 +439,13 @@ impl From<AccelerationStructureGeometry> for vk::AccelerationStructureGeometryKH
 
 /// Specifies acceleration structure geometry data.
 ///
-/// See
-/// [VkAccelerationStructureGeometryDataKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureGeometryDataKHR.html)
-/// for more information.
+/// See [`VkAccelerationStructureGeometryKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureGeometryKHR.html).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum AccelerationStructureGeometryData {
     /// Axis-aligned bounding box geometry in a bottom-level acceleration structure.
     ///
     /// See
-    /// [VkAccelerationStructureGeometryAabbsDataKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureGeometryAabbsDataKHR.html)
-    /// for more information.
+    /// See [`VkAccelerationStructureGeometryAabbsDataKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureGeometryAabbsDataKHR.html).
     AABBs {
         /// A device or host address to memory containing [vk::AabbPositionsKHR] structures
         /// containing position data for each axis-aligned bounding box in the geometry.
@@ -458,13 +459,12 @@ pub enum AccelerationStructureGeometryData {
 
     /// Geometry consisting of instances of other acceleration structures.
     ///
-    /// See [VkAccelerationStructureGeometryInstancesDataKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureGeometryInstancesDataKHR.html)
-    /// for more information.
+    /// See [`VkAccelerationStructureGeometryInstancesDataKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureGeometryInstancesDataKHR.html).
     Instances {
         /// Either the address of an array of device referencing individual
         /// VkAccelerationStructureInstanceKHR structures or packed motion instance information as
         /// described in
-        /// [motion instances](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#acceleration-structure-motion-instances)
+        /// See [`VkAccelerationStructureInstanceKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureInstanceKHR.html).
         /// if `array_of_pointers` is `true`, or the address of an array of
         /// VkAccelerationStructureInstanceKHR structures.
         ///
@@ -477,23 +477,22 @@ pub enum AccelerationStructureGeometryData {
 
     /// A triangle geometry in a bottom-level acceleration structure.
     ///
-    /// See
-    /// [VkAccelerationStructureGeometryTrianglesDataKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkAccelerationStructureGeometryTrianglesDataKHR.html)
-    /// for more information.
+    /// See [`VkAccelerationStructureGeometryTrianglesDataKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureGeometryTrianglesDataKHR.html).
     Triangles {
         /// A device or host address to memory containing index data for this geometry.
         index_addr: DeviceOrHostAddress,
 
         /// The
-        /// [VkIndexType](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkIndexType.html)
+        /// See [`VkIndexType`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkIndexType.html).
         /// of each index element.
         index_type: vk::IndexType,
 
-        /// The highest index of a vertex that will be addressed by a build command using this structure.
+        /// The highest index of a vertex that will be addressed by a build command using this
+        /// structure.
         max_vertex: u32,
 
         /// A device or host address to memory containing an optional reference to a
-        /// [VkTransformMatrixKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkTransformMatrixKHR.html)
+        /// See [`VkTransformMatrixKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkTransformMatrixKHR.html).
         /// structure describing a transformation from the space in which the vertices in this
         /// geometry are described to the space in which the acceleration structure is defined.
         transform_addr: Option<DeviceOrHostAddress>,
@@ -502,7 +501,7 @@ pub enum AccelerationStructureGeometryData {
         vertex_addr: DeviceOrHostAddress,
 
         /// The
-        /// [VkFormat](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkFormat.html)
+        /// See [`VkFormat`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkFormat.html).
         /// of each vertex element.
         vertex_format: vk::Format,
 
@@ -760,8 +759,7 @@ impl From<UninitializedFieldError> for AccelerationStructureInfoBuilderError {
 #[derive(Clone, Copy, Debug)]
 pub struct AccelerationStructureSize {
     /// The size of the scratch buffer required when building an acceleration structure using the
-    /// [`Acceleration::build_structure`](super::super::graph::pass_ref::Acceleration::build_structure)
-    /// function.
+    /// `Acceleration::build_structure` function.
     pub build_size: vk::DeviceSize,
 
     /// The value of `size` parameter needed by [`AccelerationStructureInfo`] for use with the
@@ -769,16 +767,13 @@ pub struct AccelerationStructureSize {
     pub create_size: vk::DeviceSize,
 
     /// The size of the scratch buffer required when updating an acceleration structure using the
-    /// [`Acceleration::update_structure`](super::super::graph::pass_ref::Acceleration::update_structure)
-    /// function.
+    /// `Acceleration::update_structure` function.
     pub update_size: vk::DeviceSize,
 }
 
 /// Specifies a constant device or host address.
 ///
-/// See
-/// [VkDeviceOrHostAddressKHR](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkDeviceOrHostAddressKHR.html)
-/// for more information.
+/// See [`VkDeviceOrHostAddressKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDeviceOrHostAddressKHR.html).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DeviceOrHostAddress {
     /// An address value returned from [`AccelerationStructure::device_address`].

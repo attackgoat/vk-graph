@@ -1,7 +1,7 @@
-//! Pool which leases by looking for compatibile information before creating new resources.
+//! Pool which requests by looking for compatibile information before creating new resources.
 
 use {
-    super::{Cache, Lease, Pool, PoolInfo, lease_command_buffer},
+    super::{Cache, Lease, Pool, PoolConfig, lease_command_buffer},
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -48,7 +48,7 @@ impl From<ImageInfo> for ImageKey {
 
 /// A balanced resource allocator.
 ///
-/// The information for each lease request is compared against the stored resources for
+/// The information for each resource request is compared against the stored resources for
 /// compatibility. If no acceptable resources are stored for the information provided a new resource
 /// is created and returned.
 ///
@@ -60,13 +60,13 @@ impl From<ImageInfo> for ImageKey {
 ///
 /// # Bucket Strategy
 ///
-/// The information for each lease request is the key for a `HashMap` of buckets. If no bucket
+/// The information for each resource request is the key for a `HashMap` of buckets. If no bucket
 /// exists with compatible information a new bucket is created.
 ///
-/// In practice this means that for a [`PoolInfo::image_capacity`] of `4`, requests for a 1024x1024
-/// image with certain attributes will store a maximum of `4` such images. Requests for any image
-/// having a different size or incompatible attributes will store an additional maximum of `4`
-/// images.
+/// In practice this means that for a [`PoolConfig::image_capacity`] of `4`, requests for a
+/// 1024x1024 image with certain attributes will store a maximum of `4` such images. Requests for
+/// any image having a different size or incompatible attributes will store an additional maximum of
+/// `4` images.
 ///
 /// # Memory Management
 ///
@@ -92,7 +92,7 @@ pub struct LazyPool {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub info: PoolInfo,
+    pub info: PoolConfig,
 
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
@@ -100,19 +100,19 @@ pub struct LazyPool {
 impl LazyPool {
     /// Constructs a new `LazyPool`.
     pub fn new(device: &Device) -> Self {
-        Self::with_capacity(device, PoolInfo::default())
+        Self::with_capacity(device, PoolConfig::default())
     }
 
     /// Constructs a new `LazyPool` with the given capacity information.
-    pub fn with_capacity(device: &Device, info: impl Into<PoolInfo>) -> Self {
-        let info: PoolInfo = info.into();
+    pub fn with_capacity(device: &Device, info: impl Into<PoolConfig>) -> Self {
+        let info: PoolConfig = info.into();
         let device = device.clone();
 
         Self {
             accel_struct_cache: Default::default(),
             buffer_cache: Default::default(),
             command_buffer_cache: Default::default(),
-            descriptor_pool_cache: PoolInfo::default_cache(),
+            descriptor_pool_cache: PoolConfig::default_cache(),
             device,
             image_cache: Default::default(),
             info,
@@ -180,7 +180,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
         let cache = self
             .accel_struct_cache
             .entry(info.ty)
-            .or_insert_with(|| PoolInfo::explicit_cache(self.info.accel_struct_capacity));
+            .or_insert_with(|| PoolConfig::explicit_cache(self.info.accel_struct_capacity));
         let cache_ref = Arc::downgrade(cache);
 
         {
@@ -217,7 +217,7 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
         let cache = self
             .buffer_cache
             .entry((info.host_read | info.host_write, info.alignment))
-            .or_insert_with(|| PoolInfo::explicit_cache(self.info.buffer_capacity));
+            .or_insert_with(|| PoolConfig::explicit_cache(self.info.buffer_capacity));
         let cache_ref = Arc::downgrade(cache);
 
         {
@@ -260,7 +260,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for LazyPool {
         let cache_ref = self
             .command_buffer_cache
             .entry(info.queue_family_index)
-            .or_insert_with(PoolInfo::default_cache);
+            .or_insert_with(PoolConfig::default_cache);
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
@@ -336,7 +336,7 @@ impl Pool<ImageInfo, Image> for LazyPool {
         let cache = self
             .image_cache
             .entry(info.into())
-            .or_insert_with(|| PoolInfo::explicit_cache(self.info.image_capacity));
+            .or_insert_with(|| PoolConfig::explicit_cache(self.info.image_capacity));
         let cache_ref = Arc::downgrade(cache);
 
         {
@@ -376,7 +376,7 @@ impl Pool<RenderPassInfo, RenderPass> for LazyPool {
             // We tried to get the cache first in order to avoid this clone
             self.render_pass_cache
                 .entry(info.clone())
-                .or_insert_with(PoolInfo::default_cache)
+                .or_insert_with(PoolConfig::default_cache)
         };
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]

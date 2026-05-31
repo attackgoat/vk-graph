@@ -51,8 +51,8 @@ const GOLD: Material = Material {
     roughness: 0.3,
 };
 
-/// The example demonstrates leasing resources (images and buffers) and composing rendering
-/// operations with just a few lines of Graph builder-pattern code.
+/// The example demonstrates requesting pooled resources (images and buffers) and composing
+/// rendering operations with just a few lines of Graph builder-pattern code.
 ///
 /// Also shown:
 /// - Basic PBR rendering (from Sascha Willems)

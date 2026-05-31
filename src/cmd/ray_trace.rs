@@ -55,7 +55,11 @@ impl PipelineCommand<'_, RayTracePipeline> {
 /// # use ash::vk;
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+/// # use vk_graph::driver::ray_trace::{
+/// #     RayTracePipeline,
+/// #     RayTracePipelineInfo,
+/// #     RayTraceShaderGroup,
+/// # };
 /// # use vk_graph::driver::shader::Shader;
 /// # use vk_graph::Graph;
 /// # fn main() -> Result<(), DriverError> {
@@ -125,7 +129,11 @@ impl RayTraceCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+    /// # use vk_graph::driver::ray_trace::{
+    /// #     RayTracePipeline,
+    /// #     RayTracePipelineInfo,
+    /// #     RayTraceShaderGroup,
+    /// # };
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
@@ -137,10 +145,26 @@ impl RayTraceCommandRef<'_> {
     /// #     [Shader::new_miss(my_miss_code.as_slice())],
     /// #     [RayTraceShaderGroup::new_general(0)],
     /// # )?;
-    /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
+    /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR {
+    /// #     device_address: 0,
+    /// #     stride: 0,
+    /// #     size: 0,
+    /// # };
+    /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR {
+    /// #     device_address: 0,
+    /// #     stride: 0,
+    /// #     size: 0,
+    /// # };
+    /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR {
+    /// #     device_address: 0,
+    /// #     stride: 0,
+    /// #     size: 0,
+    /// # };
+    /// # let call_sbt = vk::StridedDeviceAddressRegionKHR {
+    /// #     device_address: 0,
+    /// #     stride: 0,
+    /// #     size: 0,
+    /// # };
     /// # let mut my_graph = Graph::default();
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
@@ -152,7 +176,7 @@ impl RayTraceCommandRef<'_> {
     /// # Ok(()) }
     /// ```
     ///
-    /// [gpuinfo.org]: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxPushConstantsSize&platform=all
+    /// See [`vkCmdPushConstants`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdPushConstants.html).
     #[profiling::function]
     pub fn push_constants(&self, offset: u32, data: &[u8]) -> &Self {
         self.cmd_push_constants(
@@ -168,9 +192,7 @@ impl RayTraceCommandRef<'_> {
     /// Set the stack size dynamically for a ray trace pipeline.
     ///
     /// See
-    /// [`RayTracePipelineInfo::dynamic_stack_size`](crate::driver::ray_trace::RayTracePipelineInfo::dynamic_stack_size)
-    /// and
-    /// [`vkCmdSetRayTracingPipelineStackSizeKHR`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/vkCmdSetRayTracingPipelineStackSizeKHR.html).
+    /// `RayTracePipelineInfo::dynamic_stack_size` and see the Vulkan spec.
     #[profiling::function]
     pub fn set_stack_size(&self, pipeline_stack_size: u32) -> &Self {
         #[cfg(debug_assertions)]
@@ -186,7 +208,9 @@ impl RayTraceCommandRef<'_> {
         self
     }
 
-    // TODO: If the rayTraversalPrimitiveCulling or rayQuery features are enabled, the SkipTrianglesKHR and SkipAABBsKHR ray flags can be specified when tracing a ray. SkipTrianglesKHR and SkipAABBsKHR are mutually exclusive.
+    // TODO: If the rayTraversalPrimitiveCulling or rayQuery features are enabled, the
+    // SkipTrianglesKHR and SkipAABBsKHR ray flags can be specified when tracing a ray.
+    // SkipTrianglesKHR and SkipAABBsKHR are mutually exclusive.
 
     /// Ray traces using the currently-bound [`RayTracePipeline`] and the given shader binding
     /// tables.
@@ -202,7 +226,11 @@ impl RayTraceCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+    /// # use vk_graph::driver::ray_trace::{
+    /// #     RayTracePipeline,
+    /// #     RayTracePipelineInfo,
+    /// #     RayTraceShaderGroup,
+    /// # };
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
@@ -214,10 +242,26 @@ impl RayTraceCommandRef<'_> {
     /// #     [Shader::new_miss(my_miss_code.as_slice())],
     /// #     [RayTraceShaderGroup::new_general(0)],
     /// # )?;
-    /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
-    /// # let call_sbt = vk::StridedDeviceAddressRegionKHR { device_address: 0, stride: 0, size: 0 };
+    /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR {
+    /// #     device_address: 0,
+    /// #     stride: 0,
+    /// #     size: 0,
+    /// # };
+    /// # let hit_sbt = vk::StridedDeviceAddressRegionKHR {
+    /// #     device_address: 0,
+    /// #     stride: 0,
+    /// #     size: 0,
+    /// # };
+    /// # let miss_sbt = vk::StridedDeviceAddressRegionKHR {
+    /// #     device_address: 0,
+    /// #     stride: 0,
+    /// #     size: 0,
+    /// # };
+    /// # let call_sbt = vk::StridedDeviceAddressRegionKHR {
+    /// #     device_address: 0,
+    /// #     stride: 0,
+    /// #     size: 0,
+    /// # };
     /// # let mut my_graph = Graph::default();
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
@@ -265,7 +309,7 @@ impl RayTraceCommandRef<'_> {
     /// `indirect_device_address` is a [buffer device address] which is a pointer to a
     /// [`vk::TraceRaysIndirectCommandKHR`] structure containing the trace ray parameters.
     ///
-    /// See [`vkCmdTraceRaysIndirectKHR`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkCmdTraceRaysIndirectKHR.html).
+    /// See [`vkCmdTraceRaysIndirectKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdTraceRaysIndirectKHR.html).
     ///
     /// [buffer device address]: crate::driver::buffer::Buffer::device_address
     #[profiling::function]
@@ -325,7 +369,7 @@ mod deprecated {
     }
 
     impl PipelineCommand<'_, RayTracePipeline> {
-        #[deprecated = "use shader_resource_access function with AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer"]
+        #[deprecated = "use shader_resource_access"]
         #[doc(hidden)]
         pub fn read_descriptor<N>(self, descriptor: impl Into<Binding>, node: N) -> Self
         where
@@ -341,7 +385,7 @@ mod deprecated {
             )
         }
 
-        #[deprecated = "use shader_subresource_access function with AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer"]
+        #[deprecated = "use shader_subresource_access"]
         #[doc(hidden)]
         pub fn read_descriptor_as<N>(
             self,
