@@ -964,6 +964,7 @@ fn merge_push_constant_ranges(pcr: &[vk::PushConstantRange]) -> Vec<vk::PushCons
                             size: rhs.size,
                         },
                     );
+                    res[j..].sort_unstable_by(sort_fn);
                     i += 1;
                     j += 1;
                 } else if lhs.offset + lhs.size == rhs.offset + rhs.size {
@@ -1260,6 +1261,65 @@ mod test {
             assert_eq!($lhs.offset, $rhs.offset, "Offset not equal");
             assert_eq!($lhs.size, $rhs.size, "Size not equal");
         };
+    }
+
+    fn reference_merge_push_constant_ranges(
+        pcr: &[vk::PushConstantRange],
+    ) -> Vec<vk::PushConstantRange> {
+        if pcr.is_empty() {
+            return vec![];
+        }
+        let end = pcr.iter().map(|r| r.offset + r.size).max().unwrap();
+        let mut per_byte = vec![0u32; end as usize];
+        for r in pcr {
+            let raw = r.stage_flags.as_raw();
+            let range_end = r.offset + r.size;
+            for b in r.offset as usize..range_end as usize {
+                per_byte[b] |= raw;
+            }
+        }
+        let mut result = Vec::new();
+        let mut i = 0usize;
+        while (i as u32) < end {
+            let flags = per_byte[i];
+            if flags == 0 {
+                i += 1;
+                continue;
+            }
+            let start = i as u32;
+            while (i as u32) < end && per_byte[i] == flags {
+                i += 1;
+            }
+            result.push(vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::from_raw(flags),
+                offset: start,
+                size: (i as u32) - start,
+            });
+        }
+        result
+    }
+
+    fn assert_merge_invariants(input: &[vk::PushConstantRange], output: &[vk::PushConstantRange]) {
+        let expected = reference_merge_push_constant_ranges(input);
+        assert_eq!(
+            output.len(),
+            expected.len(),
+            "length mismatch\n  input: {input:?}\n  got: {output:?}\n  expected: {expected:?}"
+        );
+        for (idx, (got, exp)) in output.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                got.stage_flags, exp.stage_flags,
+                "result[{idx}] stage_flags mismatch\n  input: {input:?}\n  got: {output:?}\n  expected: {expected:?}"
+            );
+            assert_eq!(
+                got.offset, exp.offset,
+                "result[{idx}] offset mismatch\n  input: {input:?}\n  got: {output:?}\n  expected: {expected:?}"
+            );
+            assert_eq!(
+                got.size, exp.size,
+                "result[{idx}] size mismatch\n  input: {input:?}\n  got: {output:?}\n  expected: {expected:?}"
+            );
+        }
     }
 
     #[test]
@@ -1564,5 +1624,346 @@ mod test {
                 size: 16,
             },
         );
+    }
+
+    #[test]
+    pub fn push_constant_ranges_single() {
+        let input = [vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            offset: 16,
+            size: 32,
+        }];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 1);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 16,
+                size: 32,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_three_identical() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 32,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 0,
+                size: 32,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 32,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 1);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::FRAGMENT
+                    | vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 32,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_three_same_offset() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 8,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 0,
+                size: 16,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 32,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 3);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::FRAGMENT
+                    | vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[1],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
+                offset: 8,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[2],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 16,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_nested_chain() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 64,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 8,
+                size: 48,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 32,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 5);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[1],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                offset: 8,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[2],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::FRAGMENT
+                    | vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 32,
+            },
+        );
+        assert_pcr_eq!(
+            res[3],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                offset: 48,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[4],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 56,
+                size: 8,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_touching() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 16,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 16,
+                size: 16,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 32,
+                size: 16,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 3);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 16,
+            },
+        );
+        assert_pcr_eq!(
+            res[1],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 16,
+                size: 16,
+            },
+        );
+        assert_pcr_eq!(
+            res[2],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 32,
+                size: 16,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_complex_interleave() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 24,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::GEOMETRY,
+                offset: 8,
+                size: 24,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 24,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 32,
+                size: 24,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 6);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[1],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::GEOMETRY,
+                offset: 8,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[2],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::GEOMETRY
+                    | vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[3],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::GEOMETRY | vk::ShaderStageFlags::COMPUTE,
+                offset: 24,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[4],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT,
+                offset: 32,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[5],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 40,
+                size: 16,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_fuzz() {
+        use rand::Rng;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        let stages = [
+            vk::ShaderStageFlags::VERTEX,
+            vk::ShaderStageFlags::FRAGMENT,
+            vk::ShaderStageFlags::GEOMETRY,
+            vk::ShaderStageFlags::TESSELLATION_CONTROL,
+            vk::ShaderStageFlags::TESSELLATION_EVALUATION,
+            vk::ShaderStageFlags::COMPUTE,
+        ];
+
+        for seed in 0..10000 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let count = rng.random_range(0..=stages.len());
+
+            let mut available: Vec<usize> = (0..stages.len()).collect();
+            for i in (1..available.len()).rev() {
+                let j = rng.random_range(0..=i);
+                available.swap(i, j);
+            }
+
+            let input: Vec<vk::PushConstantRange> = available
+                .iter()
+                .take(count)
+                .map(|&idx| {
+                    let offset = rng.random_range(0u32..128);
+                    let size = rng.random_range(1u32..64);
+                    vk::PushConstantRange {
+                        stage_flags: stages[idx],
+                        offset,
+                        size,
+                    }
+                })
+                .collect();
+
+            let result = merge_push_constant_ranges(&input);
+            assert_merge_invariants(&input, &result);
+        }
     }
 }
