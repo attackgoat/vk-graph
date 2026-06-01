@@ -6,9 +6,11 @@ use {
     crate::{
         ExecutionPipeline,
         driver::{
-            compute::ComputePipeline, graphic::GraphicsPipeline, ray_trace::RayTracingPipeline,
+            DriverError, compute::ComputePipeline, graphic::GraphicsPipeline,
+            ray_trace::RayTracingPipeline,
         },
     },
+    log::warn,
     std::marker::PhantomData,
 };
 
@@ -217,22 +219,18 @@ impl<'c, T> PipelineCommand<'c, T> {
         let binding = binding.into();
         let subresource = subresource.into();
         let node_idx = resource_node.index();
+        let view_info = subresource.into();
 
         self.cmd.push_subresource_access(
             resource_node,
             SubresourceRange::from(subresource),
             access,
         );
-
-        assert!(
-            self.cmd
-                .cmd_mut()
-                .expect_last_exec_mut()
-                .bindings
-                .insert(binding, (node_idx, subresource.into()))
-                .is_none(),
-            "binding {binding:?} has already been bound"
-        );
+        self.cmd
+            .cmd_mut()
+            .expect_last_exec_mut()
+            .bindings
+            .insert(binding, (node_idx, view_info));
 
         self
     }
