@@ -226,7 +226,7 @@ impl Swapchain {
         )?;
 
         // submission.record_node_dependencies(&mut *self.pool, cmd, swapchain_image)?;
-        submission.queue_resource(swapchain_image, pool, &mut exec.cmd)?;
+        submission.record_resource(swapchain_image, pool, &mut exec.cmd)?;
 
         {
             let swapchain_image = submission.resource(swapchain_image);
