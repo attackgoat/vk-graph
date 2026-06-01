@@ -342,8 +342,8 @@ where
                 }
             }
 
-            res.aspect_mask |= vk::ImageAspectFlags::from_raw(
-                (1 << (self.access_range.base_aspect + self.aspect)) as _,
+            res.aspect_mask = vk::ImageAspectFlags::from_raw(
+                res.aspect_mask.as_raw() | (1 << (self.access_range.base_aspect + self.aspect)),
             );
         }
     }
