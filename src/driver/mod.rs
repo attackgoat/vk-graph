@@ -1,4 +1,5 @@
-//! Vulkan interface based on smart pointers.
+//! **ADVANCED**: Raw Vulkan wrappers. Most users should use [`Graph`](crate::Graph),
+//! [`cmd`](crate::cmd), and [`node`](crate::node) instead.
 //!
 //! # Resources
 //!
@@ -63,6 +64,7 @@ pub mod descriptor_set;
 
 mod descriptor_set_layout;
 
+#[doc(hidden)]
 pub use {
     ash::{self},
     vk_sync::{self as sync},

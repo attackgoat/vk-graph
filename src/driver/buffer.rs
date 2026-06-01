@@ -842,11 +842,13 @@ impl From<BufferInfoBuilder> for BufferInfo {
 impl BufferInfoBuilder {
     /// Builds a new `BufferInfo`.
     ///
-    /// If `alignment` is not a power to two this function will panic.
+    /// If `alignment` is not a power to two and the `checked` feature is active this function will
+    /// panic.
     #[inline(always)]
     pub fn build(self) -> BufferInfo {
         let res = self.fallible_build().expect("all fields have defaults");
 
+        #[cfg(feature = "checked")]
         assert!(
             res.alignment.is_power_of_two(),
             "Alignment must be a power of two"

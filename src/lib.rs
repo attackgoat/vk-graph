@@ -1,13 +1,13 @@
 /*!
 
-This crate provides a high-performance [Vulkan](https://www.vulkan.org/) driver featuring automated
-resource management and execution.
+A high-performance [Vulkan](https://www.vulkan.org/) driver with automated resource management and
+execution. Start with [`Graph`] — bind resources, record commands, and submit for execution.
 
-For an overview, including installation and typical usage, see the
-[Guide Book](https://attackgoat.github.io/vk-graph).
+- **Beginner**: [`Graph`], [`cmd`], [`node`], [`pool`] — the high-level graph API
+- **Intermediate**: [`driver`] — smart-pointer Vulkan wrappers (resources, pipelines, device)
+- **Expert**: [`driver`] re-exports `ash` and `vk_sync` — raw Vulkan bindings
 
-
-
+For installation, guides, and examples see the [Guide Book](https://attackgoat.github.io/vk-graph).
 
 */
 
