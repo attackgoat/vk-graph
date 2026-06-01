@@ -2,7 +2,7 @@ use {
     super::BitmapFont,
     anyhow::{Context, bail},
     bmfont::BMFont,
-    log::info,
+    log::{info, warn},
     std::sync::Arc,
     vk_graph::{
         Graph,
@@ -20,9 +20,6 @@ use {
     },
     vk_shader_macros::include_glsl,
 };
-
-#[cfg(debug_assertions)]
-use log::warn;
 
 /// Describes the channels and pixel stride of an image format
 #[derive(Clone, Copy, Debug)]
@@ -157,7 +154,6 @@ impl ImageLoader {
             "insufficient data"
         );
 
-        #[cfg(debug_assertions)]
         if pixels.len() > (format.stride() as u32 * width * height).next_multiple_of(4) as usize {
             warn!("unused data");
         }

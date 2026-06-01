@@ -250,7 +250,6 @@ impl Animation {
         let channels = animation.channels().to_vec();
 
         // This demo only supports linear interpolation (not step or cubic)
-        #[cfg(debug_assertions)]
         for channel in &channels {
             assert!(matches!(channel.interpolation(), Interpolation::Linear));
         }

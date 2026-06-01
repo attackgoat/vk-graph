@@ -29,7 +29,7 @@ use std::marker::PhantomData;
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::{Mutex, MutexGuard};
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "checked")]
 fn assert_aspect_mask_supported(aspect_mask: vk::ImageAspectFlags) {
     use vk::ImageAspectFlags as A;
 
@@ -108,7 +108,7 @@ impl Access {
 pub(crate) struct DenseAccess<A> {
     accesses: Box<[A]>,
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "checked")]
     array_layer_count: u32,
 
     aspect_count: u8,
@@ -119,7 +119,7 @@ impl<A: Copy> DenseAccess<A> {
     pub(crate) fn new(info: ImageInfo, access: A) -> Self {
         let aspect_mask = format_aspect_mask(info.fmt);
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         assert_aspect_mask_supported(aspect_mask);
 
         let aspect_count = aspect_mask.as_raw().count_ones() as u8;
@@ -133,7 +133,7 @@ impl<A: Copy> DenseAccess<A> {
             ]
             .into_boxed_slice(),
 
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "checked")]
             array_layer_count,
 
             aspect_count,
@@ -146,7 +146,8 @@ impl<A: Copy> DenseAccess<A> {
             + mip_level * self.aspect_count as u32
             + aspect as u32) as _;
 
-        debug_assert!(
+        #[cfg(feature = "checked")]
+        assert!(
             idx < self.accesses.len(),
             "idx={idx}, aspect={aspect}, layer={array_layer}, mip={mip_level}, aspect_count={}, mip_level_count={}, array_layer_count={}, len={}",
             self.aspect_count,
@@ -184,10 +185,10 @@ impl<'a, I, A: Copy> DenseAccessIter<'a, I, A> {
     where
         I: DerefMut<Target = DenseAccess<A>>,
     {
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         assert_aspect_mask_supported(access_range.aspect_mask);
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         assert!(access_range.base_array_layer < image.array_layer_count);
 
         debug_assert!(access_range.base_mip_level < image.mip_level_count);
@@ -570,7 +571,7 @@ impl Image {
         access: AccessType,
         mut access_range: vk::ImageSubresourceRange,
     ) -> impl Iterator<Item = (AccessType, vk::ImageSubresourceRange)> + '_ {
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         {
             assert_aspect_mask_supported(access_range.aspect_mask);
 

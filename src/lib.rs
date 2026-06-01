@@ -338,6 +338,8 @@ impl ExecutionPipeline {
 #[derive(Debug)]
 struct CommandData {
     execs: Vec<Execution>,
+
+    #[cfg(debug_assertions)]
     name: Option<String>,
 }
 
@@ -383,7 +385,15 @@ impl CommandData {
     }
 
     fn name(&self) -> &str {
-        self.name.as_deref().unwrap_or("command")
+        const DEFAULT: &str = "command";
+
+        #[cfg(not(debug_assertions))]
+        {
+            DEFAULT
+        }
+
+        #[cfg(debug_assertions)]
+        self.name.as_deref().unwrap_or(DEFAULT)
     }
 }
 
@@ -607,16 +617,16 @@ impl Graph {
         let src = src.into();
         let dst = dst.into();
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         let src_size = self.resource(src).info.size;
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         let dst_size = self.resource(dst).info.size;
 
         let mut cmd = self.begin_cmd().debug_name("copy buffer");
 
         for region in regions.as_ref() {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "checked")]
             {
                 assert!(
                     region.src_offset + region.size <= src_size,
@@ -991,7 +1001,7 @@ impl Graph {
         let buffer = buffer.into();
         let data_end = offset + data.as_ref().len() as vk::DeviceSize;
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         {
             let buffer_info = self.resource(buffer).info;
 

@@ -54,6 +54,7 @@ run "workspace target check" env RUSTFLAGS="-D warnings" cargo check --all-targe
 run "workspace target check (parking_lot)" env RUSTFLAGS="-D warnings" cargo check --all-targets --workspace --features parking_lot
 run "workspace clippy" cargo clippy --all-targets --workspace --no-default-features --features loaded -- -D warnings
 run "workspace clippy (parking_lot)" cargo clippy --all-targets --workspace --features parking_lot -- -D warnings
+run "workspace clippy (no checked)" cargo clippy --all-targets --workspace --no-default-features --features "loaded,parking_lot" -- -D warnings
 run "workspace tests" env RUSTFLAGS="-D warnings" cargo test --all-targets --workspace --no-default-features --features loaded
 
 if [ "$RUN_INTEGRATION" -eq 1 ]; then

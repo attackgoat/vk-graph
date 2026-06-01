@@ -909,7 +909,7 @@ pub(super) const fn is_write_access(ty: self::sync::AccessType) -> bool {
 #[profiling::function]
 fn merge_push_constant_ranges(pcr: &[vk::PushConstantRange]) -> Vec<vk::PushConstantRange> {
     // Each specified range must be for a single stage and each stage must be specified once
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "checked")]
     {
         let mut stage_flags = vk::ShaderStageFlags::empty();
         for item in pcr.iter() {

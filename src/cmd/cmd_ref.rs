@@ -14,7 +14,7 @@ use {
     std::{cell::RefCell, ops::Deref},
 };
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "checked")]
 use crate::Execution;
 
 /// Recording interface for general Vulkan commands.
@@ -42,7 +42,7 @@ use crate::Execution;
 pub struct CommandRef<'a> {
     cmd: &'a crate::driver::cmd_buf::CommandBuffer,
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "checked")]
     exec: &'a Execution,
 
     resources: &'a [AnyResource],
@@ -52,11 +52,11 @@ impl<'a> CommandRef<'a> {
     pub(crate) fn new(
         cmd: &'a crate::driver::cmd_buf::CommandBuffer,
         resources: &'a [AnyResource],
-        #[cfg(debug_assertions)] exec: &'a Execution,
+        #[cfg(feature = "checked")] exec: &'a Execution,
     ) -> Self {
         Self {
             cmd,
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "checked")]
             exec,
             resources,
         }
@@ -538,7 +538,7 @@ impl<'a> CommandRef<'a> {
         // access type must first be specified so the correct barriers may be added.
         //
         // See: https://attackgoat.github.io/vk-graph/pipeline_sync.html
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         assert!(
             self.exec.accesses.contains_key(&resource_node.index()),
             "unexpected node access: call an access function first"

@@ -537,7 +537,7 @@ where
         debug_assert!(access_range.start < access_range.end);
         debug_assert!(access_range.end <= buffer.size);
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         {
             let access_start = |(_, access_start): &(AccessType, vk::DeviceSize)| *access_start;
 

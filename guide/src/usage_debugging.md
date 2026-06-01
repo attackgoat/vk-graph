@@ -65,6 +65,22 @@ echo 100 | sudo tee /sys/devices/system/cpu/intel_pstate/min_perf_pct
 ([_Source_](https://www.kernel.org/doc/Documentation/cpu-freq/intel-pstate.txt)
 <i class="fa-solid fa-arrow-up-right-from-square"></i>)
 
+## `checked` Feature
+
+`vk-graph` provides a `checked` Cargo feature that enables runtime validation of common
+misuse patterns that the VVL cannot catch:
+
+- Missing `resource_access` / `shader_resource_access` declarations before using a resource
+- [`update_buffer`] and [`copy_buffer_region`](crate::Graph::copy_buffer_region) buffer bounds
+- Valid image aspect masks and subresource ranges
+
+The `checked` feature is **enabled by default** — it activates in both debug and release builds.
+Disable it for zero-overhead release builds that have been validated:
+
+```bash
+cargo run --no-default-features --features loaded,parking_lot --release
+```
+
 ## Vulkan Validation Layer
 
 Vulkan is a zero-overhead API — the specification does not mandate that drivers validate every

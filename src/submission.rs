@@ -38,7 +38,7 @@ use {
     },
 };
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(feature = "checked"))]
 use std::hint::unreachable_unchecked;
 
 const fn image_access_layout(access: AccessType) -> ImageLayout {
@@ -1839,7 +1839,7 @@ impl Submission {
                     );
                 }
 
-                let mut name = pass.name.take().unwrap_or_default();
+                let mut name = pass.name().to_owned();
 
                 // Grow the merged pass once, not per merge
                 {
@@ -1866,7 +1866,10 @@ impl Submission {
                     pass.execs.append(&mut other.execs);
                 }
 
-                pass.name = Some(name);
+                #[cfg(debug_assertions)]
+                {
+                    pass.name = Some(name);
+                }
 
                 self.graph.cmds.push(pass);
                 idx += 1 + end - start;
@@ -1983,10 +1986,10 @@ impl Submission {
                     AnyResource::AccelerationStructure(..)
                     | AnyResource::AccelerationStructureLease(..) => {
                         let Some(accel_struct) = resource.as_accel_struct() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2006,10 +2009,10 @@ impl Submission {
                     }
                     AnyResource::Buffer(..) | AnyResource::BufferLease(..) => {
                         let Some(buffer) = resource.as_buffer() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2041,10 +2044,10 @@ impl Submission {
                     | AnyResource::ImageLease(..)
                     | AnyResource::SwapchainImage(..) => {
                         let Some(image) = resource.as_image() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2225,10 +2228,10 @@ impl Submission {
                     AnyResource::AccelerationStructure(..)
                     | AnyResource::AccelerationStructureLease(..) => {
                         let Some(accel_struct) = resource.as_accel_struct() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2238,10 +2241,10 @@ impl Submission {
                     }
                     AnyResource::Buffer(..) | AnyResource::BufferLease(..) => {
                         let Some(buffer) = resource.as_buffer() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2253,10 +2256,10 @@ impl Submission {
                                 ..
                             } = subresource_access
                             else {
-                                #[cfg(debug_assertions)]
+                                #[cfg(feature = "checked")]
                                 unreachable!();
 
-                                #[cfg(not(debug_assertions))]
+                                #[cfg(not(feature = "checked"))]
                                 unsafe {
                                     // This cannot be reached because PassRef enforces the subrange
                                     // is of type N::Subresource
@@ -2272,10 +2275,10 @@ impl Submission {
                     | AnyResource::ImageLease(..)
                     | AnyResource::SwapchainImage(..) => {
                         let Some(image) = resource.as_image() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2293,10 +2296,10 @@ impl Submission {
                                 subresource: SubresourceRange::Image(access_range),
                             } = subresource_access
                             else {
-                                #[cfg(debug_assertions)]
+                                #[cfg(feature = "checked")]
                                 unreachable!();
 
-                                #[cfg(not(debug_assertions))]
+                                #[cfg(not(feature = "checked"))]
                                 unsafe {
                                     // This cannot be reached because PassRef enforces the subrange
                                     // is of type N::Subresource
@@ -2410,7 +2413,6 @@ impl Submission {
         }
 
         // // Print some handy details or hit a breakpoint if you set the flag
-        // #[cfg(debug_assertions)]
         // if log_enabled!(Debug) && self.graph.debug {
         //     debug!("resolving the following graph:\n\n{:#?}\n\n", self.graph);
         // }
@@ -2529,7 +2531,7 @@ impl Submission {
                     exec_func(crate::cmd::CommandRef::new(
                         cmd_buf,
                         &self.graph.resources,
-                        #[cfg(debug_assertions)]
+                        #[cfg(feature = "checked")]
                         exec,
                     ));
                 }
