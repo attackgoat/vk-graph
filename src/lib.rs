@@ -947,7 +947,14 @@ impl Graph {
         resource_node.borrow(&self.resources)
     }
 
-    /// Note: `data` must not exceed 65536 bytes.
+    /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html)
+    /// command.
+    ///
+    /// Vulkan requires `data` to be at most `65536` bytes.
+    ///
+    /// In debug builds, this method asserts that `data.len()` does not exceed that Vulkan limit
+    /// and that `offset + data.len()` does not exceed the bound buffer size. In release builds,
+    /// those conditions are not checked here.
     #[profiling::function]
     pub fn update_buffer(
         &mut self,
@@ -955,6 +962,8 @@ impl Graph {
         offset: vk::DeviceSize,
         data: impl AsRef<[u8]> + 'static + Send,
     ) -> &mut Self {
+        debug_assert!(data.as_ref().len() <= 64 * 1024);
+
         let buffer = buffer.into();
         let data_end = offset + data.as_ref().len() as vk::DeviceSize;
 
