@@ -23,6 +23,9 @@ mod submission;
 
 use std::sync::Arc;
 
+#[cfg(feature = "checked")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::{
     cmd::{ClearColorValue, CommandRef},
     driver::{
@@ -67,6 +70,11 @@ use {
 
 type ExecFn = Box<dyn FnOnce(CommandRef) + Send>;
 type NodeIndex = usize;
+
+type GraphId = u64;
+
+#[cfg(feature = "checked")]
+static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
 #[doc(hidden)]
@@ -405,16 +413,44 @@ impl CommandData {
 /// [`PassBuilder`](https://github.com/EmbarkStudios/kajiya/blob/main/crates/lib/kajiya-rg/src/pass_builder.rs)
 /// and
 /// [`graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/graph.cpp).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Graph {
     cmds: Vec<CommandData>,
     resources: ResourceMap,
+
+    #[cfg(feature = "checked")]
+    graph_id: GraphId,
+}
+
+impl Default for Graph {
+    fn default() -> Self {
+        Self {
+            cmds: Default::default(),
+            resources: Default::default(),
+
+            #[cfg(feature = "checked")]
+            graph_id: NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed),
+        }
+    }
 }
 
 impl Graph {
     /// Constructs a default `Graph`.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn assert_node_owner<N>(&self, _resource_node: &N)
+    where
+        N: Node,
+    {
+        #[cfg(feature = "checked")]
+        _resource_node.assert_owner(self.graph_id);
+    }
+
+    #[cfg(feature = "checked")]
+    pub(crate) fn graph_id(&self) -> GraphId {
+        self.graph_id
     }
 
     /// Allocates and begins writing a new command.
@@ -944,6 +980,8 @@ impl Graph {
     /// Returns the index of the first pass which accesses a given node
     #[profiling::function]
     fn first_node_access_pass_index(&self, resource_node: impl Node) -> Option<usize> {
+        self.assert_node_owner(&resource_node);
+
         let node_idx = resource_node.index();
 
         for (pass_idx, pass) in self.cmds.iter().enumerate() {
@@ -977,6 +1015,7 @@ impl Graph {
     where
         N: Node,
     {
+        self.assert_node_owner(&resource_node);
         resource_node.borrow(&self.resources)
     }
 
@@ -986,9 +1025,8 @@ impl Graph {
     /// Vulkan requires `data` to be at most `65536` bytes.
     ///
     /// These constraints are validated by the Vulkan Validation Layer (VVL) when it is active.
-    /// Per the crate's zero-overhead philosophy, we do not duplicate the layer's checks in
-    /// release builds. Debug builds include assertions as a courtesy for development without
-    /// the validation layer.
+    /// When the `checked` feature is enabled, `vk-graph` also validates the data size and bounds
+    /// before recording the command.
     #[profiling::function]
     pub fn update_buffer(
         &mut self,
@@ -1003,6 +1041,12 @@ impl Graph {
 
         #[cfg(feature = "checked")]
         {
+            assert!(
+                data.as_ref().len() <= 64 * 1024,
+                "data length ({}) exceeds vkCmdUpdateBuffer limit (65536)",
+                data.as_ref().len()
+            );
+
             let buffer_info = self.resource(buffer).info;
 
             assert!(
@@ -1041,6 +1085,9 @@ pub trait Node: private::Sealed {
 
     #[doc(hidden)]
     fn index(&self) -> NodeIndex;
+
+    #[doc(hidden)]
+    fn assert_owner(&self, _graph_id: GraphId) {}
 }
 
 mod private {
@@ -1068,7 +1115,11 @@ impl Resource for SwapchainImage {
     type Node = SwapchainImageNode;
 
     fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-        let node = Self::Node::new(graph.resources.len());
+        let node = Self::Node::new(
+            graph.resources.len(),
+            #[cfg(feature = "checked")]
+            graph.graph_id,
+        );
 
         //trace!("Node {}: {:?}", res.idx, &self);
 
@@ -1110,7 +1161,11 @@ macro_rules! resource {
                     // Arc<Buffer> or etc)
 
                     // We will return an existing node, if possible
-                    Self::Node::new(graph.resources.bind_shared(self))
+                    Self::Node::new(
+                        graph.resources.bind_shared(self),
+                        #[cfg(feature = "checked")]
+                        graph.graph_id,
+                    )
                 }
             }
 
@@ -1147,7 +1202,11 @@ macro_rules! resource {
                     // (Arc<Lease<Image>> or Arc<Lease<Buffer>> or etc)
 
                     // We will return an existing node, if possible
-                    Self::Node::new(graph.resources.bind_shared(self))
+                    Self::Node::new(
+                        graph.resources.bind_shared(self),
+                        #[cfg(feature = "checked")]
+                        graph.graph_id,
+                    )
                 }
             }
 

@@ -227,6 +227,17 @@ impl<'c, T> PipelineCommand<'c, T> {
             SubresourceRange::from(subresource),
             access,
         );
+
+        #[cfg(feature = "checked")]
+        {
+            if let Some(prev) = self.cmd.cmd().expect_last_exec().bindings.get(&binding) {
+                assert!(
+                    *prev == (node_idx, view_info),
+                    "shader binding {binding:?} already bound to a different resource or view"
+                );
+            }
+        }
+
         self.cmd
             .cmd_mut()
             .expect_last_exec_mut()

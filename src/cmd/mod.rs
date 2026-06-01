@@ -169,6 +169,8 @@ impl<'a> Command<'a> {
         subresource: SubresourceRange,
         access: AccessType,
     ) {
+        self.graph.assert_node_owner(&resource_node);
+
         let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());
@@ -542,7 +544,7 @@ pub(super) struct SubresourceAccess {
 }
 
 /// Describes the interpretation of a resource.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub enum ViewInfo {
     /// Acceleration structures are always whole resources.

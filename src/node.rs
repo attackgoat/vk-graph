@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use crate::{
-    Node,
+    GraphId, Node,
     driver::{
         accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
         swapchain::SwapchainImage,
@@ -76,6 +76,13 @@ impl Node for AnyAccelerationStructureNode {
             Self::AccelerationStructureLease(node) => node.index(),
         }
     }
+
+    fn assert_owner(&self, graph_id: GraphId) {
+        match self {
+            Self::AccelerationStructure(node) => node.assert_owner(graph_id),
+            Self::AccelerationStructureLease(node) => node.assert_owner(graph_id),
+        }
+    }
 }
 
 /// Specifies either an owned buffer or one obtained from a pool.
@@ -113,6 +120,13 @@ impl Node for AnyBufferNode {
         match self {
             Self::Buffer(node) => node.index(),
             Self::BufferLease(node) => node.index(),
+        }
+    }
+
+    fn assert_owner(&self, graph_id: GraphId) {
+        match self {
+            Self::Buffer(node) => node.assert_owner(graph_id),
+            Self::BufferLease(node) => node.assert_owner(graph_id),
         }
     }
 }
@@ -166,6 +180,14 @@ impl Node for AnyImageNode {
             Self::SwapchainImage(node) => node.index(),
         }
     }
+
+    fn assert_owner(&self, graph_id: GraphId) {
+        match self {
+            Self::Image(node) => node.assert_owner(graph_id),
+            Self::ImageLease(node) => node.assert_owner(graph_id),
+            Self::SwapchainImage(node) => node.assert_owner(graph_id),
+        }
+    }
 }
 
 macro_rules! node {
@@ -173,18 +195,28 @@ macro_rules! node {
         paste::paste! {
             /// A graph-local handle for a bound resource.
             ///
-            /// Node equality is based on the internal resource index, not on graph identity.
-            /// Two nodes with the same index from *different* graphs may compare equal but
-            /// are not interchangeable. Always use a node with the graph that produced it.
+            /// Node handles are only valid with the graph that produced them.
+            ///
+            /// When the `checked` feature is enabled, using a node with a different graph will
+            /// panic immediately.
             #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
             pub struct [<$name Node>] {
                 index: NodeIndex,
+
+                #[cfg(feature = "checked")]
+                graph_id: GraphId,
             }
 
             impl [<$name Node>] {
-                pub(crate) fn new(index: usize) -> Self {
+                pub(crate) fn new(
+                    index: usize,
+                    #[cfg(feature = "checked")] graph_id: GraphId,
+                ) -> Self {
                     Self {
                         index,
+
+                        #[cfg(feature = "checked")]
+                        graph_id,
                     }
                 }
             }
@@ -204,6 +236,11 @@ macro_rules! node {
 
                 fn index(&self) -> NodeIndex {
                     self.index
+                }
+
+                fn assert_owner(&self, _graph_id: GraphId) {
+                    #[cfg(feature = "checked")]
+                    assert!(self.graph_id == _graph_id, "node belongs to a different graph");
                 }
             }
         }

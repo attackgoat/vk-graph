@@ -182,10 +182,15 @@ impl RayTracingCommandRef<'_> {
     pub fn set_stack_size(&self, pipeline_stack_size: u32) -> &Self {
         let khr_ray_tracing_pipeline = Device::expect_vk_khr_ray_tracing_pipeline(&self.cmd.device);
 
+        #[cfg(feature = "checked")]
+        assert!(
+            self.pipeline.inner.info.dynamic_stack_size,
+            "ray tracing pipeline was not created with dynamic_stack_size enabled"
+        );
+
         unsafe {
-            // Deliberately unchecked: Vulkan is a zero-overhead API and the validation
-            // layer already catches this. Adding our own assertion would burn CPU cycles
-            // in release builds for something the caller cannot act on.
+            // Checked mode catches missing dynamic_stack_size enablement early. Other Vulkan
+            // validation remains the responsibility of the validation layer.
             khr_ray_tracing_pipeline
                 .cmd_set_ray_tracing_pipeline_stack_size(self.cmd.handle, pipeline_stack_size);
         }

@@ -45,6 +45,9 @@ pub struct CommandRef<'a> {
     #[cfg(feature = "checked")]
     exec: &'a Execution,
 
+    #[cfg(feature = "checked")]
+    graph_id: crate::GraphId,
+
     resources: &'a [AnyResource],
 }
 
@@ -53,11 +56,14 @@ impl<'a> CommandRef<'a> {
         cmd: &'a crate::driver::cmd_buf::CommandBuffer,
         resources: &'a [AnyResource],
         #[cfg(feature = "checked")] exec: &'a Execution,
+        #[cfg(feature = "checked")] graph_id: crate::GraphId,
     ) -> Self {
         Self {
             cmd,
             #[cfg(feature = "checked")]
             exec,
+            #[cfg(feature = "checked")]
+            graph_id,
             resources,
         }
     }
@@ -530,6 +536,9 @@ impl<'a> CommandRef<'a> {
     where
         N: Node,
     {
+        #[cfg(feature = "checked")]
+        resource_node.assert_owner(self.graph_id);
+
         // You must have called an access function for this node on this execution before borrowing
         // the resource!
         //

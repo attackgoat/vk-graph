@@ -1904,6 +1904,8 @@ impl Submission {
     /// data left to inspect afterwards!
     #[profiling::function]
     pub fn node_stages(&self, node: impl Node) -> vk::PipelineStageFlags {
+        self.graph.assert_node_owner(&node);
+
         let node_idx = node.index();
         let mut res = Default::default();
 
@@ -2427,6 +2429,9 @@ impl Submission {
         self.merge_scheduled_passes(&mut schedule.passes);
         self.lease_scheduled_resources(pool, &schedule.passes)?;
 
+        #[cfg(feature = "checked")]
+        let graph_id = self.graph.graph_id();
+
         for pass_idx in schedule.passes.iter().copied() {
             let pass = &mut self.graph.cmds[pass_idx];
 
@@ -2533,6 +2538,8 @@ impl Submission {
                         &self.graph.resources,
                         #[cfg(feature = "checked")]
                         exec,
+                        #[cfg(feature = "checked")]
+                        graph_id,
                     ));
                 }
             }
@@ -2969,6 +2976,8 @@ impl Submission {
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
     {
+        self.graph.assert_node_owner(&resource_node);
+
         let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());
@@ -3002,6 +3011,8 @@ impl Submission {
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
     {
+        self.graph.assert_node_owner(&resource_node);
+
         let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());

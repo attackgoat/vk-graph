@@ -859,7 +859,7 @@ impl BufferInfoBuilder {
 }
 
 /// Specifies a range of buffer data.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BufferSubresourceRange {
     /// The start of range.
     pub start: vk::DeviceSize,
