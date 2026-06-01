@@ -14,7 +14,7 @@ use {
             device::Device,
             format_aspect_mask,
             graphic::{DepthStencilInfo, GraphicsPipeline},
-            image::{Image, ImageAccess},
+            image::{DenseAccess, Image},
             initial_image_layout_access, is_read_access, is_write_access,
             pipeline_stage_access_flags,
             render_pass::{RenderPass, RenderPassInfo},
@@ -2201,7 +2201,7 @@ impl Submission {
         #[derive(Default)]
         struct Tls {
             images: Vec<ImageResourceBarrier>,
-            initial_layouts: HashMap<usize, ImageAccess<bool>>,
+            initial_layouts: HashMap<usize, DenseAccess<bool>>,
         }
 
         TLS.with_borrow_mut(|tls| {
@@ -2281,10 +2281,11 @@ impl Submission {
                             }
                         };
 
+                        // TODO: Optimize this path for single-aspect single-layer single-mip images
                         let initial_layout = tls
                             .initial_layouts
                             .entry(node_idx)
-                            .or_insert_with(|| ImageAccess::new(image.info, true));
+                            .or_insert_with(|| DenseAccess::new(image.info, true));
 
                         for subresource_access in accesses {
                             let &SubresourceAccess {
@@ -2305,7 +2306,7 @@ impl Submission {
                             };
 
                             for (initial_layout, layout_range) in
-                                initial_layout.access(false, access_range)
+                                initial_layout.swap(false, access_range)
                             {
                                 for (prev_access, range) in
                                     Image::access(image, access, layout_range)

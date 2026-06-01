@@ -94,6 +94,98 @@ use {
     },
 };
 
+macro_rules! access_type_u8_map {
+    ($($idx:literal => $name:ident),* $(,)?) => {
+        pub(super) const fn access_type_into_u8(ty: self::sync::AccessType) -> u8 {
+            use self::sync::AccessType::*;
+
+            match ty {
+                $($name => $idx,)*
+            }
+        }
+
+        pub(super) const fn access_type_from_u8(value: u8) -> self::sync::AccessType {
+            use self::sync::AccessType::*;
+
+            match value {
+                $($idx => $name,)*
+                _ => panic!("invalid packed access type"),
+            }
+        }
+    };
+}
+
+access_type_u8_map! {
+    0 => Nothing,
+    1 => CommandBufferReadNVX,
+    2 => IndirectBuffer,
+    3 => IndexBuffer,
+    4 => VertexBuffer,
+    5 => VertexShaderReadUniformBuffer,
+    6 => VertexShaderReadSampledImageOrUniformTexelBuffer,
+    7 => VertexShaderReadOther,
+    8 => TessellationControlShaderReadUniformBuffer,
+    9 => TessellationControlShaderReadSampledImageOrUniformTexelBuffer,
+    10 => TessellationControlShaderReadOther,
+    11 => TessellationEvaluationShaderReadUniformBuffer,
+    12 => TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer,
+    13 => TessellationEvaluationShaderReadOther,
+    14 => GeometryShaderReadUniformBuffer,
+    15 => GeometryShaderReadSampledImageOrUniformTexelBuffer,
+    16 => GeometryShaderReadOther,
+    17 => FragmentShaderReadUniformBuffer,
+    18 => FragmentShaderReadSampledImageOrUniformTexelBuffer,
+    19 => FragmentShaderReadColorInputAttachment,
+    20 => FragmentShaderReadDepthStencilInputAttachment,
+    21 => FragmentShaderReadOther,
+    22 => ColorAttachmentRead,
+    23 => DepthStencilAttachmentRead,
+    24 => ComputeShaderReadUniformBuffer,
+    25 => ComputeShaderReadSampledImageOrUniformTexelBuffer,
+    26 => ComputeShaderReadOther,
+    27 => AnyShaderReadUniformBuffer,
+    28 => AnyShaderReadUniformBufferOrVertexBuffer,
+    29 => AnyShaderReadSampledImageOrUniformTexelBuffer,
+    30 => AnyShaderReadOther,
+    31 => TransferRead,
+    32 => HostRead,
+    33 => Present,
+    34 => CommandBufferWriteNVX,
+    35 => VertexShaderWrite,
+    36 => TessellationControlShaderWrite,
+    37 => TessellationEvaluationShaderWrite,
+    38 => GeometryShaderWrite,
+    39 => FragmentShaderWrite,
+    40 => ColorAttachmentWrite,
+    41 => DepthStencilAttachmentWrite,
+    42 => DepthStencilAttachmentReadWrite,
+    43 => DepthAttachmentWriteStencilReadOnly,
+    44 => StencilAttachmentWriteDepthReadOnly,
+    45 => ComputeShaderWrite,
+    46 => ComputeShaderReadWrite,
+    47 => AnyShaderWrite,
+    48 => TransferWrite,
+    49 => HostWrite,
+    50 => ColorAttachmentReadWrite,
+    51 => General,
+    52 => RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+    53 => RayTracingShaderReadColorInputAttachment,
+    54 => RayTracingShaderReadDepthStencilInputAttachment,
+    55 => RayTracingShaderReadAccelerationStructure,
+    56 => RayTracingShaderReadOther,
+    57 => AccelerationStructureBuildWrite,
+    58 => AccelerationStructureBuildRead,
+    59 => AccelerationStructureBufferWrite,
+    60 => MeshShaderReadUniformBuffer,
+    61 => MeshShaderReadSampledImageOrUniformTexelBuffer,
+    62 => MeshShaderReadOther,
+    63 => TaskShaderReadUniformBuffer,
+    64 => TaskShaderReadSampledImageOrUniformTexelBuffer,
+    65 => TaskShaderReadOther,
+    66 => MeshShaderWrite,
+    67 => TaskShaderWrite,
+}
+
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
     match fmt {
         vk::Format::D16_UNORM | vk::Format::D32_SFLOAT | vk::Format::X8_D24_UNORM_PACK32 => {

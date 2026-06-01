@@ -1239,8 +1239,8 @@ mod test {
 
             #[test]
             #[ignore = "requires Vulkan device"]
-            fn bind_shared_reuses_the_existing_node_index_for_the_same_address(
-            ) -> Result<(), DriverError> {
+            fn bind_shared_reuses_the_existing_node_index_for_the_same_address()
+            -> Result<(), DriverError> {
                 let device = test_device()?;
                 let buffer = Arc::new(Buffer::create(
                     &device,
@@ -1257,8 +1257,8 @@ mod test {
 
             #[test]
             #[ignore = "requires Vulkan device"]
-            fn bind_shared_creates_distinct_node_indices_for_different_addresses(
-            ) -> Result<(), DriverError> {
+            fn bind_shared_creates_distinct_node_indices_for_different_addresses()
+            -> Result<(), DriverError> {
                 let device = test_device()?;
                 let buffer = Arc::new(Buffer::create(
                     &device,
@@ -1369,7 +1369,8 @@ mod test {
                 }
 
                 for step in 0..64 {
-                    let kind = resource_kinds[(next_rand(&mut rand_state) as usize) % resource_kinds.len()];
+                    let kind = resource_kinds
+                        [(next_rand(&mut rand_state) as usize) % resource_kinds.len()];
                     let expect_new = match kind {
                         ResourceKind::OwnedBuffer
                         | ResourceKind::OwnedBufferLease
@@ -1404,13 +1405,19 @@ mod test {
                         ResourceKind::OwnedBuffer => graph
                             .bind_resource(Buffer::create(
                                 &device,
-                                BufferInfo::device_mem(16 + step, vk::BufferUsageFlags::STORAGE_BUFFER),
+                                BufferInfo::device_mem(
+                                    16 + step,
+                                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                                ),
                             )?)
                             .index(),
                         ResourceKind::SharedBuffer if expect_new => {
                             let resource = Arc::new(Buffer::create(
                                 &device,
-                                BufferInfo::device_mem(16 + step, vk::BufferUsageFlags::STORAGE_BUFFER),
+                                BufferInfo::device_mem(
+                                    16 + step,
+                                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                                ),
                             )?);
                             let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
                             shared_buffers.push(resource, node_idx);
@@ -1519,13 +1526,13 @@ mod test {
                         ResourceKind::OwnedAccelerationStructure => graph
                             .bind_resource(AccelerationStructure::create(
                                 &device,
-                                AccelerationStructureInfo::blas(256 + step as u64),
+                                AccelerationStructureInfo::blas(256 + step),
                             )?)
                             .index(),
                         ResourceKind::SharedAccelerationStructure if expect_new => {
                             let resource = Arc::new(AccelerationStructure::create(
                                 &device,
-                                AccelerationStructureInfo::blas(256 + step as u64),
+                                AccelerationStructureInfo::blas(256 + step),
                             )?);
                             let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
                             shared_accels.push(resource, node_idx);
@@ -1539,13 +1546,13 @@ mod test {
                             node_idx
                         }
                         ResourceKind::OwnedAccelerationStructureLease => graph
-                            .bind_resource(pool.resource(AccelerationStructureInfo::blas(
-                                512 + step as u64,
-                            ))?)
+                            .bind_resource(
+                                pool.resource(AccelerationStructureInfo::blas(512 + step))?,
+                            )
                             .index(),
                         ResourceKind::SharedAccelerationStructureLease if expect_new => {
                             let resource = Arc::new(
-                                pool.resource(AccelerationStructureInfo::blas(512 + step as u64))?,
+                                pool.resource(AccelerationStructureInfo::blas(512 + step))?,
                             );
                             let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
                             shared_accel_leases.push(resource, node_idx);
