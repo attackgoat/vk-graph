@@ -2960,11 +2960,11 @@ impl Submission {
     /// command buffer and updates this submission's scheduling state so those commands are not
     /// recorded again later.
     #[profiling::function]
-    pub fn record_resource<P>(
+    pub fn queue_cmds_for_resource<P>(
         &mut self,
+        cmd_buf: &mut CommandBuffer,
         resource_node: impl Node,
         pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -2993,11 +2993,11 @@ impl Submission {
     /// top of that existing state. If you are pulling multiple outputs and care about their final
     /// ordering, record the most important output first.
     #[profiling::function]
-    pub fn record_resource_dependencies<P>(
+    pub fn queue_cmds_for_resource_dependencies<P>(
         &mut self,
+        cmd_buf: &mut CommandBuffer,
         resource_node: impl Node,
         pool: &mut P,
-        cmd_buf: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
