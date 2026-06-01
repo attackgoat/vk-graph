@@ -65,6 +65,24 @@ echo 100 | sudo tee /sys/devices/system/cpu/intel_pstate/min_perf_pct
 ([_Source_](https://www.kernel.org/doc/Documentation/cpu-freq/intel-pstate.txt)
 <i class="fa-solid fa-arrow-up-right-from-square"></i>)
 
+## Vulkan Validation Layer
+
+Vulkan is a zero-overhead API — the specification does not mandate that drivers validate every
+dynamic state precondition. The Vulkan Validation Layer (VVL) exists for that purpose during
+development.
+
+`vk-graph` does not add eager runtime assertions for conditions that the VVL already catches (e.g.
+missing extensions, invalid dynamic state, incorrect usage patterns). Doing so would burn CPU cycles
+in release builds, duplicate effort, and create a false sense of safety for conditions the caller
+cannot reasonably act on at the call site.
+
+This is different from normal application code: incorrect API usage in graphics programming produces
+undefined behavior and the hardware silently consumes invalid calls. The right place to catch these
+mistakes is during development with the VVL, not with eager checks in every function.
+
+When running with validation enabled, set `VK_GRAPH_SKIP_VALIDATION_PARK=1` so validation errors
+fail fast instead of parking the process waiting for a debugger.
+
 ## Helpful tools
 
 - [_VulkanSDK_](https://vulkan.lunarg.com/sdk/home)

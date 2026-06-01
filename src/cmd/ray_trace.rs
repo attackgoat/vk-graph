@@ -183,7 +183,9 @@ impl RayTracingCommandRef<'_> {
         let khr_ray_tracing_pipeline = Device::expect_vk_khr_ray_tracing_pipeline(&self.cmd.device);
 
         unsafe {
-            // This will generate a validation error if dynamic stack size has not been enabled
+            // Deliberately unchecked: Vulkan is a zero-overhead API and the validation
+            // layer already catches this. Adding our own assertion would burn CPU cycles
+            // in release builds for something the caller cannot act on.
             khr_ray_tracing_pipeline
                 .cmd_set_ray_tracing_pipeline_stack_size(self.cmd.handle, pipeline_stack_size);
         }
