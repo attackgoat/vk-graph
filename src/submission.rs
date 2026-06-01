@@ -691,7 +691,8 @@ impl Submission {
         };
 
         unsafe {
-            cmd_buf.device
+            cmd_buf
+                .device
                 .cmd_bind_pipeline(cmd_buf.handle, pipeline_bind_point, pipeline);
         }
 
@@ -3330,7 +3331,8 @@ impl Submission {
             );
 
             unsafe {
-                cmd_buf.device
+                cmd_buf
+                    .device
                     .update_descriptor_sets(tls.descriptors.as_slice(), &[]);
             }
         }

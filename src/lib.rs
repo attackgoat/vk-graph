@@ -60,6 +60,7 @@ use {
         collections::{BTreeMap, HashMap},
         fmt::{Debug, Formatter},
         ops::Range,
+        ops::{Deref, DerefMut},
     },
     vk_sync::AccessType,
 };
@@ -375,7 +376,7 @@ impl CommandData {
 #[derive(Debug, Default)]
 pub struct Graph {
     cmds: Vec<CommandData>,
-    resources: Vec<AnyResource>,
+    resources: ResourceMap,
 }
 
 impl Graph {
@@ -1029,7 +1030,7 @@ impl Resource for SwapchainImage {
         //trace!("Node {}: {:?}", res.idx, &self);
 
         let resource = AnyResource::SwapchainImage(Box::new(self));
-        graph.resources.push(resource);
+        graph.resources.bind(resource);
 
         node
     }
@@ -1044,13 +1045,9 @@ macro_rules! resource {
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // In this function we are resource a new item (Image or Buffer or etc)
+
                     // We will return a new node
-                    let node = Self::Node::new(graph.resources.len());
-
-                    let resource = AnyResource::$name(Arc::new(self));
-                    graph.resources.push(resource);
-
-                    node
+                    Arc::new(self).bind_graph(graph)
                 }
             }
 
@@ -1061,21 +1058,15 @@ macro_rules! resource {
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // In this function we are resource an existing resource (Arc<Image> or
                     // Arc<Buffer> or etc)
+
                     // We will return an existing node, if possible
-                    // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
-                    for (idx, existing_resource) in graph.resources.iter_mut().enumerate() {
-                        if let AnyResource::$name(existing_resource) = existing_resource
-                            && Arc::ptr_eq(existing_resource, &self) {
-                                return Self::Node::new(idx);
-                        }
-                    }
+                    let addr = Arc::as_ptr(&self) as usize;
 
-                    // Return a new node
-                    let node = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource::$name(self);
-                    graph.resources.push(resource);
-
-                    node
+                    Self::Node::new(
+                        graph
+                            .resources
+                            .bind_shared(addr, AnyResource::$name(self)),
+                    )
                 }
             }
 
@@ -1099,11 +1090,7 @@ macro_rules! resource {
                     // Lease<Buffer> or etc)
 
                     // We will return a new node
-                    let node = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource::[<$name Lease>](Arc::new(self));
-                    graph.resources.push(resource);
-
-                    node
+                    Arc::new(self).bind_graph(graph)
                 }
             }
 
@@ -1116,20 +1103,13 @@ macro_rules! resource {
                     // (Arc<Lease<Image>> or Arc<Lease<Buffer>> or etc)
 
                     // We will return an existing node, if possible
-                    // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
-                    for (idx, existing_resource) in graph.resources.iter().enumerate() {
-                        if let AnyResource::[<$name Lease>](existing_resource) = existing_resource
-                            && Arc::ptr_eq(existing_resource, &self) {
-                                return Self::Node::new(idx);
-                        }
-                    }
+                    let addr = Arc::as_ptr(&self) as usize;
 
-                    // We will return a new node
-                    let node = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource::[<$name Lease>](self);
-                    graph.resources.push(resource);
-
-                    node
+                    Self::Node::new(
+                        graph
+                            .resources
+                            .bind_shared(addr, AnyResource::[<$name Lease>](self)),
+                    )
                 }
             }
 
@@ -1150,3 +1130,41 @@ macro_rules! resource {
 resource!(AccelerationStructure);
 resource!(Image);
 resource!(Buffer);
+
+#[derive(Debug, Default)]
+struct ResourceMap {
+    addr_index: HashMap<usize, NodeIndex>,
+    resources: Vec<AnyResource>,
+}
+
+impl ResourceMap {
+    fn bind(&mut self, resource: AnyResource) -> NodeIndex {
+        let node_idx = self.resources.len();
+        self.resources.push(resource);
+
+        node_idx
+    }
+
+    fn bind_shared(&mut self, addr: usize, resource: AnyResource) -> NodeIndex {
+        *self.addr_index.entry(addr).or_insert_with(|| {
+            let node_idx = self.resources.len();
+            self.resources.push(resource);
+
+            node_idx
+        })
+    }
+}
+
+impl Deref for ResourceMap {
+    type Target = [AnyResource];
+
+    fn deref(&self) -> &Self::Target {
+        &self.resources
+    }
+}
+
+impl DerefMut for ResourceMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.resources
+    }
+}

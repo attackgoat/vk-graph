@@ -6,11 +6,9 @@ use {
     crate::{
         ExecutionPipeline,
         driver::{
-            DriverError, compute::ComputePipeline, graphic::GraphicsPipeline,
-            ray_trace::RayTracingPipeline,
+            compute::ComputePipeline, graphic::GraphicsPipeline, ray_trace::RayTracingPipeline,
         },
     },
-    log::warn,
     std::marker::PhantomData,
 };
 
