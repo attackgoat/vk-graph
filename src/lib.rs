@@ -975,9 +975,10 @@ impl Graph {
     ///
     /// Vulkan requires `data` to be at most `65536` bytes.
     ///
-    /// In debug builds, this method asserts that `data.len()` does not exceed that Vulkan limit
-    /// and that `offset + data.len()` does not exceed the bound buffer size. In release builds,
-    /// those conditions are not checked here.
+    /// These constraints are validated by the Vulkan Validation Layer (VVL) when it is active.
+    /// Per the crate's zero-overhead philosophy, we do not duplicate the layer's checks in
+    /// release builds. Debug builds include assertions as a courtesy for development without
+    /// the validation layer.
     #[profiling::function]
     pub fn update_buffer(
         &mut self,

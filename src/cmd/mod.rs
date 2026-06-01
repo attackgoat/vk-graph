@@ -1,4 +1,21 @@
 //! Strongly-typed [`Graph`] commands.
+//!
+//! ## Lifecycle
+//!
+//! Commands follow a builder-style chain:
+//!
+//! 1. [`Graph::begin_cmd`] opens a [`Command`].
+//! 2. Declare resource accesses with [`Command::resource_access`] or bind a shader pipeline
+//!    with [`Command::bind_pipeline`], returning a [`PipelineCommand`].
+//! 3. With a pipeline, declare shader bindings with [`PipelineCommand::shader_resource_access`].
+//! 4. Record work with [`record_cmd`](Command::record_cmd) — available on both
+//!    [`Command`] and [`PipelineCommand`].
+//! 5. The command auto-closes when dropped or when [`Graph::into_submission`] is called.
+//!
+//! A single command can call `record_cmd` multiple times — each call creates a separate
+//! "execution" within that command. Executions within a command stay in the specified
+//! order, but the graph system may re-order entire commands or merge them during
+//! submission for optimal scheduling.
 
 mod cmd_ref;
 mod compute;

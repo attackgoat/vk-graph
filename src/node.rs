@@ -1,4 +1,29 @@
 //! Handles for Vulkan smart-pointer resources.
+//!
+//! When you bind a resource to a [`Graph`](crate::Graph), you get back a node handle:
+//!
+//! ```ignore
+//! let buf_node: BufferNode = graph.bind_resource(my_buffer);
+//! let img_node: ImageNode   = graph.bind_resource(my_image);
+//! ```
+//!
+//! These handles are then passed to command-building methods like
+//! [`resource_access`](crate::cmd::PipelineCommand::resource_access) or
+//! [`shader_resource_access`](crate::cmd::PipelineCommand::shader_resource_access).
+//!
+//! ## Node kinds
+//!
+//! | Handle | Resource type | Use case |
+//! |---|---|:--|
+//! | [`BufferNode`] | Owned [`Buffer`] | Most common |
+//! | [`ImageNode`] | Owned [`Image`] | Most common |
+//! | [`AccelerationStructureNode`] | Owned [`AccelerationStructure`] | Ray tracing |
+//! | [`SwapchainImageNode`] | [`SwapchainImage`] | Swapchain presentation |
+//! | [`BufferLeaseNode`], [`ImageLeaseNode`], [`AccelerationStructureLeaseNode`] | Pool-leased resource | Pool-based allocation |
+//! | [`AnyBufferNode`], [`AnyImageNode`], [`AnyAccelerationStructureNode`] | Any of the above | Heterogeneous collections |
+//!
+//! For most users, [`BufferNode`] and [`ImageNode`] are all you need. The `Lease` and
+//! `Any*` variants exist for advanced pooling and dynamic dispatch scenarios.
 
 use std::sync::Arc;
 
@@ -146,7 +171,11 @@ impl Node for AnyImageNode {
 macro_rules! node {
     ($name:ident, $resource:ty, $fn_name:ident) => {
         paste::paste! {
-            /// Resource node.
+            /// A graph-local handle for a bound resource.
+            ///
+            /// Node equality is based on the internal resource index, not on graph identity.
+            /// Two nodes with the same index from *different* graphs may compare equal but
+            /// are not interchangeable. Always use a node with the graph that produced it.
             #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
             pub struct [<$name Node>] {
                 index: NodeIndex,

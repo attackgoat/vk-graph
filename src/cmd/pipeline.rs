@@ -199,6 +199,9 @@ impl<'c, T> PipelineCommand<'c, T> {
     /// `resource_node` at the specified shader `binding` using `access`. The resource will be
     /// interpreted using `view_info`.
     ///
+    /// If the same `binding` slot is used more than once, the last call wins and the
+    /// previous binding is silently overwritten.
+    ///
     /// An access function must be called for `resource_node` before it is used within a
     /// `record_`-function.
     pub fn set_shader_subresource_access<N>(
@@ -255,6 +258,9 @@ impl<'c, T> PipelineCommand<'c, T> {
 
     /// Informs the command that the next recorded command buffer will read or write the
     /// `resource_node` at the specified shader `binding` using `access`.
+    ///
+    /// If the same `binding` slot is used more than once, the last call wins and the
+    /// previous binding is silently overwritten.
     ///
     /// An access function must be called for `resource_node` before it is used within a
     /// `record_`-function.
