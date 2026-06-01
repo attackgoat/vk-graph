@@ -727,6 +727,34 @@ pub struct Shader {
     vertex_input_state: Option<VertexInputState>,
 }
 
+macro_rules! shader_ctors {
+    ($(($name:ident, $flag:ident, $desc:literal),)*) => {
+        paste::paste! {
+            $(
+                #[doc = $desc]
+                ///
+                /// # Panics
+                ///
+                /// Panics if the shader code is invalid. Use [`try_build`](ShaderBuilder::try_build)
+                /// on the returned builder for a fallible path.
+                pub fn [<new_ $name>](spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+                    ShaderBuilder::default().spirv(spirv).stage(vk::ShaderStageFlags::$flag)
+                }
+
+                #[doc = "Creates a "]
+                #[doc = $desc]
+                #[doc = ", returning an error if the SPIR-V is invalid."]
+                pub fn [<try_new_ $name>](spirv: impl Into<SpirvBinary>) -> Result<Shader, DriverError> {
+                    ShaderBuilder::default()
+                        .spirv(spirv)
+                        .stage(vk::ShaderStageFlags::$flag)
+                        .try_build()
+                }
+            )*
+        }
+    }
+}
+
 impl Shader {
     /// Specifies a shader with the given `stage` and shader code.
     #[allow(clippy::new_ret_no_self)]
@@ -734,130 +762,21 @@ impl Shader {
         ShaderBuilder::default().spirv(spirv).stage(stage)
     }
 
-    /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_any_hit(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::ANY_HIT_KHR, spirv)
-    }
-
-    /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_callable(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::CALLABLE_KHR, spirv)
-    }
-
-    /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_closest_hit(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::CLOSEST_HIT_KHR, spirv)
-    }
-
-    /// Creates a new compute shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_compute(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::COMPUTE, spirv)
-    }
-
-    /// Creates a new fragment shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_fragment(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::FRAGMENT, spirv)
-    }
-
-    /// Creates a new geometry shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_geometry(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::GEOMETRY, spirv)
-    }
-
-    /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_intersection(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::INTERSECTION_KHR, spirv)
-    }
-
-    /// Creates a new mesh shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
-    pub fn new_mesh(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::MESH_EXT, spirv)
-    }
-
-    /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_miss(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::MISS_KHR, spirv)
-    }
-
-    /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_ray_gen(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::RAYGEN_KHR, spirv)
-    }
-
-    /// Creates a new mesh task shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
-    pub fn new_task(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::TASK_EXT, spirv)
-    }
-
-    /// Creates a new tessellation control shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tessellation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, spirv)
-    }
-
-    /// Creates a new tessellation evaluation shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tessellation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, spirv)
-    }
-
-    /// Creates a new vertex shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_vertex(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::VERTEX, spirv)
+    shader_ctors! {
+        (any_hit, ANY_HIT_KHR, "Creates a new ray tracing any-hit shader."),
+        (callable, CALLABLE_KHR, "Creates a new ray tracing callable shader."),
+        (closest_hit, CLOSEST_HIT_KHR, "Creates a new ray tracing closest-hit shader."),
+        (compute, COMPUTE, "Creates a new compute shader."),
+        (fragment, FRAGMENT, "Creates a new fragment shader."),
+        (geometry, GEOMETRY, "Creates a new geometry shader."),
+        (intersection, INTERSECTION_KHR, "Creates a new ray tracing intersection shader."),
+        (mesh, MESH_EXT, "Creates a new mesh shader."),
+        (miss, MISS_KHR, "Creates a new ray tracing miss shader."),
+        (ray_gen, RAYGEN_KHR, "Creates a new ray tracing ray-generation shader."),
+        (task, TASK_EXT, "Creates a new task shader."),
+        (tessellation_ctrl, TESSELLATION_CONTROL, "Creates a new tessellation control shader."),
+        (tessellation_eval, TESSELLATION_EVALUATION, "Creates a new tessellation evaluation shader."),
+        (vertex, VERTEX, "Creates a new vertex shader."),
     }
 
     /// Returns the input and write attachments of a shader.
@@ -1480,12 +1399,13 @@ impl ShaderBuilder {
     }
 
     /// Builds a new `Shader`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the SPIR-V is invalid. Prefer [`try_build`](Self::try_build) for a fallible path.
     pub fn build(self) -> Shader {
-        let entry_name = self.entry_name.clone().unwrap_or_else(|| "main".to_owned());
-
-        self.try_build().unwrap_or_else(|_| {
-            panic!("invalid or unsupported shader code for entry name '{entry_name}'")
-        })
+        self.try_build()
+            .unwrap_or_else(|err| panic!("invalid or unsupported shader code: {err}"))
     }
 
     /// Specifies a manually-defined image sampler.
