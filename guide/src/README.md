@@ -51,7 +51,7 @@ The driver is based off the popular `ash` crate and `vk-sync`; reasoned as follo
 [_`Corange`_](https://github.com/orangeduck/Corange)
 <i class="fa-solid fa-arrow-up-right-from-square"></i>
 - 2020 --- Project migrated to Github and named `screen-13`
-- 2022 --- v0.2 released with `RenderGraph` type based on
+- 2022 --- v0.2 released with an earlier graph API based on
 [_`Kajiya`_](https://github.com/EmbarkStudios/kajiya)
 <i class="fa-solid fa-arrow-up-right-from-square"></i>
 - 2026 --- Project renamed `vk-graph` (v0.14)

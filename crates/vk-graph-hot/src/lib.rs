@@ -10,8 +10,8 @@ mod shader;
 
 pub use self::{
     compute::HotComputePipeline,
-    graphic::HotGraphicPipeline,
-    ray_trace::HotRayTracePipeline,
+    graphic::HotGraphicsPipeline,
+    ray_trace::HotRayTracingPipeline,
     shader::{HotShader, HotShaderBuilder},
 };
 
@@ -257,33 +257,22 @@ mod test {
 }
 
 macro_rules! pipeline {
-    ($name:ident) => {
-        ::paste::paste! {
-            impl [<Hot $name Pipeline>] {
-                fn cache(
-                    &self,
-                ) -> ::std::sync::RwLockReadGuard<'_, HotPipeline<[<$name Pipeline>]>> {
-                    self.cache
-                        .read()
-                        .expect("poisoned hot pipeline lock")
+    ($pipeline:ident) => {
+        paste::paste! {
+            impl [<Hot $pipeline>] {
+                fn cache(&self) -> ::std::sync::RwLockReadGuard<'_, HotPipeline<$pipeline>> {
+                    self.cache.read().expect("poisoned hot pipeline lock")
                 }
 
-                fn cache_mut(
-                    &self,
-                ) -> ::std::sync::RwLockWriteGuard<'_, HotPipeline<[<$name Pipeline>]>> {
-                    self.cache
-                        .write()
-                        .expect("poisoned hot pipeline lock")
+                fn cache_mut(&self) -> ::std::sync::RwLockWriteGuard<'_, HotPipeline<$pipeline>> {
+                    self.cache.write().expect("poisoned hot pipeline lock")
                 }
             }
 
-            impl [<Hot $name Pipeline>] {
+            impl [<Hot $pipeline>] {
                 /// Gets the debugging name assigned to this pipeline, if one has been set.
                 pub fn debug_name(&self) -> Option<String> {
-                    self.cache()
-                        .pipeline
-                        .debug_name()
-                        .map(ToOwned::to_owned)
+                    self.cache().pipeline.debug_name().map(ToOwned::to_owned)
                 }
 
                 /// The device which owns this pipeline.
@@ -292,10 +281,8 @@ macro_rules! pipeline {
                 }
 
                 /// Gets the information used to create this object.
-                pub fn info(&self) -> [<$name PipelineInfo>] {
-                    self.cache()
-                        .pipeline
-                        .info()
+                pub fn info(&self) -> [<$pipeline Info>] {
+                    self.cache().pipeline.info()
                 }
 
                 /// Sets the debugging name assigned to this pipeline.
@@ -303,9 +290,7 @@ macro_rules! pipeline {
                 /// _Note:_ The pipeline name may only be assigned once.
                 /// Subsequent calls will not update the previously set name value.
                 pub fn set_debug_name(&mut self, name: impl Into<String>) {
-                    self.cache_mut()
-                        .pipeline
-                        .set_debug_name(name);
+                    self.cache_mut().pipeline.set_debug_name(name);
                 }
 
                 /// Sets the debugging name assigned to this pipeline.
@@ -319,41 +304,33 @@ macro_rules! pipeline {
                 }
             }
 
-            impl<'a> Pipeline<'a> for [<Hot $name Pipeline>] {
-                type Command = <[<$name Pipeline>] as Pipeline<'a>>::Command;
+            impl<'a> Pipeline<'a> for [<Hot $pipeline>] {
+                type Command = <$pipeline as Pipeline<'a>>::Command;
 
                 fn bind_cmd(self, cmd: Command<'a>) -> Self::Command {
                     self.compile_shader_and_bind_cmd(cmd)
                 }
             }
 
-            impl<'a> Pipeline<'a> for &'a [<Hot $name Pipeline>] {
-                type Command = <[<$name Pipeline>] as Pipeline<'a>>::Command;
+            impl<'a> Pipeline<'a> for &'a [<Hot $pipeline>] {
+                type Command = <$pipeline as Pipeline<'a>>::Command;
 
                 fn bind_cmd(self, cmd: Command<'a>) -> Self::Command {
                     self.compile_shader_and_bind_cmd(cmd)
                 }
             }
-
         }
     };
 }
 
 use pipeline;
 
-// pipeline!(Graphic);
-// pipeline!(RayTrace);
-
 macro_rules! pipeline_handle {
-    ($name:ident) => {
-        ::paste::paste! {
-            impl [<Hot $name Pipeline>] {
-                /// The native Vulkan pipeline handle of this pipeline.
-                pub fn handle(&self) -> ::vk_graph::driver::ash::vk::Pipeline {
-                    self.cache()
-                        .pipeline
-                        .handle()
-                }
+    ($hot:ident) => {
+        impl $hot {
+            /// The native Vulkan pipeline handle of this pipeline.
+            pub fn handle(&self) -> ::vk_graph::driver::ash::vk::Pipeline {
+                self.cache().pipeline.handle()
             }
         }
     };

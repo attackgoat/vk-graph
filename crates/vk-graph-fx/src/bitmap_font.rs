@@ -11,7 +11,7 @@ use {
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{BlendInfo, GraphicPipeline, GraphicPipelineInfo},
+            graphic::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::Image,
             shader::{Shader, SpecializationMap},
             sync::AccessType,
@@ -38,7 +38,7 @@ fn color_to_unorm(color: Color) -> [u8; 16] {
 pub struct BitmapFont {
     font: BMFont,
     pages: Vec<Arc<Image>>,
-    pipeline: GraphicPipeline,
+    pipeline: GraphicsPipeline,
     pool: LazyPool,
 }
 
@@ -52,9 +52,9 @@ impl BitmapFont {
         let pool = LazyPool::new(device);
         let pages = pages.into();
         let num_pages = pages.len() as u32;
-        let pipeline = GraphicPipeline::create(
+        let pipeline = GraphicsPipeline::create(
             device,
-            GraphicPipelineInfo::builder().blend(BlendInfo::ALPHA),
+            GraphicsPipelineInfo::builder().blend(BlendInfo::ALPHA),
             [
                 Shader::new_vertex(include_glsl!("res/shader/graphic/font.vert").as_slice()),
                 Shader::new_fragment(include_glsl!("res/shader/graphic/font.frag").as_slice())

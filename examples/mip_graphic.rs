@@ -13,7 +13,7 @@ use {
         driver::{
             DriverError,
             device::Device,
-            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             shader::{SamplerInfoBuilder, Shader},
         },
@@ -120,9 +120,9 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
         b: Vec4,
     }
 
-    let vertical_gradient = GraphicPipeline::create(
+    let vertical_gradient = GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(
                 glsl!(
@@ -230,10 +230,10 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
         .map(|_| ())
 }
 
-fn splat(device: &Device) -> Result<GraphicPipeline, DriverError> {
-    GraphicPipeline::create(
+fn splat(device: &Device) -> Result<GraphicsPipeline, DriverError> {
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(
                 glsl!(

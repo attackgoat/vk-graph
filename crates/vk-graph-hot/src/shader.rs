@@ -101,7 +101,7 @@ impl HotShader {
         HotShaderBuilder::new(stage, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -110,7 +110,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::ANY_HIT_KHR, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -119,7 +119,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::CALLABLE_KHR, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -155,7 +155,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::GEOMETRY, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -173,7 +173,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::MESH_EXT, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -182,7 +182,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::MISS_KHR, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///

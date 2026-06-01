@@ -13,7 +13,7 @@ use {
             DriverError,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
         },
@@ -337,7 +337,7 @@ fn create_funky_shape(device: &Device, pool: &mut LazyPool) -> Result<Shape, Dri
     })
 }
 
-fn create_fill_background_pipeline(device: &Device) -> GraphicPipeline {
+fn create_fill_background_pipeline(device: &Device) -> GraphicsPipeline {
     let vertex_shader = Shader::new_vertex(
         glsl!(
             r#"
@@ -378,15 +378,15 @@ fn create_fill_background_pipeline(device: &Device) -> GraphicPipeline {
         .as_slice(),
     );
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [vertex_shader, fragment_shader],
     )
     .unwrap()
 }
 
-fn create_prepass_pipeline(device: &Device) -> GraphicPipeline {
+fn create_prepass_pipeline(device: &Device) -> GraphicsPipeline {
     let vertex_shader = Shader::new_vertex(
         glsl!(
             r#"
@@ -449,15 +449,15 @@ fn create_prepass_pipeline(device: &Device) -> GraphicPipeline {
         .as_slice(),
     );
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [vertex_shader, fragment_shader],
     )
     .unwrap()
 }
 
-fn create_pbr_pipeline(device: &Device) -> GraphicPipeline {
+fn create_pbr_pipeline(device: &Device) -> GraphicsPipeline {
     // See: https://github.com/SaschaWillems/Vulkan/blob/master/data/shaders/glsl/pbrbasic/pbr.vert
     let vertex_shader = Shader::new_vertex(
         glsl!(
@@ -634,9 +634,9 @@ fn create_pbr_pipeline(device: &Device) -> GraphicPipeline {
         .as_slice(),
     );
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [vertex_shader, fragment_shader],
     )
     .unwrap()

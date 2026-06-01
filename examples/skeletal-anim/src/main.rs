@@ -24,7 +24,7 @@ use {
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfoBuilder},
+            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfoBuilder},
             image::{Image, ImageInfo},
             shader::Shader,
             sync::AccessType,
@@ -167,13 +167,13 @@ fn main() -> Result<(), WindowError> {
     })
 }
 
-fn create_pipeline(device: &Device, pak: &mut PakBuf) -> Result<GraphicPipeline, DriverError> {
+fn create_pipeline(device: &Device, pak: &mut PakBuf) -> Result<GraphicsPipeline, DriverError> {
     let vert_spirv = pak.read_blob("shader/animated_mesh_vert.spirv").unwrap();
     let frag_spirv = pak.read_blob("shader/mesh_frag.spirv").unwrap();
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfoBuilder::default().front_face(vk::FrontFace::CLOCKWISE),
+        GraphicsPipelineInfoBuilder::default().front_face(vk::FrontFace::CLOCKWISE),
         [
             Shader::new_vertex(vert_spirv.as_slice()),
             Shader::new_fragment(frag_spirv.as_slice()),

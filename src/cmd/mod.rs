@@ -12,9 +12,9 @@ pub use self::{
         UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
     compute::ComputeCommandRef,
-    graphic::{ClearColorValue, GraphicCommandRef, LoadOp, StoreOp},
+    graphic::{ClearColorValue, GraphicsCommandRef, LoadOp, StoreOp},
     pipeline::{Pipeline, PipelineCommand},
-    ray_trace::RayTraceCommandRef,
+    ray_trace::RayTracingCommandRef,
 };
 
 use {
@@ -102,10 +102,10 @@ impl<'a> Command<'a> {
     /// -|-
     /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_,
     /// ComputePipeline>`]
-    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_,
-    /// GraphicPipeline>`]
-    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_,
-    /// RayTracePipeline>`]
+    /// [`GraphicsPipeline`](crate::driver::graphic::GraphicsPipeline)|[`PipelineCommand<'_,
+    /// GraphicsPipeline>`]
+    /// [`RayTracingPipeline`](crate::driver::ray_trace::RayTracingPipeline)|[`PipelineCommand<'_,
+    /// RayTracingPipeline>`]
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'a>,

@@ -3,7 +3,7 @@
 use {
     super::{DriverError, device::Device, format_aspect_mask},
     ash::vk::{self, ImageCreateInfo},
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     gpu_allocator::{
         MemoryLocation,
         vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
@@ -145,16 +145,14 @@ impl Image {
     /// ```
     #[profiling::function]
     pub fn create(device: &Device, info: impl Into<ImageInfo>) -> Result<Self, DriverError> {
-        let info: ImageInfo = info.into();
+        let info = info.into();
 
         //trace!("create: {:?}", &info);
         trace!("create");
 
-        assert!(
-            !info.usage.is_empty(),
-            "Unspecified image usage {:?}",
-            info.usage
-        );
+        if info.usage.is_empty() {
+            return Err(DriverError::InvalidData);
+        }
 
         let accesses = Mutex::new(ImageAccess::new(info, AccessType::Nothing));
 
@@ -726,13 +724,13 @@ struct ImageAccessRange {
 /// Information used to create an [`Image`] instance.
 #[derive(Builder, Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "ImageInfoBuilderError"),
+    build_fn(private, name = "fallible_build"),
     derive(Copy, Clone, Debug),
     pattern = "owned"
 )]
 pub struct ImageInfo {
     /// The number of layers in the image.
-    #[builder(default = "1", setter(strip_option))]
+    #[builder(default = "1")]
     pub array_layer_count: u32,
 
     /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the
@@ -743,49 +741,49 @@ pub struct ImageInfo {
     pub dedicated: bool,
 
     /// Image extent of the Z axis, when describing a three dimensional image.
-    #[builder(setter(strip_option))]
+    #[builder(default)]
     pub depth: u32,
 
     /// A bitmask of describing additional parameters of the image.
-    #[builder(default, setter(strip_option))]
+    #[builder(default)]
     pub flags: vk::ImageCreateFlags,
 
     /// The format and type of the texel blocks that will be contained in the image.
-    #[builder(setter(strip_option))]
+    #[builder(default = "vk::Format::UNDEFINED")]
     pub fmt: vk::Format,
 
     /// Image extent of the Y axis, when describing a two or three dimensional image.
-    #[builder(setter(strip_option))]
+    #[builder(default)]
     pub height: u32,
 
     /// The number of levels of detail available for minified sampling of the image.
-    #[builder(default = "1", setter(strip_option))]
+    #[builder(default = "1")]
     pub mip_level_count: u32,
 
     /// Specifies the number of [samples per texel].
     ///
     /// See [`VkImageCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkImageCreateInfo.html).
-    #[builder(default = "SampleCount::Type1", setter(strip_option))]
+    #[builder(default = "SampleCount::Type1")]
     pub sample_count: SampleCount,
 
     /// Specifies the tiling arrangement of the texel blocks in memory.
     ///
     /// The default value is [`vk::ImageTiling::OPTIMAL`].
-    #[builder(default = "vk::ImageTiling::OPTIMAL", setter(strip_option))]
+    #[builder(default = "vk::ImageTiling::OPTIMAL")]
     pub tiling: vk::ImageTiling,
 
     /// The basic dimensionality of the image.
     ///
     /// Layers in array textures do not count as a dimension for the purposes of the image type.
-    #[builder(setter(strip_option))]
+    #[builder(default = "vk::ImageType::TYPE_2D")]
     pub ty: vk::ImageType,
 
     /// A bitmask of describing the intended usage of the image.
-    #[builder(default, setter(strip_option))]
+    #[builder(default)]
     pub usage: vk::ImageUsageFlags,
 
     /// Image extent of the X axis.
-    #[builder(setter(strip_option))]
+    #[builder(default)]
     pub width: u32,
 }
 
@@ -961,36 +959,14 @@ impl From<ImageInfo> for vk::ImageSubresourceRange {
 
 impl ImageInfoBuilder {
     /// Builds a new `ImageInfo`.
-    ///
-    /// # Panics
-    ///
-    /// If any of the following functions have not been called this function will panic:
-    ///
-    /// * `ty`
-    /// * `fmt`
-    /// * `width`
-    /// * `height`
-    /// * `depth`
     #[inline(always)]
     pub fn build(self) -> ImageInfo {
-        match self.fallible_build() {
-            Err(ImageInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        }
+        self.fallible_build().expect("all fields have defaults")
     }
 
     /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
     pub fn into_image_view(self) -> ImageViewInfoBuilder {
         self.build().into_image_view().into_builder()
-    }
-}
-
-#[derive(Debug)]
-struct ImageInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for ImageInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
     }
 }
 
@@ -1053,7 +1029,7 @@ impl Drop for ImageView {
 /// Information used to reinterpret an existing [`Image`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "ImageViewInfoBuilderError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -1065,6 +1041,7 @@ pub struct ImageViewInfo {
     pub array_layer_count: u32,
 
     /// The portion of the image that will be contained in the view.
+    #[builder(default = "vk::ImageAspectFlags::COLOR")]
     pub aspect_mask: vk::ImageAspectFlags,
 
     /// The first array layer that will be contained in the view.
@@ -1076,6 +1053,7 @@ pub struct ImageViewInfo {
     pub base_mip_level: u32,
 
     /// The format and type of the texel blocks that will be contained in the view.
+    #[builder(default = "vk::Format::UNDEFINED")]
     pub fmt: vk::Format,
 
     /// The number of mip levels that will be contained in the view.
@@ -1085,6 +1063,7 @@ pub struct ImageViewInfo {
     pub mip_level_count: u32,
 
     /// The basic dimensionality of the view.
+    #[builder(default = "vk::ImageViewType::TYPE_2D")]
     pub ty: vk::ImageViewType,
 }
 
@@ -1193,29 +1172,9 @@ impl From<ImageViewInfo> for vk::ImageSubresourceRange {
 
 impl ImageViewInfoBuilder {
     /// Builds a new 'ImageViewInfo'.
-    ///
-    /// # Panics
-    ///
-    /// If any of the following values have not been set this function will panic:
-    ///
-    /// * `ty`
-    /// * `fmt`
-    /// * `aspect_mask`
     #[inline(always)]
     pub fn build(self) -> ImageViewInfo {
-        match self.fallible_build() {
-            Err(ImageViewInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ImageViewInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for ImageViewInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
+        self.fallible_build().expect("all fields have defaults")
     }
 }
 
@@ -2239,45 +2198,23 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: depth")]
-    pub fn image_info_builder_uninit_depth() {
-        ImageInfoBuilder::default().build();
-    }
+    pub fn image_info_builder_defaults() {
+        let info = ImageInfo {
+            array_layer_count: 1,
+            dedicated: false,
+            depth: 0,
+            flags: vk::ImageCreateFlags::empty(),
+            fmt: vk::Format::UNDEFINED,
+            height: 0,
+            mip_level_count: 1,
+            sample_count: SampleCount::Type1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            ty: vk::ImageType::TYPE_2D,
+            usage: vk::ImageUsageFlags::empty(),
+            width: 0,
+        };
 
-    #[test]
-    #[should_panic(expected = "Field not initialized: fmt")]
-    pub fn image_info_builder_uninit_fmt() {
-        ImageInfoBuilder::default().depth(1).build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: height")]
-    pub fn image_info_builder_uninit_height() {
-        ImageInfoBuilder::default()
-            .depth(1)
-            .fmt(vk::Format::default())
-            .build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: ty")]
-    pub fn image_info_builder_uninit_ty() {
-        ImageInfoBuilder::default()
-            .depth(1)
-            .fmt(vk::Format::default())
-            .height(2)
-            .build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: width")]
-    pub fn image_info_builder_uninit_width() {
-        ImageInfoBuilder::default()
-            .depth(1)
-            .fmt(vk::Format::default())
-            .height(2)
-            .ty(vk::ImageType::TYPE_2D)
-            .build();
+        assert_eq!(ImageInfoBuilder::default().build(), info);
     }
 
     fn image_subresource(
@@ -2378,25 +2315,10 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: aspect_mask")]
-    pub fn image_view_info_builder_uninit_aspect_mask() {
-        ImageViewInfoBuilder::default().build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: fmt")]
-    pub fn image_view_info_builder_unint_fmt() {
-        ImageViewInfoBuilder::default()
-            .aspect_mask(vk::ImageAspectFlags::empty())
-            .build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: ty")]
-    pub fn image_view_info_builder_unint_ty() {
-        ImageViewInfoBuilder::default()
-            .aspect_mask(vk::ImageAspectFlags::empty())
-            .fmt(vk::Format::default())
-            .build();
+    pub fn image_view_info_builder_defaults() {
+        assert_eq!(
+            ImageViewInfoBuilder::default().build(),
+            ImageViewInfo::new(vk::Format::UNDEFINED, vk::ImageViewType::TYPE_2D)
+        );
     }
 }

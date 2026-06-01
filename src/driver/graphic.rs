@@ -9,7 +9,7 @@ use {
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader, SpecializationMap},
     },
     ash::vk,
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     log::{Level::Trace, log_enabled, trace, warn},
     ordered_float::OrderedFloat,
     std::{
@@ -34,7 +34,7 @@ const RGBA_COLOR_COMPONENTS: vk::ColorComponentFlags = vk::ColorComponentFlags::
 /// See [`VkPipelineColorBlendAttachmentState`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineColorBlendAttachmentState.html).
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -171,7 +171,7 @@ impl BlendInfoBuilder {
 /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -311,12 +311,12 @@ impl DepthStencilInfoBuilder {
 /// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
 #[derive(Clone, Debug)]
 #[read_only::cast]
-pub struct GraphicPipeline {
-    pub(crate) inner: Arc<GraphicPipelineInner>,
+pub struct GraphicsPipeline {
+    pub(crate) inner: Arc<GraphicsPipelineInner>,
 }
 
-impl GraphicPipeline {
-    /// Creates a new graphic pipeline on the given device.
+impl GraphicsPipeline {
+    /// Creates a new graphics pipeline on the given device.
     ///
     /// The correct pipeline stages will be enabled based on the provided shaders. See [Shader] for
     /// details on all available stages.
@@ -334,7 +334,7 @@ impl GraphicPipeline {
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::create(DeviceInfo::default())?;
@@ -343,8 +343,8 @@ impl GraphicPipeline {
     /// // shader code is raw SPIR-V code as bytes
     /// let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// let frag = Shader::new_fragment(my_frag_code.as_slice());
-    /// let info = GraphicPipelineInfo::default();
-    /// let pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
+    /// let info = GraphicsPipelineInfo::default();
+    /// let pipeline = GraphicsPipeline::create(&device, info, [vert, frag])?;
     ///
     /// assert_eq!(pipeline.info().front_face, vk::FrontFace::COUNTER_CLOCKWISE);
     /// # Ok(()) }
@@ -352,11 +352,12 @@ impl GraphicPipeline {
     #[profiling::function]
     pub fn create<S>(
         device: &Device,
-        info: impl Into<GraphicPipelineInfo>,
+        info: impl Into<GraphicsPipelineInfo>,
         shaders: impl IntoIterator<Item = S>,
     ) -> Result<Self, DriverError>
     where
-        S: Into<Shader>,
+        S: TryInto<Shader>,
+        S::Error: Into<DriverError>,
     {
         trace!("create");
 
@@ -364,13 +365,13 @@ impl GraphicPipeline {
         let info = info.into();
         let shaders = shaders
             .into_iter()
-            .map(|shader| shader.into())
-            .collect::<Vec<Shader>>();
+            .map(|shader| shader.try_into().map_err(Into::into))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let vertex_input = shaders
             .iter()
             .find(|shader| shader.stage == vk::ShaderStageFlags::VERTEX)
-            .expect("missing vertex shader")
+            .ok_or(DriverError::InvalidData)?
             .try_vertex_input()?;
 
         // Check for proper stages because vulkan may not complain but this is bad
@@ -417,32 +418,32 @@ impl GraphicPipeline {
             .filter_map(|mut push_const| push_const.take())
             .collect::<Vec<_>>();
 
-        let input_attachments = {
-            let (input, write) = shaders
-                .iter()
-                .find(|shader| shader.stage == vk::ShaderStageFlags::FRAGMENT)
-                .expect("missing fragment shader")
-                .attachments();
-            let (input, write) = (
+        let input_attachments = shaders
+            .iter()
+            .find(|shader| shader.stage == vk::ShaderStageFlags::FRAGMENT)
+            .map(|shader| {
+                let (input, write) = shader.attachments();
+                let (input, write) = (
+                    input
+                        .collect::<HashSet<_>>()
+                        .into_iter()
+                        .collect::<Box<_>>(),
+                    write.collect::<HashSet<_>>(),
+                );
+
+                if log_enabled!(Trace) {
+                    for input in input.iter() {
+                        trace!("detected input attachment {input}");
+                    }
+
+                    for write in &write {
+                        trace!("detected write attachment {write}");
+                    }
+                }
+
                 input
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .collect::<Box<_>>(),
-                write.collect::<HashSet<_>>(),
-            );
-
-            if log_enabled!(Trace) {
-                for input in input.iter() {
-                    trace!("detected input attachment {input}");
-                }
-
-                for write in &write {
-                    trace!("detected write attachment {write}");
-                }
-            }
-
-            input
-        };
+            })
+            .unwrap_or_default();
 
         unsafe {
             let layout = device
@@ -453,7 +454,7 @@ impl GraphicPipeline {
                     None,
                 )
                 .map_err(|err| {
-                    warn!("unable to create graphic pipeline layout: {err}");
+                    warn!("unable to create graphics pipeline layout: {err}");
 
                     DriverError::Unsupported
                 })?;
@@ -473,7 +474,11 @@ impl GraphicPipeline {
                     let shader_stage = ShaderStage {
                         flags: shader.stage,
                         module: shader_module,
-                        name: CString::new(shader.entry_name.as_str()).expect("invalid entry name"),
+                        name: CString::new(shader.entry_name.as_str()).map_err(|err| {
+                            warn!("invalid graphics shader entry name: {err}");
+
+                            DriverError::InvalidData
+                        })?,
                         specialization: shader.specialization,
                     };
 
@@ -510,7 +515,7 @@ impl GraphicPipeline {
             let push_constants = merge_push_constant_ranges(&push_constants).into_boxed_slice();
 
             Ok(Self {
-                inner: Arc::new(GraphicPipelineInner {
+                inner: Arc::new(GraphicsPipelineInner {
                     descriptor_bindings,
                     descriptor_info,
                     device,
@@ -532,13 +537,13 @@ impl GraphicPipeline {
         self.inner.name.get().map(String::as_str)
     }
 
-    /// The device which owns this graphic pipeline.
+    /// The device which owns this graphics pipeline.
     pub fn device(&self) -> &Device {
         &self.inner.device
     }
 
     /// Gets the information used to create this object.
-    pub fn info(&self) -> GraphicPipelineInfo {
+    pub fn info(&self) -> GraphicsPipelineInfo {
         self.inner.info
     }
 
@@ -566,28 +571,28 @@ impl GraphicPipeline {
     }
 }
 
-impl Eq for GraphicPipeline {}
+impl Eq for GraphicsPipeline {}
 
-impl Hash for GraphicPipeline {
+impl Hash for GraphicsPipeline {
     fn hash<H: Hasher>(&self, state: &mut H) {
         Arc::as_ptr(&self.inner).hash(state);
     }
 }
 
-impl PartialEq for GraphicPipeline {
+impl PartialEq for GraphicsPipeline {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
-/// Information used to create a [`GraphicPipeline`] instance.
+/// Information used to create a [`GraphicsPipeline`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-pub struct GraphicPipelineInfo {
+pub struct GraphicsPipelineInfo {
     /// Controls whether a temporary coverage value is generated based on the alpha component of
     /// the fragment’s first color output.
     #[builder(default)]
@@ -667,15 +672,15 @@ pub struct GraphicPipelineInfo {
     pub samples: SampleCount,
 }
 
-impl GraphicPipelineInfo {
-    /// Creates a default `GraphicPipelineInfoBuilder`.
-    pub fn builder() -> GraphicPipelineInfoBuilder {
+impl GraphicsPipelineInfo {
+    /// Creates a default `GraphicsPipelineInfoBuilder`.
+    pub fn builder() -> GraphicsPipelineInfoBuilder {
         Default::default()
     }
 
-    /// Converts a `GraphicPipelineInfo` into a `GraphicPipelineInfoBuilder`.
-    pub fn into_builder(self) -> GraphicPipelineInfoBuilder {
-        GraphicPipelineInfoBuilder {
+    /// Converts a `GraphicsPipelineInfo` into a `GraphicsPipelineInfoBuilder`.
+    pub fn into_builder(self) -> GraphicsPipelineInfoBuilder {
+        GraphicsPipelineInfoBuilder {
             alpha_to_coverage: Some(self.alpha_to_coverage),
             alpha_to_one: Some(self.alpha_to_one),
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
@@ -690,7 +695,7 @@ impl GraphicPipelineInfo {
     }
 }
 
-impl Default for GraphicPipelineInfo {
+impl Default for GraphicsPipelineInfo {
     fn default() -> Self {
         Self {
             alpha_to_coverage: false,
@@ -707,27 +712,27 @@ impl Default for GraphicPipelineInfo {
     }
 }
 
-impl From<GraphicPipelineInfoBuilder> for GraphicPipelineInfo {
-    fn from(info: GraphicPipelineInfoBuilder) -> Self {
+impl From<GraphicsPipelineInfoBuilder> for GraphicsPipelineInfo {
+    fn from(info: GraphicsPipelineInfoBuilder) -> Self {
         info.build()
     }
 }
 
-impl GraphicPipelineInfoBuilder {
-    /// Builds a new `GraphicPipelineInfo`.
+impl GraphicsPipelineInfoBuilder {
+    /// Builds a new `GraphicsPipelineInfo`.
     #[inline(always)]
-    pub fn build(self) -> GraphicPipelineInfo {
+    pub fn build(self) -> GraphicsPipelineInfo {
         self.fallible_build()
-            .expect("invalid graphic pipeline info")
+            .expect("invalid graphics pipeline info")
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct GraphicPipelineInner {
+pub(crate) struct GraphicsPipelineInner {
     pub descriptor_bindings: DescriptorBindingMap,
     pub descriptor_info: PipelineDescriptorInfo,
     pub device: Device,
-    pub info: GraphicPipelineInfo,
+    pub info: GraphicsPipelineInfo,
     pub input_attachments: Box<[u32]>,
     pub layout: vk::PipelineLayout,
     pub multisample: MultisampleState,
@@ -737,7 +742,7 @@ pub(crate) struct GraphicPipelineInner {
     pub vertex_input: VertexInputState,
 }
 
-impl Drop for GraphicPipelineInner {
+impl Drop for GraphicsPipelineInner {
     #[profiling::function]
     fn drop(&mut self) {
         if panicking() {
@@ -880,17 +885,17 @@ mod test {
     }
 
     #[test]
-    pub fn graphic_pipeline_info() {
-        let info = GraphicPipelineInfo::default();
+    pub fn graphics_pipeline_info() {
+        let info = GraphicsPipelineInfo::default();
         let builder = info.into_builder().build();
 
         assert_eq!(info, builder);
     }
 
     #[test]
-    pub fn graphic_pipeline_info_builder() {
-        let info = GraphicPipelineInfo::default();
-        let builder = GraphicPipelineInfoBuilder::default().build();
+    pub fn graphics_pipeline_info_builder() {
+        let info = GraphicsPipelineInfo::default();
+        let builder = GraphicsPipelineInfoBuilder::default().build();
 
         assert_eq!(info, builder);
     }

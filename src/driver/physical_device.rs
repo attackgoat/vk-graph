@@ -218,12 +218,12 @@ pub struct PhysicalDevice {
     /// Describes the features of the device which relate to ray tracing, if available.
     ///
     /// _Note:_ This field is read-only.
-    pub ray_trace_features: RayTraceFeatures,
+    pub ray_tracing_pipeline_features: RayTracingPipelineFeatures,
 
     /// Describes the properties of the device which relate to ray tracing, if available.
     ///
     /// _Note:_ This field is read-only.
-    pub ray_trace_properties: Option<RayTraceProperties>,
+    pub ray_tracing_pipeline_properties: Option<RayTracingPipelineProperties>,
 
     /// Describes the properties of the device which relate to min/max sampler filtering.
     ///
@@ -233,7 +233,7 @@ pub struct PhysicalDevice {
     /// True if the device supports swapchain use.
     ///
     /// _Note:_ This field is read-only.
-    pub swapchain_ext: bool,
+    pub khr_swapchain: bool,
 }
 
 impl PhysicalDevice {
@@ -258,7 +258,7 @@ impl PhysicalDevice {
         // The swapchain extension is required for presentation support, so we enable it whenever
         // the physical device reports support. Imported instances may already carry the required
         // instance extensions even though vk-graph did not create them.
-        if self.swapchain_ext {
+        if self.khr_swapchain {
             enabled_ext_names.push(khr::swapchain::NAME.as_ptr());
         }
 
@@ -271,7 +271,7 @@ impl PhysicalDevice {
             enabled_ext_names.push(khr::ray_query::NAME.as_ptr());
         }
 
-        if self.ray_trace_features.ray_tracing_pipeline {
+        if self.ray_tracing_pipeline_features.ray_tracing_pipeline {
             enabled_ext_names.push(khr::ray_tracing_pipeline::NAME.as_ptr());
         }
 
@@ -318,7 +318,8 @@ impl PhysicalDevice {
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut index_type_uint8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
         let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-        let mut ray_trace_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+        let mut ray_tracing_pipeline_features =
+            vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut features_v1_1)
             .push_next(&mut features_v1_2);
@@ -331,8 +332,8 @@ impl PhysicalDevice {
             features = features.push_next(&mut ray_query_features);
         }
 
-        if self.ray_trace_features.ray_tracing_pipeline {
-            features = features.push_next(&mut ray_trace_features);
+        if self.ray_tracing_pipeline_features.ray_tracing_pipeline {
+            features = features.push_next(&mut ray_tracing_pipeline_features);
         }
 
         if self.index_type_uint8_features.index_type_uint8 {
@@ -347,6 +348,18 @@ impl PhysicalDevice {
             .push_next(&mut features);
 
         create_fn(device_create_info)
+    }
+
+    /// Helper for times when you already know that the device supports the ray tracing pipeline
+    /// extension.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [Self.physical_device.ray_tracing_pipeline_properties] is `None`.
+    pub(crate) fn expect_ray_tracing_pipeline_properties(&self) -> &RayTracingPipelineProperties {
+        self.ray_tracing_pipeline_properties
+            .as_ref()
+            .expect("missing VK_KHR_ray_tracing_pipeline")
     }
 
     /// Lists the capabilities of a given format.
@@ -435,14 +448,15 @@ impl PhysicalDevice {
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut index_type_u8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
         let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-        let mut ray_trace_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+        let mut ray_tracing_pipeline_features =
+            vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut features_v1_1)
             .push_next(&mut features_v1_2)
             .push_next(&mut acceleration_structure_features)
             .push_next(&mut index_type_u8_features)
             .push_next(&mut ray_query_features)
-            .push_next(&mut ray_trace_features);
+            .push_next(&mut ray_tracing_pipeline_features);
         unsafe {
             get_physical_device_features2(physical_device, &mut features);
         }
@@ -457,7 +471,8 @@ impl PhysicalDevice {
             vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
         let mut depth_stencil_resolve_properties =
             vk::PhysicalDeviceDepthStencilResolveProperties::default();
-        let mut ray_trace_properties = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
+        let mut ray_tracing_pipeline_properties =
+            vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
         let mut sampler_filter_minmax_properties =
             vk::PhysicalDeviceSamplerFilterMinmaxProperties::default();
         let mut properties = vk::PhysicalDeviceProperties2::default()
@@ -465,7 +480,7 @@ impl PhysicalDevice {
             .push_next(&mut properties_v1_2)
             .push_next(&mut accel_struct_properties)
             .push_next(&mut depth_stencil_resolve_properties)
-            .push_next(&mut ray_trace_properties)
+            .push_next(&mut ray_tracing_pipeline_properties)
             .push_next(&mut sampler_filter_minmax_properties);
         unsafe {
             get_physical_device_properties2(physical_device, &mut properties);
@@ -509,31 +524,32 @@ impl PhysicalDevice {
             .filter(|extension_name| !extension_name.is_null())
             .map(|extension_name| unsafe { CStr::from_ptr(extension_name) })
             .collect::<HashSet<_>>();
-        let supports_accel_struct = extension_names.contains(khr::acceleration_structure::NAME)
+        let accel_struct = extension_names.contains(khr::acceleration_structure::NAME)
             && extension_names.contains(khr::deferred_host_operations::NAME);
-        let supports_index_type_uint8 = extension_names.contains(ext::index_type_uint8::NAME);
-        let supports_ray_query = extension_names.contains(khr::ray_query::NAME);
-        let supports_ray_trace = extension_names.contains(khr::ray_tracing_pipeline::NAME);
-        let swapchain_ext = extension_names.contains(khr::swapchain::NAME) && instance.surface_ext;
+        let index_type_uint8 = extension_names.contains(ext::index_type_uint8::NAME);
+        let ray_query = extension_names.contains(khr::ray_query::NAME);
+        let ray_tracing_pipeline = extension_names.contains(khr::ray_tracing_pipeline::NAME);
+        let khr_swapchain = instance.khr_surface && extension_names.contains(khr::swapchain::NAME);
 
         // Gather optional features and properties of the physical device
-        let index_type_uint8_features = if supports_index_type_uint8 {
+        let index_type_uint8_features = if index_type_uint8 {
             index_type_u8_features.into()
         } else {
             Default::default()
         };
-        let ray_query_features = if supports_ray_query {
+        let ray_query_features = if ray_query {
             ray_query_features.into()
         } else {
             Default::default()
         };
-        let ray_trace_features = if supports_ray_trace {
-            ray_trace_features.into()
+        let ray_tracing_pipeline_features = if ray_tracing_pipeline {
+            ray_tracing_pipeline_features.into()
         } else {
             Default::default()
         };
-        let accel_struct_properties = supports_accel_struct.then(|| accel_struct_properties.into());
-        let ray_trace_properties = supports_ray_trace.then(|| ray_trace_properties.into());
+        let accel_struct_properties = accel_struct.then(|| accel_struct_properties.into());
+        let ray_tracing_properties =
+            ray_tracing_pipeline.then(|| ray_tracing_pipeline_properties.into());
 
         Ok(Self {
             accel_struct_properties,
@@ -544,6 +560,7 @@ impl PhysicalDevice {
             handle: physical_device,
             index_type_uint8_features,
             instance: instance.clone(),
+            khr_swapchain,
             memory_properties,
             properties_v1_0,
             properties_v1_1,
@@ -551,10 +568,9 @@ impl PhysicalDevice {
             queue_families,
             queue_family_indices,
             ray_query_features,
-            ray_trace_features,
-            ray_trace_properties,
+            ray_tracing_pipeline_features,
+            ray_tracing_pipeline_properties: ray_tracing_properties,
             sampler_filter_minmax_properties,
-            swapchain_ext,
         })
     }
 
@@ -596,7 +612,7 @@ impl From<vk::PhysicalDeviceRayQueryFeaturesKHR<'_>> for RayQueryFeatures {
 ///
 /// See [`VkPhysicalDeviceRayTracingPipelineFeaturesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayTracingPipelineFeaturesKHR.html).
 #[derive(Clone, Copy, Debug, Default)]
-pub struct RayTraceFeatures {
+pub struct RayTracingPipelineFeatures {
     /// Indicates whether the implementation supports the ray tracing pipeline functionality.
     ///
     /// See
@@ -622,7 +638,7 @@ pub struct RayTraceFeatures {
     pub ray_traversal_primitive_culling: bool,
 }
 
-impl From<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>> for RayTraceFeatures {
+impl From<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>> for RayTracingPipelineFeatures {
     fn from(features: vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>) -> Self {
         Self {
             ray_tracing_pipeline: features.ray_tracing_pipeline == vk::TRUE,
@@ -644,7 +660,7 @@ impl From<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>> for RayTraceFeatu
 ///
 /// See [`VkPhysicalDeviceRayTracingPipelinePropertiesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayTracingPipelinePropertiesKHR.html).
 #[derive(Clone, Copy, Debug)]
-pub struct RayTraceProperties {
+pub struct RayTracingPipelineProperties {
     /// The size in bytes of the shader header.
     pub shader_group_handle_size: u32,
 
@@ -674,7 +690,7 @@ pub struct RayTraceProperties {
     pub max_ray_hit_attribute_size: u32,
 }
 
-impl From<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>> for RayTraceProperties {
+impl From<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>> for RayTracingPipelineProperties {
     fn from(props: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>) -> Self {
         Self {
             shader_group_handle_size: props.shader_group_handle_size,

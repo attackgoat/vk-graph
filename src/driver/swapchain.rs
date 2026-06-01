@@ -7,7 +7,7 @@ use {
         image::{Image, ImageInfo},
     },
     ash::vk::{self, Handle},
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     log::{debug, info, trace, warn},
     std::{mem::replace, ops::Deref, slice, thread::panicking},
 };
@@ -196,10 +196,10 @@ impl Swapchain {
                 })?;
             }
 
-            let swapchain_ext = Device::expect_swapchain_ext(&self.surface.device);
+            let ext = Device::expect_vk_khr_swapchain(&self.surface.device);
 
             let image_idx = unsafe {
-                swapchain_ext.acquire_next_image(self.handle, timeout, acquired, vk::Fence::null())
+                ext.acquire_next_image(self.handle, timeout, acquired, vk::Fence::null())
             }
             .map(|(idx, suboptimal)| {
                 if suboptimal {
@@ -292,10 +292,10 @@ impl Swapchain {
             warn!("device_wait_idle() failed: {err}");
         }
 
-        let swapchain_ext = Device::expect_swapchain_ext(device);
+        let ext = Device::expect_vk_khr_swapchain(device);
 
         unsafe {
-            swapchain_ext.destroy_swapchain(*handle, None);
+            ext.destroy_swapchain(*handle, None);
         }
 
         *handle = vk::SwapchainKHR::null();
@@ -315,11 +315,11 @@ impl Swapchain {
         let queue_signal = &mut self.queue_family_signals[queue_family_index as usize]
             .queue_signals[queue_index as usize];
 
-        let swapchain_ext = Device::expect_swapchain_ext(device);
+        let ext = Device::expect_vk_khr_swapchain(device);
 
         Device::with_queue(device, queue_family_index, queue_index, |queue| {
             unsafe {
-                match swapchain_ext.queue_present(
+                match ext.queue_present(
                     queue,
                     &vk::PresentInfoKHR::default()
                         .wait_semaphores(wait_semaphores)
@@ -366,7 +366,7 @@ impl Swapchain {
             )?;
             queue_signal.queued = true;
 
-            Ok(())
+            Ok::<_, DriverError>(())
         })?;
 
         if !self.prev_swapchain.handle.is_null() {
@@ -432,7 +432,7 @@ impl Swapchain {
             surface_caps.current_transform
         };
 
-        let swapchain_ext = Device::expect_swapchain_ext(&self.surface.device);
+        let ext = Device::expect_vk_khr_swapchain(&self.surface.device);
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface.handle)
             .min_image_count(min_image_count)
@@ -450,31 +450,30 @@ impl Swapchain {
             .clipped(true)
             .old_swapchain(self.handle)
             .image_array_layers(1);
-        let swapchain = unsafe { swapchain_ext.create_swapchain(&swapchain_create_info, None) }
-            .map_err(|err| {
+        let swapchain =
+            unsafe { ext.create_swapchain(&swapchain_create_info, None) }.map_err(|err| {
                 warn!("unable to create swapchain: {err}");
 
                 DriverError::Unsupported
             })?;
 
-        let images =
-            unsafe { swapchain_ext.get_swapchain_images(swapchain) }.map_err(|err| match err {
-                vk::Result::INCOMPLETE => {
-                    warn!("invalid swapchain image enumeration: incomplete");
+        let images = unsafe { ext.get_swapchain_images(swapchain) }.map_err(|err| match err {
+            vk::Result::INCOMPLETE => {
+                warn!("invalid swapchain image enumeration: incomplete");
 
-                    DriverError::InvalidData
-                }
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
-                    warn!("unable to get swapchain images: {err}");
+                DriverError::InvalidData
+            }
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                warn!("unable to get swapchain images: {err}");
 
-                    DriverError::OutOfMemory
-                }
-                _ => {
-                    warn!("unable to get swapchain images: {err}");
+                DriverError::OutOfMemory
+            }
+            _ => {
+                warn!("unable to get swapchain images: {err}");
 
-                    DriverError::Unsupported
-                }
-            })?;
+                DriverError::Unsupported
+            }
+        })?;
         let images = images
             .into_iter()
             .enumerate()
@@ -493,14 +492,14 @@ impl Swapchain {
                 let image_idx = image_idx as u32;
                 image.name = Some(format!("swapchain{image_idx}"));
 
-                Ok(SwapchainImage {
+                SwapchainImage {
                     read_only: ReadOnlySwapchainImage {
                         image,
                         index: image_idx,
                     },
-                })
+                }
             })
-            .collect::<Result<Box<_>, _>>()?;
+            .collect::<Box<_>>();
 
         self.info.height = surface_height;
         self.info.width = surface_width;
@@ -713,12 +712,13 @@ impl Deref for ReadOnlySwapchainImage {
 /// Information used to create a [`Swapchain`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "SwapchainInfoBuilderError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
 pub struct SwapchainInfo {
     /// The initial height of the surface.
+    #[builder(default)]
     pub height: u32,
 
     /// The minimum number of presentable images that the application needs. The implementation
@@ -776,9 +776,11 @@ pub struct SwapchainInfo {
     pub present_mode: vk::PresentModeKHR,
 
     /// The format and color space of the surface.
+    #[builder(default)]
     pub surface: vk::SurfaceFormatKHR,
 
     /// The initial width of the surface.
+    #[builder(default)]
     pub width: u32,
 }
 
@@ -820,29 +822,9 @@ impl From<SwapchainInfoBuilder> for SwapchainInfo {
 
 impl SwapchainInfoBuilder {
     /// Builds a new `SwapchainInfo`.
-    ///
-    /// # Panics
-    ///
-    /// If any of the following values have not been set this function will panic.
-    ///
-    /// * `width`
-    /// * `height`
-    /// * `surface`
     #[inline(always)]
     pub fn build(self) -> SwapchainInfo {
-        match self.fallible_build() {
-            Err(SwapchainInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct SwapchainInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for SwapchainInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
+        self.fallible_build().expect("all fields have defaults")
     }
 }
 
@@ -874,23 +856,10 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: height")]
-    pub fn swapchain_info_builder_uninit_height() {
-        Builder::default().build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: surface")]
-    pub fn swapchain_info_builder_uninit_surface() {
-        Builder::default().height(42).build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: width")]
-    pub fn swapchain_info_builder_uninit_width() {
-        Builder::default()
-            .height(42)
-            .surface(vk::SurfaceFormatKHR::default())
-            .build();
+    pub fn swapchain_info_builder_defaults() {
+        assert_eq!(
+            Builder::default().build(),
+            Info::new(0, 0, vk::SurfaceFormatKHR::default())
+        );
     }
 }

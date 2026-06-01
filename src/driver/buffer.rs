@@ -3,7 +3,7 @@
 use {
     super::{DriverError, device::Device},
     ash::vk,
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     gpu_allocator::{
         MemoryLocation,
         vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
@@ -728,7 +728,7 @@ where
 /// Information used to create a [`Buffer`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "BufferInfoBuilderError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -760,6 +760,7 @@ pub struct BufferInfo {
     pub host_write: bool,
 
     /// Size in bytes of the buffer to be created.
+    #[builder(default)]
     pub size: vk::DeviceSize,
 
     /// A bitmask of specifying allowed usages of the buffer.
@@ -840,20 +841,11 @@ impl From<BufferInfoBuilder> for BufferInfo {
 
 impl BufferInfoBuilder {
     /// Builds a new `BufferInfo`.
-    ///    
-    /// # Panics
-    ///
-    /// If any of the following values have not been set this function will panic:
-    ///
-    /// * `size`
     ///
     /// If `alignment` is not a power to two this function will panic.
     #[inline(always)]
     pub fn build(self) -> BufferInfo {
-        let res = match self.fallible_build() {
-            Err(BufferInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        };
+        let res = self.fallible_build().expect("all fields have defaults");
 
         assert!(
             res.alignment.is_power_of_two(),
@@ -861,15 +853,6 @@ impl BufferInfoBuilder {
         );
 
         res
-    }
-}
-
-#[derive(Debug)]
-struct BufferInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for BufferInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
     }
 }
 
@@ -1361,9 +1344,11 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: size")]
-    pub fn buffer_info_builder_uninit_size() {
-        Builder::default().build();
+    pub fn buffer_info_builder_default_size() {
+        assert_eq!(
+            Builder::default().build(),
+            Info::device_mem(0, vk::BufferUsageFlags::empty())
+        );
     }
 
     fn buffer_subresource_range(

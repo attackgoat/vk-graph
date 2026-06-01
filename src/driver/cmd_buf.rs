@@ -3,7 +3,7 @@
 use {
     super::{DriverError, device::Device},
     ash::vk,
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     log::{error, trace, warn},
     std::{fmt::Debug, slice, thread::panicking},
 };
@@ -45,7 +45,11 @@ pub struct CommandBuffer {
 impl CommandBuffer {
     /// Creates a command buffer allocation backed by a transient resettable command pool.
     #[profiling::function]
-    pub fn create(device: &Device, info: CommandBufferInfo) -> Result<Self, DriverError> {
+    pub fn create(
+        device: &Device,
+        info: impl Into<CommandBufferInfo>,
+    ) -> Result<Self, DriverError> {
+        let info = info.into();
         let device = device.clone();
 
         let pool = unsafe {
@@ -181,7 +185,7 @@ impl Drop for CommandBuffer {
 /// Information used to create a [`CommandBuffer`] instance.
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -189,6 +193,7 @@ pub struct CommandBufferInfo {
     /// Designates the queue family used by the command pool that allocates this command buffer.
     ///
     /// See [`VkCommandPoolCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkCommandPoolCreateInfo.html).
+    #[builder(default)]
     pub queue_family_index: u32,
 }
 
@@ -224,5 +229,26 @@ impl CommandBufferInfoBuilder {
     #[inline(always)]
     pub fn build(self) -> CommandBufferInfo {
         self.fallible_build().expect("invalid command buffer info")
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    type Info = CommandBufferInfo;
+    type Builder = CommandBufferInfoBuilder;
+
+    #[test]
+    pub fn command_buffer_info() {
+        let info = Info::new(3);
+        let builder = info.into_builder().build();
+
+        assert_eq!(info, builder);
+    }
+
+    #[test]
+    pub fn command_buffer_info_builder_default_queue_family_index() {
+        assert_eq!(Builder::default().build(), Info::new(0));
     }
 }

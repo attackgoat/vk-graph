@@ -13,7 +13,7 @@ use {
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
             device::Device,
             format_aspect_mask,
-            graphic::{DepthStencilInfo, GraphicPipeline},
+            graphic::{DepthStencilInfo, GraphicsPipeline},
             image::{Image, ImageAccess},
             initial_image_layout_access, is_read_access, is_write_access,
             pipeline_stage_access_flags,
@@ -215,7 +215,7 @@ impl Submission {
 
     #[profiling::function]
     fn allow_merge_passes(lhs: &CommandData, rhs: &CommandData) -> bool {
-        fn first_graphic_pipeline(pass: &CommandData) -> Option<&GraphicPipeline> {
+        fn first_graphic_pipeline(pass: &CommandData) -> Option<&GraphicsPipeline> {
             pass.execs
                 .first()
                 .and_then(|exec| exec.pipeline.as_ref().map(ExecutionPipeline::as_graphic))
@@ -667,7 +667,7 @@ impl Submission {
                     ("graphic", pipeline.debug_name(), vk::Pipeline::null())
                 }
                 ExecutionPipeline::RayTrace(pipeline) => {
-                    ("ray trace", pipeline.debug_name(), pipeline.handle())
+                    ("ray tracing", pipeline.debug_name(), pipeline.handle())
                 }
             };
             if let Some(name) = name {
@@ -1091,7 +1091,7 @@ impl Submission {
             let pipeline = exec
                 .pipeline
                 .as_ref()
-                .expect("missing graphic pipeline")
+                .expect("missing graphics pipeline")
                 .expect_graphic();
             let mut subpass_info = SubpassInfo::with_capacity(attachment_count);
 
@@ -1753,7 +1753,7 @@ impl Submission {
                         .expect_first_exec()
                         .pipeline
                         .as_ref()
-                        .expect("missing graphic pipeline")
+                        .expect("missing graphics pipeline")
                         .expect_graphic()
                         .inner
                         .descriptor_info
@@ -2898,13 +2898,7 @@ impl Submission {
 
         Device::with_queue(&cmd.device, queue_family_index, queue_index, |queue| {
             Device::end_command_buffer(&cmd.device, cmd.handle)?;
-
-            unsafe {
-                cmd.device
-                    .reset_fences(slice::from_ref(&cmd.fence))
-                    .map_err(|_| DriverError::OutOfMemory)?;
-            }
-
+            Device::reset_fences(&cmd.device, slice::from_ref(&cmd.fence))?;
             Device::queue_submit(
                 &cmd.device,
                 queue,
@@ -2914,7 +2908,7 @@ impl Submission {
                 cmd.fence,
             )?;
 
-            Ok(())
+            Ok::<_, DriverError>(())
         })?;
 
         // This graph contains references to buffers, images, and other resources which must be kept

@@ -5,11 +5,11 @@ use {
         DriverError,
         device::Device,
         merge_push_constant_ranges,
-        physical_device::RayTraceProperties,
+        physical_device::RayTracingPipelineProperties,
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
     ash::vk,
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     log::warn,
     std::{
         ffi::CString,
@@ -24,12 +24,12 @@ use {
 /// Also contains information about the object.
 #[derive(Clone, Debug)]
 #[read_only::cast]
-pub struct RayTracePipeline {
-    pub(crate) inner: Arc<RayTracePipelineInner>,
+pub struct RayTracingPipeline {
+    pub(crate) inner: Arc<RayTracingPipelineInner>,
 }
 
-impl RayTracePipeline {
-    /// Creates a new ray trace pipeline on the given device.
+impl RayTracingPipeline {
+    /// Creates a new ray tracing pipeline on the given device.
     ///
     /// The correct pipeline stages will be enabled based on the provided shaders. See [Shader] for
     /// details on all available stages.
@@ -51,9 +51,9 @@ impl RayTracePipeline {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::ray_trace::{
-    /// #     RayTracePipeline,
-    /// #     RayTracePipelineInfo,
-    /// #     RayTraceShaderGroup,
+    /// #     RayTracingPipeline,
+    /// #     RayTracingPipelineInfo,
+    /// #     RayTracingShaderGroup,
     /// # };
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
@@ -63,8 +63,8 @@ impl RayTracePipeline {
     /// # let my_miss_code = [0u8; 1];
     /// # let my_shadow_code = [0u8; 1];
     /// // shader code is raw SPIR-V code as bytes
-    /// let info = RayTracePipelineInfo::default().into_builder().max_ray_recursion_depth(1);
-    /// let pipeline = RayTracePipeline::create(
+    /// let info = RayTracingPipelineInfo::default().into_builder().max_ray_recursion_depth(1);
+    /// let pipeline = RayTracingPipeline::create(
     ///     &device,
     ///     info,
     ///     [
@@ -74,10 +74,10 @@ impl RayTracePipeline {
     ///         Shader::new_miss(my_shadow_code.as_slice()),
     ///     ],
     ///     [
-    ///         RayTraceShaderGroup::new_general(0),
-    ///         RayTraceShaderGroup::new_triangles(1, None),
-    ///         RayTraceShaderGroup::new_general(2),
-    ///         RayTraceShaderGroup::new_general(3),
+    ///         RayTracingShaderGroup::new_general(0),
+    ///         RayTracingShaderGroup::new_triangles(1, None),
+    ///         RayTracingShaderGroup::new_general(2),
+    ///         RayTracingShaderGroup::new_general(3),
     ///     ],
     /// )?;
     ///
@@ -88,15 +88,20 @@ impl RayTracePipeline {
     #[profiling::function]
     pub fn create<S>(
         device: &Device,
-        info: impl Into<RayTracePipelineInfo>,
+        info: impl Into<RayTracingPipelineInfo>,
         shaders: impl IntoIterator<Item = S>,
-        shader_groups: impl IntoIterator<Item = RayTraceShaderGroup>,
+        shader_groups: impl IntoIterator<Item = RayTracingShaderGroup>,
     ) -> Result<Self, DriverError>
     where
-        S: Into<Shader>,
+        S: TryInto<Shader>,
+        S::Error: Into<DriverError>,
     {
-        if device.physical_device.ray_trace_properties.is_none() {
-            warn!("unsupported ray trace pipeline creation: missing ray trace properties");
+        if device
+            .physical_device
+            .ray_tracing_pipeline_properties
+            .is_none()
+        {
+            warn!("unsupported ray tracing pipeline creation: missing ray tracing properties");
 
             return Err(DriverError::Unsupported);
         }
@@ -110,8 +115,8 @@ impl RayTracePipeline {
 
         let shaders = shaders
             .into_iter()
-            .map(|shader| shader.into())
-            .collect::<Vec<Shader>>();
+            .map(|shader| shader.try_into().map_err(Into::into))
+            .collect::<Result<Vec<_>, _>>()?;
         let push_constants = shaders
             .iter()
             .map(|shader| shader.push_constant_range())
@@ -144,7 +149,7 @@ impl RayTracePipeline {
                     None,
                 )
                 .map_err(|err| {
-                    warn!("unable to create ray trace pipeline layout: {err}");
+                    warn!("unable to create ray tracing pipeline layout: {err}");
 
                     DriverError::Unsupported
                 })?;
@@ -153,7 +158,7 @@ impl RayTracePipeline {
                 .map(|shader| CString::new(shader.entry_name.as_str()))
                 .collect::<Result<_, _>>()
                 .map_err(|err| {
-                    warn!("invalid ray trace shader entry name: {err}");
+                    warn!("invalid ray tracing shader entry name: {err}");
 
                     DriverError::InvalidData
                 })?;
@@ -171,7 +176,7 @@ impl RayTracePipeline {
                         None,
                     )
                     .map_err(|err| {
-                        warn!("unable to create ray trace shader module: {err}");
+                        warn!("unable to create ray tracing shader module: {err}");
 
                         device.destroy_pipeline_layout(layout, None);
 
@@ -202,31 +207,36 @@ impl RayTracePipeline {
                 dynamic_states.push(vk::DynamicState::RAY_TRACING_PIPELINE_STACK_SIZE_KHR);
             }
 
-            let ray_trace_ext = Device::expect_ray_trace_ext(device);
-            let handle =
-                ray_trace_ext.create_ray_tracing_pipelines(
-                    vk::DeferredOperationKHR::null(),
-                    Device::pipeline_cache(device),
-                    &[vk::RayTracingPipelineCreateInfoKHR::default()
-                        .stages(&shader_stages)
-                        .groups(&shader_groups)
-                        .max_pipeline_ray_recursion_depth(info.max_ray_recursion_depth.min(
-                            Device::expect_ray_trace_properties(device).max_ray_recursion_depth,
-                        ))
-                        .layout(layout)
-                        .dynamic_state(
-                            &vk::PipelineDynamicStateCreateInfo::default()
-                                .dynamic_states(&dynamic_states),
-                        )],
-                    None,
-                );
+            let khr_ray_tracing_pipeline = Device::expect_vk_khr_ray_tracing_pipeline(device);
+
+            let handle = khr_ray_tracing_pipeline.create_ray_tracing_pipelines(
+                vk::DeferredOperationKHR::null(),
+                Device::pipeline_cache(device),
+                &[vk::RayTracingPipelineCreateInfoKHR::default()
+                    .stages(&shader_stages)
+                    .groups(&shader_groups)
+                    .max_pipeline_ray_recursion_depth(
+                        info.max_ray_recursion_depth.min(
+                            device
+                                .physical_device
+                                .expect_ray_tracing_pipeline_properties()
+                                .max_ray_recursion_depth,
+                        ),
+                    )
+                    .layout(layout)
+                    .dynamic_state(
+                        &vk::PipelineDynamicStateCreateInfo::default()
+                            .dynamic_states(&dynamic_states),
+                    )],
+                None,
+            );
 
             for shader_module in shader_modules.iter().copied() {
                 device.destroy_shader_module(shader_module, None);
             }
 
             let handle = handle.map_err(|(pipelines, err)| {
-                warn!("unable to create ray trace pipeline: {err}");
+                warn!("unable to create ray tracing pipeline: {err}");
 
                 for pipeline in pipelines {
                     device.destroy_pipeline(pipeline, None);
@@ -236,10 +246,12 @@ impl RayTracePipeline {
 
                 DriverError::Unsupported
             })?[0];
-            let &RayTraceProperties {
+            let &RayTracingPipelineProperties {
                 shader_group_handle_size,
                 ..
-            } = Device::expect_ray_trace_properties(device);
+            } = device
+                .physical_device
+                .expect_ray_tracing_pipeline_properties();
 
             let push_constants = merge_push_constant_ranges(&push_constants).into_boxed_slice();
 
@@ -254,7 +266,7 @@ impl RayTracePipeline {
             // 5. pipeline must not have been created with VK_PIPELINE_CREATE_LIBRARY_BIT_KHR.
             //
             let shader_group_handles = {
-                ray_trace_ext.get_ray_tracing_shader_group_handles(
+                khr_ray_tracing_pipeline.get_ray_tracing_shader_group_handles(
                     handle,
                     0,
                     group_count as u32,
@@ -265,7 +277,7 @@ impl RayTracePipeline {
             .into_boxed_slice();
 
             Ok(Self {
-                inner: Arc::new(RayTracePipelineInner {
+                inner: Arc::new(RayTracingPipelineInner {
                     descriptor_bindings,
                     descriptor_info,
                     device: device.clone(),
@@ -285,7 +297,7 @@ impl RayTracePipeline {
         self.inner.name.get().map(String::as_str)
     }
 
-    /// The device which owns this ray trace pipeline.
+    /// The device which owns this ray tracing pipeline.
     pub fn device(&self) -> &Device {
         &self.inner.device
     }
@@ -299,17 +311,21 @@ impl RayTracePipeline {
     /// [ray_trace.rs](https://github.com/attackgoat/vk-graph/blob/master/examples/ray_trace.rs)
     /// for a detail example which constructs a shader binding table buffer using this function.
     pub fn group_handle(&self, idx: usize) -> &[u8] {
-        let &RayTraceProperties {
+        let &RayTracingPipelineProperties {
             shader_group_handle_size,
             ..
-        } = Device::expect_ray_trace_properties(&self.inner.device);
+        } = self
+            .inner
+            .device
+            .physical_device
+            .expect_ray_tracing_pipeline_properties();
         let start = idx * shader_group_handle_size as usize;
         let end = start + shader_group_handle_size as usize;
 
         &self.inner.shader_group_handles[start..end]
     }
 
-    /// Query ray trace pipeline shader group shader stack size.
+    /// Query ray tracing pipeline shader group shader stack size.
     ///
     /// The return value is the ray tracing pipeline stack size in bytes for the specified shader as
     /// called from the specified shader group.
@@ -319,20 +335,27 @@ impl RayTracePipeline {
         group: u32,
         group_shader: vk::ShaderGroupShaderKHR,
     ) -> vk::DeviceSize {
+        // Safely use unchecked because the ray tracing extension is checked during pipeline
+        // creation.
+        let khr_ray_tracing_pipeline =
+            Device::expect_vk_khr_ray_tracing_pipeline(&self.inner.device);
+
         unsafe {
-            // Safely use unchecked because ray_trace_ext is checked during pipeline creation
-            Device::expect_ray_trace_ext(&self.inner.device)
-                .get_ray_tracing_shader_group_stack_size(self.handle(), group, group_shader)
+            khr_ray_tracing_pipeline.get_ray_tracing_shader_group_stack_size(
+                self.handle(),
+                group,
+                group_shader,
+            )
         }
     }
 
-    /// The native Vulkan pipeline handle of this ray trace pipeline.
+    /// The native Vulkan pipeline handle of this ray tracing pipeline.
     pub fn handle(&self) -> vk::Pipeline {
         self.inner.handle
     }
 
     /// Gets the information used to create this object.
-    pub fn info(&self) -> RayTracePipelineInfo {
+    pub fn info(&self) -> RayTracingPipelineInfo {
         self.inner.info
     }
 
@@ -365,28 +388,28 @@ impl RayTracePipeline {
     }
 }
 
-impl Eq for RayTracePipeline {}
+impl Eq for RayTracingPipeline {}
 
-impl Hash for RayTracePipeline {
+impl Hash for RayTracingPipeline {
     fn hash<H: Hasher>(&self, state: &mut H) {
         Arc::as_ptr(&self.inner).hash(state);
     }
 }
 
-impl PartialEq for RayTracePipeline {
+impl PartialEq for RayTracingPipeline {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
-/// Information used to create a [`RayTracePipeline`] instance.
+/// Information used to create a [`RayTracingPipeline`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
-pub struct RayTracePipelineInfo {
+pub struct RayTracingPipelineInfo {
     /// The number of descriptors to allocate for a given binding when using bindless (unbounded)
     /// syntax.
     ///
@@ -412,10 +435,10 @@ pub struct RayTracePipelineInfo {
     #[builder(default = "8192")]
     pub bindless_descriptor_count: u32,
 
-    /// Allow [setting the stack size dynamically] for a ray trace pipeline.
+    /// Allow [setting the stack size dynamically] for a ray tracing pipeline.
     ///
-    /// When set, you must manually set the stack size during ray trace passes using
-    /// [`RayTraceCommandRef::set_stack_size`](crate::cmd::RayTraceCommandRef::set_stack_size).
+    /// When set, you must manually set the stack size during ray tracing passes using
+    /// [`RayTracingCommandRef::set_stack_size`](crate::cmd::RayTracingCommandRef::set_stack_size).
     ///
     /// See [`vkCmdSetRayTracingPipelineStackSizeKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetRayTracingPipelineStackSizeKHR.html).
     #[builder(default)]
@@ -430,15 +453,15 @@ pub struct RayTracePipelineInfo {
     pub max_ray_recursion_depth: u32,
 }
 
-impl RayTracePipelineInfo {
-    /// Creates a default `RayTracePipelineInfoBuilder`.
-    pub fn builder() -> RayTracePipelineInfoBuilder {
+impl RayTracingPipelineInfo {
+    /// Creates a default `RayTracingPipelineInfoBuilder`.
+    pub fn builder() -> RayTracingPipelineInfoBuilder {
         Default::default()
     }
 
-    /// Converts a `RayTracePipelineInfo` into a `RayTracePipelineInfoBuilder`.
-    pub fn into_builder(self) -> RayTracePipelineInfoBuilder {
-        RayTracePipelineInfoBuilder {
+    /// Converts a `RayTracingPipelineInfo` into a `RayTracingPipelineInfoBuilder`.
+    pub fn into_builder(self) -> RayTracingPipelineInfoBuilder {
+        RayTracingPipelineInfoBuilder {
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
             dynamic_stack_size: Some(self.dynamic_stack_size),
             max_ray_recursion_depth: Some(self.max_ray_recursion_depth),
@@ -446,7 +469,7 @@ impl RayTracePipelineInfo {
     }
 }
 
-impl Default for RayTracePipelineInfo {
+impl Default for RayTracingPipelineInfo {
     fn default() -> Self {
         Self {
             bindless_descriptor_count: 8192,
@@ -456,35 +479,35 @@ impl Default for RayTracePipelineInfo {
     }
 }
 
-impl From<RayTracePipelineInfoBuilder> for RayTracePipelineInfo {
-    fn from(info: RayTracePipelineInfoBuilder) -> Self {
+impl From<RayTracingPipelineInfoBuilder> for RayTracingPipelineInfo {
+    fn from(info: RayTracingPipelineInfoBuilder) -> Self {
         info.build()
     }
 }
 
-impl RayTracePipelineInfoBuilder {
-    /// Builds a new `RayTracePipelineInfo`.
+impl RayTracingPipelineInfoBuilder {
+    /// Builds a new `RayTracingPipelineInfo`.
     #[inline(always)]
-    pub fn build(self) -> RayTracePipelineInfo {
+    pub fn build(self) -> RayTracingPipelineInfo {
         self.fallible_build()
-            .expect("invalid ray trace pipeline info")
+            .expect("invalid ray tracing pipeline info")
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct RayTracePipelineInner {
+pub(crate) struct RayTracingPipelineInner {
     pub descriptor_bindings: DescriptorBindingMap,
     pub descriptor_info: PipelineDescriptorInfo,
     pub device: Device,
     pub handle: vk::Pipeline,
-    pub info: RayTracePipelineInfo,
+    pub info: RayTracingPipelineInfo,
     pub layout: vk::PipelineLayout,
     pub name: OnceLock<String>,
     pub push_constants: Box<[vk::PushConstantRange]>,
     pub shader_group_handles: Box<[u8]>,
 }
 
-impl Drop for RayTracePipelineInner {
+impl Drop for RayTracingPipelineInner {
     #[profiling::function]
     fn drop(&mut self) {
         if panicking() {
@@ -498,37 +521,37 @@ impl Drop for RayTracePipelineInner {
     }
 }
 
-/// Describes the set of the shader stages to be included in each shader group in the ray trace
+/// Describes the set of shader stages to be included in each shader group in the ray tracing
 /// pipeline.
 ///
 /// See [`VkRayTracingShaderGroupCreateInfoKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRayTracingShaderGroupCreateInfoKHR.html).
 #[derive(Clone, Copy, Debug)]
-pub struct RayTraceShaderGroup {
+pub struct RayTracingShaderGroup {
     /// The optional index of the any-hit shader in the group if the shader group has type of
-    /// [RayTraceShaderGroupType::TrianglesHitGroup] or
-    /// [RayTraceShaderGroupType::ProceduralHitGroup].
+    /// [RayTracingShaderGroupType::TrianglesHitGroup] or
+    /// [RayTracingShaderGroupType::ProceduralHitGroup].
     pub any_hit_shader: Option<u32>,
 
     /// The optional index of the closest hit shader in the group if the shader group has type of
-    /// [RayTraceShaderGroupType::TrianglesHitGroup] or
-    /// [RayTraceShaderGroupType::ProceduralHitGroup].
+    /// [RayTracingShaderGroupType::TrianglesHitGroup] or
+    /// [RayTracingShaderGroupType::ProceduralHitGroup].
     pub closest_hit_shader: Option<u32>,
 
     /// The index of the ray generation, miss, or callable shader in the group if the shader group
-    /// has type of [RayTraceShaderGroupType::General].
+    /// has type of [RayTracingShaderGroupType::General].
     pub general_shader: Option<u32>,
 
     /// The index of the intersection shader in the group if the shader group has type of
-    /// [RayTraceShaderGroupType::ProceduralHitGroup].
+    /// [RayTracingShaderGroupType::ProceduralHitGroup].
     pub intersection_shader: Option<u32>,
 
     /// The type of hit group specified in this structure.
-    pub ty: RayTraceShaderGroupType,
+    pub ty: RayTracingShaderGroupType,
 }
 
-impl RayTraceShaderGroup {
+impl RayTracingShaderGroup {
     fn new(
-        ty: RayTraceShaderGroupType,
+        ty: RayTracingShaderGroupType,
         general_shader: impl Into<Option<u32>>,
         intersection_shader: impl Into<Option<u32>>,
         closest_hit_shader: impl Into<Option<u32>>,
@@ -551,7 +574,7 @@ impl RayTraceShaderGroup {
     /// Creates a new general-type shader group with the given general shader.
     pub fn new_general(general_shader: impl Into<Option<u32>>) -> Self {
         Self::new(
-            RayTraceShaderGroupType::General,
+            RayTracingShaderGroupType::General,
             general_shader,
             None,
             None,
@@ -567,7 +590,7 @@ impl RayTraceShaderGroup {
         any_hit_shader: impl Into<Option<u32>>,
     ) -> Self {
         Self::new(
-            RayTraceShaderGroupType::ProceduralHitGroup,
+            RayTracingShaderGroupType::ProceduralHitGroup,
             None,
             intersection_shader,
             closest_hit_shader,
@@ -579,7 +602,7 @@ impl RayTraceShaderGroup {
     /// any-hit shader.
     pub fn new_triangles(closest_hit_shader: u32, any_hit_shader: impl Into<Option<u32>>) -> Self {
         Self::new(
-            RayTraceShaderGroupType::TrianglesHitGroup,
+            RayTracingShaderGroupType::TrianglesHitGroup,
             None,
             None,
             closest_hit_shader,
@@ -588,8 +611,8 @@ impl RayTraceShaderGroup {
     }
 }
 
-impl From<RayTraceShaderGroup> for vk::RayTracingShaderGroupCreateInfoKHR<'static> {
-    fn from(shader_group: RayTraceShaderGroup) -> Self {
+impl From<RayTracingShaderGroup> for vk::RayTracingShaderGroupCreateInfoKHR<'static> {
+    fn from(shader_group: RayTracingShaderGroup) -> Self {
         vk::RayTracingShaderGroupCreateInfoKHR::default()
             .ty(shader_group.ty.into())
             .any_hit_shader(shader_group.any_hit_shader.unwrap_or(vk::SHADER_UNUSED_KHR))
@@ -610,7 +633,7 @@ impl From<RayTraceShaderGroup> for vk::RayTracingShaderGroupCreateInfoKHR<'stati
 /// Describes a type of ray tracing shader group, which is a collection of shaders which run in the
 /// specified mode.
 #[derive(Clone, Copy, Debug)]
-pub enum RayTraceShaderGroupType {
+pub enum RayTracingShaderGroupType {
     /// A shader group with a general shader.
     General,
 
@@ -621,14 +644,14 @@ pub enum RayTraceShaderGroupType {
     TrianglesHitGroup,
 }
 
-impl From<RayTraceShaderGroupType> for vk::RayTracingShaderGroupTypeKHR {
-    fn from(ty: RayTraceShaderGroupType) -> Self {
+impl From<RayTracingShaderGroupType> for vk::RayTracingShaderGroupTypeKHR {
+    fn from(ty: RayTracingShaderGroupType) -> Self {
         match ty {
-            RayTraceShaderGroupType::General => vk::RayTracingShaderGroupTypeKHR::GENERAL,
-            RayTraceShaderGroupType::ProceduralHitGroup => {
+            RayTracingShaderGroupType::General => vk::RayTracingShaderGroupTypeKHR::GENERAL,
+            RayTracingShaderGroupType::ProceduralHitGroup => {
                 vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP
             }
-            RayTraceShaderGroupType::TrianglesHitGroup => {
+            RayTracingShaderGroupType::TrianglesHitGroup => {
                 vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP
             }
         }
@@ -639,11 +662,11 @@ impl From<RayTraceShaderGroupType> for vk::RayTracingShaderGroupTypeKHR {
 mod test {
     use super::*;
 
-    type Info = RayTracePipelineInfo;
-    type Builder = RayTracePipelineInfoBuilder;
+    type Info = RayTracingPipelineInfo;
+    type Builder = RayTracingPipelineInfoBuilder;
 
     #[test]
-    pub fn ray_trace_pipeline_info() {
+    pub fn ray_tracing_pipeline_info() {
         let info = Info::default();
         let builder = info.into_builder().build();
 
@@ -651,7 +674,7 @@ mod test {
     }
 
     #[test]
-    pub fn ray_trace_pipeline_info_builder() {
+    pub fn ray_tracing_pipeline_info_builder() {
         let info = Info::default();
         let builder = Builder::default().build();
 

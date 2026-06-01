@@ -3,12 +3,12 @@
 Ray tracing work in `vk-graph` usually has two phases:
 
 - Build or update acceleration structures with a general command buffer
-- Bind a `RayTracePipeline` and issue `trace_rays` or `trace_rays_indirect`
+- Bind a `RayTracingPipeline` and issue `trace_rays` or `trace_rays_indirect`
 
-API docs: [`RayTraceCommandRef::build_accel_struct`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.build_accel_struct),
-[`RayTraceCommandRef::trace_rays`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.trace_rays),
-[`RayTraceCommandRef::trace_rays_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.trace_rays_indirect),
-[`RayTraceCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.push_constants).
+API docs: [`RayTracingCommandRef::build_accel_struct`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.build_accel_struct),
+[`RayTracingCommandRef::trace_rays`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.trace_rays),
+[`RayTracingCommandRef::trace_rays_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.trace_rays_indirect),
+[`RayTracingCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.push_constants).
 
 ## Available Commands
 
@@ -75,7 +75,7 @@ previous GPU pass writes primitive counts or build ranges.
 
 ## Tracing Rays
 
-Once the acceleration structures and shader binding table are ready, bind a `RayTracePipeline` and
+Once the acceleration structures and shader binding table are ready, bind a `RayTracingPipeline` and
 issue `trace_rays`.
 
 ```no_run
@@ -84,7 +84,7 @@ issue `trace_rays`.
 # use vk_graph::driver::{DriverError, sync::AccessType};
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
-# use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+# use vk_graph::driver::ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
 # let device = Device::create(DeviceInfo::default())?;
@@ -99,16 +99,16 @@ let output = graph.bind_resource(Image::create(
     ),
 )?);
 
-let pipeline = RayTracePipeline::create(
+let pipeline = RayTracingPipeline::create(
     &device,
-    RayTracePipelineInfo::default(),
+    RayTracingPipelineInfo::default(),
     [
         Shader::new_ray_gen([0u8; 4].as_slice()),
         Shader::new_miss([0u8; 4].as_slice()),
     ],
     [
-        RayTraceShaderGroup::new_general(0),
-        RayTraceShaderGroup::new_general(1),
+        RayTracingShaderGroup::new_general(0),
+        RayTracingShaderGroup::new_general(1),
     ],
 )?;
 
@@ -129,23 +129,23 @@ graph
 
 ## Push Constants
 
-Use [`RayTraceCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.push_constants)
+Use [`RayTracingCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.push_constants)
 for small ray tracing state such as frame counters or camera parameters.
 
 ```no_run
 # use vk_graph::driver::{ash::vk, DriverError};
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
-# use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+# use vk_graph::driver::ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup};
 # use vk_graph::driver::shader::Shader;
 # use vk_graph::Graph;
 # fn main() -> Result<(), DriverError> {
 # let device = Device::create(DeviceInfo::default())?;
-# let pipeline = RayTracePipeline::create(
+# let pipeline = RayTracingPipeline::create(
 #     &device,
-#     RayTracePipelineInfo::default(),
+#     RayTracingPipelineInfo::default(),
 #     [Shader::new_ray_gen([0u8; 4].as_slice())],
-#     [RayTraceShaderGroup::new_general(0)],
+#     [RayTracingShaderGroup::new_general(0)],
 # )?;
 # let output = Image::create(
 #     &device,
@@ -189,7 +189,7 @@ buffer.
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::device::{Device, DeviceInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
-# use vk_graph::driver::ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup};
+# use vk_graph::driver::ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
 # let device = Device::create(DeviceInfo::default())?;
@@ -210,16 +210,16 @@ let args = graph.bind_resource(Buffer::create(
         vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
     ),
 )?);
-let pipeline = RayTracePipeline::create(
+let pipeline = RayTracingPipeline::create(
     &device,
-    RayTracePipelineInfo::builder().dynamic_stack_size(true),
+    RayTracingPipelineInfo::builder().dynamic_stack_size(true),
     [
         Shader::new_ray_gen([0u8; 4].as_slice()),
         Shader::new_miss([0u8; 4].as_slice()),
     ],
     [
-        RayTraceShaderGroup::new_general(0),
-        RayTraceShaderGroup::new_general(1),
+        RayTracingShaderGroup::new_general(0),
+        RayTracingShaderGroup::new_general(1),
     ],
 )?;
 

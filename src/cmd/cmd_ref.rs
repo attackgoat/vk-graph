@@ -215,9 +215,15 @@ impl<'a> CommandRef<'a> {
                 vk_infos
             };
 
+            let khr_acceleration_structure =
+                Device::expect_vk_khr_acceleration_structure(&self.cmd.device);
+
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd.device)
-                    .cmd_build_acceleration_structures(self.cmd.handle, &vk_infos, &vk_ranges);
+                khr_acceleration_structure.cmd_build_acceleration_structures(
+                    self.cmd.handle,
+                    &vk_infos,
+                    &vk_ranges,
+                );
             }
         });
 
@@ -294,15 +300,17 @@ impl<'a> CommandRef<'a> {
                 (vk_infos, vk_max_primitive_counts)
             };
 
+            let khr_acceleration_structure =
+                Device::expect_vk_khr_acceleration_structure(&self.cmd.device);
+
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd.device)
-                    .cmd_build_acceleration_structures_indirect(
-                        self.cmd.handle,
-                        &vk_infos,
-                        &tls.range_bases,
-                        &tls.range_strides,
-                        &vk_max_primitive_counts,
-                    );
+                khr_acceleration_structure.cmd_build_acceleration_structures_indirect(
+                    self.cmd.handle,
+                    &vk_infos,
+                    &tls.range_bases,
+                    &tls.range_strides,
+                    &vk_max_primitive_counts,
+                );
             }
         });
 
@@ -413,9 +421,15 @@ impl<'a> CommandRef<'a> {
                 vk_infos
             };
 
+            let khr_acceleration_structure =
+                Device::expect_vk_khr_acceleration_structure(&self.cmd.device);
+
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd.device)
-                    .cmd_build_acceleration_structures(self.cmd.handle, &vk_infos, &vk_ranges);
+                khr_acceleration_structure.cmd_build_acceleration_structures(
+                    self.cmd.handle,
+                    &vk_infos,
+                    &vk_ranges,
+                );
             }
         });
 
@@ -493,15 +507,17 @@ impl<'a> CommandRef<'a> {
                 (vk_infos, vk_max_primitive_counts)
             };
 
+            let khr_acceleration_structure =
+                Device::expect_vk_khr_acceleration_structure(&self.cmd.device);
+
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd.device)
-                    .cmd_build_acceleration_structures_indirect(
-                        self.cmd.handle,
-                        &vk_infos,
-                        &tls.range_bases,
-                        &tls.range_strides,
-                        &vk_max_primitive_counts,
-                    );
+                khr_acceleration_structure.cmd_build_acceleration_structures_indirect(
+                    self.cmd.handle,
+                    &vk_infos,
+                    &tls.range_bases,
+                    &tls.range_strides,
+                    &vk_max_primitive_counts,
+                );
             }
         });
 

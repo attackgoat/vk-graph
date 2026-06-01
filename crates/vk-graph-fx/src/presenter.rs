@@ -8,7 +8,7 @@ use {
             DriverError,
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
-            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
             shader::Shader,
             sync::AccessType,
         },
@@ -92,15 +92,15 @@ impl ComputePresenter {
 
 /// Graphic-pipeline presenter for drawing an image into a swapchain image.
 pub struct GraphicPresenter {
-    pipeline: GraphicPipeline,
+    pipeline: GraphicsPipeline,
 }
 
 impl GraphicPresenter {
-    /// Creates the graphic pipeline used for fullscreen image presentation.
+    /// Creates the graphics pipeline used for fullscreen image presentation.
     pub fn new(device: &Device) -> Result<Self, DriverError> {
-        let pipeline = GraphicPipeline::create(
+        let pipeline = GraphicsPipeline::create(
             device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             [
                 Shader::new_vertex(include_glsl!("res/shader/graphic/present.vert").as_slice()),
                 Shader::new_fragment(include_glsl!("res/shader/graphic/present.frag").as_slice()),

@@ -12,7 +12,7 @@ use {
             DriverError,
             buffer::Buffer,
             device::Device,
-            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
             shader::{Shader, ShaderBuilder},
         },
     },
@@ -110,7 +110,7 @@ fn main() -> anyhow::Result<()> {
 
 fn draw_triangle(
     frame: &mut FrameContext,
-    pipeline: &GraphicPipeline,
+    pipeline: &GraphicsPipeline,
     vertex_buf: &Arc<Buffer>,
     load: LoadOp<ClearColorValue>,
 ) {
@@ -128,7 +128,7 @@ fn draw_triangle(
         });
 }
 
-fn create_f16_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+fn create_f16_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
     if !supports_vertex_buffer(device, vk::Format::R16G16_SFLOAT) {
         return Err(DriverError::Unsupported);
     }
@@ -161,14 +161,14 @@ fn create_f16_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> 
     create_pipeline(device, vertex)
 }
 
-fn create_f32_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+fn create_f32_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
     // Uses automatic vertex input layout
     let vertex = create_vertex_shader(false);
 
     create_pipeline(device, vertex)
 }
 
-fn create_f64_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+fn create_f64_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
     if !supports_vertex_buffer(device, vk::Format::R64G64_SFLOAT) {
         return Err(DriverError::Unsupported);
     }
@@ -244,10 +244,13 @@ fn create_vertex_shader(is_double: bool) -> ShaderBuilder {
     Shader::new_vertex(spirv)
 }
 
-fn create_pipeline(device: &Device, vertex: ShaderBuilder) -> Result<GraphicPipeline, DriverError> {
-    GraphicPipeline::create(
+fn create_pipeline(
+    device: &Device,
+    vertex: ShaderBuilder,
+) -> Result<GraphicsPipeline, DriverError> {
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             vertex,
             Shader::from_spirv(

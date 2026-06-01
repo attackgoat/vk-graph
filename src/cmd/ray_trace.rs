@@ -1,22 +1,22 @@
 use {
     super::{PipelineCommand, cmd_ref::CommandRef},
-    crate::driver::{device::Device, ray_trace::RayTracePipeline},
+    crate::driver::{device::Device, ray_trace::RayTracingPipeline},
     ash::vk,
     std::ops::Deref,
 };
 
-impl PipelineCommand<'_, RayTracePipeline> {
-    /// Begin recording a ray trace pipeline command buffer.
+impl PipelineCommand<'_, RayTracingPipeline> {
+    /// Begin recording a ray tracing pipeline command buffer.
     pub fn record_cmd(
         mut self,
-        func: impl FnOnce(RayTraceCommandRef<'_>) + Send + 'static,
+        func: impl FnOnce(RayTracingCommandRef<'_>) + Send + 'static,
     ) -> Self {
         self.record_cmd_mut(func);
         self
     }
 
-    /// Begin recording a ray trace pipeline command buffer.
-    pub fn record_cmd_mut(&mut self, func: impl FnOnce(RayTraceCommandRef<'_>) + Send + 'static) {
+    /// Begin recording a ray tracing pipeline command buffer.
+    pub fn record_cmd_mut(&mut self, func: impl FnOnce(RayTracingCommandRef<'_>) + Send + 'static) {
         let pipeline = self
             .cmd
             .cmd()
@@ -24,28 +24,17 @@ impl PipelineCommand<'_, RayTracePipeline> {
             .expect_ray_trace()
             .clone();
 
-        #[cfg(debug_assertions)]
-        let dynamic_stack_size = pipeline.inner.info.dynamic_stack_size;
-
         self.cmd.push_exec(move |cmd| {
-            func(RayTraceCommandRef {
-                cmd,
-
-                #[cfg(debug_assertions)]
-                dynamic_stack_size,
-
-                pipeline,
-            });
+            func(RayTracingCommandRef { cmd, pipeline });
         });
     }
 }
 
 /// Recording interface for ray tracing commands.
 ///
-/// This structure provides a strongly-typed set of methods which allow ray trace shader code to be
-/// executed. An instance is provided to the closure argument of
-/// [`PipelineCommand::record_cmd`] which may be accessed by binding a [`RayTracePipeline`] to
-/// a command.
+/// This structure provides a strongly-typed set of methods which allow ray tracing shader code to
+/// be executed. An instance is provided to the closure argument of [`PipelineCommand::record_cmd`]
+/// which may be accessed by binding a [`RayTracingPipeline`] to a command.
 ///
 /// # Examples
 ///
@@ -56,39 +45,35 @@ impl PipelineCommand<'_, RayTracePipeline> {
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::ray_trace::{
-/// #     RayTracePipeline,
-/// #     RayTracePipelineInfo,
-/// #     RayTraceShaderGroup,
+/// #     RayTracingPipeline,
+/// #     RayTracingPipelineInfo,
+/// #     RayTracingShaderGroup,
 /// # };
 /// # use vk_graph::driver::shader::Shader;
 /// # use vk_graph::Graph;
 /// # fn main() -> Result<(), DriverError> {
 /// # let device = Device::create(DeviceInfo::default())?;
-/// # let info = RayTracePipelineInfo::default();
+/// # let info = RayTracingPipelineInfo::default();
 /// # let my_miss_code = [0u8; 1];
-/// # let my_ray_trace_pipeline = RayTracePipeline::create(&device, info,
+/// # let my_ray_trace_pipeline = RayTracingPipeline::create(&device, info,
 /// #     [Shader::new_miss(my_miss_code.as_slice())],
-/// #     [RayTraceShaderGroup::new_general(0)],
+/// #     [RayTracingShaderGroup::new_general(0)],
 /// # )?;
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd()
-///         .debug_name("my ray trace command")
+///         .debug_name("my ray tracing command")
 ///         .bind_pipeline(&my_ray_trace_pipeline)
 ///         .record_cmd(move |cmd| {
-///             // During this closure we have access to the ray trace functions!
+///             // During this closure we have access to the ray tracing functions!
 ///         });
 /// # Ok(()) }
 /// ```
-pub struct RayTraceCommandRef<'a> {
+pub struct RayTracingCommandRef<'a> {
     cmd: CommandRef<'a>,
-
-    #[cfg(debug_assertions)]
-    dynamic_stack_size: bool,
-
-    pipeline: RayTracePipeline,
+    pipeline: RayTracingPipeline,
 }
 
-impl RayTraceCommandRef<'_> {
+impl RayTracingCommandRef<'_> {
     /// Updates push constants.
     ///
     /// Push constants represent a high speed path to modify constant data in pipelines that is
@@ -130,20 +115,20 @@ impl RayTraceCommandRef<'_> {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::ray_trace::{
-    /// #     RayTracePipeline,
-    /// #     RayTracePipelineInfo,
-    /// #     RayTraceShaderGroup,
+    /// #     RayTracingPipeline,
+    /// #     RayTracingPipelineInfo,
+    /// #     RayTracingShaderGroup,
     /// # };
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::create(DeviceInfo::default())?;
     /// # let shader = [0u8; 1];
-    /// # let info = RayTracePipelineInfo::default();
+    /// # let info = RayTracingPipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
-    /// # let my_ray_trace_pipeline = RayTracePipeline::create(&device, info,
+    /// # let my_ray_trace_pipeline = RayTracingPipeline::create(&device, info,
     /// #     [Shader::new_miss(my_miss_code.as_slice())],
-    /// #     [RayTraceShaderGroup::new_general(0)],
+    /// #     [RayTracingShaderGroup::new_general(0)],
     /// # )?;
     /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR {
     /// #     device_address: 0,
@@ -189,19 +174,17 @@ impl RayTraceCommandRef<'_> {
         self
     }
 
-    /// Set the stack size dynamically for a ray trace pipeline.
+    /// Set the stack size dynamically for a ray tracing pipeline.
     ///
     /// See
-    /// `RayTracePipelineInfo::dynamic_stack_size` and see the Vulkan spec.
+    /// `RayTracingPipelineInfo::dynamic_stack_size` and see the Vulkan spec.
     #[profiling::function]
     pub fn set_stack_size(&self, pipeline_stack_size: u32) -> &Self {
-        #[cfg(debug_assertions)]
-        assert!(self.dynamic_stack_size);
-
-        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd.device);
+        let khr_ray_tracing_pipeline = Device::expect_vk_khr_ray_tracing_pipeline(&self.cmd.device);
 
         unsafe {
-            ray_trace_ext
+            // This will generate a validation error if dynamic stack size has not been enabled
+            khr_ray_tracing_pipeline
                 .cmd_set_ray_tracing_pipeline_stack_size(self.cmd.handle, pipeline_stack_size);
         }
 
@@ -212,7 +195,7 @@ impl RayTraceCommandRef<'_> {
     // SkipTrianglesKHR and SkipAABBsKHR ray flags can be specified when tracing a ray.
     // SkipTrianglesKHR and SkipAABBsKHR are mutually exclusive.
 
-    /// Ray traces using the currently-bound [`RayTracePipeline`] and the given shader binding
+    /// Ray traces using the currently-bound [`RayTracingPipeline`] and the given shader binding
     /// tables.
     ///
     /// Shader binding tables must be constructed according to this [example].
@@ -227,20 +210,20 @@ impl RayTraceCommandRef<'_> {
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
     /// # use vk_graph::driver::ray_trace::{
-    /// #     RayTracePipeline,
-    /// #     RayTracePipelineInfo,
-    /// #     RayTraceShaderGroup,
+    /// #     RayTracingPipeline,
+    /// #     RayTracingPipelineInfo,
+    /// #     RayTracingShaderGroup,
     /// # };
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::create(DeviceInfo::default())?;
     /// # let shader = [0u8; 1];
-    /// # let info = RayTracePipelineInfo::default();
+    /// # let info = RayTracingPipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
-    /// # let my_ray_trace_pipeline = RayTracePipeline::create(&device, info,
+    /// # let my_ray_trace_pipeline = RayTracingPipeline::create(&device, info,
     /// #     [Shader::new_miss(my_miss_code.as_slice())],
-    /// #     [RayTraceShaderGroup::new_general(0)],
+    /// #     [RayTracingShaderGroup::new_general(0)],
     /// # )?;
     /// # let rgen_sbt = vk::StridedDeviceAddressRegionKHR {
     /// #     device_address: 0,
@@ -285,10 +268,10 @@ impl RayTraceCommandRef<'_> {
         height: u32,
         depth: u32,
     ) -> &Self {
-        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd.device);
+        let khr_ray_tracing_pipeline = Device::expect_vk_khr_ray_tracing_pipeline(&self.cmd.device);
 
         unsafe {
-            ray_trace_ext.cmd_trace_rays(
+            khr_ray_tracing_pipeline.cmd_trace_rays(
                 self.cmd.handle,
                 raygen_shader_binding_table,
                 miss_shader_binding_table,
@@ -303,7 +286,7 @@ impl RayTraceCommandRef<'_> {
         self
     }
 
-    /// Ray traces using the currently-bound [`RayTracePipeline`] and the given shader binding
+    /// Ray traces using the currently-bound [`RayTracingPipeline`] and the given shader binding
     /// tables.
     ///
     /// `indirect_device_address` is a [buffer device address] which is a pointer to a
@@ -321,10 +304,10 @@ impl RayTraceCommandRef<'_> {
         callable_shader_binding_table: &vk::StridedDeviceAddressRegionKHR,
         indirect_device_address: vk::DeviceAddress,
     ) -> &Self {
-        let ray_trace_ext = Device::expect_ray_trace_ext(&self.cmd.device);
+        let khr_ray_tracing_pipeline = Device::expect_vk_khr_ray_tracing_pipeline(&self.cmd.device);
 
         unsafe {
-            ray_trace_ext.cmd_trace_rays_indirect(
+            khr_ray_tracing_pipeline.cmd_trace_rays_indirect(
                 self.cmd.handle,
                 raygen_shader_binding_table,
                 miss_shader_binding_table,
@@ -338,7 +321,7 @@ impl RayTraceCommandRef<'_> {
     }
 }
 
-impl<'a> Deref for RayTraceCommandRef<'a> {
+impl<'a> Deref for RayTracingCommandRef<'a> {
     type Target = CommandRef<'a>;
 
     fn deref(&self) -> &Self::Target {

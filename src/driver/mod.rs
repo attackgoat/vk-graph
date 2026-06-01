@@ -30,8 +30,8 @@
 //! The following pipelines are available:
 //!
 //! - [`ComputePipeline`](compute::ComputePipeline)
-//! - [`GraphicPipeline`](graphic::GraphicPipeline)
-//! - [`RayTracePipeline`](ray_trace::RayTracePipeline)
+//! - [`GraphicsPipeline`](graphic::GraphicsPipeline)
+//! - [`RayTracingPipeline`](ray_trace::RayTracingPipeline)
 //!
 //! Pipelines are immutable. All pipeline types contain useful public methods, for
 //! example:
@@ -88,6 +88,7 @@ use {
     gpu_allocator::AllocationError,
     std::{
         cmp::Ordering,
+        convert::Infallible,
         error::Error,
         fmt::{Display, Formatter},
     },
@@ -1140,6 +1141,12 @@ impl DriverError {
             | AllocationError::CastableFormatsRequiresEnhancedBarriers
             | AllocationError::CastableFormatsRequiresAtLeastDevice12 => Self::Unsupported,
         }
+    }
+}
+
+impl From<Infallible> for DriverError {
+    fn from(value: Infallible) -> Self {
+        match value {}
     }
 }
 

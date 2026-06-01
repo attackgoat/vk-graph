@@ -5,7 +5,9 @@ use {
     },
     crate::{
         ExecutionPipeline,
-        driver::{compute::ComputePipeline, graphic::GraphicPipeline, ray_trace::RayTracePipeline},
+        driver::{
+            compute::ComputePipeline, graphic::GraphicsPipeline, ray_trace::RayTracingPipeline,
+        },
     },
     std::marker::PhantomData,
 };
@@ -24,10 +26,10 @@ pub trait Pipeline<'a> {
 }
 
 macro_rules! pipeline {
-    ($name:ident) => {
+    ($variant:ident, $pipeline:ident, $is_fn:ident, $unwrap_fn:ident) => {
         paste::paste! {
-            impl<'a> Pipeline<'a> for [<$name Pipeline>] {
-                type Command = PipelineCommand<'a, [<$name Pipeline>]>;
+            impl<'a> Pipeline<'a> for $pipeline {
+                type Command = PipelineCommand<'a, $pipeline>;
 
                 fn bind_cmd(self, mut cmd: Command<'a>) -> Self::Command {
                     {
@@ -36,8 +38,7 @@ macro_rules! pipeline {
                             cmd.execs.push(Default::default());
                         }
 
-                        cmd.expect_last_exec_mut().pipeline
-                            = Some(ExecutionPipeline::$name(self));
+                        cmd.expect_last_exec_mut().pipeline = Some(ExecutionPipeline::$variant(self));
                     }
 
                     Self::Command {
@@ -47,8 +48,8 @@ macro_rules! pipeline {
                 }
             }
 
-            impl<'a> Pipeline<'a> for &'a [<$name Pipeline>] {
-                type Command = PipelineCommand<'a, [<$name Pipeline>]>;
+            impl<'a> Pipeline<'a> for &'a $pipeline {
+                type Command = PipelineCommand<'a, $pipeline>;
 
                 fn bind_cmd(self, mut cmd: Command<'a>) -> Self::Command {
                     {
@@ -58,7 +59,7 @@ macro_rules! pipeline {
                         }
 
                         cmd.expect_last_exec_mut().pipeline
-                            = Some(ExecutionPipeline::$name(self.clone()));
+                            = Some(ExecutionPipeline::$variant(self.clone()));
                     }
 
                     Self::Command {
@@ -71,13 +72,13 @@ macro_rules! pipeline {
 
             impl ExecutionPipeline {
                 #[allow(unused)]
-                pub(crate) fn [<is_ $name:snake>](&self) -> bool {
-                    matches!(self, Self::$name(_))
+                pub(crate) fn $is_fn(&self) -> bool {
+                    matches!(self, Self::$variant(_))
                 }
 
                 #[allow(unused)]
-                pub(crate) fn [<unwrap_ $name:snake>](&self) -> &[<$name Pipeline>] {
-                    if let Self::$name(binding) = self {
+                pub(crate) fn $unwrap_fn(&self) -> &$pipeline {
+                    if let Self::$variant(binding) = self {
                         &binding
                     } else {
                         panic!();
@@ -89,17 +90,17 @@ macro_rules! pipeline {
 }
 
 // Pipelines you can bind to a command ref
-pipeline!(Compute);
-pipeline!(Graphic);
-pipeline!(RayTrace);
+pipeline!(Compute, ComputePipeline, is_compute, unwrap_compute);
+pipeline!(Graphic, GraphicsPipeline, is_graphic, unwrap_graphic);
+pipeline!(RayTrace, RayTracingPipeline, is_ray_trace, unwrap_ray_trace);
 
-/// A [`Command`] which has been bound to a particular compute, graphic, or ray-trace pipeline.
+/// A [`Command`] which has been bound to a particular compute, graphics, or ray tracing pipeline.
 pub struct PipelineCommand<'c, T> {
     pub(super) __: PhantomData<T>,
     pub(super) cmd: Command<'c>,
 }
 
-// NOTE: There are specific implementations of T in the compute, graphic, and ray trace modules
+// NOTE: There are specific implementations of T in the compute, graphics, and ray tracing modules.
 impl<'c, T> PipelineCommand<'c, T> {
     /// Binds a shader pipeline to the current command, allowing for strongly typed access to the
     /// related functions.
@@ -108,10 +109,10 @@ impl<'c, T> PipelineCommand<'c, T> {
     /// -|-
     /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_,
     /// ComputePipeline>`]
-    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_,
-    /// GraphicPipeline>`]
-    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_,
-    /// RayTracePipeline>`]
+    /// [`GraphicsPipeline`](crate::driver::graphic::GraphicsPipeline)|[`PipelineCommand<'_,
+    /// GraphicsPipeline>`]
+    /// [`RayTracingPipeline`](crate::driver::ray_trace::RayTracingPipeline)|[`PipelineCommand<'_,
+    /// RayTracingPipeline>`]
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'c>,

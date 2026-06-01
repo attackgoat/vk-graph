@@ -12,7 +12,7 @@ use {
             DriverError,
             buffer::Buffer,
             device::Device,
-            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
         },
         pool::lazy::LazyPool,
@@ -33,7 +33,7 @@ fn main() -> Result<(), WindowError> {
         .window(|window| window.with_inner_size(LogicalSize::new(512, 512)))
         .build()?;
     let images = create_images(&window.device)?;
-    let pipeline = create_graphic_pipeline(&window.device)?;
+    let pipeline = create_graphics_pipeline(&window.device)?;
     let draw_buf = create_indirect_buffer(&window.device)?;
 
     window.run(|frame| {
@@ -115,10 +115,10 @@ fn create_indirect_buffer(device: &Device) -> Result<Arc<Buffer>, DriverError> {
     Ok(draw_buf)
 }
 
-fn create_graphic_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
-    GraphicPipeline::create(
+fn create_graphics_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             glsl!(
                 r#"

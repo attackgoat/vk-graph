@@ -28,7 +28,7 @@ use {
             },
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
         },
@@ -260,7 +260,7 @@ fn create_blas(
     Ok(blas)
 }
 
-fn create_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+fn create_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 460 core
@@ -349,9 +349,9 @@ fn create_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
         "#
     );
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()),

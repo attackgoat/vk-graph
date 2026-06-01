@@ -1,4 +1,4 @@
-//! Hot-reload ray-trace pipeline support.
+//! Hot-reload ray tracing pipeline support.
 
 use {
     super::{
@@ -15,28 +15,28 @@ use {
         driver::{
             DriverError,
             device::Device,
-            ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup},
+            ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
         },
     },
 };
 
-/// A ray-trace pipeline wrapper that recompiles its shaders when source files change.
+/// A ray tracing pipeline wrapper that recompiles its shaders when source files change.
 #[derive(Debug)]
-pub struct HotRayTracePipeline {
-    cache: RwLock<HotPipeline<RayTracePipeline>>,
+pub struct HotRayTracingPipeline {
+    cache: RwLock<HotPipeline<RayTracingPipeline>>,
     device: Device,
     has_changes: Arc<AtomicBool>,
-    shader_groups: Box<[RayTraceShaderGroup]>,
+    shader_groups: Box<[RayTracingShaderGroup]>,
     shaders: Box<[HotShader]>,
 }
 
-impl HotRayTracePipeline {
-    /// Creates a hot-reload ray-trace pipeline from shader files and shader groups.
+impl HotRayTracingPipeline {
+    /// Creates a hot-reload ray tracing pipeline from shader files and shader groups.
     pub fn create<S>(
         device: &Device,
-        info: impl Into<RayTracePipelineInfo>,
+        info: impl Into<RayTracingPipelineInfo>,
         shaders: impl IntoIterator<Item = S>,
-        shader_groups: impl IntoIterator<Item = RayTraceShaderGroup>,
+        shader_groups: impl IntoIterator<Item = RayTracingShaderGroup>,
     ) -> Result<Self, DriverError>
     where
         S: Into<HotShader>,
@@ -47,7 +47,7 @@ impl HotRayTracePipeline {
         let has_changes = Default::default();
         let mut watcher = create_watcher(&has_changes);
 
-        let pipeline = RayTracePipeline::create(
+        let pipeline = RayTracingPipeline::create(
             device,
             info,
             compile_shaders_and_watch(&shaders, &mut watcher)?,
@@ -66,14 +66,14 @@ impl HotRayTracePipeline {
     fn compile_shader_and_bind_cmd<'a>(
         &self,
         cmd: Command<'a>,
-    ) -> <RayTracePipeline as Pipeline<'a>>::Command {
+    ) -> <RayTracingPipeline as Pipeline<'a>>::Command {
         if self.has_changes.swap(false, Ordering::Relaxed) {
             info!("Shader change detected");
 
             let mut cache = self.cache_mut();
 
             if let Ok(shaders) = compile_shaders_and_watch(&self.shaders, &mut cache.watcher)
-                && let Ok(pipeline) = RayTracePipeline::create(
+                && let Ok(pipeline) = RayTracingPipeline::create(
                     &self.device,
                     cache.pipeline.info(),
                     shaders,
@@ -88,5 +88,5 @@ impl HotRayTracePipeline {
     }
 }
 
-pipeline!(RayTrace);
-pipeline_handle!(RayTrace);
+pipeline!(RayTracingPipeline);
+pipeline_handle!(HotRayTracingPipeline);

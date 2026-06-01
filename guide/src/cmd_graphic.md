@@ -1,12 +1,12 @@
 # Graphics
 
-Graphic commands are recorded after binding a `GraphicPipeline` and declaring attachments such as
+Graphics commands are recorded after binding a `GraphicsPipeline` and declaring attachments such as
 `color_attachment_image` or `depth_stencil_attachment_image`.
 
-API docs: [`GraphicCommandRef::draw`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.draw),
-[`GraphicCommandRef::draw_indexed`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.draw_indexed),
-[`GraphicCommandRef::draw_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.draw_indirect),
-[`GraphicCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.push_constants).
+API docs: [`GraphicsCommandRef::draw`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw),
+[`GraphicsCommandRef::draw_indexed`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw_indexed),
+[`GraphicsCommandRef::draw_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw_indirect),
+[`GraphicsCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.push_constants).
 
 ## Available Commands
 
@@ -36,7 +36,7 @@ The most common pattern is to bind vertex and index buffers, then issue `draw` o
 # use vk_graph::driver::{DriverError, sync::AccessType};
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+# use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
@@ -61,9 +61,9 @@ let indices = graph.bind_resource(Buffer::create(
     BufferInfo::device_mem(1024, vk::BufferUsageFlags::INDEX_BUFFER),
 )?);
 
-let pipeline = GraphicPipeline::create(
+let pipeline = GraphicsPipeline::create(
     &device,
-    GraphicPipelineInfo::default(),
+    GraphicsPipelineInfo::default(),
     [
         Shader::new_vertex([0u8; 4].as_slice()),
         Shader::new_fragment([0u8; 4].as_slice()),
@@ -100,15 +100,15 @@ for the single-sampled resolve target.
 # use vk_graph::cmd::{LoadOp, StoreOp};
 # use vk_graph::driver::ash::vk;
 # use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+# use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
 # use vk_graph::driver::image::{Image, ImageInfo, SampleCount};
 # use vk_graph::driver::shader::Shader;
 # use vk_graph::Graph;
 # fn main() -> Result<(), vk_graph::driver::DriverError> {
 # let device = Device::create(DeviceInfo::default())?;
-# let pipeline = GraphicPipeline::create(
+# let pipeline = GraphicsPipeline::create(
 #     &device,
-#     GraphicPipelineInfo::default(),
+#     GraphicsPipelineInfo::default(),
 #     [
 #         Shader::new_vertex([0u8; 4].as_slice()),
 #         Shader::new_fragment([0u8; 4].as_slice()),
@@ -160,7 +160,7 @@ Override them when a pass renders only part of the target.
 # use vk_graph::driver::{DriverError, sync::AccessType};
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+# use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
@@ -179,9 +179,9 @@ let vertices = graph.bind_resource(Buffer::create(
     &device,
     BufferInfo::device_mem(4096, vk::BufferUsageFlags::VERTEX_BUFFER),
 )?);
-let pipeline = GraphicPipeline::create(
+let pipeline = GraphicsPipeline::create(
     &device,
-    GraphicPipelineInfo::default(),
+    GraphicsPipelineInfo::default(),
     [
         Shader::new_vertex([0u8; 4].as_slice()),
         Shader::new_fragment([0u8; 4].as_slice()),
@@ -232,7 +232,7 @@ onto the GPU.
 # use vk_graph::driver::{DriverError, sync::AccessType};
 # use vk_graph::driver::buffer::{Buffer, BufferInfo};
 # use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+# use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
 # use vk_graph::driver::shader::Shader;
 # fn main() -> Result<(), DriverError> {
@@ -278,9 +278,9 @@ let draw_count = graph.bind_resource(Buffer::create_from_slice(
     vk::BufferUsageFlags::INDIRECT_BUFFER,
     &1u32.to_ne_bytes(),
 )?);
-let pipeline = GraphicPipeline::create(
+let pipeline = GraphicsPipeline::create(
     &device,
-    GraphicPipelineInfo::default(),
+    GraphicsPipelineInfo::default(),
     [
         Shader::new_vertex([0u8; 4].as_slice()),
         Shader::new_fragment([0u8; 4].as_slice()),
@@ -313,22 +313,22 @@ graph
 
 ## Push Constants
 
-Use [`GraphicCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.push_constants)
+Use [`GraphicsCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.push_constants)
 for compact per-draw state that fits within the device's push-constant limit.
 
 ```no_run
 # use vk_graph::cmd::{LoadOp, StoreOp};
 # use vk_graph::driver::{ash::vk, DriverError};
 # use vk_graph::driver::device::{Device, DeviceInfo};
-# use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+# use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
 # use vk_graph::driver::image::{Image, ImageInfo};
 # use vk_graph::driver::shader::Shader;
 # use vk_graph::Graph;
 # fn main() -> Result<(), DriverError> {
 # let device = Device::create(DeviceInfo::default())?;
-# let pipeline = GraphicPipeline::create(
+# let pipeline = GraphicsPipeline::create(
 #     &device,
-#     GraphicPipelineInfo::default(),
+#     GraphicsPipelineInfo::default(),
 #     [
 #         Shader::new_vertex([0u8; 4].as_slice()),
 #         Shader::new_fragment([0u8; 4].as_slice()),

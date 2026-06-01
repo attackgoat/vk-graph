@@ -38,7 +38,7 @@ use {
             buffer::{Buffer, BufferInfo},
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo, StencilMode},
+            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo, StencilMode},
             image::{ImageInfo, SampleCount},
             physical_device::Vulkan10Limits,
             render_pass::ResolveMode,
@@ -519,7 +519,7 @@ fn record_pipeline_no_op(frame: &mut FrameContext, _: &mut HashPool) {
 fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         glsl!(
             r#"
             #version 460 core
@@ -636,7 +636,7 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
 fn record_graphic_load_store(frame: &mut FrameContext, _: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         glsl!(
             r#"
             #version 460 core
@@ -742,7 +742,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
 
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfo::builder().samples(sample_count),
+        GraphicsPipelineInfo::builder().samples(sample_count),
         glsl!(
             r#"
             #version 460 core
@@ -880,7 +880,7 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
         .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -914,7 +914,7 @@ fn record_graphic_will_merge_common_color1(frame: &mut FrameContext, pool: &mut 
         .debug_name("b")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -970,7 +970,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1004,7 +1004,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .debug_name("b")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1041,7 +1041,7 @@ fn record_graphic_will_merge_common_color2(frame: &mut FrameContext, pool: &mut 
         .debug_name("c")
         .bind_pipeline(&graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1098,7 +1098,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1133,7 +1133,7 @@ fn record_graphic_will_merge_common_depth1(frame: &mut FrameContext, pool: &mut 
         .debug_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1188,7 +1188,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1220,7 +1220,7 @@ fn record_graphic_will_merge_common_depth2(frame: &mut FrameContext, pool: &mut 
         .debug_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1268,7 +1268,7 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
         .debug_name("a")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1300,7 +1300,7 @@ fn record_graphic_will_merge_common_depth3(frame: &mut FrameContext, pool: &mut 
         .debug_name("b")
         .bind_pipeline(graphic_vert_frag_pipeline(
             frame.device,
-            GraphicPipelineInfo::default(),
+            GraphicsPipelineInfo::default(),
             glsl!(
                 r#"
                 #version 460 core
@@ -1341,7 +1341,7 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
     .as_slice();
     let pipeline_a = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         vertex,
         glsl!(            kind: frag,
             r#"
@@ -1359,7 +1359,7 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
     );
     let pipeline_b = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         vertex,
         glsl!(
             kind: frag,
@@ -1413,7 +1413,7 @@ fn record_graphic_will_merge_subpass_input(frame: &mut FrameContext, pool: &mut 
 fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         glsl!(
             r#"
             #version 460 core
@@ -1472,7 +1472,7 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
 fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         glsl!(
             r#"
             #version 460 core
@@ -1584,21 +1584,21 @@ fn compute_pipeline(
 
 fn graphic_vert_frag_pipeline(
     device: &Device,
-    info: impl Into<GraphicPipelineInfo>,
+    info: impl Into<GraphicsPipelineInfo>,
     vert_source: &'static [u32],
     frag_source: &'static [u32],
-) -> GraphicPipeline {
+) -> GraphicsPipeline {
     use std::{cell::RefCell, collections::HashMap};
 
     #[derive(Eq, Hash, PartialEq)]
     struct Key {
-        info: GraphicPipelineInfo,
+        info: GraphicsPipelineInfo,
         vert_source: &'static [u32],
         frag_source: &'static [u32],
     }
 
     thread_local! {
-        static TLS: RefCell<HashMap<Key, GraphicPipeline>> = Default::default();
+        static TLS: RefCell<HashMap<Key, GraphicsPipeline>> = Default::default();
     }
 
     let info = info.into();
@@ -1611,7 +1611,7 @@ fn graphic_vert_frag_pipeline(
                 frag_source,
             })
             .or_insert_with(move || {
-                GraphicPipeline::create(
+                GraphicsPipeline::create(
                     device,
                     info,
                     [

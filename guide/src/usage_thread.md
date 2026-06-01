@@ -66,5 +66,5 @@ See:
 <i class="fa-solid fa-arrow-up-right-from-square"></i>
 
 
-[^threads]: The internal implementation of `GraphicPipeline` does do a bit of caching in order to
+[^threads]: The internal implementation of `GraphicsPipeline` does do a bit of caching in order to
 improve performance, however this behavior should not generate issues with any reasonable workload.

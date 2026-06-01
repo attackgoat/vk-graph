@@ -4,10 +4,10 @@ use {
     super::{
         DriverError,
         instance::{Instance, InstanceInfoBuilder},
-        physical_device::{PhysicalDevice, RayTraceProperties},
+        physical_device::PhysicalDevice,
     },
     ash::{khr, vk},
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     gpu_allocator::{
         AllocatorDebugSettings,
         vulkan::{Allocator, AllocatorCreateDesc},
@@ -150,9 +150,11 @@ impl Device {
     /// # Panics
     ///
     /// Panics if [Self.physical_device.accel_struct_properties] is `None`.
-    pub(crate) fn expect_accel_struct_ext(this: &Self) -> &khr::acceleration_structure::Device {
+    pub(crate) fn expect_vk_khr_acceleration_structure(
+        this: &Self,
+    ) -> &khr::acceleration_structure::Device {
         this.inner
-            .accel_struct_ext
+            .vk_khr_acceleration_structure
             .as_ref()
             .expect("missing VK_KHR_acceleration_structure")
     }
@@ -162,23 +164,12 @@ impl Device {
     ///
     /// # Panics
     ///
-    /// Panics if [Self.physical_device.ray_trace_properties] is `None`.
-    pub(crate) fn expect_ray_trace_ext(this: &Self) -> &khr::ray_tracing_pipeline::Device {
+    /// Panics if [Self.physical_device.ray_tracing_features] is `None`.
+    pub(crate) fn expect_vk_khr_ray_tracing_pipeline(
+        this: &Self,
+    ) -> &khr::ray_tracing_pipeline::Device {
         this.inner
-            .ray_trace_ext
-            .as_ref()
-            .expect("missing VK_KHR_ray_tracing_pipeline")
-    }
-
-    /// Helper for times when you already know that the device supports the ray tracing pipeline
-    /// extension.
-    ///
-    /// # Panics
-    ///
-    /// Panics if [Self.physical_device.ray_trace_properties] is `None`.
-    pub(crate) fn expect_ray_trace_properties(this: &Self) -> &RayTraceProperties {
-        this.physical_device
-            .ray_trace_properties
+            .vk_khr_ray_tracing_pipeline
             .as_ref()
             .expect("missing VK_KHR_ray_tracing_pipeline")
     }
@@ -188,9 +179,9 @@ impl Device {
     /// # Panics
     ///
     /// Panics if the device was not created for display window access.
-    pub(crate) fn expect_surface_ext(this: &Self) -> &khr::surface::Instance {
+    pub(crate) fn expect_vk_khr_surface(this: &Self) -> &khr::surface::Instance {
         this.inner
-            .surface_ext
+            .vk_khr_surface
             .as_ref()
             .expect("missing VK_KHR_surface")
     }
@@ -200,9 +191,9 @@ impl Device {
     /// # Panics
     ///
     /// Panics if the device was not created for display window access.
-    pub(crate) fn expect_swapchain_ext(this: &Self) -> &khr::swapchain::Device {
+    pub(crate) fn expect_vk_khr_swapchain(this: &Self) -> &khr::swapchain::Device {
         this.inner
-            .swapchain_ext
+            .vk_khr_swapchain
             .as_ref()
             .expect("missing VK_KHR_swapchain")
     }
@@ -286,19 +277,19 @@ impl Device {
             queues.push(queue_family.into_boxed_slice());
         }
 
-        let surface_ext = physical_device.swapchain_ext.then(|| {
+        let vk_khr_surface = physical_device.khr_swapchain.then(|| {
             let entry = Instance::entry(&physical_device.instance);
             khr::surface::Instance::new(entry, &physical_device.instance)
         });
-        let swapchain_ext = physical_device
-            .swapchain_ext
+        let vk_khr_swapchain = physical_device
+            .khr_swapchain
             .then(|| khr::swapchain::Device::new(&physical_device.instance, &device));
-        let accel_struct_ext = physical_device
+        let vk_khr_acceleration_structure = physical_device
             .accel_struct_properties
             .is_some()
             .then(|| khr::acceleration_structure::Device::new(&physical_device.instance, &device));
-        let ray_trace_ext = physical_device
-            .ray_trace_features
+        let vk_khr_ray_tracing_pipeline = physical_device
+            .ray_tracing_pipeline_features
             .ray_tracing_pipeline
             .then(|| khr::ray_tracing_pipeline::Device::new(&physical_device.instance, &device));
 
@@ -313,14 +304,14 @@ impl Device {
         Ok(Self {
             read_only: ReadOnlyDevice {
                 inner: Arc::new(DeviceInner {
-                    accel_struct_ext,
                     allocator: ManuallyDrop::new(Mutex::new(allocator)),
                     device,
                     pipeline_cache,
                     queues: queues.into_boxed_slice(),
-                    ray_trace_ext,
-                    surface_ext,
-                    swapchain_ext,
+                    vk_khr_acceleration_structure,
+                    vk_khr_ray_tracing_pipeline,
+                    vk_khr_surface,
+                    vk_khr_swapchain,
                 }),
                 physical_device: Box::new(physical_device),
             },
@@ -488,7 +479,7 @@ impl PartialEq for Device {
 /// Information used to create a [`Device`] instance.
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -545,14 +536,14 @@ impl DeviceInfoBuilder {
 }
 
 struct DeviceInner {
-    accel_struct_ext: Option<khr::acceleration_structure::Device>,
     allocator: ManuallyDrop<Mutex<Allocator>>,
     device: ash::Device,
     pipeline_cache: vk::PipelineCache,
     queues: Box<[Box<[Mutex<vk::Queue>]>]>,
-    ray_trace_ext: Option<khr::ray_tracing_pipeline::Device>,
-    surface_ext: Option<khr::surface::Instance>,
-    swapchain_ext: Option<khr::swapchain::Device>,
+    vk_khr_acceleration_structure: Option<khr::acceleration_structure::Device>,
+    vk_khr_ray_tracing_pipeline: Option<khr::ray_tracing_pipeline::Device>,
+    vk_khr_surface: Option<khr::surface::Instance>,
+    vk_khr_swapchain: Option<khr::swapchain::Device>,
 }
 
 impl Drop for DeviceInner {

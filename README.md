@@ -44,7 +44,7 @@ used to execute custom command streams.
 
 Features of the graph:
 
- - Compute, graphic, and ray-trace pipelines
+ - Compute, graphics, and ray tracing pipelines
  - Automatic Vulkan management (render passes, subpasses, descriptors, pools, _etc._)
  - Automatic render pass scheduling, re-ordering, merging, with resource aliasing
  - Interoperable with existing Vulkan code

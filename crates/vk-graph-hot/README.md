@@ -1,6 +1,6 @@
 # vk-graph Hot
 
-Hot-reloading shader pipelines for _vk-graph_. Supports compute, graphic, and ray-trace shader
+Hot-reloading shader pipelines for _vk-graph_. Supports compute, graphics, and ray tracing shader
 pipelines.
 This crate is versioned independently from `vk-graph`.
 

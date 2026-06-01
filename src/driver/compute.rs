@@ -7,7 +7,7 @@ use {
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
     ash::vk,
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     log::{trace, warn},
     std::{
         ffi::CString,
@@ -55,15 +55,19 @@ impl ComputePipeline {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn create(
+    pub fn create<S>(
         device: &Device,
         info: impl Into<ComputePipelineInfo>,
-        shader: impl Into<Shader>,
-    ) -> Result<Self, DriverError> {
+        shader: S,
+    ) -> Result<Self, DriverError>
+    where
+        S: TryInto<Shader>,
+        S::Error: Into<DriverError>,
+    {
         trace!("create");
 
         let info = info.into();
-        let shader = shader.into();
+        let shader = shader.try_into().map_err(Into::into)?;
 
         // Use SPIR-V reflection to get the types and counts of all descriptors
         let mut descriptor_bindings = shader.descriptor_bindings();
@@ -91,8 +95,11 @@ impl ComputePipeline {
 
                     DriverError::Unsupported
                 })?;
-            let entry_name =
-                CString::new(shader.entry_name.as_bytes()).expect("invalid entry name");
+            let entry_name = CString::new(shader.entry_name.as_bytes()).map_err(|err| {
+                warn!("invalid compute shader entry name: {err}");
+
+                DriverError::InvalidData
+            })?;
             let mut stage_create_info = vk::PipelineShaderStageCreateInfo::default()
                 .module(shader_module)
                 .stage(shader.stage)
@@ -215,7 +222,7 @@ impl PartialEq for ComputePipeline {
 /// Information used to create a [`ComputePipeline`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]

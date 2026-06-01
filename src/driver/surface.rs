@@ -29,10 +29,10 @@ pub struct Surface {
 impl Surface {
     /// Query surface capabilities
     pub fn capabilities(&self) -> Result<vk::SurfaceCapabilitiesKHR, DriverError> {
-        let surface_ext = Device::expect_surface_ext(&self.device);
+        let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
         unsafe {
-            surface_ext.get_physical_device_surface_capabilities(
+            khr_surface.get_physical_device_surface_capabilities(
                 self.device.physical_device.handle,
                 self.handle,
             )
@@ -87,10 +87,10 @@ impl Surface {
     /// Lists the supported surface formats.
     #[profiling::function]
     pub fn formats(&self) -> Result<Vec<vk::SurfaceFormatKHR>, DriverError> {
-        let surface_ext = Device::expect_surface_ext(&self.device);
+        let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
         unsafe {
-            surface_ext.get_physical_device_surface_formats(
+            khr_surface.get_physical_device_surface_formats(
                 self.device.physical_device.handle,
                 self.handle,
             )
@@ -127,43 +127,44 @@ impl Surface {
 
     /// Returns `true` if the given queue family supports presentation on this surface.
     pub fn physical_device_support(&self, queue_family_index: u32) -> Result<bool, DriverError> {
-        let surface_ext = Device::expect_surface_ext(&self.device);
+        let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
         unsafe {
-            surface_ext.get_physical_device_surface_support(
-                self.device.physical_device.handle,
-                queue_family_index,
-                self.handle,
-            )
-        }
-        .map_err(|err| {
-            warn!("unable to get physical device support: {err}");
+            khr_surface
+                .get_physical_device_surface_support(
+                    self.device.physical_device.handle,
+                    queue_family_index,
+                    self.handle,
+                )
+                .map_err(|err| {
+                    warn!("unable to get physical device support: {err}");
 
-            match err {
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
-                    DriverError::OutOfMemory
-                }
-                vk::Result::ERROR_SURFACE_LOST_KHR => DriverError::InvalidData,
-                _ => DriverError::Unsupported,
-            }
-        })
+                    match err {
+                        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                        | vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                        vk::Result::ERROR_SURFACE_LOST_KHR => DriverError::InvalidData,
+                        _ => DriverError::Unsupported,
+                    }
+                })
+        }
     }
 
     /// Query supported presentation modes.
     pub fn present_modes(&self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
-        let surface_ext = Device::expect_surface_ext(&self.device);
+        let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
         unsafe {
-            surface_ext.get_physical_device_surface_present_modes(
-                self.device.physical_device.handle,
-                self.handle,
-            )
-        }
-        .map_err(|err| {
-            warn!("unable to get present modes: {err}");
+            khr_surface
+                .get_physical_device_surface_present_modes(
+                    self.device.physical_device.handle,
+                    self.handle,
+                )
+                .map_err(|err| {
+                    warn!("unable to get present modes: {err}");
 
-            DriverError::Unsupported
-        })
+                    DriverError::Unsupported
+                })
+        }
     }
 
     /// Helper function to automatically select the best sRGB format, if one is available.
@@ -209,10 +210,10 @@ impl Drop for Surface {
             return;
         }
 
-        let surface_ext = Device::expect_surface_ext(&self.device);
+        let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
         unsafe {
-            surface_ext.destroy_surface(self.handle, None);
+            khr_surface.destroy_surface(self.handle, None);
         }
     }
 }

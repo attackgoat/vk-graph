@@ -20,8 +20,8 @@ use {
             buffer::{Buffer, BufferInfo},
             device::Device,
             image::ImageInfo,
-            physical_device::RayTraceProperties,
-            ray_trace::{RayTracePipeline, RayTracePipelineInfo, RayTraceShaderGroup},
+            physical_device::RayTracingPipelineProperties,
+            ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
             shader::Shader,
         },
         pool::{Pool as _, hash::HashPool},
@@ -349,10 +349,10 @@ static SHADER_SHADOW_MISS: &[u32] = glsl!(
 )
 .as_slice();
 
-fn create_ray_trace_pipeline(device: &Device) -> Result<RayTracePipeline, DriverError> {
-    RayTracePipeline::create(
+fn create_ray_tracing_pipeline(device: &Device) -> Result<RayTracingPipeline, DriverError> {
+    RayTracingPipeline::create(
         device,
-        RayTracePipelineInfo::builder().max_ray_recursion_depth(1),
+        RayTracingPipelineInfo::builder().max_ray_recursion_depth(1),
         [
             Shader::new_ray_gen(SHADER_RAY_GEN),
             Shader::new_closest_hit(SHADER_CLOSEST_HIT),
@@ -360,10 +360,10 @@ fn create_ray_trace_pipeline(device: &Device) -> Result<RayTracePipeline, Driver
             Shader::new_miss(SHADER_SHADOW_MISS),
         ],
         [
-            RayTraceShaderGroup::new_general(0),
-            RayTraceShaderGroup::new_triangles(1, None),
-            RayTraceShaderGroup::new_general(2),
-            RayTraceShaderGroup::new_general(3),
+            RayTracingShaderGroup::new_general(0),
+            RayTracingShaderGroup::new_triangles(1, None),
+            RayTracingShaderGroup::new_general(2),
+            RayTracingShaderGroup::new_general(3),
         ],
     )
 }
@@ -515,7 +515,7 @@ fn main() -> anyhow::Result<()> {
     // Setup the ray tracing pipeline
     // ------------------------------------------------------------------------------------------ //
 
-    let &RayTraceProperties {
+    let &RayTracingPipelineProperties {
         shader_group_base_alignment,
         shader_group_handle_alignment,
         shader_group_handle_size,
@@ -523,10 +523,10 @@ fn main() -> anyhow::Result<()> {
     } = window
         .device
         .physical_device
-        .ray_trace_properties
+        .ray_tracing_pipeline_properties
         .as_ref()
         .unwrap();
-    let ray_trace_pipeline = create_ray_trace_pipeline(&window.device)?;
+    let ray_tracing_pipeline = create_ray_tracing_pipeline(&window.device)?;
 
     // ------------------------------------------------------------------------------------------ //
     // Setup a shader binding table
@@ -553,17 +553,17 @@ fn main() -> anyhow::Result<()> {
         .unwrap();
 
         let data = Buffer::mapped_slice_mut(&mut buf);
-        let rgen_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 0);
+        let rgen_handle = RayTracingPipeline::group_handle(&ray_tracing_pipeline, 0);
         data[0..rgen_handle.len()].copy_from_slice(rgen_handle);
 
-        let hit_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 1);
+        let hit_handle = RayTracingPipeline::group_handle(&ray_tracing_pipeline, 1);
         data[sbt_hit_start as usize..sbt_hit_start as usize + hit_handle.len()]
             .copy_from_slice(hit_handle);
 
-        let miss_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 2);
+        let miss_handle = RayTracingPipeline::group_handle(&ray_tracing_pipeline, 2);
         data[sbt_miss_start as usize..sbt_miss_start as usize + miss_handle.len()]
             .copy_from_slice(miss_handle);
-        let miss_shadow_handle = RayTracePipeline::group_handle(&ray_trace_pipeline, 3);
+        let miss_shadow_handle = RayTracingPipeline::group_handle(&ray_tracing_pipeline, 3);
         let sbt_miss_shadow_start = sbt_miss_start + shader_group_handle_alignment;
         data[sbt_miss_shadow_start as usize
             ..sbt_miss_shadow_start as usize + miss_shadow_handle.len()]
@@ -879,7 +879,7 @@ fn main() -> anyhow::Result<()> {
             .graph
             .begin_cmd()
             .debug_name("basic ray tracer")
-            .bind_pipeline(&ray_trace_pipeline)
+            .bind_pipeline(&ray_tracing_pipeline)
             .resource_access(
                 blas_node,
                 AccessType::RayTracingShaderReadAccelerationStructure,

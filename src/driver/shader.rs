@@ -19,6 +19,7 @@ use {
         fmt::{Debug, Formatter},
         iter::repeat_n,
         ops::Deref,
+        panic::{AssertUnwindSafe, catch_unwind},
         thread::panicking,
     },
 };
@@ -733,7 +734,7 @@ impl Shader {
         ShaderBuilder::default().spirv(spirv).stage(stage)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -742,7 +743,7 @@ impl Shader {
         Self::new(vk::ShaderStageFlags::ANY_HIT_KHR, spirv)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -751,7 +752,7 @@ impl Shader {
         Self::new(vk::ShaderStageFlags::CALLABLE_KHR, spirv)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -787,7 +788,7 @@ impl Shader {
         Self::new(vk::ShaderStageFlags::GEOMETRY, spirv)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -805,7 +806,7 @@ impl Shader {
         Self::new(vk::ShaderStageFlags::MESH_EXT, spirv)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -814,7 +815,7 @@ impl Shader {
         Self::new(vk::ShaderStageFlags::MISS_KHR, spirv)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -1144,6 +1145,29 @@ impl Shader {
         spirv: impl Into<SpirvBinary>,
         specialization: Option<&SpecializationMap>,
     ) -> Result<EntryPoint, DriverError> {
+        // spq-core can panic on malformed SPIR-V instead of returning Err, for example:
+        // `range start index 5 out of range for slice of length 0` from spq-core/src/parse/bin.rs.
+        catch_unwind(AssertUnwindSafe(|| {
+            Self::reflect_entry_point_unchecked(entry_name, spirv, specialization)
+        }))
+        .map_err(|_| {
+            warn!("invalid shader reflection entry point: panic");
+
+            DriverError::InvalidData
+        })?
+        .map_err(|err| {
+            warn!("invalid shader reflection entry point: {err}");
+
+            DriverError::InvalidData
+        })
+    }
+
+    #[profiling::function]
+    fn reflect_entry_point_unchecked(
+        entry_name: &str,
+        spirv: impl Into<SpirvBinary>,
+        specialization: Option<&SpecializationMap>,
+    ) -> Result<EntryPoint, DriverError> {
         let mut config = ReflectConfig::new();
         config.ref_all_rscs(true).spv(spirv);
 
@@ -1401,18 +1425,43 @@ impl Debug for Shader {
     }
 }
 
-impl From<ShaderBuilder> for Shader {
-    fn from(shader: ShaderBuilder) -> Self {
-        shader.build()
+impl TryFrom<ShaderBuilder> for Shader {
+    type Error = DriverError;
+
+    fn try_from(shader: ShaderBuilder) -> Result<Self, Self::Error> {
+        shader.try_build()
     }
 }
 
-impl<T> From<T> for Shader
-where
-    T: Into<SpirvBinary>,
-{
-    fn from(spirv: T) -> Self {
-        Shader::from_spirv(spirv).build()
+impl TryFrom<&[u8]> for Shader {
+    type Error = DriverError;
+
+    fn try_from(spirv: &[u8]) -> Result<Self, Self::Error> {
+        Shader::from_spirv(spirv).try_build()
+    }
+}
+
+impl TryFrom<&[u32]> for Shader {
+    type Error = DriverError;
+
+    fn try_from(spirv: &[u32]) -> Result<Self, Self::Error> {
+        Shader::from_spirv(spirv).try_build()
+    }
+}
+
+impl TryFrom<Vec<u8>> for Shader {
+    type Error = DriverError;
+
+    fn try_from(spirv: Vec<u8>) -> Result<Self, Self::Error> {
+        Shader::from_spirv(spirv).try_build()
+    }
+}
+
+impl TryFrom<Vec<u32>> for Shader {
+    type Error = DriverError;
+
+    fn try_from(spirv: Vec<u32>) -> Result<Self, Self::Error> {
+        Shader::from_spirv(spirv).try_build()
     }
 }
 
@@ -1475,22 +1524,17 @@ impl ShaderBuilder {
     /// Attempts to build a new `Shader`.
     pub fn try_build(mut self) -> Result<Shader, DriverError> {
         let entry_name = self.entry_name.as_deref().unwrap_or("main");
-        let entry_point = Shader::reflect_entry_point(
-            entry_name,
-            self.spirv
-                .as_ref()
-                .map(|spirv| spirv.words())
-                .expect("missing spirv code"),
-            self.specialization
-                .as_ref()
-                .map(|opt| opt.as_ref())
-                .unwrap_or_default(),
-        )
-        .map_err(|err| {
-            warn!("invalid shader reflection entry point: {err}");
-
-            DriverError::InvalidData
-        })?;
+        let spirv = self
+            .spirv
+            .as_ref()
+            .map(|spirv| spirv.words())
+            .ok_or(DriverError::InvalidData)?;
+        let specialization = self
+            .specialization
+            .as_ref()
+            .map(|opt| opt.as_ref())
+            .unwrap_or_default();
+        let entry_point = Shader::reflect_entry_point(entry_name, spirv, specialization)?;
 
         if self.stage.unwrap_or_default().is_empty() {
             self.stage = Some(match entry_point.exec_model {
@@ -1628,5 +1672,10 @@ mod test {
         let builder = Builder::default().build();
 
         assert_eq!(info, builder);
+    }
+
+    #[test]
+    pub fn invalid_spirv_try_into_driver_value() {
+        assert!(Shader::try_from(vec![0]).is_err());
     }
 }

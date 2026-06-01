@@ -47,10 +47,10 @@ use {
         DescriptorBindingMap,
         compute::ComputePipeline,
         format_aspect_mask, format_texel_block_extent, format_texel_block_size,
-        graphic::{DepthStencilInfo, GraphicPipeline},
+        graphic::{DepthStencilInfo, GraphicsPipeline},
         image::{ImageInfo, ImageViewInfo, SampleCount},
         image_subresource_range_from_layers,
-        ray_trace::RayTracePipeline,
+        ray_trace::RayTracingPipeline,
         render_pass::ResolveMode,
         shader::PipelineDescriptorInfo,
     },
@@ -238,12 +238,12 @@ struct ExecutionFunction(ExecFn);
 #[derive(Clone, Debug)]
 enum ExecutionPipeline {
     Compute(ComputePipeline),
-    Graphic(GraphicPipeline),
-    RayTrace(RayTracePipeline),
+    Graphic(GraphicsPipeline),
+    RayTrace(RayTracingPipeline),
 }
 
 impl ExecutionPipeline {
-    fn as_graphic(&self) -> Option<&GraphicPipeline> {
+    fn as_graphic(&self) -> Option<&GraphicsPipeline> {
         if let Self::Graphic(pipeline) = self {
             Some(pipeline)
         } else {
@@ -283,15 +283,15 @@ impl ExecutionPipeline {
         }
     }
 
-    fn expect_graphic(&self) -> &GraphicPipeline {
-        self.as_graphic().expect("missing graphic pipeline")
+    fn expect_graphic(&self) -> &GraphicsPipeline {
+        self.as_graphic().expect("missing graphics pipeline")
     }
 
-    fn expect_ray_trace(&self) -> &RayTracePipeline {
+    fn expect_ray_trace(&self) -> &RayTracingPipeline {
         if let Self::RayTrace(pipeline) = self {
             pipeline
         } else {
-            panic!("missing ray trace pipeline")
+            panic!("missing ray tracing pipeline")
         }
     }
 
