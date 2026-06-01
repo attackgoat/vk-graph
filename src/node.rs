@@ -9,6 +9,7 @@ use crate::{
         swapchain::SwapchainImage,
     },
     pool::Lease,
+    private,
 };
 
 use super::{AnyResource, NodeIndex};
@@ -34,6 +35,8 @@ impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
         Self::AccelerationStructureLease(node)
     }
 }
+
+impl private::Sealed for AnyAccelerationStructureNode {}
 
 impl Node for AnyAccelerationStructureNode {
     type Resource = AccelerationStructure;
@@ -71,6 +74,8 @@ impl From<BufferLeaseNode> for AnyBufferNode {
         Self::BufferLease(node)
     }
 }
+
+impl private::Sealed for AnyBufferNode {}
 
 impl Node for AnyBufferNode {
     type Resource = Buffer;
@@ -120,6 +125,8 @@ impl From<SwapchainImageNode> for AnyImageNode {
     }
 }
 
+impl private::Sealed for AnyImageNode {}
+
 impl Node for AnyImageNode {
     type Resource = Image;
 
@@ -152,6 +159,8 @@ macro_rules! node {
                     }
                 }
             }
+
+            impl private::Sealed for [<$name Node>] {}
 
             impl Node for [<$name Node>] {
                 type Resource = $resource;

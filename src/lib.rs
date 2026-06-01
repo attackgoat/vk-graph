@@ -1019,7 +1019,9 @@ impl Graph {
 /// A Vulkan resource which has been bound to a [`Graph`].
 ///
 /// See [`Graph::bind_resource`].
-pub trait Node {
+///
+/// This trait is sealed and cannot be implemented outside of `vk-graph`.
+pub trait Node: private::Sealed {
     /// The Vulkan buffer, image, or acceleration struction type.
     type Resource;
 
@@ -1030,11 +1032,18 @@ pub trait Node {
     fn index(&self) -> NodeIndex;
 }
 
+mod private {
+    /// Prevents external implementations of [`Node`] and [`Resource`].
+    pub trait Sealed {}
+}
+
 /// A Vulkan resource which may be bound to a [`Graph`].
 ///
 /// See [`Graph::bind_resource`] and
 /// [`Command::bind_resource`](crate::cmd::Command::bind_resource).
-pub trait Resource {
+///
+/// This trait is sealed and cannot be implemented outside of `vk-graph`.
+pub trait Resource: private::Sealed {
     /// The resource handle type.
     type Node;
 
@@ -1042,11 +1051,12 @@ pub trait Resource {
     fn bind_graph(self, _: &mut Graph) -> Self::Node;
 }
 
+impl private::Sealed for SwapchainImage {}
+
 impl Resource for SwapchainImage {
     type Node = SwapchainImageNode;
 
     fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-        // We will return a new node
         let node = Self::Node::new(graph.resources.len());
 
         //trace!("Node {}: {:?}", res.idx, &self);
@@ -1061,6 +1071,13 @@ impl Resource for SwapchainImage {
 macro_rules! resource {
     ($name:ident) => {
         paste::paste! {
+            impl private::Sealed for $name {}
+            impl private::Sealed for Arc<$name> {}
+            impl<'a> private::Sealed for &'a Arc<$name> {}
+            impl private::Sealed for Lease<$name> {}
+            impl private::Sealed for Arc<Lease<$name>> {}
+            impl<'a> private::Sealed for &'a Arc<Lease<$name>> {}
+
             impl Resource for $name {
                 type Node = [<$name Node>];
 

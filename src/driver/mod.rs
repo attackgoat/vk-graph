@@ -1274,8 +1274,8 @@ mod test {
         for r in pcr {
             let raw = r.stage_flags.as_raw();
             let range_end = r.offset + r.size;
-            for b in r.offset as usize..range_end as usize {
-                per_byte[b] |= raw;
+            for byte in per_byte[r.offset as usize..range_end as usize].iter_mut() {
+                *byte |= raw;
             }
         }
         let mut result = Vec::new();
@@ -1926,8 +1926,8 @@ mod test {
     #[test]
     pub fn push_constant_ranges_fuzz() {
         use rand::Rng;
-        use rand::rngs::StdRng;
         use rand::SeedableRng;
+        use rand::rngs::StdRng;
 
         let stages = [
             vk::ShaderStageFlags::VERTEX,
