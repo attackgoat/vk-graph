@@ -1676,6 +1676,6 @@ mod test {
 
     #[test]
     pub fn invalid_spirv_try_into_driver_value() {
-        assert!(Shader::try_from(vec![0]).is_err());
+        assert!(Shader::try_from(vec![0u32]).is_err());
     }
 }

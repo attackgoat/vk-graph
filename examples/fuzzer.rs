@@ -42,7 +42,7 @@ use {
             image::{ImageInfo, SampleCount},
             physical_device::Vulkan10Limits,
             render_pass::ResolveMode,
-            shader::{Shader, SpecializationMap},
+            shader::{Shader, ShaderBuilder, SpecializationMap},
         },
         pool::{Pool as _, hash::HashPool},
     },
@@ -1566,7 +1566,7 @@ fn compute_pipeline(
     key: &'static str,
     device: &Device,
     info: impl Into<ComputePipelineInfo>,
-    shader: impl Into<Shader>,
+    shader: ShaderBuilder,
 ) -> ComputePipeline {
     use std::{cell::RefCell, collections::HashMap};
 
