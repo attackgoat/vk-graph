@@ -981,7 +981,7 @@ impl Shader {
     #[profiling::function]
     pub(super) fn merge_descriptor_bindings(
         descriptor_bindings: impl IntoIterator<Item = DescriptorBindingMap>,
-    ) -> DescriptorBindingMap {
+    ) -> Result<DescriptorBindingMap, DriverError> {
         fn merge_info(lhs: &mut DescriptorInfo, rhs: DescriptorInfo) -> bool {
             let (lhs_count, rhs_count) = match lhs {
                 DescriptorInfo::AccelerationStructure(lhs) => {
@@ -1086,11 +1086,16 @@ impl Shader {
         }
 
         #[profiling::function]
-        fn merge_pair(src: DescriptorBindingMap, dst: &mut DescriptorBindingMap) {
+        fn merge_pair(
+            src: DescriptorBindingMap,
+            dst: &mut DescriptorBindingMap,
+        ) -> Result<(), DriverError> {
             for (descriptor_binding, (descriptor_info, descriptor_flags)) in src.into_iter() {
                 if let Some((existing_info, existing_flags)) = dst.get_mut(&descriptor_binding) {
                     if !merge_info(existing_info, descriptor_info) {
-                        panic!("Inconsistent shader descriptors ({descriptor_binding:?})");
+                        warn!("inconsistent shader descriptors ({descriptor_binding:?})");
+
+                        return Err(DriverError::InvalidData);
                     }
 
                     *existing_flags |= descriptor_flags;
@@ -1098,15 +1103,17 @@ impl Shader {
                     dst.insert(descriptor_binding, (descriptor_info, descriptor_flags));
                 }
             }
+
+            Ok(())
         }
 
         let mut descriptor_bindings = descriptor_bindings.into_iter();
         let mut res = descriptor_bindings.next().unwrap_or_default();
         for descriptor_binding in descriptor_bindings {
-            merge_pair(descriptor_binding, &mut res);
+            merge_pair(descriptor_binding, &mut res)?;
         }
 
-        res
+        Ok(res)
     }
 
     #[profiling::function]
@@ -1677,5 +1684,31 @@ mod test {
     #[test]
     pub fn invalid_spirv_try_into_driver_value() {
         assert!(Shader::try_from(vec![0u32]).is_err());
+    }
+
+    #[test]
+    pub fn merge_descriptor_bindings_rejects_mismatched_descriptors() {
+        let mut lhs = DescriptorBindingMap::default();
+        lhs.insert(
+            Descriptor::from(0),
+            (
+                DescriptorInfo::UniformBuffer(1),
+                vk::ShaderStageFlags::VERTEX,
+            ),
+        );
+
+        let mut rhs = DescriptorBindingMap::default();
+        rhs.insert(
+            Descriptor::from(0),
+            (
+                DescriptorInfo::StorageBuffer(1),
+                vk::ShaderStageFlags::FRAGMENT,
+            ),
+        );
+
+        assert!(matches!(
+            Shader::merge_descriptor_bindings([lhs, rhs]),
+            Err(DriverError::InvalidData)
+        ));
     }
 }

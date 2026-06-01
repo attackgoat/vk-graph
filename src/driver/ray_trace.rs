@@ -126,7 +126,7 @@ impl RayTracingPipeline {
         // Use SPIR-V reflection to get the types and counts of all descriptors
         let mut descriptor_bindings = Shader::merge_descriptor_bindings(
             shaders.iter().map(|shader| shader.descriptor_bindings()),
-        );
+        )?;
         for (descriptor_info, _) in descriptor_bindings.values_mut() {
             if descriptor_info.binding_count() == 0 {
                 descriptor_info.set_binding_count(info.bindless_descriptor_count);
