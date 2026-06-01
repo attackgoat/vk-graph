@@ -20,6 +20,6 @@ fn run_cpu_readback_example(extra_args: &[&str]) {
 
 #[test]
 #[ignore = "requires a working Vulkan device"]
-fn cpu_readback() {
+fn live_device_cpu_readback() {
     run_cpu_readback_example(&[]);
 }

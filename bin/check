@@ -4,7 +4,7 @@ set -eu
 
 ALLOW_DIRTY=0
 MDBOOK_VERSION=0.5.3
-RUN_GPU=1
+RUN_INTEGRATION=1
 RUN_SEMVER=0
 
 for arg in "$@"; do
@@ -12,8 +12,8 @@ for arg in "$@"; do
         --allow-dirty)
             ALLOW_DIRTY=1
             ;;
-        --no-gpu)
-            RUN_GPU=0
+        --no-integration)
+            RUN_INTEGRATION=0
             ;;
         --semver)
             RUN_SEMVER=1
@@ -56,8 +56,8 @@ run "workspace clippy" cargo clippy --all-targets --workspace --no-default-featu
 run "workspace clippy (parking_lot)" cargo clippy --all-targets --workspace --features parking_lot -- -D warnings
 run "workspace tests" env RUSTFLAGS="-D warnings" cargo test --all-targets --workspace --no-default-features --features loaded
 
-if [ "$RUN_GPU" -eq 1 ]; then
-    run "gpu smoke tests" env RUSTFLAGS="-D warnings" cargo test --test gpu_smoke cpu_readback -- --ignored --exact --test-threads=1
+if [ "$RUN_INTEGRATION" -eq 1 ]; then
+    run "integration tests" env RUSTFLAGS="-D warnings" cargo test --workspace integration -- --ignored --test-threads=1
 fi
 
 run "workspace doctests" env RUSTFLAGS="-D warnings" cargo test --workspace --doc

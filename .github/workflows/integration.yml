@@ -12,7 +12,7 @@ env:
 
 jobs:
   gpu:
-    name: GPU smoke and full checks
+    name: Live-device and full checks
     runs-on: [self-hosted, linux, vulkan]
     timeout-minutes: 45
     permissions:

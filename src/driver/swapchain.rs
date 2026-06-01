@@ -690,6 +690,23 @@ pub struct SwapchainImage {
     pub index: u32,
 }
 
+impl SwapchainImage {
+    #[cfg(test)]
+    pub(crate) fn from_raw(
+        device: &Device,
+        handle: vk::Image,
+        info: impl Into<ImageInfo>,
+        index: u32,
+    ) -> Self {
+        Self {
+            read_only: ReadOnlySwapchainImage {
+                image: Image::from_raw(device, handle, info),
+                index,
+            },
+        }
+    }
+}
+
 impl Clone for SwapchainImage {
     fn clone(&self) -> Self {
         Self {
