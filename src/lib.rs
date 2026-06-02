@@ -1007,8 +1007,22 @@ impl Graph {
         Submission::new(self)
     }
 
-    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given bound resource node represents.
+    /// Returns a borrow of the Vulkan resource represented by `resource_node`.
+    ///
+    /// The exact return type depends on the node type:
+    ///
+    /// - Concrete nodes such as [`BufferNode`] and [`ImageNode`] return the exact stored handle
+    ///   type, such as
+    ///   `&Arc<Buffer>` or `&Arc<Image>`.
+    /// - Erased nodes such as [`AnyBufferNode`] and [`AnyImageNode`] return a borrow of the
+    ///   underlying resource,
+    ///   such as `&Buffer` or `&Image`.
+    ///
+    /// This distinction lets erased node enums unify owned, leased, and swapchain-backed resources
+    /// behind a single resource view.
+    ///
+    /// Node ownership is validated here when the `checked` feature is enabled. With `checked`
+    /// disabled, callers must ensure `resource_node` came from this graph.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
         N: Node,

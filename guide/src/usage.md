@@ -122,6 +122,10 @@ assert_eq!(shared_image.info.width, 320);
 # }
 ```
 
+Concrete node types return the exact stored handle type. For example, `ImageNode` returns
+`&Arc<Image>`. Erased node types such as `AnyImageNode` instead return `&Image` so they can unify
+owned, leased, and swapchain-backed resources behind one view.
+
 ## Commands
 
 Nodes may be used with built-in graph commands:

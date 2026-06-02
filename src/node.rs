@@ -24,6 +24,11 @@
 //!
 //! For most users, [`BufferNode`] and [`ImageNode`] are all you need. The `Lease` and
 //! `Any*` variants exist for advanced pooling and dynamic dispatch scenarios.
+//!
+//! When borrowing resources back out of a graph with [`Graph::resource`](crate::Graph::resource),
+//! concrete node types return the exact stored handle type, while `Any*` node types return a
+//! borrow of the underlying resource. For example, `BufferNode` yields `&Arc<Buffer>`, but
+//! `AnyBufferNode` yields `&Buffer`.
 
 use std::sync::Arc;
 
@@ -199,6 +204,9 @@ macro_rules! node {
             ///
             /// When the `checked` feature is enabled, using a node with a different graph will
             /// panic immediately.
+            ///
+            /// When `checked` is disabled, this ownership check is skipped for zero-overhead
+            /// builds, so cross-graph node misuse is invalid and may resolve to the wrong resource.
             #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
             pub struct [<$name Node>] {
                 index: NodeIndex,

@@ -73,9 +73,13 @@ misuse patterns that the VVL cannot catch:
 - Missing `resource_access` / `shader_resource_access` declarations before using a resource
 - [`update_buffer`] and [`copy_buffer_region`](crate::Graph::copy_buffer_region) buffer bounds
 - Valid image aspect masks and subresource ranges
+- Cross-graph node ownership checks
 
 The `checked` feature is **enabled by default** — it activates in both debug and release builds.
 Disable it for zero-overhead release builds that have been validated:
+
+With `checked` disabled, `vk-graph` no longer fail-fast validates that a node handle belongs to the
+graph it is used with. That remains invalid usage; the caller is responsible for avoiding it.
 
 ```bash
 cargo run --no-default-features --features loaded,parking_lot --release

@@ -136,9 +136,10 @@ impl CommandBuffer {
         Device::end_command_buffer(&self.device, self.handle)
     }
 
-    /// Returns `true` after the GPU has executed the previous submission to this command buffer.
+    /// Returns `true` after the GPU has executed the most recent submission associated with this
+    /// command buffer's fence.
     ///
-    /// See [`Self::wait_until_executed`] to block while checking.
+    /// See [`Self::wait_until_executed`] to block until execution completes.
     #[profiling::function]
     pub fn has_executed(&self) -> Result<bool, DriverError> {
         let res = unsafe { self.device.get_fence_status(self.fence) };
@@ -161,11 +162,29 @@ impl CommandBuffer {
     }
 
     /// Resets the embedded fence to the unsignaled state.
+    ///
+    /// This is typically used before re-submitting the command buffer after a prior submission has
+    /// completed.
     pub fn reset_fence(&self) -> Result<(), DriverError> {
         Device::reset_fences(&self.device, slice::from_ref(&self.fence))
     }
 
-    /// Submits command buffers to a queue.
+    /// Submits command buffers to a queue using this command buffer's fence.
+    ///
+    /// This method does not begin, end, or reset `self`, or reset `self`'s fence. Callers are
+    /// expected to submit only executable command buffers and to manage fence reset as needed
+    /// before re-submitting this same command buffer.
+    ///
+    /// Typical handling is:
+    ///
+    /// 1. Begin recording with [`Self::begin`].
+    /// 2. Record commands.
+    /// 3. End recording with [`Self::end`].
+    /// 4. Submit this command buffer with `queue_submit`.
+    /// 5. Later, wait for completion with [`Self::has_executed`] or
+    ///    [`Self::wait_until_executed`].
+    /// 6. Before re-submitting this same command buffer, reset its fence with
+    ///    [`Self::reset_fence`], then begin recording again.
     pub fn queue_submit(
         &self,
         queue: vk::Queue,
@@ -178,6 +197,10 @@ impl CommandBuffer {
     /// this command buffer.
     ///
     /// See [`Self::has_executed`] to check without blocking.
+    ///
+    /// This method does not reset the embedded fence before returning. If you later call
+    /// [`Self::reset_fence`], then [`Self::has_executed`] will return `false` until the next
+    /// submission completes.
     #[profiling::function]
     pub fn wait_until_executed(&mut self) -> Result<(), DriverError> {
         if self.droppables.is_empty() {
@@ -185,7 +208,6 @@ impl CommandBuffer {
         }
 
         Device::wait_for_fence(&self.device, &self.fence)?;
-        self.reset_fence()?;
         self.drop_fenced();
 
         Ok(())

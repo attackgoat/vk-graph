@@ -18,7 +18,6 @@ use {
             ash::{self, vk},
             cmd_buf::{CommandBuffer, CommandBufferInfo},
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
-            device::Device,
             image::Image,
             render_pass::{RenderPass, RenderPassInfo},
             surface::Surface,
@@ -217,19 +216,17 @@ impl Swapchain {
 
         let started = Instant::now();
 
-        Device::begin_command_buffer(
-            &exec.cmd_buf.device,
-            exec.cmd_buf.handle,
+        exec.cmd_buf.begin(
             &vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
 
         // submission.record_node_dependencies(&mut *self.pool, cmd, swapchain_image)?;
-        let submission = submission.record_resource(pool, &mut exec.cmd_buf, swapchain_image)?;
+        let mut submission =
+            submission.record_resource(pool, &mut exec.cmd_buf, swapchain_image)?;
 
         {
             let swapchain_image = submission.resource(swapchain_image);
-            let cmd_buf = submission.cmd_buf();
 
             for (access, range) in Image::access(
                 swapchain_image,
@@ -251,8 +248,8 @@ impl Swapchain {
 
                 // Force a presentation layout transition
                 pipeline_barrier(
-                    &cmd_buf.device,
-                    cmd_buf.handle,
+                    &submission.cmd_buf.device,
+                    submission.cmd_buf.handle,
                     None,
                     &[],
                     slice::from_ref(&ImageBarrier {
@@ -274,7 +271,8 @@ impl Swapchain {
         // before present which use nodes that are unused in the remainder of the graph.
         // These operations are still important, but they don't need to wait for any of the above
         // things so we do them last
-        let submission = submission.record(pool)?;
+        submission.record(pool)?;
+        submission.cmd_buf.end()?;
 
         let swapchain_image = submission.resource(swapchain_image).clone();
 

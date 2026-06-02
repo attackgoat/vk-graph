@@ -489,6 +489,9 @@ pub struct DeviceInfo {
     /// This requires a Vulkan SDK installation and will cause validation errors to introduce
     /// panics as they happen.
     ///
+    /// When `stderr` is attached to an interactive terminal, validation errors will park the
+    /// callback thread for debugger attach.
+    ///
     /// _NOTE:_ Consider turning OFF debug if you discover an unknown issue. Often the validation
     /// layers will throw an error before other layers can provide additional context such as the
     /// API dump info or other messages. You might find the "actual" issue is detailed in those

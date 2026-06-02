@@ -486,9 +486,8 @@ impl WindowBuilder {
 
     /// Enables Vulkan graphics debugging layers.
     ///
-    /// _NOTE:_ Any validation warnings or errors will cause the current thread to park itself after
-    /// describing the error using the `log` crate. This makes it easy to attach a debugger and see
-    /// what is causing the issue directly.
+    /// _NOTE:_ Validation errors will only park the current thread for debugger attach when the
+    /// process is attached to an interactive terminal. Otherwise they continue after logging.
     ///
     /// ## Platform-specific
     ///

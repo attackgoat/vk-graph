@@ -22,6 +22,7 @@ use {
     std::{
         env::var,
         ffi::c_void,
+        io::{IsTerminal, stderr},
         process::{abort, id},
         thread::{current, park},
     },
@@ -114,7 +115,12 @@ unsafe extern "system" fn debug_callback(
         .unwrap_or(false)
     {
         warn!("validation callback park skipped; execution will continue");
-        logger().flush();
+
+        return vk::FALSE;
+    }
+
+    if !stderr().is_terminal() {
+        warn!("validation callback park skipped; stderr is not an interactive terminal");
 
         return vk::FALSE;
     }
@@ -650,8 +656,10 @@ pub struct InstanceInfo {
     /// This requires a Vulkan SDK installation and will cause validation errors to introduce
     /// panics as they happen.
     ///
-    /// Set `VK_GRAPH_SKIP_VALIDATION_PARK=1` to keep logging validation errors without parking the
+    /// When `stderr` is attached to an interactive terminal, validation errors will park the
     /// callback thread for debugger attach.
+    ///
+    /// Set `VK_GRAPH_SKIP_VALIDATION_PARK=1` to keep logging validation errors without parking.
     ///
     /// _NOTE:_ Consider turning OFF debug if you discover an unknown issue. Often the validation
     /// layers will throw an error before other layers can provide additional context such as the
