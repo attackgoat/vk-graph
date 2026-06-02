@@ -3,6 +3,7 @@
 use {
     super::{
         DriverError, access_type_from_u8, access_type_into_u8, device::Device, format_aspect_mask,
+        pack_queue,
     },
     ash::vk::{self, ImageCreateInfo},
     derive_builder::Builder,
@@ -14,9 +15,10 @@ use {
     std::{
         collections::{HashMap, hash_map::Entry},
         fmt::{Debug, Formatter},
+        marker::PhantomData,
         mem::{replace, take},
         ops::DerefMut,
-        sync::atomic::{AtomicU8, Ordering},
+        sync::atomic::{AtomicU8, AtomicU64, Ordering},
         thread::panicking,
     },
     vk_sync::AccessType,
@@ -25,7 +27,6 @@ use {
 #[cfg(feature = "parking_lot")]
 use parking_lot::{Mutex, MutexGuard};
 
-use std::marker::PhantomData;
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::{Mutex, MutexGuard};
 
@@ -102,6 +103,20 @@ impl Access {
             }
         }
     }
+
+    fn current_access(&self) -> AccessType {
+        match self {
+            Self::Uniform(uniform) => uniform.load(),
+            Self::Dense(accesses) => {
+                let accesses = accesses.lock();
+
+                #[cfg(not(feature = "parking_lot"))]
+                let accesses = accesses.expect("poisoned image access lock");
+
+                accesses.first()
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -167,6 +182,12 @@ impl<A: Copy + PartialEq> DenseAccess<A> {
         access_range: vk::ImageSubresourceRange,
     ) -> DenseAccessIter<'_, &mut Self, A> {
         DenseAccessIter::new(self, access, access_range)
+    }
+
+    // TODO: This is incorrect. First is not useful for the purpose, this value should be calculated
+    // after summing up all accesses in one (so we wait properly)
+    pub(crate) fn first(&self) -> A {
+        self.accesses[0]
     }
 }
 
@@ -399,6 +420,12 @@ pub struct Image {
     #[readonly]
     pub info: ImageInfo,
 
+    /// The last queue (family, index) that owned this image.
+    ///
+    /// Upper 32 bits = queue_family_index, lower 32 bits = queue_index.
+    /// Set to `u64::MAX` for `CONCURRENT` images (ownership transfer not applicable).
+    pub(crate) queue_packed: AtomicU64,
+
     /// A name for debugging purposes.
     pub name: Option<String>,
 }
@@ -446,8 +473,11 @@ impl Image {
 
         let device = device.clone();
         let create_info: ImageCreateInfo = info.into();
-        let create_info =
-            create_info.queue_family_indices(&device.physical_device.queue_family_indices);
+        let create_info = if info.sharing_mode == vk::SharingMode::CONCURRENT {
+            create_info.queue_family_indices(&device.physical_device.queue_family_indices)
+        } else {
+            create_info
+        };
         let handle = unsafe {
             device.create_image(&create_info, None).map_err(|err| {
                 warn!("unable to create image: {err}");
@@ -510,6 +540,12 @@ impl Image {
 
         debug_assert_ne!(handle, vk::Image::null());
 
+        let queue_packed = if info.sharing_mode == vk::SharingMode::CONCURRENT {
+            u64::MAX
+        } else {
+            pack_queue(0, 0)
+        };
+
         Ok(Self {
             access,
             allocation: Some(allocation),
@@ -518,6 +554,7 @@ impl Image {
             image_view_cache: Mutex::new(Default::default()),
             info,
             name: None,
+            queue_packed: AtomicU64::new(queue_packed),
         })
     }
 
@@ -601,6 +638,12 @@ impl Image {
         self.access.swap(access, access_range)
     }
 
+    // TODO: Better name
+    /// Returns the current access type for this image (used for queue ownership release barriers).
+    pub(crate) fn current_access(&self) -> AccessType {
+        self.access.current_access()
+    }
+
     /// Sets the debugging name assigned to this image.
     pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -640,6 +683,12 @@ impl Image {
 
         let access = Access::new(info, AccessType::Nothing);
 
+        let queue_packed = if info.sharing_mode == vk::SharingMode::CONCURRENT {
+            u64::MAX
+        } else {
+            pack_queue(0, 0)
+        };
+
         Self {
             access,
             allocation: None,
@@ -648,6 +697,7 @@ impl Image {
             image_view_cache: Mutex::new(Default::default()),
             info,
             name: None,
+            queue_packed: AtomicU64::new(queue_packed),
         }
     }
 
@@ -673,6 +723,12 @@ impl Image {
 
         let Self { handle, info, .. } = *self;
 
+        let queue_packed = if info.sharing_mode == vk::SharingMode::CONCURRENT {
+            u64::MAX
+        } else {
+            pack_queue(0, 0)
+        };
+
         Self {
             access: Access::new(info, AccessType::Nothing),
             allocation: None,
@@ -681,6 +737,7 @@ impl Image {
             image_view_cache: Mutex::new(image_view_cache),
             info,
             name: self.name.clone(),
+            queue_packed: AtomicU64::new(queue_packed),
         }
     }
 
@@ -817,6 +874,22 @@ pub struct ImageInfo {
     #[builder(default = "SampleCount::Type1")]
     pub sample_count: SampleCount,
 
+    /// Controls whether the image is accessible from a single queue family (`EXCLUSIVE`) or from
+    /// multiple queue families concurrently (`CONCURRENT`).
+    ///
+    /// `EXCLUSIVE` (the default) restricts the image to a single queue family. This may enable
+    /// driver optimizations but requires ownership transfers to use the image on a different queue
+    /// family.
+    ///
+    /// Set to `CONCURRENT` when the image will be accessed from multiple queue families (e.g.
+    /// graphics and compute on separate queues).
+    ///
+    /// See
+    /// [`VkSharingMode`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSharingMode.html)
+    /// in the Vulkan specification.
+    #[builder(default = "vk::SharingMode::EXCLUSIVE")]
+    pub sharing_mode: vk::SharingMode,
+
     /// Specifies the tiling arrangement of the texel blocks in memory.
     ///
     /// The default value is [`vk::ImageTiling::OPTIMAL`].
@@ -919,6 +992,7 @@ impl ImageInfo {
             fmt,
             usage,
             flags: vk::ImageCreateFlags::empty(),
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
             tiling: vk::ImageTiling::OPTIMAL,
             mip_level_count: 1,
             sample_count: SampleCount::Type1,
@@ -965,6 +1039,7 @@ impl ImageInfo {
             height: Some(self.height),
             mip_level_count: Some(self.mip_level_count),
             sample_count: Some(self.sample_count),
+            sharing_mode: Some(self.sharing_mode),
             tiling: Some(self.tiling),
             ty: Some(self.ty),
             usage: Some(self.usage),
@@ -989,7 +1064,7 @@ impl From<ImageInfo> for vk::ImageCreateInfo<'_> {
             .samples(value.sample_count.into())
             .tiling(value.tiling)
             .usage(value.usage)
-            .sharing_mode(vk::SharingMode::CONCURRENT)
+            .sharing_mode(value.sharing_mode)
             .initial_layout(vk::ImageLayout::UNDEFINED)
     }
 }
@@ -1296,6 +1371,10 @@ impl UniformAccess {
         Self {
             access: AtomicU8::new(access_type_into_u8(access)),
         }
+    }
+
+    fn load(&self) -> AccessType {
+        access_type_from_u8(self.access.load(Ordering::Acquire))
     }
 
     fn swap(
@@ -2319,6 +2398,7 @@ mod test {
             height: 0,
             mip_level_count: 1,
             sample_count: SampleCount::Type1,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
             tiling: vk::ImageTiling::OPTIMAL,
             ty: vk::ImageType::TYPE_2D,
             usage: vk::ImageUsageFlags::empty(),

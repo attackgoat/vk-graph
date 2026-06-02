@@ -282,6 +282,7 @@ impl Pool<ImageInfo, Image> for FifoPool {
                         && item.info.height == info.height
                         && item.info.mip_level_count == info.mip_level_count
                         && item.info.sample_count == info.sample_count
+                        && item.info.sharing_mode == info.sharing_mode
                         && item.info.tiling == info.tiling
                         && item.info.ty == info.ty
                         && item.info.width == info.width

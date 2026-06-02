@@ -109,12 +109,20 @@ fn main() -> anyhow::Result<()> {
                 // Clear a new image to a cycling color
                 let mut graph = Graph::default();
                 let image = graph.bind_resource(
-                    pool.resource(ImageInfo::image_2d(
-                        10,
-                        10,
-                        vk::Format::R8G8B8A8_UNORM,
-                        vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
-                    ))
+                    pool.resource(
+                        ImageInfo::image_2d(
+                            10,
+                            10,
+                            vk::Format::R8G8B8A8_UNORM,
+                            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
+                        )
+                        .into_builder()
+                        .sharing_mode(if args.concurrent {
+                            vk::SharingMode::CONCURRENT
+                        } else {
+                            vk::SharingMode::EXCLUSIVE
+                        }),
+                    )
                     .unwrap(),
                 );
                 graph.clear_color_image(
@@ -275,4 +283,8 @@ struct Args {
     /// Enable Vulkan SDK validation layers
     #[arg(long)]
     debug: bool,
+
+    /// Use concurrent sharing mode instead of the default exclusive (automatic ownership transfer)
+    #[arg(long)]
+    concurrent: bool,
 }

@@ -22,6 +22,7 @@ let info = ImageInfo {
     height,
     mip_level_count: 1,
     sample_count: SampleCount::Type1,
+    sharing_mode: vk::SharingMode::EXCLUSIVE,
     tiling: vk::ImageTiling::OPTIMAL,
     ty: vk::ImageType::TYPE_2D,
     usage,
