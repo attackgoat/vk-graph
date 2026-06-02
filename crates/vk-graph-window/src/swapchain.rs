@@ -201,8 +201,8 @@ impl Swapchain {
     {
         trace!("present_image");
 
-        let mut submission = graph.into_submission();
-        let wait_dst_stage_mask = submission.node_stages(swapchain_image);
+        let mut submission = graph.finalize();
+        let wait_dst_stage_mask = submission.resource_stages(swapchain_image);
 
         // The swapchain should have been written to, otherwise it would be noise and that's a panic
         assert!(
@@ -226,7 +226,7 @@ impl Swapchain {
         )?;
 
         // submission.record_node_dependencies(&mut *self.pool, cmd, swapchain_image)?;
-        submission.queue_cmds_for_resource(&mut exec.cmd, swapchain_image, pool)?;
+        submission.record_resource(pool, &mut exec.cmd, swapchain_image)?;
 
         {
             let swapchain_image = submission.resource(swapchain_image);
@@ -273,7 +273,7 @@ impl Swapchain {
         // before present which use nodes that are unused in the remainder of the graph.
         // These operations are still important, but they don't need to wait for any of the above
         // things so we do them last
-        submission.submit_cmd_buf(pool, &mut exec.cmd)?;
+        submission.record(pool, &mut exec.cmd)?;
 
         Device::with_queue(
             &exec.cmd.device,

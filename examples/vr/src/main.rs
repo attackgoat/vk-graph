@@ -491,7 +491,7 @@ fn main() -> anyhow::Result<()> {
         // in-flight resources) so that nothing is dropped until that image is actually done.
         swapchain.wait_image(xr::Duration::INFINITE).unwrap();
         let swapchain_queue = graph
-            .into_submission()
+            .finalize()
             .queue_submit(&mut pool, queue_family_index as _, 0)
             .unwrap();
         swapchain.release_image().unwrap();
@@ -792,7 +792,7 @@ fn load_texture(
 
     let queue_family_index = device_queue_family_index(device, vk::QueueFlags::TRANSFER).unwrap();
     graph
-        .into_submission()
+        .finalize()
         .queue_submit(&mut LazyPool::new(device), queue_family_index as _, 0)?
         .wait_until_executed()?;
 

@@ -780,7 +780,7 @@ impl Submission {
     /// A fully-resolved graph contains no additional work and may be discarded, although doing so
     /// will stall the GPU while the fences are waited on. It is preferrable to wait a few frame so
     /// that the fences will have already been signalled.
-    pub fn is_submitted(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.graph.cmds.is_empty()
     }
 
@@ -1971,10 +1971,10 @@ impl Submission {
     /// Note that this value must be retrieved before resolving a node as there will be no
     /// data left to inspect afterwards!
     #[profiling::function]
-    pub fn node_stages(&self, node: impl Node) -> vk::PipelineStageFlags {
-        self.graph.assert_node_owner(&node);
+    pub fn resource_stages(&self, resource_node: impl Node) -> vk::PipelineStageFlags {
+        self.graph.assert_node_owner(&resource_node);
 
-        let node_idx = node.index();
+        let node_idx = resource_node.index();
         let mut res = Default::default();
 
         'pass: for pass in self.graph.cmds.iter() {
@@ -3053,7 +3053,7 @@ impl Submission {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
 
-        self.submit_cmd_buf(pool, &mut cmd)?;
+        self.record(pool, &mut cmd)?;
 
         // Phase 2: Build RELEASE submissions for any transfers discovered while recording.
         let mut release_groups: Vec<ReleaseGroup> = Vec::new();
@@ -3220,7 +3220,7 @@ impl Submission {
 
     /// Records any pending graph commands that have not been previously scheduled.
     #[profiling::function]
-    pub fn submit_cmd_buf<P>(
+    pub fn record<P>(
         &mut self,
         pool: &mut P,
         cmd_buf: &mut CommandBuffer,
@@ -3253,11 +3253,11 @@ impl Submission {
     /// command buffer and updates this submission's scheduling state so those commands are not
     /// recorded again later.
     #[profiling::function]
-    pub fn queue_cmds_for_resource<P>(
+    pub fn record_resource<P>(
         &mut self,
+        pool: &mut P,
         cmd_buf: &mut CommandBuffer,
         resource_node: impl Node,
-        pool: &mut P,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -3288,11 +3288,11 @@ impl Submission {
     /// top of that existing state. If you are pulling multiple outputs and care about their final
     /// ordering, record the most important output first.
     #[profiling::function]
-    pub fn queue_cmds_for_resource_dependencies<P>(
+    pub fn record_resource_dependencies<P>(
         &mut self,
+        pool: &mut P,
         cmd_buf: &mut CommandBuffer,
         resource_node: impl Node,
-        pool: &mut P,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -3643,7 +3643,7 @@ impl Submission {
 
 impl From<Graph> for Submission {
     fn from(val: Graph) -> Self {
-        val.into_submission()
+        val.finalize()
     }
 }
 

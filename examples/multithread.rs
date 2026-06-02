@@ -139,7 +139,7 @@ fn main() -> anyhow::Result<()> {
 
                 // Submit on a queue we are reserving for only this thread to use
                 graph
-                    .into_submission()
+                    .finalize()
                     .queue_submit(&mut pool, secondary_queue_family_index, queue_index)
                     .unwrap();
 
@@ -272,7 +272,7 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
 
     // This copy happens in queue index 0!
     graph
-        .into_submission()
+        .finalize()
         .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     BitmapFont::new(device, font, [page_0])

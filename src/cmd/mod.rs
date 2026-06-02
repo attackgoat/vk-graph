@@ -10,7 +10,7 @@
 //! 3. With a pipeline, declare shader bindings with [`PipelineCommand::shader_resource_access`].
 //! 4. Record work with [`record_cmd`](Command::record_cmd) — available on both
 //!    [`Command`] and [`PipelineCommand`].
-//! 5. The command auto-closes when dropped or when [`Graph::into_submission`] is called.
+//! 5. The command auto-closes when dropped or when [`Graph::finalize`] is called.
 //!
 //! A single command can call `record_cmd` multiple times — each call creates a separate
 //! "execution" within that command. Executions within a command stay in the specified

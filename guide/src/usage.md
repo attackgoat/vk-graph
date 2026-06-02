@@ -7,7 +7,7 @@ API docs: [`Graph`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html),
 [`Graph::begin_cmd`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.begin_cmd),
 [`Graph::bind_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.bind_resource),
 [`Graph::resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.resource),
-[`Graph::into_submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.into_submission).
+[`Graph::finalize`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.finalize).
 
 Typical usage contains:
 
@@ -271,7 +271,7 @@ graph, but they may do so manually:
 # ) -> Result<(), DriverError> {
 // NOTE: This will stall! Use the async functions to check periodically instead
 graph
-    .into_submission()
+    .finalize()
     .queue_submit(&mut LazyPool::new(device), 0, 0)?
     .wait_until_executed()?;
 # Ok(()) }

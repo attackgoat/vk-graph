@@ -998,7 +998,7 @@ impl Graph {
     /// Finalizes the graph and provides an object with functions for submitting the resulting
     /// commands.
     #[profiling::function]
-    pub fn into_submission(mut self) -> Submission {
+    pub fn finalize(mut self) -> Submission {
         // The final execution of each pass has no function
         for cmd in &mut self.cmds {
             debug_assert!(cmd.expect_last_exec().func.is_none());
