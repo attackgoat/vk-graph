@@ -62,6 +62,7 @@ profile-with-tracy = ["profiling/profile-with-tracy"]
 ash = { version = "0.38.0", default-features = false, features = ["debug", "std"] }
 ash-window = "0.13"
 derive_builder = "0.20"
+fixedbitset = "0.5"
 gpu-allocator = "0.28"
 log.workspace = true
 ordered-float = "5.1"

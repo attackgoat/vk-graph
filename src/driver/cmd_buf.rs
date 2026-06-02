@@ -40,6 +40,7 @@ pub struct CommandBuffer {
     pub info: CommandBufferInfo,
 
     pub(crate) pool: vk::CommandPool,
+    release_semaphore: Option<vk::Semaphore>,
 }
 
 impl CommandBuffer {
@@ -110,7 +111,24 @@ impl CommandBuffer {
             handle,
             info,
             pool,
+            release_semaphore: None,
         })
+    }
+
+    /// Returns a cached semaphore used to signal temporary queue-ownership release submissions.
+    ///
+    /// The semaphore is created lazily on first use and then reused with this command buffer for
+    /// subsequent release submissions.
+    pub(crate) fn release_semaphore(&mut self) -> Result<vk::Semaphore, DriverError> {
+        if let Some(semaphore) = self.release_semaphore {
+            return Ok(semaphore);
+        }
+
+        let semaphore = Device::create_semaphore(&self.device)?;
+
+        self.release_semaphore = Some(semaphore);
+
+        Ok(semaphore)
     }
 
     /// Drops an item after execution has been completed.
@@ -226,6 +244,10 @@ impl Drop for CommandBuffer {
         }
 
         unsafe {
+            if let Some(semaphore) = self.release_semaphore.take() {
+                self.device.destroy_semaphore(semaphore, None);
+            }
+
             self.device
                 .free_command_buffers(self.pool, slice::from_ref(&self.handle));
             self.device.destroy_command_pool(self.pool, None);

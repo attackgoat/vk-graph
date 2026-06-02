@@ -24,6 +24,9 @@ cargo run --example min_max -- --debug
 cargo run --example mip_compute -- --debug
 cargo run --example mip_graphic -- --debug
 cargo run --example multithread -- --debug
+cargo run --example multithread -- --debug --concurrent
+cargo run --example multithread --release
+cargo run --example multithread --release -- --concurrent
 cargo run --example multipass -- --debug
 cargo run --example msaa -- --debug
 cargo run --example triangle -- --debug

@@ -42,6 +42,7 @@ use {
         pool::{Lease, Pool},
     },
     ash::vk,
+    fixedbitset::FixedBitSet,
     log::{
         Level::{Debug, Trace},
         debug, log_enabled, trace, warn,
@@ -122,13 +123,15 @@ struct ReleaseGroup {
 
 #[derive(Debug)]
 struct ReleaseBundle {
-    _device: Device,
+    #[allow(dead_code)]
+    cmd_buf: Lease<CommandBuffer>,
+
     semaphore: vk::Semaphore,
-    _temp_cmd: Lease<CommandBuffer>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct PendingTransfer {
+    src_access: AccessType,
     src_queue_family_index: u32,
     src_queue_index: u32,
     dst_queue_family_index: u32,
@@ -287,6 +290,7 @@ impl Drop for PhysicalPass {
 ///   a [`RecordedSubmission`].
 #[derive(Debug)]
 pub struct Submission {
+    exclusive_image_indices: FixedBitSet,
     graph: Graph,
     physical_passes: Vec<PhysicalPass>,
     pending_transfers: HashMap<vk::Image, PendingTransfer>,
@@ -310,6 +314,7 @@ impl Submission {
         let physical_passes = Vec::with_capacity(graph.cmds.len());
 
         Self {
+            exclusive_image_indices: FixedBitSet::with_capacity(graph.resources.len()),
             graph,
             physical_passes,
             pending_transfers: HashMap::new(),
@@ -2541,6 +2546,12 @@ impl Submission {
                     continue;
                 }
 
+                self.exclusive_image_indices.insert(node_idx);
+
+                if image.current_access() == AccessType::Nothing {
+                    continue;
+                }
+
                 let (src_queue_family_index, src_queue_index) =
                     unpack_queue(image.queue_packed.load(Ordering::Acquire));
 
@@ -2549,23 +2560,21 @@ impl Submission {
                 }
 
                 let transfer = PendingTransfer {
+                    src_access: image.current_access(),
                     src_queue_family_index,
                     src_queue_index,
                     dst_queue_family_index: queue_family_index,
                 };
 
-                match self.pending_transfers.entry(image.handle) {
-                    std::collections::hash_map::Entry::Occupied(entry) => {
+                self.pending_transfers
+                    .entry(image.handle)
+                    .and_modify(|existing| {
                         debug_assert_eq!(
-                            *entry.get(),
-                            transfer,
+                            *existing, transfer,
                             "conflicting queue transfer recorded for image"
                         );
-                    }
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(transfer);
-                    }
-                }
+                    })
+                    .or_insert(transfer);
             }
         }
     }
@@ -3125,7 +3134,6 @@ impl Submission {
             let Some(&transfer) = self.pending_transfers.get(&image.handle) else {
                 continue;
             };
-            let current_access = image.current_access();
             let subresource_range = vk::ImageSubresourceRange {
                 aspect_mask: format_aspect_mask(image.info.fmt),
                 base_mip_level: 0,
@@ -3139,12 +3147,12 @@ impl Submission {
             }) {
                 group
                     .images
-                    .push((image.handle, current_access, subresource_range));
+                    .push((image.handle, transfer.src_access, subresource_range));
             } else {
                 release_groups.push(ReleaseGroup {
                     old_fam: transfer.src_queue_family_index,
                     old_idx: transfer.src_queue_index,
-                    images: vec![(image.handle, current_access, subresource_range)],
+                    images: vec![(image.handle, transfer.src_access, subresource_range)],
                 });
             }
         }
@@ -3155,13 +3163,8 @@ impl Submission {
             for group in &release_groups {
                 let mut release_cmd = pool.resource(CommandBufferInfo::new(group.old_fam as _))?;
                 release_cmd.wait_until_executed()?;
-
-                let semaphore = unsafe {
-                    release_cmd
-                        .device
-                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                }
-                .map_err(|_| DriverError::Unsupported)?;
+                release_cmd.reset_fence()?;
+                let semaphore = release_cmd.release_semaphore()?;
 
                 Device::begin_command_buffer(
                     &release_cmd.device,
@@ -3216,9 +3219,8 @@ impl Submission {
                 })?;
 
                 release_bundles.push(ReleaseBundle {
-                    _device: release_cmd.device.clone(),
+                    cmd_buf: release_cmd,
                     semaphore,
-                    _temp_cmd: release_cmd,
                 });
             }
         }
@@ -3231,10 +3233,9 @@ impl Submission {
                 .iter()
                 .map(|b| b.semaphore)
                 .collect::<Box<[_]>>();
-            let release_wait_stages = release_bundles
-                .iter()
-                .map(|_| vk::PipelineStageFlags::ALL_COMMANDS)
-                .collect::<Box<[_]>>();
+            let release_wait_stages =
+                repeat_n(vk::PipelineStageFlags::ALL_COMMANDS, release_bundles.len())
+                    .collect::<Box<[_]>>();
 
             let merged_wait_semaphores = wait_semaphores
                 .iter()
@@ -3262,17 +3263,11 @@ impl Submission {
             Ok::<_, DriverError>(())
         })?;
 
-        // Phase 5: Update last_queue for transferred images.
-        for (&handle, transfer) in &self.pending_transfers {
-            if let Some(resource) = self
-                .graph
-                .resources
-                .iter()
-                .filter_map(AnyResource::as_image)
-                .find(|r| r.handle == handle)
-            {
+        // Phase 5: Update queue ownership for all exclusive images touched by this submission.
+        for node_idx in self.exclusive_image_indices.ones() {
+            if let Some(resource) = self.graph.resources[node_idx].as_image() {
                 resource.queue_packed.store(
-                    pack_queue(transfer.dst_queue_family_index, queue_index),
+                    pack_queue(queue_family_index, queue_index),
                     Ordering::Release,
                 );
             }

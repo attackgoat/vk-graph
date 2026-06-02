@@ -15,9 +15,10 @@ use {
         Graph,
         driver::{
             DriverError,
-            ash::{self, vk},
+            ash::vk,
             cmd_buf::{CommandBuffer, CommandBufferInfo},
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
+            device::Device,
             image::Image,
             render_pass::{RenderPass, RenderPassInfo},
             surface::Surface,
@@ -28,17 +29,6 @@ use {
         pool::Pool,
     },
 };
-
-fn create_semaphore(device: &ash::Device) -> Result<vk::Semaphore, DriverError> {
-    let create_info = vk::SemaphoreCreateInfo::default();
-    let allocation_callbacks = None;
-
-    unsafe { device.create_semaphore(&create_info, allocation_callbacks) }.map_err(|err| {
-        warn!("unable to create semaphore: {err}");
-
-        DriverError::OutOfMemory
-    })
-}
 
 const fn image_access_layout(access: AccessType) -> ImageLayout {
     if matches!(access, AccessType::Present | AccessType::ComputeShaderWrite) {
@@ -92,8 +82,8 @@ impl Swapchain {
                 &swapchain.surface.device,
                 CommandBufferInfo::new(info.queue_family_index),
             )?;
-            let swapchain_acquired = create_semaphore(&swapchain.surface.device)?;
-            let swapchain_rendered = create_semaphore(&swapchain.surface.device)?;
+            let swapchain_acquired = Device::create_semaphore(&swapchain.surface.device)?;
+            let swapchain_rendered = Device::create_semaphore(&swapchain.surface.device)?;
 
             execs.push(Execution {
                 cmd_buf,

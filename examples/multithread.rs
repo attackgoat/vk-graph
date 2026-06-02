@@ -284,7 +284,8 @@ struct Args {
     #[arg(long)]
     debug: bool,
 
-    /// Use concurrent sharing mode instead of the default exclusive (automatic ownership transfer)
+    /// Use concurrent sharing mode (Vulkan implementation automatically transfers ownership)
+    /// instead of the default exclusive (vk-graph automatically tracks and transfers ownership)
     #[arg(long)]
     concurrent: bool,
 }

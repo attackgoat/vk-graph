@@ -108,7 +108,10 @@ impl Device {
         Self::try_from_physical_device(physical_device)
     }
 
-    pub(crate) fn create_fence(this: &Self, signaled: bool) -> Result<vk::Fence, DriverError> {
+    /// Creates a Vulkan fence on this device.
+    ///
+    /// Pass `true` for `signaled` when the fence should begin in the signaled state.
+    pub fn create_fence(this: &Self, signaled: bool) -> Result<vk::Fence, DriverError> {
         let mut flags = vk::FenceCreateFlags::empty();
 
         if signaled {
@@ -118,11 +121,29 @@ impl Device {
         let create_info = vk::FenceCreateInfo::default().flags(flags);
         let allocation_callbacks = None;
 
-        unsafe { this.create_fence(&create_info, allocation_callbacks) }.map_err(|err| {
-            warn!("unable to create fence: {err}");
+        unsafe {
+            this.create_fence(&create_info, allocation_callbacks)
+                .map_err(|err| {
+                    warn!("unable to create fence: {err}");
 
-            DriverError::OutOfMemory
-        })
+                    DriverError::OutOfMemory
+                })
+        }
+    }
+
+    /// Creates a Vulkan binary semaphore on this device.
+    pub fn create_semaphore(this: &Self) -> Result<vk::Semaphore, DriverError> {
+        let create_info = vk::SemaphoreCreateInfo::default();
+        let allocation_callbacks = None;
+
+        unsafe {
+            this.create_semaphore(&create_info, allocation_callbacks)
+                .map_err(|err| {
+                    warn!("unable to create semaphore: {err}");
+
+                    DriverError::OutOfMemory
+                })
+        }
     }
 
     /// Ends recording a command buffer on this device.
@@ -198,6 +219,7 @@ impl Device {
             .expect("missing VK_KHR_swapchain")
     }
 
+    /// Returns the device-owned pipeline cache handle.
     pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
         this.inner.pipeline_cache
     }
@@ -358,11 +380,16 @@ impl Device {
         Self::try_from_ash(device, physical_device)
     }
 
+    /// Waits for a single fence to signal.
     #[profiling::function]
     pub(crate) fn wait_for_fence(this: &Self, fence: &vk::Fence) -> Result<(), DriverError> {
         Device::wait_for_fences(this, slice::from_ref(fence))
     }
 
+    /// Waits for all fences in `fences` to signal.
+    ///
+    /// This first performs a short poll so uncontended waits return quickly, then falls back to an
+    /// indefinite wait while logging unusually slow completions.
     #[profiling::function]
     pub(crate) fn wait_for_fences(this: &Self, fences: &[vk::Fence]) -> Result<(), DriverError> {
         unsafe {
@@ -410,6 +437,7 @@ impl Device {
         Ok(())
     }
 
+    /// Provides mutable access to the device allocator under its internal lock.
     pub(crate) fn with_allocator<R>(this: &Self, f: impl FnOnce(&mut Allocator) -> R) -> R {
         let allocator = this.inner.allocator.lock();
 
