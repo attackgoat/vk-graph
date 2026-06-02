@@ -15,9 +15,10 @@ use {
             format_aspect_mask,
             graphic::{DepthStencilInfo, GraphicsPipeline},
             image::{DenseAccess, Image},
-            initial_image_layout_access, is_read_access, is_write_access,
+            initial_image_layout_access, is_read_access, is_write_access, pack_queue,
             pipeline_stage_access_flags,
             render_pass::{RenderPass, RenderPassInfo},
+            unpack_queue,
         },
         pool::{Lease, Pool},
     },
@@ -32,6 +33,7 @@ use {
         iter::repeat_n,
         ops::Range,
         slice,
+        sync::atomic::Ordering,
     },
     vk_sync::{
         AccessType, BufferBarrier, GlobalBarrier, ImageBarrier, ImageLayout, cmd::pipeline_barrier,
@@ -47,6 +49,70 @@ const fn image_access_layout(access: AccessType) -> ImageLayout {
     } else {
         ImageLayout::Optimal
     }
+}
+
+/// Maps the current access type to the concrete Vulkan image layout,
+/// replicating the vk_sync layout-selection logic used during barrier construction.
+fn access_type_to_layout(access: AccessType) -> vk::ImageLayout {
+    match access {
+        // ImageLayout::Optimal → use the layout from AccessInfo
+        AccessType::ColorAttachmentRead
+        | AccessType::ColorAttachmentReadWrite
+        | AccessType::ColorAttachmentWrite => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        AccessType::DepthStencilAttachmentRead => vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        AccessType::DepthStencilAttachmentReadWrite | AccessType::DepthStencilAttachmentWrite => {
+            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        }
+        AccessType::DepthAttachmentWriteStencilReadOnly => {
+            vk::ImageLayout::DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL
+        }
+        AccessType::StencilAttachmentWriteDepthReadOnly => {
+            vk::ImageLayout::DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL
+        }
+        AccessType::TransferRead => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        AccessType::TransferWrite => vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        // Shader reads of sampled images / input attachments
+        AccessType::VertexShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::FragmentShaderReadColorInputAttachment
+        | AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::TessellationControlShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::GeometryShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::MeshShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::TaskShaderReadSampledImageOrUniformTexelBuffer => {
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        }
+        AccessType::FragmentShaderReadDepthStencilInputAttachment => {
+            vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        }
+        // ImageLayout::General → GENERAL (or PRESENT_SRC_KHR for Present)
+        AccessType::Present => vk::ImageLayout::PRESENT_SRC_KHR,
+        // Everything else → GENERAL (safe fallback, covers ComputeShaderWrite,
+        // AnyShaderWrite, HostRead/Write, etc.)
+        _ => vk::ImageLayout::GENERAL,
+    }
+}
+
+struct ReleaseGroup {
+    old_fam: u32,
+    old_idx: u32,
+    images: Vec<(vk::Image, AccessType, vk::ImageSubresourceRange)>,
+}
+
+#[derive(Debug)]
+struct ReleaseBundle {
+    _device: Device,
+    semaphore: vk::Semaphore,
+    _temp_cmd: Lease<CommandBuffer>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingTransfer {
+    src_queue_family_index: u32,
+    src_queue_index: u32,
+    dst_queue_family_index: u32,
 }
 
 #[derive(Default)]
@@ -195,12 +261,13 @@ impl Drop for PhysicalPass {
 ///
 /// This pattern was derived from:
 ///
-/// <http://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/>
-/// <https://github.com/EmbarkStudios/kajiya>
+/// - [`themaister.net`](http://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/)
+/// - [`EmbarkStudios/kajiya`](https://github.com/EmbarkStudios/kajiya)
 #[derive(Debug)]
 pub struct Submission {
     graph: Graph,
     physical_passes: Vec<PhysicalPass>,
+    pending_transfers: HashMap<vk::Image, PendingTransfer>,
 }
 
 impl Submission {
@@ -210,6 +277,7 @@ impl Submission {
         Self {
             graph,
             physical_passes,
+            pending_transfers: HashMap::new(),
         }
     }
 
@@ -1940,6 +2008,7 @@ impl Submission {
         cmd_buf: &CommandBuffer,
         resources: &mut [AnyResource],
         accesses: impl Iterator<Item = (&'a NodeIndex, &'a Vec<SubresourceAccess>)>,
+        pending_transfers: &HashMap<vk::Image, PendingTransfer>,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
         thread_local! {
@@ -2167,8 +2236,16 @@ impl Submission {
                         previous_layout: image_access_layout(*prev_access),
                         discard_contents: *prev_access == AccessType::Nothing
                             || is_write_access(*next_access),
-                        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                        src_queue_family_index: pending_transfers
+                            .get(&image)
+                            .map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                                transfer.src_queue_family_index
+                            }),
+                        dst_queue_family_index: pending_transfers
+                            .get(&image)
+                            .map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                                transfer.dst_queue_family_index
+                            }),
                         image,
                         range,
                     }
@@ -2190,6 +2267,7 @@ impl Submission {
         cmd_buf: &CommandBuffer,
         resources: &mut [AnyResource],
         pass: &mut CommandData,
+        pending_transfers: &HashMap<vk::Image, PendingTransfer>,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
         thread_local! {
@@ -2357,8 +2435,16 @@ impl Submission {
                         previous_accesses: slice::from_ref(prev_access),
                         previous_layout: image_access_layout(*prev_access),
                         discard_contents,
-                        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                        src_queue_family_index: pending_transfers
+                            .get(image)
+                            .map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                                transfer.src_queue_family_index
+                            }),
+                        dst_queue_family_index: pending_transfers
+                            .get(image)
+                            .map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                                transfer.dst_queue_family_index
+                            }),
                         image: *image,
                         range: *range,
                     }
@@ -2399,6 +2485,60 @@ impl Submission {
         })
     }
 
+    fn track_pending_transfers(&mut self, schedule: &Schedule, queue_family_index: u32) {
+        for pass_idx in schedule.passes.iter().copied() {
+            let pass = &self.graph.cmds[pass_idx];
+
+            for (node_idx, accesses) in pass
+                .execs
+                .iter()
+                .flat_map(|exec| exec.accesses.iter())
+                .map(|(node_idx, accesses)| (*node_idx, accesses))
+            {
+                if !accesses
+                    .iter()
+                    .any(|access| matches!(access.subresource, SubresourceRange::Image(..)))
+                {
+                    continue;
+                }
+
+                let Some(image) = self.graph.resources[node_idx].as_image() else {
+                    continue;
+                };
+
+                if image.info.sharing_mode == vk::SharingMode::CONCURRENT {
+                    continue;
+                }
+
+                let (src_queue_family_index, src_queue_index) =
+                    unpack_queue(image.queue_packed.load(Ordering::Acquire));
+
+                if src_queue_family_index == queue_family_index {
+                    continue;
+                }
+
+                let transfer = PendingTransfer {
+                    src_queue_family_index,
+                    src_queue_index,
+                    dst_queue_family_index: queue_family_index,
+                };
+
+                match self.pending_transfers.entry(image.handle) {
+                    std::collections::hash_map::Entry::Occupied(entry) => {
+                        debug_assert_eq!(
+                            *entry.get(),
+                            transfer,
+                            "conflicting queue transfer recorded for image"
+                        );
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(transfer);
+                    }
+                }
+            }
+        }
+    }
+
     #[profiling::function]
     fn record_scheduled_passes<P>(
         &mut self,
@@ -2428,6 +2568,7 @@ impl Submission {
         Self::reorder_scheduled_passes(schedule, end_pass_idx);
         self.merge_scheduled_passes(&mut schedule.passes);
         self.lease_scheduled_resources(pool, &schedule.passes)?;
+        self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index);
 
         #[cfg(feature = "checked")]
         let graph_id = self.graph.graph_id();
@@ -2447,7 +2588,12 @@ impl Submission {
             }
 
             let render_area = if is_graphic {
-                Self::record_image_layout_transitions(cmd_buf, &mut self.graph.resources, pass);
+                Self::record_image_layout_transitions(
+                    cmd_buf,
+                    &mut self.graph.resources,
+                    pass,
+                    &self.pending_transfers,
+                );
 
                 let render_area = vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
@@ -2524,6 +2670,7 @@ impl Submission {
                         cmd_buf,
                         &mut self.graph.resources,
                         exec.accesses.iter(),
+                        &self.pending_transfers,
                     );
                 }
 
@@ -2880,7 +3027,6 @@ impl Submission {
     }
 
     /// Submits the remaining commands stored in this instance.
-    #[profiling::function]
     pub fn queue_submit<P>(
         mut self,
         pool: &mut P,
@@ -2894,6 +3040,8 @@ impl Submission {
     {
         trace!("submit");
 
+        // Phase 1: Get the main command buffer and record commands. This also discovers any
+        // ownership transfers required by the scheduled work.
         let mut cmd = pool.resource(CommandBufferInfo::new(queue_family_index as _))?;
 
         cmd.wait_until_executed()?;
@@ -2907,20 +3055,158 @@ impl Submission {
 
         self.submit_cmd_buf(pool, &mut cmd)?;
 
+        // Phase 2: Build RELEASE submissions for any transfers discovered while recording.
+        let mut release_groups: Vec<ReleaseGroup> = Vec::new();
+        for resource in self.graph.resources.iter() {
+            let Some(image) = resource.as_image() else {
+                continue;
+            };
+            let Some(&transfer) = self.pending_transfers.get(&image.handle) else {
+                continue;
+            };
+            let current_access = image.current_access();
+            let subresource_range = vk::ImageSubresourceRange {
+                aspect_mask: format_aspect_mask(image.info.fmt),
+                base_mip_level: 0,
+                level_count: vk::REMAINING_MIP_LEVELS,
+                base_array_layer: 0,
+                layer_count: vk::REMAINING_ARRAY_LAYERS,
+            };
+            if let Some(group) = release_groups.iter_mut().find(|g| {
+                g.old_fam == transfer.src_queue_family_index
+                    && g.old_idx == transfer.src_queue_index
+            }) {
+                group
+                    .images
+                    .push((image.handle, current_access, subresource_range));
+            } else {
+                release_groups.push(ReleaseGroup {
+                    old_fam: transfer.src_queue_family_index,
+                    old_idx: transfer.src_queue_index,
+                    images: vec![(image.handle, current_access, subresource_range)],
+                });
+            }
+        }
+
+        // Phase 3: For each unique old queue, submit a RELEASE barrier.
+        let mut release_bundles: Vec<ReleaseBundle> = Vec::new();
+        if !release_groups.is_empty() {
+            for group in &release_groups {
+                let mut release_cmd = pool.resource(CommandBufferInfo::new(group.old_fam as _))?;
+                release_cmd.wait_until_executed()?;
+
+                let semaphore = unsafe {
+                    release_cmd
+                        .device
+                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                }
+                .map_err(|_| DriverError::Unsupported)?;
+
+                Device::begin_command_buffer(
+                    &release_cmd.device,
+                    release_cmd.handle,
+                    &vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )?;
+
+                let barriers: Box<[_]> = group
+                    .images
+                    .iter()
+                    .map(|&(handle, current_access, subresource_range)| {
+                        let layout = access_type_to_layout(current_access);
+                        vk::ImageMemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                            .dst_access_mask(vk::AccessFlags::empty())
+                            .old_layout(layout)
+                            .new_layout(layout)
+                            .src_queue_family_index(group.old_fam)
+                            .dst_queue_family_index(queue_family_index)
+                            .image(handle)
+                            .subresource_range(subresource_range)
+                    })
+                    .collect();
+
+                unsafe {
+                    release_cmd.device.cmd_pipeline_barrier(
+                        release_cmd.handle,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &barriers,
+                    );
+                }
+
+                Device::with_queue(&release_cmd.device, group.old_fam, group.old_idx, |queue| {
+                    Device::end_command_buffer(&release_cmd.device, release_cmd.handle)?;
+                    Device::queue_submit(
+                        &release_cmd.device,
+                        queue,
+                        slice::from_ref(
+                            &vk::SubmitInfo::default()
+                                .command_buffers(slice::from_ref(&release_cmd.handle))
+                                .signal_semaphores(slice::from_ref(&semaphore)),
+                        ),
+                        release_cmd.fence,
+                    )?;
+
+                    Ok::<_, DriverError>(())
+                })?;
+
+                release_bundles.push(ReleaseBundle {
+                    _device: release_cmd.device.clone(),
+                    semaphore,
+                    _temp_cmd: release_cmd,
+                });
+            }
+        }
+
+        // Phase 4: Submit the main command buffer, waiting on release semaphores if any.
         Device::with_queue(&cmd.device, queue_family_index, queue_index, |queue| {
             Device::end_command_buffer(&cmd.device, cmd.handle)?;
             Device::reset_fences(&cmd.device, slice::from_ref(&cmd.fence))?;
-            Device::queue_submit(
-                &cmd.device,
-                queue,
-                slice::from_ref(
-                    &vk::SubmitInfo::default().command_buffers(slice::from_ref(&cmd.handle)),
-                ),
-                cmd.fence,
-            )?;
+
+            let wait_semaphores: Box<[_]> = release_bundles.iter().map(|b| b.semaphore).collect();
+            let wait_stages: Box<[_]> = release_bundles
+                .iter()
+                .map(|_| vk::PipelineStageFlags::ALL_COMMANDS)
+                .collect();
+
+            let submit_info = if wait_semaphores.is_empty() {
+                vk::SubmitInfo::default().command_buffers(slice::from_ref(&cmd.handle))
+            } else {
+                vk::SubmitInfo::default()
+                    .command_buffers(slice::from_ref(&cmd.handle))
+                    .wait_semaphores(&wait_semaphores)
+                    .wait_dst_stage_mask(&wait_stages)
+            };
+
+            Device::queue_submit(&cmd.device, queue, slice::from_ref(&submit_info), cmd.fence)?;
 
             Ok::<_, DriverError>(())
         })?;
+
+        // Phase 5: Update last_queue for transferred images.
+        for (&handle, transfer) in &self.pending_transfers {
+            if let Some(resource) = self
+                .graph
+                .resources
+                .iter()
+                .filter_map(AnyResource::as_image)
+                .find(|r| r.handle == handle)
+            {
+                resource.queue_packed.store(
+                    pack_queue(transfer.dst_queue_family_index, queue_index),
+                    Ordering::Release,
+                );
+            }
+        }
+
+        // Keep release bundles alive until the main submission completes.
+        for bundle in release_bundles {
+            cmd.drop_after_executed(bundle);
+        }
 
         // This graph contains references to buffers, images, and other resources which must be kept
         // alive until this graph execution completes on the GPU. Once those references are dropped
