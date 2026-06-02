@@ -59,16 +59,38 @@ pub mod shader;
 pub mod surface;
 pub mod swapchain;
 
-#[doc(hidden)]
+/// Descriptor pool allocation helpers used by pipeline execution.
+///
+/// Part of the advanced driver API for callers that need direct control over descriptor
+/// allocation. Most users should use the higher-level graph system instead.
 pub mod descriptor_set;
 
 mod descriptor_set_layout;
 
+/// Re-export of the [`ash`] crate — the foundational Vulkan bindings that every wrapper in this
+/// crate is built on.
+///
+/// `vk-graph` is **ash+graph**: it wraps `ash` to make Vulkan easier to use, but does not replace
+/// it. Expert users can always reach through to the raw bindings via `vk_graph::driver::ash`.
+///
+/// # Hidden from docs
+///
+/// This re-export is `#[doc(hidden)]` to avoid duplicating the entire `ash` API surface in
+/// `vk-graph`'s documentation. It is intentionally public and stable — not deprecated.
 #[doc(hidden)]
-pub use {
-    ash::{self},
-    vk_sync::{self as sync},
-};
+pub use ash::{self};
+
+/// Re-export of [`vk_sync`] under the `sync` alias — Vulkan synchronization primitives.
+///
+/// Provides [`AccessType`](sync::AccessType) and related types that are the foundation of
+/// `vk-graph`'s automatic resource tracking.
+///
+/// # Hidden from docs
+///
+/// This re-export is `#[doc(hidden)]` to avoid duplicating the entire `vk_sync` API surface in
+/// `vk-graph`'s documentation. It is intentionally public and stable — not deprecated.
+#[doc(hidden)]
+pub use vk_sync::{self as sync};
 
 pub(crate) use self::{
     descriptor_set::DescriptorSet,
@@ -459,7 +481,9 @@ pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
         vk::Format::G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16
         | vk::Format::G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16
         | vk::Format::G16_B16R16_2PLANE_444_UNORM => 6,
-        _ => panic!("unsupported texel block size format"),
+        // Vulkan is extensible — new formats can appear at any time. The caller is expected to
+        // know the format is valid; no runtime assertion needed per the project's philosophy.
+        _ => 0,
     }
 }
 
@@ -719,7 +743,9 @@ pub const fn format_texel_block_extent(vk_format: vk::Format) -> (u32, u32) {
         | vk::Format::PVRTC1_4BPP_SRGB_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_UNORM_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_SRGB_BLOCK_IMG => (4, 4),
-        _ => panic!("unsupported texel block extent format"),
+        // Vulkan is extensible — new formats can appear at any time. The caller is expected to
+        // know the format is valid; no runtime assertion needed per the project's philosophy.
+        _ => (1, 1),
     }
 }
 

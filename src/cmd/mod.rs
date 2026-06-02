@@ -83,6 +83,8 @@ impl<'a> Command<'a> {
         let cmd_idx = graph.cmds.len();
         graph.cmds.push(CommandData {
             execs: vec![Default::default()], // We start off with a default execution!
+
+            #[cfg(debug_assertions)]
             name: None,
         });
 

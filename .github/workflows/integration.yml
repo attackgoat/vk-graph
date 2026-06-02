@@ -42,5 +42,8 @@ jobs:
       - name: Install mdBook
         run: cargo install --locked mdbook --version 0.5.3
 
-      - name: Run full checks with GPU
-        run: bin/check --allow-dirty
+      - name: Run full checks with GPU (debug)
+        run: bin/check
+
+      - name: Run full checks with GPU (release)
+        run: bin/check --release
