@@ -2795,56 +2795,84 @@ impl Submission {
             return;
         }
 
-        let mut scheduled = 0;
+        let pass_count = schedule.passes.len();
 
-        thread_local! {
-            static UNSCHEDULED: RefCell<Vec<bool>> = Default::default();
+        schedule.local_indices.truncate(end_pass_idx);
+        schedule.local_indices.fill(usize::MAX);
+        schedule.local_indices.resize(end_pass_idx, usize::MAX);
+
+        schedule.interdependent.truncate(pass_count);
+        for interdependent in &mut schedule.interdependent {
+            interdependent.clear();
         }
 
-        UNSCHEDULED.with_borrow_mut(|unscheduled| {
-            unscheduled.truncate(end_pass_idx);
-            unscheduled.fill(true);
-            unscheduled.resize(end_pass_idx, true);
+        schedule.interdependent.resize_with(pass_count, Vec::new);
 
-            // Re-order passes by maximizing the distance between dependent nodes
-            while scheduled < schedule.passes.len() {
-                let mut best_idx = scheduled;
-                let pass_idx = schedule.passes[best_idx];
-                let mut best_overlap_factor = schedule
-                    .access_index
-                    .interdependent_passes(pass_idx, end_pass_idx)
-                    .count();
+        schedule.seen_deps.clear();
+        schedule.seen_deps.grow(pass_count);
 
-                for (idx, pass_idx) in schedule.passes[best_idx + 1..schedule.passes.len()]
-                    .iter()
-                    .enumerate()
-                {
-                    let mut overlap_factor = 0;
+        schedule.unscheduled.clear();
+        schedule.unscheduled.grow(end_pass_idx);
 
-                    for other_pass_idx in schedule
-                        .access_index
-                        .interdependent_passes(*pass_idx, end_pass_idx)
-                    {
-                        if unscheduled[other_pass_idx] {
-                            // This pass can't be the candidate because it depends on unfinished
-                            // work
-                            break;
-                        }
+        for (local_idx, &pass_idx) in schedule.passes.iter().enumerate() {
+            schedule.local_indices[pass_idx] = local_idx;
+            schedule.unscheduled.insert(pass_idx);
+        }
 
-                        overlap_factor += 1;
-                    }
-
-                    if overlap_factor > best_overlap_factor {
-                        best_idx += idx + 1;
-                        best_overlap_factor = overlap_factor;
-                    }
+        for (local_idx, &pass_idx) in schedule.passes.iter().enumerate() {
+            for dep_pass_idx in schedule
+                .access_index
+                .interdependent_passes(pass_idx, end_pass_idx)
+            {
+                let dep_local_idx = schedule.local_indices[dep_pass_idx];
+                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+                    continue;
                 }
 
-                unscheduled[schedule.passes[best_idx]] = false;
-                schedule.passes.swap(scheduled, best_idx);
-                scheduled += 1;
+                if !schedule.seen_deps.put(dep_local_idx) {
+                    schedule.interdependent[local_idx].push(dep_pass_idx);
+                }
             }
-        });
+
+            for dep_pass_idx in schedule
+                .access_index
+                .interdependent_passes(pass_idx, end_pass_idx)
+            {
+                let dep_local_idx = schedule.local_indices[dep_pass_idx];
+                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
+                    schedule.seen_deps.set(dep_local_idx, false);
+                }
+            }
+        }
+
+        let mut scheduled = 0;
+        while scheduled < pass_count {
+            let mut best_idx = scheduled;
+            let mut best_overlap_factor = schedule.interdependent[best_idx].len();
+
+            for idx in (scheduled + 1)..pass_count {
+                let mut overlap_factor = 0;
+
+                for &dep_pass_idx in &schedule.interdependent[idx] {
+                    if schedule.unscheduled.contains(dep_pass_idx) {
+                        break;
+                    }
+
+                    overlap_factor += 1;
+                }
+
+                if overlap_factor > best_overlap_factor {
+                    best_overlap_factor = overlap_factor;
+                    best_idx = idx;
+                }
+            }
+
+            let best_pass_idx = schedule.passes[best_idx];
+            schedule.unscheduled.set(best_pass_idx, false);
+            schedule.passes.swap(scheduled, best_idx);
+            schedule.interdependent.swap(scheduled, best_idx);
+            scheduled += 1;
+        }
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
@@ -3848,5 +3876,9 @@ impl From<Graph> for Submission {
 #[derive(Default)]
 struct Schedule {
     access_index: AccessIndex,
+    interdependent: Vec<Vec<usize>>,
+    local_indices: Vec<usize>,
     passes: Vec<usize>,
+    seen_deps: FixedBitSet,
+    unscheduled: FixedBitSet,
 }

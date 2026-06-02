@@ -287,7 +287,11 @@ impl Window {
                 });
             }
 
-            fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ()) {
+            fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ()) {
+                info!("signal received, exiting event loop");
+
+                event_loop.exit();
+
                 if let Some(ActiveWindow { events, .. }) = self.active_window.as_mut() {
                     events.push(Event::UserEvent(event));
                 }
@@ -414,6 +418,15 @@ impl Window {
             error: None,
             primary_monitor: None,
         };
+
+        let proxy = self.read_only.event_loop.create_proxy();
+        if let Err(e) = ctrlc::set_handler(move || {
+            trace!("received SIGINT/SIGTERM");
+
+            let _ = proxy.send_event(());
+        }) {
+            warn!("failed to set Ctrl-C handler: {e}");
+        }
 
         self.read_only.event_loop.run_app(&mut app)?;
 

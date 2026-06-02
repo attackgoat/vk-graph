@@ -13,6 +13,7 @@ readme = "README.md"
 repository.workspace = true
 
 [dependencies]
+ctrlc = { version = "3.4", features = ["termination"] }
 derive_builder = "0.20"
 log.workspace = true
 profiling.workspace = true
