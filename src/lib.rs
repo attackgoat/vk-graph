@@ -74,6 +74,52 @@ type GraphId = u64;
 #[cfg(feature = "checked")]
 static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Default)]
+struct ExecutionAccesses {
+    entries: Vec<(NodeIndex, Vec<SubresourceAccess>)>,
+    lookup: HashMap<NodeIndex, usize>,
+}
+
+impl ExecutionAccesses {
+    fn contains(&self, node_idx: NodeIndex) -> bool {
+        self.lookup.contains_key(&node_idx)
+    }
+
+    fn get(&self, node_idx: NodeIndex) -> Option<&[SubresourceAccess]> {
+        self.lookup
+            .get(&node_idx)
+            .map(|&entry_idx| self.entries[entry_idx].1.as_slice())
+    }
+
+    fn get_mut(&mut self, node_idx: &NodeIndex) -> Option<&mut [SubresourceAccess]> {
+        self.lookup
+            .get(node_idx)
+            .copied()
+            .map(|entry_idx| self.entries[entry_idx].1.as_mut_slice())
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (NodeIndex, &[SubresourceAccess])> + '_ {
+        self.entries
+            .iter()
+            .map(|(node_idx, accesses)| (*node_idx, accesses.as_slice()))
+    }
+
+    fn push(&mut self, node_idx: NodeIndex, access: SubresourceAccess) {
+        if let Some(&entry_idx) = self.lookup.get(&node_idx) {
+            self.entries[entry_idx].1.push(access);
+        } else {
+            self.lookup.insert(node_idx, self.entries.len());
+            self.entries.push((node_idx, vec![access]));
+        }
+    }
+}
+
+impl Debug for ExecutionAccesses {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.entries.fmt(f)
+    }
+}
+
 #[derive(Debug)]
 #[doc(hidden)]
 pub enum AnyResource {
@@ -211,7 +257,7 @@ impl Attachment {
 
 #[derive(Default)]
 struct Execution {
-    accesses: HashMap<NodeIndex, Vec<SubresourceAccess>>,
+    accesses: ExecutionAccesses,
     bindings: BTreeMap<Binding, (NodeIndex, ViewInfo)>,
 
     correlated_view_mask: u32,
@@ -984,7 +1030,7 @@ impl Graph {
 
         for (pass_idx, pass) in self.cmds.iter().enumerate() {
             for exec in pass.execs.iter() {
-                if exec.accesses.contains_key(&node_idx) {
+                if exec.accesses.contains(node_idx) {
                     return Some(pass_idx);
                 }
             }

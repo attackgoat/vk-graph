@@ -184,9 +184,7 @@ impl<'a> Command<'a> {
         self.cmd_mut()
             .expect_last_exec_mut()
             .accesses
-            .entry(node_idx)
-            .and_modify(|accesses| accesses.push(access))
-            .or_insert(vec![access]);
+            .push(node_idx, access);
     }
 
     /// Begin recording a general-purpose command buffer.
