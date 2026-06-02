@@ -43,6 +43,14 @@ pub struct CommandBuffer {
 }
 
 impl CommandBuffer {
+    /// Begins recording this command buffer.
+    ///
+    /// This is a thin wrapper around [`ash::Device::begin_command_buffer`] that maps Vulkan errors
+    /// to [`DriverError`] variants.
+    pub fn begin(&self, info: &vk::CommandBufferBeginInfo) -> Result<(), DriverError> {
+        Device::begin_command_buffer(&self.device, self.handle, info)
+    }
+
     /// Creates a command buffer allocation backed by a transient resettable command pool.
     #[profiling::function]
     pub fn create(
@@ -120,6 +128,14 @@ impl CommandBuffer {
         self.droppables.clear();
     }
 
+    /// Ends recording this command buffer.
+    ///
+    /// This is a thin wrapper around [`ash::Device::end_command_buffer`] that maps Vulkan errors
+    /// to [`DriverError`] variants.
+    pub fn end(&self) -> Result<(), DriverError> {
+        Device::end_command_buffer(&self.device, self.handle)
+    }
+
     /// Returns `true` after the GPU has executed the previous submission to this command buffer.
     ///
     /// See [`Self::wait_until_executed`] to block while checking.
@@ -144,6 +160,20 @@ impl CommandBuffer {
         }
     }
 
+    /// Resets the embedded fence to the unsignaled state.
+    pub fn reset_fence(&self) -> Result<(), DriverError> {
+        Device::reset_fences(&self.device, slice::from_ref(&self.fence))
+    }
+
+    /// Submits command buffers to a queue.
+    pub fn queue_submit(
+        &self,
+        queue: vk::Queue,
+        submits: &[vk::SubmitInfo],
+    ) -> Result<(), DriverError> {
+        Device::queue_submit(&self.device, queue, submits, self.fence)
+    }
+
     /// Stalls by blocking the current thread until the GPU has executed the previous submission to
     /// this command buffer.
     ///
@@ -155,7 +185,7 @@ impl CommandBuffer {
         }
 
         Device::wait_for_fence(&self.device, &self.fence)?;
-
+        self.reset_fence()?;
         self.drop_fenced();
 
         Ok(())

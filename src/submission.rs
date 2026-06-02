@@ -1,3 +1,22 @@
+//! Submission and recording types.
+//!
+//! This module contains the execution-facing types produced by [`Graph::finalize`].
+//!
+//! Typical usage starts with a [`Submission`], which represents a finalized graph that has not yet
+//! been bound to a command buffer:
+//!
+//! - Use [`Submission::queue_submit`] for the one-shot path that allocates, records, and submits a
+//!   command buffer internally.
+//! - Use [`Submission::record`], [`Submission::record_resource`], or
+//!   [`Submission::record_resource_dependencies`] to bind the submission to an existing command
+//!   buffer and obtain a [`RecordedSubmission`].
+//!
+//! A [`RecordedSubmission`] keeps the remaining graph work paired with the command buffer it was
+//! recorded into. This typestate prevents recording with one command buffer and accidentally
+//! submitting with another.
+//!
+//! [`Graph::finalize`]: crate::Graph::finalize
+
 use {
     super::{
         AnyResource, Attachment, CommandData, ExecutionPipeline, Graph, Node, NodeIndex,
@@ -257,17 +276,27 @@ impl Drop for PhysicalPass {
     }
 }
 
-/// A structure which can optimize and submit [`Graph`] instances.
+/// A finalized graph execution plan.
 ///
-/// This pattern was derived from:
+/// `Submission` owns the remaining commands of a [`Graph`] after [`Graph::finalize`] has ended the
+/// graph-building phase. It supports two execution styles:
 ///
-/// - [`themaister.net`](http://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/)
-/// - [`EmbarkStudios/kajiya`](https://github.com/EmbarkStudios/kajiya)
+/// - [`Submission::queue_submit`] for a one-shot submission path.
+/// - [`Submission::record`], [`Submission::record_resource`], or
+///   [`Submission::record_resource_dependencies`] for explicit command-buffer recording, returning
+///   a [`RecordedSubmission`].
 #[derive(Debug)]
 pub struct Submission {
     graph: Graph,
     physical_passes: Vec<PhysicalPass>,
     pending_transfers: HashMap<vk::Image, PendingTransfer>,
+}
+
+/// A [`Submission`] bound to a specific command buffer for explicit recording and submission.
+#[derive(Debug)]
+pub struct RecordedSubmission<'a> {
+    cmd_buf: &'a mut CommandBuffer,
+    submission: Submission,
 }
 
 impl Submission {
@@ -775,11 +804,7 @@ impl Submission {
         }
     }
 
-    /// Returns `true` when all recorded passes have been submitted to a driver command buffer.
-    ///
-    /// A fully-resolved graph contains no additional work and may be discarded, although doing so
-    /// will stall the GPU while the fences are waited on. It is preferrable to wait a few frame so
-    /// that the fences will have already been signalled.
+    /// Returns `true` when this submission contains no more commands to record.
     pub fn is_empty(&self) -> bool {
         self.graph.cmds.is_empty()
     }
@@ -3026,7 +3051,7 @@ impl Submission {
         }
     }
 
-    /// Submits the remaining commands stored in this instance.
+    /// Records and submits the remaining commands stored in this instance.
     pub fn queue_submit<P>(
         mut self,
         pool: &mut P,
@@ -3042,18 +3067,36 @@ impl Submission {
 
         // Phase 1: Get the main command buffer and record commands. This also discovers any
         // ownership transfers required by the scheduled work.
-        let mut cmd = pool.resource(CommandBufferInfo::new(queue_family_index as _))?;
-
-        cmd.wait_until_executed()?;
-
-        Device::begin_command_buffer(
-            &cmd.device,
-            cmd.handle,
+        let mut cmd_buf = pool.resource(CommandBufferInfo::new(queue_family_index as _))?;
+        cmd_buf.wait_until_executed()?;
+        cmd_buf.begin(
             &vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
+        self.record_impl(pool, &mut cmd_buf)?;
+        cmd_buf.end()?;
+        self.queue_submit_recorded(pool, &mut cmd_buf, queue_index, &[], &[], &[])?;
 
-        self.record(pool, &mut cmd)?;
+        Ok(cmd_buf)
+    }
+
+    /// Submits commands already recorded into `cmd_buf`, along with any ownership-transfer release
+    /// work required by this submission.
+    ///
+    /// Does not call begin or end on the command buffer.
+    fn queue_submit_recorded<P>(
+        self,
+        pool: &mut P,
+        cmd_buf: &mut CommandBuffer,
+        queue_index: u32,
+        wait_semaphores: &[vk::Semaphore],
+        wait_dst_stage_mask: &[vk::PipelineStageFlags],
+        signal_semaphores: &[vk::Semaphore],
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<CommandBufferInfo, CommandBuffer>,
+    {
+        let queue_family_index = cmd_buf.info.queue_family_index;
 
         // Phase 2: Build RELEASE submissions for any transfers discovered while recording.
         let mut release_groups: Vec<ReleaseGroup> = Vec::new();
@@ -3163,26 +3206,40 @@ impl Submission {
         }
 
         // Phase 4: Submit the main command buffer, waiting on release semaphores if any.
-        Device::with_queue(&cmd.device, queue_family_index, queue_index, |queue| {
-            Device::end_command_buffer(&cmd.device, cmd.handle)?;
-            Device::reset_fences(&cmd.device, slice::from_ref(&cmd.fence))?;
+        Device::with_queue(&cmd_buf.device, queue_family_index, queue_index, |queue| {
+            Device::reset_fences(&cmd_buf.device, slice::from_ref(&cmd_buf.fence))?;
 
-            let wait_semaphores: Box<[_]> = release_bundles.iter().map(|b| b.semaphore).collect();
-            let wait_stages: Box<[_]> = release_bundles
+            let release_wait_semaphores = release_bundles
+                .iter()
+                .map(|b| b.semaphore)
+                .collect::<Box<[_]>>();
+            let release_wait_stages = release_bundles
                 .iter()
                 .map(|_| vk::PipelineStageFlags::ALL_COMMANDS)
-                .collect();
+                .collect::<Box<[_]>>();
 
-            let submit_info = if wait_semaphores.is_empty() {
-                vk::SubmitInfo::default().command_buffers(slice::from_ref(&cmd.handle))
-            } else {
-                vk::SubmitInfo::default()
-                    .command_buffers(slice::from_ref(&cmd.handle))
-                    .wait_semaphores(&wait_semaphores)
-                    .wait_dst_stage_mask(&wait_stages)
+            let merged_wait_semaphores = wait_semaphores
+                .iter()
+                .copied()
+                .chain(release_wait_semaphores.iter().copied())
+                .collect::<Box<[_]>>();
+            let merged_wait_stages = wait_dst_stage_mask
+                .iter()
+                .copied()
+                .chain(release_wait_stages.iter().copied())
+                .collect::<Box<[_]>>();
+
+            let mut submit_info = vk::SubmitInfo::default()
+                .command_buffers(slice::from_ref(&cmd_buf.handle))
+                .signal_semaphores(signal_semaphores);
+
+            if !merged_wait_semaphores.is_empty() {
+                submit_info = submit_info
+                    .wait_semaphores(&merged_wait_semaphores)
+                    .wait_dst_stage_mask(&merged_wait_stages);
             };
 
-            Device::queue_submit(&cmd.device, queue, slice::from_ref(&submit_info), cmd.fence)?;
+            cmd_buf.queue_submit(queue, slice::from_ref(&submit_info))?;
 
             Ok::<_, DriverError>(())
         })?;
@@ -3205,7 +3262,7 @@ impl Submission {
 
         // Keep release bundles alive until the main submission completes.
         for bundle in release_bundles {
-            cmd.drop_after_executed(bundle);
+            cmd_buf.drop_after_executed(bundle);
         }
 
         // This graph contains references to buffers, images, and other resources which must be kept
@@ -3213,14 +3270,31 @@ impl Submission {
         // they will return to the pool for other things to use. The drop will happen the next time
         // someone tries to lease a command buffer and we notice this one has returned and the fence
         // has been signalled.
-        cmd.drop_after_executed(self);
+        cmd_buf.drop_after_executed(self);
 
-        Ok(cmd)
+        Ok(())
     }
 
-    /// Records any pending graph commands that have not been previously scheduled.
+    /// Records any remaining graph commands into `cmd_buf` and returns a [`RecordedSubmission`].
     #[profiling::function]
-    pub fn record<P>(
+    pub fn record<'a, P>(
+        mut self,
+        pool: &mut P,
+        cmd_buf: &'a mut CommandBuffer,
+    ) -> Result<RecordedSubmission<'a>, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.record_impl(pool, cmd_buf)?;
+
+        Ok(RecordedSubmission {
+            cmd_buf,
+            submission: self,
+        })
+    }
+
+    #[profiling::function]
+    fn record_impl<P>(
         &mut self,
         pool: &mut P,
         cmd_buf: &mut CommandBuffer,
@@ -3247,13 +3321,32 @@ impl Submission {
         })
     }
 
-    /// Records any pending graph commands that the given node requires into `cmd_buf`.
+    /// Records any remaining graph commands that the given node requires into `cmd_buf` and
+    /// returns a [`RecordedSubmission`].
     ///
     /// This is a mutating execution step, not a pure query. It records work into the provided
     /// command buffer and updates this submission's scheduling state so those commands are not
     /// recorded again later.
     #[profiling::function]
-    pub fn record_resource<P>(
+    pub fn record_resource<'a, P>(
+        mut self,
+        pool: &mut P,
+        cmd_buf: &'a mut CommandBuffer,
+        resource_node: impl Node,
+    ) -> Result<RecordedSubmission<'a>, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.record_resource_impl(pool, cmd_buf, resource_node)?;
+
+        Ok(RecordedSubmission {
+            cmd_buf,
+            submission: self,
+        })
+    }
+
+    #[profiling::function]
+    fn record_resource_impl<P>(
         &mut self,
         pool: &mut P,
         cmd_buf: &mut CommandBuffer,
@@ -3287,8 +3380,28 @@ impl Submission {
     /// method optimizes the schedule for the requested node, and later calls can only optimize on
     /// top of that existing state. If you are pulling multiple outputs and care about their final
     /// ordering, record the most important output first.
+    /// Records any remaining prerequisite commands for the given node into `cmd_buf` and returns a
+    /// [`RecordedSubmission`].
     #[profiling::function]
-    pub fn record_resource_dependencies<P>(
+    pub fn record_resource_dependencies<'a, P>(
+        mut self,
+        pool: &mut P,
+        cmd_buf: &'a mut CommandBuffer,
+        resource_node: impl Node,
+    ) -> Result<RecordedSubmission<'a>, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.record_resource_dependencies_impl(pool, cmd_buf, resource_node)?;
+
+        Ok(RecordedSubmission {
+            cmd_buf,
+            submission: self,
+        })
+    }
+
+    #[profiling::function]
+    fn record_resource_dependencies_impl<P>(
         &mut self,
         pool: &mut P,
         cmd_buf: &mut CommandBuffer,
@@ -3638,6 +3751,106 @@ impl Submission {
         }
 
         Ok(())
+    }
+}
+
+impl<'a> RecordedSubmission<'a> {
+    /// Returns the command buffer bound to this recorded submission.
+    pub fn cmd_buf(&self) -> &CommandBuffer {
+        self.cmd_buf
+    }
+
+    /// Returns `true` when this submission contains no more commands to record.
+    pub fn is_empty(&self) -> bool {
+        self.submission.is_empty()
+    }
+
+    /// Returns the stages that process the given resource.
+    #[profiling::function]
+    pub fn resource_stages(&self, resource_node: impl Node) -> vk::PipelineStageFlags {
+        self.submission.resource_stages(resource_node)
+    }
+
+    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
+    /// which the given node represents.
+    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
+    where
+        N: Node,
+    {
+        self.submission.resource(resource_node)
+    }
+
+    /// Records any remaining graph commands into this submission's command buffer.
+    #[profiling::function]
+    pub fn record<P>(mut self, pool: &mut P) -> Result<Self, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.submission.record_impl(pool, self.cmd_buf)?;
+
+        Ok(self)
+    }
+
+    /// Records any remaining graph commands required by the given resource into this submission's
+    /// command buffer.
+    #[profiling::function]
+    pub fn record_resource<P>(
+        mut self,
+        pool: &mut P,
+        resource_node: impl Node,
+    ) -> Result<Self, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.submission
+            .record_resource_impl(pool, self.cmd_buf, resource_node)?;
+
+        Ok(self)
+    }
+
+    /// Records any remaining prerequisite commands for the given resource into this submission's
+    /// command buffer, excluding passes that directly access the resource.
+    #[profiling::function]
+    pub fn record_resource_dependencies<P>(
+        mut self,
+        pool: &mut P,
+        resource_node: impl Node,
+    ) -> Result<Self, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.submission
+            .record_resource_dependencies_impl(pool, self.cmd_buf, resource_node)?;
+
+        Ok(self)
+    }
+
+    /// Submits this recorded submission's command buffer, along with any ownership-transfer
+    /// release work required by the submission.
+    pub fn queue_submit<P>(
+        self,
+        pool: &mut P,
+        queue_index: u32,
+        wait_semaphores: &[vk::Semaphore],
+        wait_dst_stage_mask: &[vk::PipelineStageFlags],
+        signal_semaphores: &[vk::Semaphore],
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<CommandBufferInfo, CommandBuffer>,
+    {
+        let Self {
+            cmd_buf,
+            submission,
+        } = self;
+
+        submission.queue_submit_recorded(
+            pool,
+            cmd_buf,
+            queue_index,
+            wait_semaphores,
+            wait_dst_stage_mask,
+            signal_semaphores,
+        )
     }
 }
 

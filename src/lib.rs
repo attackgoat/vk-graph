@@ -18,8 +18,7 @@ pub mod cmd;
 pub mod driver;
 pub mod node;
 pub mod pool;
-
-mod submission;
+pub mod submission;
 
 use std::sync::Arc;
 
@@ -33,9 +32,8 @@ use crate::{
         swapchain::SwapchainImage,
     },
     pool::Lease,
+    submission::Submission,
 };
-
-pub use self::submission::Submission;
 
 use {
     self::{
