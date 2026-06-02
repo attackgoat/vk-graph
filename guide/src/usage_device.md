@@ -82,8 +82,8 @@ let physical_devices = Instance::physical_devices(&instance)?;
 
 for physical_device in physical_devices {
     // We are looking for a device with support for these features
-    if !physical_device.swapchain_ext
-    || !physical_device.ray_trace_features.ray_tracing_pipeline {
+    if !physical_device.khr_swapchain
+    || !physical_device.ray_tracing_pipeline_features.ray_tracing_pipeline {
         continue;
     }
 

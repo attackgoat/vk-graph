@@ -16,7 +16,7 @@ use {
         driver::{
             buffer::Buffer,
             device::Device,
-            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             shader::{SamplerInfo, Shader},
         },
@@ -118,7 +118,7 @@ fn main() -> anyhow::Result<()> {
 fn create_pipeline(
     device: &Device,
     sampler_info: impl Into<SamplerInfo>,
-) -> anyhow::Result<GraphicPipeline> {
+) -> anyhow::Result<GraphicsPipeline> {
     let args = Args::parse();
 
     let mut frag_shader = match (args.hlsl, args.separate) {
@@ -235,9 +235,9 @@ fn create_pipeline(
     let sampler_binding = args.separate as u32;
     frag_shader = frag_shader.image_sampler(sampler_binding, sampler_info);
 
-    Ok(GraphicPipeline::create(
+    Ok(GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(
                 glsl!(

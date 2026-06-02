@@ -4,7 +4,7 @@ use {
         Attachment, Node, SubresourceAccess,
         cmd::SubresourceRange,
         driver::{
-            graphic::{DepthStencilInfo, GraphicPipeline},
+            graphic::{DepthStencilInfo, GraphicsPipeline},
             image::{
                 ImageInfo, ImageViewInfo, image_subresource_range_contains,
                 image_subresource_range_intersects,
@@ -18,7 +18,7 @@ use {
     vk_sync::AccessType,
 };
 
-impl PipelineCommand<'_, GraphicPipeline> {
+impl PipelineCommand<'_, GraphicsPipeline> {
     /// Sets the `color_attachment` attachment index of the following render pass to the given
     /// `image`.
     ///
@@ -193,13 +193,16 @@ impl PipelineCommand<'_, GraphicPipeline> {
     }
 
     /// Begin recording a graphics pipeline command buffer.
-    pub fn record_cmd(mut self, func: impl FnOnce(GraphicCommandRef<'_>) + Send + 'static) -> Self {
+    pub fn record_cmd(
+        mut self,
+        func: impl FnOnce(GraphicsCommandRef<'_>) + Send + 'static,
+    ) -> Self {
         self.record_cmd_mut(func);
         self
     }
 
     /// Begin recording a graphics pipeline command buffer.
-    pub fn record_cmd_mut(&mut self, func: impl FnOnce(GraphicCommandRef<'_>) + Send + 'static) {
+    pub fn record_cmd_mut(&mut self, func: impl FnOnce(GraphicsCommandRef<'_>) + Send + 'static) {
         let pipeline = self
             .cmd
             .cmd()
@@ -208,7 +211,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
             .clone();
 
         self.cmd.push_exec(move |cmd| {
-            func(GraphicCommandRef { cmd, pipeline });
+            func(GraphicsCommandRef { cmd, pipeline });
         });
     }
 
@@ -432,7 +435,7 @@ impl PipelineCommand<'_, GraphicPipeline> {
     }
 }
 
-impl PipelineCommand<'_, GraphicPipeline> {
+impl PipelineCommand<'_, GraphicsPipeline> {
     fn attach_color(
         &mut self,
         image: impl Into<AnyImageNode>,
@@ -1662,7 +1665,7 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 ///
 /// This structure provides a strongly-typed set of methods which allow raster graphics shader code
 /// to be executed. An instance is provided to the closure argument of
-/// [`PipelineCommand::record_cmd`] which may be accessed by binding a [`GraphicPipeline`] to a
+/// [`PipelineCommand::record_cmd`] which may be accessed by binding a [`GraphicsPipeline`] to a
 /// command.
 ///
 /// # Examples
@@ -1674,7 +1677,7 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 /// # use vk_graph::cmd::{LoadOp, StoreOp};
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+/// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
 /// # use vk_graph::driver::image::{Image, ImageInfo};
 /// # use vk_graph::Graph;
 /// # use vk_graph::driver::shader::Shader;
@@ -1684,8 +1687,8 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 /// # let my_vert_code = [0u8; 1];
 /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
 /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
-/// # let info = GraphicPipelineInfo::default();
-/// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
+/// # let info = GraphicsPipelineInfo::default();
+/// # let my_graphic_pipeline = GraphicsPipeline::create(&device, info, [vert, frag])?;
 /// # let mut my_graph = Graph::default();
 /// # let info = ImageInfo::image_2d(
 /// #     32,
@@ -1705,12 +1708,12 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 ///     });
 /// # Ok(()) }
 /// ```
-pub struct GraphicCommandRef<'a> {
+pub struct GraphicsCommandRef<'a> {
     cmd: CommandRef<'a>,
-    pipeline: GraphicPipeline,
+    pipeline: GraphicsPipeline,
 }
 
-impl GraphicCommandRef<'_> {
+impl GraphicsCommandRef<'_> {
     /// Bind an index buffer to the current command.
     ///
     /// `offset` is the starting offset in bytes within `buffer` used in index buffer address
@@ -1727,7 +1730,7 @@ impl GraphicCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
@@ -1737,8 +1740,8 @@ impl GraphicCommandRef<'_> {
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
-    /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
+    /// # let info = GraphicsPipelineInfo::default();
+    /// # let my_graphic_pipeline = GraphicsPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
     /// # let info = ImageInfo::image_2d(
     /// #     32,
@@ -1802,7 +1805,7 @@ impl GraphicCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
@@ -1814,8 +1817,8 @@ impl GraphicCommandRef<'_> {
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
-    /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
+    /// # let info = GraphicsPipelineInfo::default();
+    /// # let my_graphic_pipeline = GraphicsPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
     /// # let info = ImageInfo::image_2d(
     /// #     32,
@@ -1989,7 +1992,7 @@ impl GraphicCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
@@ -1999,8 +2002,8 @@ impl GraphicCommandRef<'_> {
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
-    /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
+    /// # let info = GraphicsPipelineInfo::default();
+    /// # let my_graphic_pipeline = GraphicsPipeline::create(&device, info, [vert, frag])?;
     /// # let mut my_graph = Graph::default();
     /// # let buf_info = BufferInfo::device_mem(8, vk::BufferUsageFlags::INDEX_BUFFER);
     /// # let my_idx_buf = Buffer::create(&device, buf_info)?;
@@ -2216,7 +2219,7 @@ impl GraphicCommandRef<'_> {
     /// # use vk_graph::cmd::{LoadOp, StoreOp};
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::graphic::{GraphicPipeline, GraphicPipelineInfo};
+    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::Graph;
     /// # use vk_graph::driver::shader::Shader;
@@ -2226,8 +2229,8 @@ impl GraphicCommandRef<'_> {
     /// # let my_vert_code = [0u8; 1];
     /// # let vert = Shader::new_vertex(my_vert_code.as_slice());
     /// # let frag = Shader::new_fragment(my_frag_code.as_slice());
-    /// # let info = GraphicPipelineInfo::default();
-    /// # let my_graphic_pipeline = GraphicPipeline::create(&device, info, [vert, frag])?;
+    /// # let info = GraphicsPipelineInfo::default();
+    /// # let my_graphic_pipeline = GraphicsPipeline::create(&device, info, [vert, frag])?;
     /// # let info = ImageInfo::image_2d(
     /// #     32,
     /// #     32,
@@ -2293,7 +2296,7 @@ impl GraphicCommandRef<'_> {
     }
 }
 
-impl<'a> Deref for GraphicCommandRef<'a> {
+impl<'a> Deref for GraphicsCommandRef<'a> {
     type Target = CommandRef<'a>;
 
     fn deref(&self) -> &Self::Target {

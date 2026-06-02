@@ -101,7 +101,7 @@ impl HotShader {
         HotShaderBuilder::new(stage, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -110,7 +110,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::ANY_HIT_KHR, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -119,7 +119,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::CALLABLE_KHR, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -155,7 +155,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::GEOMETRY, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -173,7 +173,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::MESH_EXT, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -182,7 +182,7 @@ impl HotShader {
         Self::new(vk::ShaderStageFlags::MISS_KHR, path)
     }
 
-    /// Creates a new ray trace shader.
+    /// Creates a new ray tracing shader.
     ///
     /// # Panics
     ///
@@ -348,6 +348,11 @@ impl HotShaderBuilder {
 
     /// Builds a new `HotShader`.
     pub fn build(self) -> HotShader {
+        self.try_build().expect("invalid hot shader")
+    }
+
+    /// Builds a new `HotShader`, returning an error if required fields are missing.
+    pub fn try_build(self) -> Result<HotShader, UninitializedFieldError> {
         let this = self;
 
         #[cfg(target_os = "macos")]
@@ -359,7 +364,7 @@ impl HotShaderBuilder {
             this.stage = Some(vk::ShaderStageFlags::empty());
         }
 
-        this.fallible_build().expect("invalid hot shader")
+        this.fallible_build()
     }
 
     /// Defines a single macro.
@@ -419,5 +424,12 @@ mod test {
                 ("BAR".to_owned(), None),
             ])
         );
+    }
+
+    #[test]
+    fn try_build_requires_path() {
+        let err = HotShaderBuilder::default().try_build().unwrap_err();
+
+        assert_eq!(err.field_name(), "path");
     }
 }

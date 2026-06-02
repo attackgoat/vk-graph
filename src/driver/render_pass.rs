@@ -4,7 +4,7 @@ use {
     super::{
         DriverError,
         device::Device,
-        graphic::{DepthStencilInfo, GraphicPipeline},
+        graphic::{DepthStencilInfo, GraphicsPipeline},
         image::SampleCount,
     },
     ash::vk,
@@ -324,7 +324,7 @@ impl RenderPass {
     #[profiling::function]
     pub(crate) fn pipeline_handle(
         &mut self,
-        pipeline: &GraphicPipeline,
+        pipeline: &GraphicsPipeline,
         depth_stencil: Option<DepthStencilInfo>,
         subpass_idx: u32,
     ) -> Result<vk::Pipeline, DriverError> {

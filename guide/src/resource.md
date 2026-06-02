@@ -20,7 +20,7 @@ referenced in future graphs.
 Binding resources to a graph produces a "Node" handle which may be used in commands and shader
 pipelines.
 
-Example for buffers using `Graph::bind_resource<R, N>(&mut self, resource: R) -> N`:
+Example for buffers using `Graph::bind_resource<R>(&mut self, resource: R) -> R::Node`:
 
 `R`|`N`
 -|-
@@ -33,7 +33,7 @@ Example for buffers using `Graph::bind_resource<R, N>(&mut self, resource: R) ->
 
 Resources may be borrowed from a graph.
 
-Example for buffers using `Graph::resource<N, R>(&self, node: N) -> &R`:
+Example for buffers using `Graph::resource<N>(&self, node: N) -> &N::Resource`:
 
 `N`|`R`
 -|-

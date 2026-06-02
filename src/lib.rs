@@ -1,13 +1,13 @@
 /*!
 
-This crate provides a high-performance [Vulkan](https://www.vulkan.org/) driver featuring automated
-resource management and execution.
+A high-performance [Vulkan](https://www.vulkan.org/) driver with automated resource management and
+execution. Start with [`Graph`] — bind resources, record commands, and submit for execution.
 
-For an overview, including installation and typical usage, see the
-[Guide Book](https://attackgoat.github.io/vk-graph).
+- **Beginner**: [`Graph`], [`cmd`], [`node`], [`pool`] — the high-level graph API
+- **Intermediate**: [`driver`] — smart-pointer Vulkan wrappers (resources, pipelines, device)
+- **Expert**: [`driver`] re-exports `ash` and `vk_sync` — raw Vulkan bindings
 
-
-
+For installation, guides, and examples see the [Guide Book](https://attackgoat.github.io/vk-graph).
 
 */
 
@@ -22,6 +22,9 @@ pub mod pool;
 mod submission;
 
 use std::sync::Arc;
+
+#[cfg(feature = "checked")]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
     cmd::{ClearColorValue, CommandRef},
@@ -47,10 +50,10 @@ use {
         DescriptorBindingMap,
         compute::ComputePipeline,
         format_aspect_mask, format_texel_block_extent, format_texel_block_size,
-        graphic::{DepthStencilInfo, GraphicPipeline},
+        graphic::{DepthStencilInfo, GraphicsPipeline},
         image::{ImageInfo, ImageViewInfo, SampleCount},
         image_subresource_range_from_layers,
-        ray_trace::RayTracePipeline,
+        ray_trace::RayTracingPipeline,
         render_pass::ResolveMode,
         shader::PipelineDescriptorInfo,
     },
@@ -60,12 +63,18 @@ use {
         collections::{BTreeMap, HashMap},
         fmt::{Debug, Formatter},
         ops::Range,
+        ops::{Deref, DerefMut},
     },
     vk_sync::AccessType,
 };
 
 type ExecFn = Box<dyn FnOnce(CommandRef) + Send>;
 type NodeIndex = usize;
+
+type GraphId = u64;
+
+#[cfg(feature = "checked")]
+static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
 #[doc(hidden)]
@@ -78,6 +87,28 @@ pub enum AnyResource {
     ImageLease(Arc<Lease<Image>>),
     SwapchainImage(Box<SwapchainImage>),
 }
+
+macro_rules! any_resource_from_arc {
+    ($name:ident) => {
+        paste::paste! {
+            impl From<Arc<$name>> for AnyResource {
+                fn from(resource: Arc<$name>) -> Self {
+                    Self::$name(resource)
+                }
+            }
+
+            impl From<Arc<Lease<$name>>> for AnyResource {
+                fn from(resource: Arc<Lease<$name>>) -> Self {
+                    Self::[<$name Lease>](resource)
+                }
+            }
+        }
+    };
+}
+
+any_resource_from_arc!(AccelerationStructure);
+any_resource_from_arc!(Buffer);
+any_resource_from_arc!(Image);
 
 impl AnyResource {
     fn as_accel_struct(&self) -> Option<&AccelerationStructure> {
@@ -238,12 +269,12 @@ struct ExecutionFunction(ExecFn);
 #[derive(Clone, Debug)]
 enum ExecutionPipeline {
     Compute(ComputePipeline),
-    Graphic(GraphicPipeline),
-    RayTrace(RayTracePipeline),
+    Graphic(GraphicsPipeline),
+    RayTrace(RayTracingPipeline),
 }
 
 impl ExecutionPipeline {
-    fn as_graphic(&self) -> Option<&GraphicPipeline> {
+    fn as_graphic(&self) -> Option<&GraphicsPipeline> {
         if let Self::Graphic(pipeline) = self {
             Some(pipeline)
         } else {
@@ -283,15 +314,15 @@ impl ExecutionPipeline {
         }
     }
 
-    fn expect_graphic(&self) -> &GraphicPipeline {
-        self.as_graphic().expect("missing graphic pipeline")
+    fn expect_graphic(&self) -> &GraphicsPipeline {
+        self.as_graphic().expect("missing graphics pipeline")
     }
 
-    fn expect_ray_trace(&self) -> &RayTracePipeline {
+    fn expect_ray_trace(&self) -> &RayTracingPipeline {
         if let Self::RayTrace(pipeline) = self {
             pipeline
         } else {
-            panic!("missing ray trace pipeline")
+            panic!("missing ray tracing pipeline")
         }
     }
 
@@ -315,6 +346,8 @@ impl ExecutionPipeline {
 #[derive(Debug)]
 struct CommandData {
     execs: Vec<Execution>,
+
+    #[cfg(debug_assertions)]
     name: Option<String>,
 }
 
@@ -360,7 +393,15 @@ impl CommandData {
     }
 
     fn name(&self) -> &str {
-        self.name.as_deref().unwrap_or("command")
+        const DEFAULT: &str = "command";
+
+        #[cfg(not(debug_assertions))]
+        {
+            DEFAULT
+        }
+
+        #[cfg(debug_assertions)]
+        self.name.as_deref().unwrap_or(DEFAULT)
     }
 }
 
@@ -372,16 +413,44 @@ impl CommandData {
 /// [`PassBuilder`](https://github.com/EmbarkStudios/kajiya/blob/main/crates/lib/kajiya-rg/src/pass_builder.rs)
 /// and
 /// [`graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/graph.cpp).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Graph {
     cmds: Vec<CommandData>,
-    resources: Vec<AnyResource>,
+    resources: ResourceMap,
+
+    #[cfg(feature = "checked")]
+    graph_id: GraphId,
+}
+
+impl Default for Graph {
+    fn default() -> Self {
+        Self {
+            cmds: Default::default(),
+            resources: Default::default(),
+
+            #[cfg(feature = "checked")]
+            graph_id: NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed),
+        }
+    }
 }
 
 impl Graph {
     /// Constructs a default `Graph`.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn assert_node_owner<N>(&self, _resource_node: &N)
+    where
+        N: Node,
+    {
+        #[cfg(feature = "checked")]
+        _resource_node.assert_owner(self.graph_id);
+    }
+
+    #[cfg(feature = "checked")]
+    pub(crate) fn graph_id(&self) -> GraphId {
+        self.graph_id
     }
 
     /// Allocates and begins writing a new command.
@@ -584,16 +653,16 @@ impl Graph {
         let src = src.into();
         let dst = dst.into();
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         let src_size = self.resource(src).info.size;
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         let dst_size = self.resource(dst).info.size;
 
         let mut cmd = self.begin_cmd().debug_name("copy buffer");
 
         for region in regions.as_ref() {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "checked")]
             {
                 assert!(
                     region.src_offset + region.size <= src_size,
@@ -911,6 +980,8 @@ impl Graph {
     /// Returns the index of the first pass which accesses a given node
     #[profiling::function]
     fn first_node_access_pass_index(&self, resource_node: impl Node) -> Option<usize> {
+        self.assert_node_owner(&resource_node);
+
         let node_idx = resource_node.index();
 
         for (pass_idx, pass) in self.cmds.iter().enumerate() {
@@ -944,10 +1015,18 @@ impl Graph {
     where
         N: Node,
     {
+        self.assert_node_owner(&resource_node);
         resource_node.borrow(&self.resources)
     }
 
-    /// Note: `data` must not exceed 65536 bytes.
+    /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html)
+    /// command.
+    ///
+    /// Vulkan requires `data` to be at most `65536` bytes.
+    ///
+    /// These constraints are validated by the Vulkan Validation Layer (VVL) when it is active.
+    /// When the `checked` feature is enabled, `vk-graph` also validates the data size and bounds
+    /// before recording the command.
     #[profiling::function]
     pub fn update_buffer(
         &mut self,
@@ -955,11 +1034,19 @@ impl Graph {
         offset: vk::DeviceSize,
         data: impl AsRef<[u8]> + 'static + Send,
     ) -> &mut Self {
+        debug_assert!(data.as_ref().len() <= 64 * 1024);
+
         let buffer = buffer.into();
         let data_end = offset + data.as_ref().len() as vk::DeviceSize;
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         {
+            assert!(
+                data.as_ref().len() <= 64 * 1024,
+                "data length ({}) exceeds vkCmdUpdateBuffer limit (65536)",
+                data.as_ref().len()
+            );
+
             let buffer_info = self.resource(buffer).info;
 
             assert!(
@@ -987,7 +1074,9 @@ impl Graph {
 /// A Vulkan resource which has been bound to a [`Graph`].
 ///
 /// See [`Graph::bind_resource`].
-pub trait Node {
+///
+/// This trait is sealed and cannot be implemented outside of `vk-graph`.
+pub trait Node: private::Sealed {
     /// The Vulkan buffer, image, or acceleration struction type.
     type Resource;
 
@@ -996,13 +1085,23 @@ pub trait Node {
 
     #[doc(hidden)]
     fn index(&self) -> NodeIndex;
+
+    #[doc(hidden)]
+    fn assert_owner(&self, _graph_id: GraphId) {}
+}
+
+mod private {
+    /// Prevents external implementations of [`Node`] and [`Resource`].
+    pub trait Sealed {}
 }
 
 /// A Vulkan resource which may be bound to a [`Graph`].
 ///
 /// See [`Graph::bind_resource`] and
 /// [`Command::bind_resource`](crate::cmd::Command::bind_resource).
-pub trait Resource {
+///
+/// This trait is sealed and cannot be implemented outside of `vk-graph`.
+pub trait Resource: private::Sealed {
     /// The resource handle type.
     type Node;
 
@@ -1010,17 +1109,22 @@ pub trait Resource {
     fn bind_graph(self, _: &mut Graph) -> Self::Node;
 }
 
+impl private::Sealed for SwapchainImage {}
+
 impl Resource for SwapchainImage {
     type Node = SwapchainImageNode;
 
     fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-        // We will return a new node
-        let node = Self::Node::new(graph.resources.len());
+        let node = Self::Node::new(
+            graph.resources.len(),
+            #[cfg(feature = "checked")]
+            graph.graph_id,
+        );
 
         //trace!("Node {}: {:?}", res.idx, &self);
 
         let resource = AnyResource::SwapchainImage(Box::new(self));
-        graph.resources.push(resource);
+        graph.resources.bind(resource);
 
         node
     }
@@ -1029,19 +1133,22 @@ impl Resource for SwapchainImage {
 macro_rules! resource {
     ($name:ident) => {
         paste::paste! {
+            impl private::Sealed for $name {}
+            impl private::Sealed for Arc<$name> {}
+            impl<'a> private::Sealed for &'a Arc<$name> {}
+            impl private::Sealed for Lease<$name> {}
+            impl private::Sealed for Arc<Lease<$name>> {}
+            impl<'a> private::Sealed for &'a Arc<Lease<$name>> {}
+
             impl Resource for $name {
                 type Node = [<$name Node>];
 
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // In this function we are resource a new item (Image or Buffer or etc)
+
                     // We will return a new node
-                    let node = Self::Node::new(graph.resources.len());
-
-                    let resource = AnyResource::$name(Arc::new(self));
-                    graph.resources.push(resource);
-
-                    node
+                    Arc::new(self).bind_graph(graph)
                 }
             }
 
@@ -1052,21 +1159,13 @@ macro_rules! resource {
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // In this function we are resource an existing resource (Arc<Image> or
                     // Arc<Buffer> or etc)
+
                     // We will return an existing node, if possible
-                    // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
-                    for (idx, existing_resource) in graph.resources.iter_mut().enumerate() {
-                        if let AnyResource::$name(existing_resource) = existing_resource
-                            && Arc::ptr_eq(existing_resource, &self) {
-                                return Self::Node::new(idx);
-                        }
-                    }
-
-                    // Return a new node
-                    let node = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource::$name(self);
-                    graph.resources.push(resource);
-
-                    node
+                    Self::Node::new(
+                        graph.resources.bind_shared(self),
+                        #[cfg(feature = "checked")]
+                        graph.graph_id,
+                    )
                 }
             }
 
@@ -1090,11 +1189,7 @@ macro_rules! resource {
                     // Lease<Buffer> or etc)
 
                     // We will return a new node
-                    let node = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource::[<$name Lease>](Arc::new(self));
-                    graph.resources.push(resource);
-
-                    node
+                    Arc::new(self).bind_graph(graph)
                 }
             }
 
@@ -1107,20 +1202,11 @@ macro_rules! resource {
                     // (Arc<Lease<Image>> or Arc<Lease<Buffer>> or etc)
 
                     // We will return an existing node, if possible
-                    // TODO: Could store a sorted list of these shared pointers to avoid the O(N)
-                    for (idx, existing_resource) in graph.resources.iter().enumerate() {
-                        if let AnyResource::[<$name Lease>](existing_resource) = existing_resource
-                            && Arc::ptr_eq(existing_resource, &self) {
-                                return Self::Node::new(idx);
-                        }
-                    }
-
-                    // We will return a new node
-                    let node = Self::Node::new(graph.resources.len());
-                    let resource = AnyResource::[<$name Lease>](self);
-                    graph.resources.push(resource);
-
-                    node
+                    Self::Node::new(
+                        graph.resources.bind_shared(self),
+                        #[cfg(feature = "checked")]
+                        graph.graph_id,
+                    )
                 }
             }
 
@@ -1141,3 +1227,444 @@ macro_rules! resource {
 resource!(AccelerationStructure);
 resource!(Image);
 resource!(Buffer);
+
+#[derive(Debug, Default)]
+struct ResourceMap {
+    addr_index: HashMap<usize, NodeIndex>,
+    resources: Vec<AnyResource>,
+}
+
+impl ResourceMap {
+    fn bind(&mut self, resource: AnyResource) -> NodeIndex {
+        let node_idx = self.resources.len();
+        self.resources.push(resource);
+
+        node_idx
+    }
+
+    fn bind_shared<T>(&mut self, resource: Arc<T>) -> NodeIndex
+    where
+        Arc<T>: Into<AnyResource>,
+    {
+        let addr = Arc::as_ptr(&resource) as usize;
+
+        *self.addr_index.entry(addr).or_insert_with(|| {
+            let node_idx = self.resources.len();
+            self.resources.push(resource.into());
+
+            node_idx
+        })
+    }
+}
+
+impl Deref for ResourceMap {
+    type Target = [AnyResource];
+
+    fn deref(&self) -> &Self::Target {
+        &self.resources
+    }
+}
+
+impl DerefMut for ResourceMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.resources
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use ash::vk;
+
+    use super::{AnyResource, Graph, Node, ResourceMap};
+    use crate::driver::{
+        DriverError,
+        accel_struct::{AccelerationStructure, AccelerationStructureInfo},
+        buffer::{Buffer, BufferInfo},
+        device::{Device, DeviceInfo},
+        image::{Image, ImageInfo},
+        swapchain::SwapchainImage,
+    };
+    use crate::pool::{Pool, hash::HashPool};
+
+    mod integration {
+        use super::*;
+
+        fn test_device() -> Result<Device, DriverError> {
+            Device::create(DeviceInfo::default())
+        }
+
+        mod resource_map {
+            use super::*;
+
+            #[test]
+            #[ignore = "requires Vulkan device"]
+            fn bind_assigns_a_new_node_index_every_time() -> Result<(), DriverError> {
+                let device = test_device()?;
+                let buffer = Arc::new(Buffer::create(
+                    &device,
+                    BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
+                )?);
+                let image = Arc::new(Image::create(
+                    &device,
+                    ImageInfo::image_2d(
+                        1,
+                        1,
+                        vk::Format::R8G8B8A8_UNORM,
+                        vk::ImageUsageFlags::SAMPLED,
+                    ),
+                )?);
+                let mut resources = ResourceMap::default();
+
+                assert_eq!(resources.bind(AnyResource::from(buffer)), 0);
+                assert_eq!(resources.bind(AnyResource::from(image)), 1);
+                assert_eq!(resources.len(), 2);
+
+                Ok(())
+            }
+
+            #[test]
+            #[ignore = "requires Vulkan device"]
+            fn bind_shared_reuses_the_existing_node_index_for_the_same_address()
+            -> Result<(), DriverError> {
+                let device = test_device()?;
+                let buffer = Arc::new(Buffer::create(
+                    &device,
+                    BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
+                )?);
+                let mut resources = ResourceMap::default();
+
+                assert_eq!(resources.bind_shared(Arc::clone(&buffer)), 0);
+                assert_eq!(resources.bind_shared(buffer), 0);
+                assert_eq!(resources.len(), 1);
+
+                Ok(())
+            }
+
+            #[test]
+            #[ignore = "requires Vulkan device"]
+            fn bind_shared_creates_distinct_node_indices_for_different_addresses()
+            -> Result<(), DriverError> {
+                let device = test_device()?;
+                let buffer = Arc::new(Buffer::create(
+                    &device,
+                    BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
+                )?);
+                let image = Arc::new(Image::create(
+                    &device,
+                    ImageInfo::image_2d(
+                        1,
+                        1,
+                        vk::Format::R8G8B8A8_UNORM,
+                        vk::ImageUsageFlags::SAMPLED,
+                    ),
+                )?);
+                let mut resources = ResourceMap::default();
+
+                assert_eq!(resources.bind_shared(buffer), 0);
+                assert_eq!(resources.bind_shared(image), 1);
+                assert_eq!(resources.len(), 2);
+
+                Ok(())
+            }
+
+            #[test]
+            #[ignore = "requires Vulkan device"]
+            fn graph_bind_fuzzes_all_resource_paths() -> Result<(), DriverError> {
+                #[derive(Clone, Copy)]
+                enum ResourceKind {
+                    OwnedBuffer,
+                    SharedBuffer,
+                    OwnedBufferLease,
+                    SharedBufferLease,
+                    OwnedImage,
+                    SharedImage,
+                    OwnedImageLease,
+                    SharedImageLease,
+                    SwapchainImage,
+                    OwnedAccelerationStructure,
+                    SharedAccelerationStructure,
+                    OwnedAccelerationStructureLease,
+                    SharedAccelerationStructureLease,
+                }
+
+                struct SharedNodes<T> {
+                    values: Vec<(Arc<T>, usize)>,
+                }
+
+                impl<T> Default for SharedNodes<T> {
+                    fn default() -> Self {
+                        Self { values: Vec::new() }
+                    }
+                }
+
+                impl<T> SharedNodes<T> {
+                    fn get(&self, idx: usize) -> Option<(Arc<T>, usize)> {
+                        self.values
+                            .get(idx)
+                            .map(|(resource, node_idx)| (Arc::clone(resource), *node_idx))
+                    }
+
+                    fn push(&mut self, resource: Arc<T>, node_idx: usize) {
+                        self.values.push((resource, node_idx));
+                    }
+
+                    fn len(&self) -> usize {
+                        self.values.len()
+                    }
+                }
+
+                fn next_rand(state: &mut u64) -> u64 {
+                    *state ^= *state << 13;
+                    *state ^= *state >> 7;
+                    *state ^= *state << 17;
+                    *state
+                }
+
+                let device = test_device()?;
+                let mut pool = HashPool::new(&device);
+                let mut graph = Graph::new();
+
+                let mut rand_state = 0x5eed_u64;
+                let mut shared_buffers = SharedNodes::<Buffer>::default();
+                let mut shared_buffer_leases = SharedNodes::<crate::pool::Lease<Buffer>>::default();
+                let mut shared_images = SharedNodes::<Image>::default();
+                let mut shared_image_leases = SharedNodes::<crate::pool::Lease<Image>>::default();
+                let mut shared_accels = SharedNodes::<AccelerationStructure>::default();
+                let mut shared_accel_leases =
+                    SharedNodes::<crate::pool::Lease<AccelerationStructure>>::default();
+                let accel_supported = device.physical_device.accel_struct_properties.is_some();
+
+                let mut resource_kinds = vec![
+                    ResourceKind::OwnedBuffer,
+                    ResourceKind::SharedBuffer,
+                    ResourceKind::OwnedBufferLease,
+                    ResourceKind::SharedBufferLease,
+                    ResourceKind::OwnedImage,
+                    ResourceKind::SharedImage,
+                    ResourceKind::OwnedImageLease,
+                    ResourceKind::SharedImageLease,
+                    ResourceKind::SwapchainImage,
+                ];
+
+                if accel_supported {
+                    resource_kinds.push(ResourceKind::OwnedAccelerationStructure);
+                    resource_kinds.push(ResourceKind::SharedAccelerationStructure);
+                    resource_kinds.push(ResourceKind::OwnedAccelerationStructureLease);
+                    resource_kinds.push(ResourceKind::SharedAccelerationStructureLease);
+                }
+
+                for step in 0..64 {
+                    let kind = resource_kinds
+                        [(next_rand(&mut rand_state) as usize) % resource_kinds.len()];
+                    let expect_new = match kind {
+                        ResourceKind::OwnedBuffer
+                        | ResourceKind::OwnedBufferLease
+                        | ResourceKind::OwnedImage
+                        | ResourceKind::OwnedImageLease
+                        | ResourceKind::SwapchainImage
+                        | ResourceKind::OwnedAccelerationStructure
+                        | ResourceKind::OwnedAccelerationStructureLease => true,
+                        ResourceKind::SharedBuffer => {
+                            shared_buffers.len() == 0 || next_rand(&mut rand_state) & 1 == 0
+                        }
+                        ResourceKind::SharedBufferLease => {
+                            shared_buffer_leases.len() == 0 || next_rand(&mut rand_state) & 1 == 0
+                        }
+                        ResourceKind::SharedImage => {
+                            shared_images.len() == 0 || next_rand(&mut rand_state) & 1 == 0
+                        }
+                        ResourceKind::SharedImageLease => {
+                            shared_image_leases.len() == 0 || next_rand(&mut rand_state) & 1 == 0
+                        }
+                        ResourceKind::SharedAccelerationStructure => {
+                            shared_accels.len() == 0 || next_rand(&mut rand_state) & 1 == 0
+                        }
+                        ResourceKind::SharedAccelerationStructureLease => {
+                            shared_accel_leases.len() == 0 || next_rand(&mut rand_state) & 1 == 0
+                        }
+                    };
+
+                    let expected_node_idx = graph.resources.len();
+
+                    let node_idx = match kind {
+                        ResourceKind::OwnedBuffer => graph
+                            .bind_resource(Buffer::create(
+                                &device,
+                                BufferInfo::device_mem(
+                                    16 + step,
+                                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                                ),
+                            )?)
+                            .index(),
+                        ResourceKind::SharedBuffer if expect_new => {
+                            let resource = Arc::new(Buffer::create(
+                                &device,
+                                BufferInfo::device_mem(
+                                    16 + step,
+                                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                                ),
+                            )?);
+                            let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
+                            shared_buffers.push(resource, node_idx);
+                            node_idx
+                        }
+                        ResourceKind::SharedBuffer => {
+                            let reuse_idx =
+                                (next_rand(&mut rand_state) as usize) % shared_buffers.len();
+                            let (resource, node_idx) = shared_buffers.get(reuse_idx).unwrap();
+                            assert_eq!(graph.bind_resource(resource).index(), node_idx);
+                            node_idx
+                        }
+                        ResourceKind::OwnedBufferLease => graph
+                            .bind_resource(pool.resource(BufferInfo::device_mem(
+                                32 + step,
+                                vk::BufferUsageFlags::STORAGE_BUFFER,
+                            ))?)
+                            .index(),
+                        ResourceKind::SharedBufferLease if expect_new => {
+                            let resource = Arc::new(pool.resource(BufferInfo::device_mem(
+                                32 + step,
+                                vk::BufferUsageFlags::STORAGE_BUFFER,
+                            ))?);
+                            let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
+                            shared_buffer_leases.push(resource, node_idx);
+                            node_idx
+                        }
+                        ResourceKind::SharedBufferLease => {
+                            let reuse_idx =
+                                (next_rand(&mut rand_state) as usize) % shared_buffer_leases.len();
+                            let (resource, node_idx) = shared_buffer_leases.get(reuse_idx).unwrap();
+                            assert_eq!(graph.bind_resource(resource).index(), node_idx);
+                            node_idx
+                        }
+                        ResourceKind::OwnedImage => graph
+                            .bind_resource(Image::create(
+                                &device,
+                                ImageInfo::image_2d(
+                                    1,
+                                    1,
+                                    vk::Format::R8G8B8A8_UNORM,
+                                    vk::ImageUsageFlags::SAMPLED,
+                                ),
+                            )?)
+                            .index(),
+                        ResourceKind::SharedImage if expect_new => {
+                            let resource = Arc::new(Image::create(
+                                &device,
+                                ImageInfo::image_2d(
+                                    1,
+                                    1,
+                                    vk::Format::R8G8B8A8_UNORM,
+                                    vk::ImageUsageFlags::SAMPLED,
+                                ),
+                            )?);
+                            let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
+                            shared_images.push(resource, node_idx);
+                            node_idx
+                        }
+                        ResourceKind::SharedImage => {
+                            let reuse_idx =
+                                (next_rand(&mut rand_state) as usize) % shared_images.len();
+                            let (resource, node_idx) = shared_images.get(reuse_idx).unwrap();
+                            assert_eq!(graph.bind_resource(resource).index(), node_idx);
+                            node_idx
+                        }
+                        ResourceKind::OwnedImageLease => graph
+                            .bind_resource(pool.resource(ImageInfo::image_2d(
+                                1,
+                                1,
+                                vk::Format::R8G8B8A8_UNORM,
+                                vk::ImageUsageFlags::SAMPLED,
+                            ))?)
+                            .index(),
+                        ResourceKind::SharedImageLease if expect_new => {
+                            let resource = Arc::new(pool.resource(ImageInfo::image_2d(
+                                1,
+                                1,
+                                vk::Format::R8G8B8A8_UNORM,
+                                vk::ImageUsageFlags::SAMPLED,
+                            ))?);
+                            let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
+                            shared_image_leases.push(resource, node_idx);
+                            node_idx
+                        }
+                        ResourceKind::SharedImageLease => {
+                            let reuse_idx =
+                                (next_rand(&mut rand_state) as usize) % shared_image_leases.len();
+                            let (resource, node_idx) = shared_image_leases.get(reuse_idx).unwrap();
+                            assert_eq!(graph.bind_resource(resource).index(), node_idx);
+                            node_idx
+                        }
+                        ResourceKind::SwapchainImage => graph
+                            .bind_resource(SwapchainImage::from_raw(
+                                &device,
+                                vk::Image::null(),
+                                ImageInfo::image_2d(
+                                    1,
+                                    1,
+                                    vk::Format::R8G8B8A8_UNORM,
+                                    vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                                ),
+                                step as u32,
+                            ))
+                            .index(),
+                        ResourceKind::OwnedAccelerationStructure => graph
+                            .bind_resource(AccelerationStructure::create(
+                                &device,
+                                AccelerationStructureInfo::blas(256 + step),
+                            )?)
+                            .index(),
+                        ResourceKind::SharedAccelerationStructure if expect_new => {
+                            let resource = Arc::new(AccelerationStructure::create(
+                                &device,
+                                AccelerationStructureInfo::blas(256 + step),
+                            )?);
+                            let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
+                            shared_accels.push(resource, node_idx);
+                            node_idx
+                        }
+                        ResourceKind::SharedAccelerationStructure => {
+                            let reuse_idx =
+                                (next_rand(&mut rand_state) as usize) % shared_accels.len();
+                            let (resource, node_idx) = shared_accels.get(reuse_idx).unwrap();
+                            assert_eq!(graph.bind_resource(resource).index(), node_idx);
+                            node_idx
+                        }
+                        ResourceKind::OwnedAccelerationStructureLease => graph
+                            .bind_resource(
+                                pool.resource(AccelerationStructureInfo::blas(512 + step))?,
+                            )
+                            .index(),
+                        ResourceKind::SharedAccelerationStructureLease if expect_new => {
+                            let resource = Arc::new(
+                                pool.resource(AccelerationStructureInfo::blas(512 + step))?,
+                            );
+                            let node_idx = graph.bind_resource(Arc::clone(&resource)).index();
+                            shared_accel_leases.push(resource, node_idx);
+                            node_idx
+                        }
+                        ResourceKind::SharedAccelerationStructureLease => {
+                            let reuse_idx =
+                                (next_rand(&mut rand_state) as usize) % shared_accel_leases.len();
+                            let (resource, node_idx) = shared_accel_leases.get(reuse_idx).unwrap();
+                            assert_eq!(graph.bind_resource(resource).index(), node_idx);
+                            node_idx
+                        }
+                    };
+
+                    if expect_new {
+                        assert_eq!(node_idx, expected_node_idx);
+                        assert_eq!(graph.resources.len(), expected_node_idx + 1);
+                    } else {
+                        assert!(node_idx < expected_node_idx);
+                        assert_eq!(graph.resources.len(), expected_node_idx);
+                    }
+                }
+
+                Ok(())
+            }
+        }
+    }
+}

@@ -1,14 +1,40 @@
 //! Handles for Vulkan smart-pointer resources.
+//!
+//! When you bind a resource to a [`Graph`](crate::Graph), you get back a node handle:
+//!
+//! ```ignore
+//! let buf_node: BufferNode = graph.bind_resource(my_buffer);
+//! let img_node: ImageNode   = graph.bind_resource(my_image);
+//! ```
+//!
+//! These handles are then passed to command-building methods like
+//! [`resource_access`](crate::cmd::PipelineCommand::resource_access) or
+//! [`shader_resource_access`](crate::cmd::PipelineCommand::shader_resource_access).
+//!
+//! ## Node kinds
+//!
+//! | Handle | Resource type | Use case |
+//! |---|---|:--|
+//! | [`BufferNode`] | Owned [`Buffer`] | Most common |
+//! | [`ImageNode`] | Owned [`Image`] | Most common |
+//! | [`AccelerationStructureNode`] | Owned [`AccelerationStructure`] | Ray tracing |
+//! | [`SwapchainImageNode`] | [`SwapchainImage`] | Swapchain presentation |
+//! | [`BufferLeaseNode`], [`ImageLeaseNode`], [`AccelerationStructureLeaseNode`] | Pool-leased resource | Pool-based allocation |
+//! | [`AnyBufferNode`], [`AnyImageNode`], [`AnyAccelerationStructureNode`] | Any of the above | Heterogeneous collections |
+//!
+//! For most users, [`BufferNode`] and [`ImageNode`] are all you need. The `Lease` and
+//! `Any*` variants exist for advanced pooling and dynamic dispatch scenarios.
 
 use std::sync::Arc;
 
 use crate::{
-    Node,
+    GraphId, Node,
     driver::{
         accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
         swapchain::SwapchainImage,
     },
     pool::Lease,
+    private,
 };
 
 use super::{AnyResource, NodeIndex};
@@ -35,6 +61,8 @@ impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
     }
 }
 
+impl private::Sealed for AnyAccelerationStructureNode {}
+
 impl Node for AnyAccelerationStructureNode {
     type Resource = AccelerationStructure;
 
@@ -46,6 +74,13 @@ impl Node for AnyAccelerationStructureNode {
         match self {
             Self::AccelerationStructure(node) => node.index(),
             Self::AccelerationStructureLease(node) => node.index(),
+        }
+    }
+
+    fn assert_owner(&self, graph_id: GraphId) {
+        match self {
+            Self::AccelerationStructure(node) => node.assert_owner(graph_id),
+            Self::AccelerationStructureLease(node) => node.assert_owner(graph_id),
         }
     }
 }
@@ -72,6 +107,8 @@ impl From<BufferLeaseNode> for AnyBufferNode {
     }
 }
 
+impl private::Sealed for AnyBufferNode {}
+
 impl Node for AnyBufferNode {
     type Resource = Buffer;
 
@@ -83,6 +120,13 @@ impl Node for AnyBufferNode {
         match self {
             Self::Buffer(node) => node.index(),
             Self::BufferLease(node) => node.index(),
+        }
+    }
+
+    fn assert_owner(&self, graph_id: GraphId) {
+        match self {
+            Self::Buffer(node) => node.assert_owner(graph_id),
+            Self::BufferLease(node) => node.assert_owner(graph_id),
         }
     }
 }
@@ -120,6 +164,8 @@ impl From<SwapchainImageNode> for AnyImageNode {
     }
 }
 
+impl private::Sealed for AnyImageNode {}
+
 impl Node for AnyImageNode {
     type Resource = Image;
 
@@ -134,24 +180,48 @@ impl Node for AnyImageNode {
             Self::SwapchainImage(node) => node.index(),
         }
     }
+
+    fn assert_owner(&self, graph_id: GraphId) {
+        match self {
+            Self::Image(node) => node.assert_owner(graph_id),
+            Self::ImageLease(node) => node.assert_owner(graph_id),
+            Self::SwapchainImage(node) => node.assert_owner(graph_id),
+        }
+    }
 }
 
 macro_rules! node {
     ($name:ident, $resource:ty, $fn_name:ident) => {
         paste::paste! {
-            /// Resource node.
+            /// A graph-local handle for a bound resource.
+            ///
+            /// Node handles are only valid with the graph that produced them.
+            ///
+            /// When the `checked` feature is enabled, using a node with a different graph will
+            /// panic immediately.
             #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
             pub struct [<$name Node>] {
                 index: NodeIndex,
+
+                #[cfg(feature = "checked")]
+                graph_id: GraphId,
             }
 
             impl [<$name Node>] {
-                pub(crate) fn new(index: usize) -> Self {
+                pub(crate) fn new(
+                    index: usize,
+                    #[cfg(feature = "checked")] graph_id: GraphId,
+                ) -> Self {
                     Self {
                         index,
+
+                        #[cfg(feature = "checked")]
+                        graph_id,
                     }
                 }
             }
+
+            impl private::Sealed for [<$name Node>] {}
 
             impl Node for [<$name Node>] {
                 type Resource = $resource;
@@ -166,6 +236,11 @@ macro_rules! node {
 
                 fn index(&self) -> NodeIndex {
                     self.index
+                }
+
+                fn assert_owner(&self, _graph_id: GraphId) {
+                    #[cfg(feature = "checked")]
+                    assert!(self.graph_id == _graph_id, "node belongs to a different graph");
                 }
             }
         }

@@ -82,13 +82,13 @@ function-chaining. In the above example two commands are built and added to the 
 
 ## Shaders
 
-Compute, graphic, and ray trace pipelines require one or more shaders:
+Compute, graphics, and ray tracing pipelines require one or more shaders:
 
 Pipeline Type|Shaders
 --|--
 `ComputePipeline`|Single: must be compute stage
-`GraphicPipeline`|Multiple: must be a raster stage
-`RayTracePipeline`|Multiple: must be a ray tracing stage
+`GraphicsPipeline`|Multiple: must be a raster stage
+`RayTracingPipeline`|Multiple: must be a ray tracing stage
 
 > [!CAUTION]
 > All `Shader` constructors panic when provided with invalid SPIR-V shader code.

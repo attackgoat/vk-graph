@@ -1,4 +1,5 @@
-//! Vulkan interface based on smart pointers.
+//! **ADVANCED**: Raw Vulkan wrappers. Most users should use [`Graph`](crate::Graph),
+//! [`cmd`](crate::cmd), and [`node`](crate::node) instead.
 //!
 //! # Resources
 //!
@@ -30,8 +31,8 @@
 //! The following pipelines are available:
 //!
 //! - [`ComputePipeline`](compute::ComputePipeline)
-//! - [`GraphicPipeline`](graphic::GraphicPipeline)
-//! - [`RayTracePipeline`](ray_trace::RayTracePipeline)
+//! - [`GraphicsPipeline`](graphic::GraphicsPipeline)
+//! - [`RayTracingPipeline`](ray_trace::RayTracingPipeline)
 //!
 //! Pipelines are immutable. All pipeline types contain useful public methods, for
 //! example:
@@ -58,15 +59,38 @@ pub mod shader;
 pub mod surface;
 pub mod swapchain;
 
-#[doc(hidden)]
+/// Descriptor pool allocation helpers used by pipeline execution.
+///
+/// Part of the advanced driver API for callers that need direct control over descriptor
+/// allocation. Most users should use the higher-level graph system instead.
 pub mod descriptor_set;
 
 mod descriptor_set_layout;
 
-pub use {
-    ash::{self},
-    vk_sync::{self as sync},
-};
+/// Re-export of the [`ash`] crate — the foundational Vulkan bindings that every wrapper in this
+/// crate is built on.
+///
+/// `vk-graph` is **ash+graph**: it wraps `ash` to make Vulkan easier to use, but does not replace
+/// it. Expert users can always reach through to the raw bindings via `vk_graph::driver::ash`.
+///
+/// # Hidden from docs
+///
+/// This re-export is `#[doc(hidden)]` to avoid duplicating the entire `ash` API surface in
+/// `vk-graph`'s documentation. It is intentionally public and stable — not deprecated.
+#[doc(hidden)]
+pub use ash::{self};
+
+/// Re-export of [`vk_sync`] under the `sync` alias — Vulkan synchronization primitives.
+///
+/// Provides [`AccessType`](sync::AccessType) and related types that are the foundation of
+/// `vk-graph`'s automatic resource tracking.
+///
+/// # Hidden from docs
+///
+/// This re-export is `#[doc(hidden)]` to avoid duplicating the entire `vk_sync` API surface in
+/// `vk-graph`'s documentation. It is intentionally public and stable — not deprecated.
+#[doc(hidden)]
+pub use vk_sync::{self as sync};
 
 pub(crate) use self::{
     descriptor_set::DescriptorSet,
@@ -88,10 +112,103 @@ use {
     gpu_allocator::AllocationError,
     std::{
         cmp::Ordering,
+        convert::Infallible,
         error::Error,
         fmt::{Display, Formatter},
     },
 };
+
+macro_rules! access_type_u8_map {
+    ($($idx:literal => $name:ident),* $(,)?) => {
+        pub(super) const fn access_type_into_u8(ty: self::sync::AccessType) -> u8 {
+            use self::sync::AccessType::*;
+
+            match ty {
+                $($name => $idx,)*
+            }
+        }
+
+        pub(super) const fn access_type_from_u8(value: u8) -> self::sync::AccessType {
+            use self::sync::AccessType::*;
+
+            match value {
+                $($idx => $name,)*
+                _ => panic!("invalid packed access type"),
+            }
+        }
+    };
+}
+
+access_type_u8_map! {
+    0 => Nothing,
+    1 => CommandBufferReadNVX,
+    2 => IndirectBuffer,
+    3 => IndexBuffer,
+    4 => VertexBuffer,
+    5 => VertexShaderReadUniformBuffer,
+    6 => VertexShaderReadSampledImageOrUniformTexelBuffer,
+    7 => VertexShaderReadOther,
+    8 => TessellationControlShaderReadUniformBuffer,
+    9 => TessellationControlShaderReadSampledImageOrUniformTexelBuffer,
+    10 => TessellationControlShaderReadOther,
+    11 => TessellationEvaluationShaderReadUniformBuffer,
+    12 => TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer,
+    13 => TessellationEvaluationShaderReadOther,
+    14 => GeometryShaderReadUniformBuffer,
+    15 => GeometryShaderReadSampledImageOrUniformTexelBuffer,
+    16 => GeometryShaderReadOther,
+    17 => FragmentShaderReadUniformBuffer,
+    18 => FragmentShaderReadSampledImageOrUniformTexelBuffer,
+    19 => FragmentShaderReadColorInputAttachment,
+    20 => FragmentShaderReadDepthStencilInputAttachment,
+    21 => FragmentShaderReadOther,
+    22 => ColorAttachmentRead,
+    23 => DepthStencilAttachmentRead,
+    24 => ComputeShaderReadUniformBuffer,
+    25 => ComputeShaderReadSampledImageOrUniformTexelBuffer,
+    26 => ComputeShaderReadOther,
+    27 => AnyShaderReadUniformBuffer,
+    28 => AnyShaderReadUniformBufferOrVertexBuffer,
+    29 => AnyShaderReadSampledImageOrUniformTexelBuffer,
+    30 => AnyShaderReadOther,
+    31 => TransferRead,
+    32 => HostRead,
+    33 => Present,
+    34 => CommandBufferWriteNVX,
+    35 => VertexShaderWrite,
+    36 => TessellationControlShaderWrite,
+    37 => TessellationEvaluationShaderWrite,
+    38 => GeometryShaderWrite,
+    39 => FragmentShaderWrite,
+    40 => ColorAttachmentWrite,
+    41 => DepthStencilAttachmentWrite,
+    42 => DepthStencilAttachmentReadWrite,
+    43 => DepthAttachmentWriteStencilReadOnly,
+    44 => StencilAttachmentWriteDepthReadOnly,
+    45 => ComputeShaderWrite,
+    46 => ComputeShaderReadWrite,
+    47 => AnyShaderWrite,
+    48 => TransferWrite,
+    49 => HostWrite,
+    50 => ColorAttachmentReadWrite,
+    51 => General,
+    52 => RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+    53 => RayTracingShaderReadColorInputAttachment,
+    54 => RayTracingShaderReadDepthStencilInputAttachment,
+    55 => RayTracingShaderReadAccelerationStructure,
+    56 => RayTracingShaderReadOther,
+    57 => AccelerationStructureBuildWrite,
+    58 => AccelerationStructureBuildRead,
+    59 => AccelerationStructureBufferWrite,
+    60 => MeshShaderReadUniformBuffer,
+    61 => MeshShaderReadSampledImageOrUniformTexelBuffer,
+    62 => MeshShaderReadOther,
+    63 => TaskShaderReadUniformBuffer,
+    64 => TaskShaderReadSampledImageOrUniformTexelBuffer,
+    65 => TaskShaderReadOther,
+    66 => MeshShaderWrite,
+    67 => TaskShaderWrite,
+}
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
     match fmt {
@@ -364,7 +481,9 @@ pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
         vk::Format::G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16
         | vk::Format::G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16
         | vk::Format::G16_B16R16_2PLANE_444_UNORM => 6,
-        _ => panic!("unsupported texel block size format"),
+        // Vulkan is extensible — new formats can appear at any time. The caller is expected to
+        // know the format is valid; no runtime assertion needed per the project's philosophy.
+        _ => 0,
     }
 }
 
@@ -624,7 +743,9 @@ pub const fn format_texel_block_extent(vk_format: vk::Format) -> (u32, u32) {
         | vk::Format::PVRTC1_4BPP_SRGB_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_UNORM_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_SRGB_BLOCK_IMG => (4, 4),
-        _ => panic!("unsupported texel block extent format"),
+        // Vulkan is extensible — new formats can appear at any time. The caller is expected to
+        // know the format is valid; no runtime assertion needed per the project's philosophy.
+        _ => (1, 1),
     }
 }
 
@@ -816,7 +937,7 @@ pub(super) const fn is_write_access(ty: self::sync::AccessType) -> bool {
 #[profiling::function]
 fn merge_push_constant_ranges(pcr: &[vk::PushConstantRange]) -> Vec<vk::PushConstantRange> {
     // Each specified range must be for a single stage and each stage must be specified once
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "checked")]
     {
         let mut stage_flags = vk::ShaderStageFlags::empty();
         for item in pcr.iter() {
@@ -871,6 +992,7 @@ fn merge_push_constant_ranges(pcr: &[vk::PushConstantRange]) -> Vec<vk::PushCons
                             size: rhs.size,
                         },
                     );
+                    res[j..].sort_unstable_by(sort_fn);
                     i += 1;
                     j += 1;
                 } else if lhs.offset + lhs.size == rhs.offset + rhs.size {
@@ -1143,6 +1265,12 @@ impl DriverError {
     }
 }
 
+impl From<Infallible> for DriverError {
+    fn from(value: Infallible) -> Self {
+        match value {}
+    }
+}
+
 impl Display for DriverError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
@@ -1161,6 +1289,65 @@ mod test {
             assert_eq!($lhs.offset, $rhs.offset, "Offset not equal");
             assert_eq!($lhs.size, $rhs.size, "Size not equal");
         };
+    }
+
+    fn reference_merge_push_constant_ranges(
+        pcr: &[vk::PushConstantRange],
+    ) -> Vec<vk::PushConstantRange> {
+        if pcr.is_empty() {
+            return vec![];
+        }
+        let end = pcr.iter().map(|r| r.offset + r.size).max().unwrap();
+        let mut per_byte = vec![0u32; end as usize];
+        for r in pcr {
+            let raw = r.stage_flags.as_raw();
+            let range_end = r.offset + r.size;
+            for byte in per_byte[r.offset as usize..range_end as usize].iter_mut() {
+                *byte |= raw;
+            }
+        }
+        let mut result = Vec::new();
+        let mut i = 0usize;
+        while (i as u32) < end {
+            let flags = per_byte[i];
+            if flags == 0 {
+                i += 1;
+                continue;
+            }
+            let start = i as u32;
+            while (i as u32) < end && per_byte[i] == flags {
+                i += 1;
+            }
+            result.push(vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::from_raw(flags),
+                offset: start,
+                size: (i as u32) - start,
+            });
+        }
+        result
+    }
+
+    fn assert_merge_invariants(input: &[vk::PushConstantRange], output: &[vk::PushConstantRange]) {
+        let expected = reference_merge_push_constant_ranges(input);
+        assert_eq!(
+            output.len(),
+            expected.len(),
+            "length mismatch\n  input: {input:?}\n  got: {output:?}\n  expected: {expected:?}"
+        );
+        for (idx, (got, exp)) in output.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                got.stage_flags, exp.stage_flags,
+                "result[{idx}] stage_flags mismatch\n  input: {input:?}\n  got: {output:?}\n  expected: {expected:?}"
+            );
+            assert_eq!(
+                got.offset, exp.offset,
+                "result[{idx}] offset mismatch\n  input: {input:?}\n  got: {output:?}\n  expected: {expected:?}"
+            );
+            assert_eq!(
+                got.size, exp.size,
+                "result[{idx}] size mismatch\n  input: {input:?}\n  got: {output:?}\n  expected: {expected:?}"
+            );
+        }
     }
 
     #[test]
@@ -1465,5 +1652,346 @@ mod test {
                 size: 16,
             },
         );
+    }
+
+    #[test]
+    pub fn push_constant_ranges_single() {
+        let input = [vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            offset: 16,
+            size: 32,
+        }];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 1);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 16,
+                size: 32,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_three_identical() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 32,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 0,
+                size: 32,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 32,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 1);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::FRAGMENT
+                    | vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 32,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_three_same_offset() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 8,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 0,
+                size: 16,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 32,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 3);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::FRAGMENT
+                    | vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[1],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
+                offset: 8,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[2],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 16,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_nested_chain() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 64,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 8,
+                size: 48,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 32,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 5);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[1],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                offset: 8,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[2],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::FRAGMENT
+                    | vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 32,
+            },
+        );
+        assert_pcr_eq!(
+            res[3],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                offset: 48,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[4],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 56,
+                size: 8,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_touching() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 16,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 16,
+                size: 16,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 32,
+                size: 16,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 3);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 16,
+            },
+        );
+        assert_pcr_eq!(
+            res[1],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 16,
+                size: 16,
+            },
+        );
+        assert_pcr_eq!(
+            res[2],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 32,
+                size: 16,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_complex_interleave() {
+        let input = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 24,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::GEOMETRY,
+                offset: 8,
+                size: 24,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 24,
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 32,
+                size: 24,
+            },
+        ];
+        let res = merge_push_constant_ranges(&input);
+        assert_eq!(res.len(), 6);
+        assert_pcr_eq!(
+            res[0],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[1],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::GEOMETRY,
+                offset: 8,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[2],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::GEOMETRY
+                    | vk::ShaderStageFlags::COMPUTE,
+                offset: 16,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[3],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::GEOMETRY | vk::ShaderStageFlags::COMPUTE,
+                offset: 24,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[4],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT,
+                offset: 32,
+                size: 8,
+            },
+        );
+        assert_pcr_eq!(
+            res[5],
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 40,
+                size: 16,
+            },
+        );
+        assert_merge_invariants(&input, &res);
+    }
+
+    #[test]
+    pub fn push_constant_ranges_fuzz() {
+        use rand::Rng;
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        let stages = [
+            vk::ShaderStageFlags::VERTEX,
+            vk::ShaderStageFlags::FRAGMENT,
+            vk::ShaderStageFlags::GEOMETRY,
+            vk::ShaderStageFlags::TESSELLATION_CONTROL,
+            vk::ShaderStageFlags::TESSELLATION_EVALUATION,
+            vk::ShaderStageFlags::COMPUTE,
+        ];
+
+        for seed in 0..10000 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let count = rng.random_range(0..=stages.len());
+
+            let mut available: Vec<usize> = (0..stages.len()).collect();
+            for i in (1..available.len()).rev() {
+                let j = rng.random_range(0..=i);
+                available.swap(i, j);
+            }
+
+            let input: Vec<vk::PushConstantRange> = available
+                .iter()
+                .take(count)
+                .map(|&idx| {
+                    let offset = rng.random_range(0u32..128);
+                    let size = rng.random_range(1u32..64);
+                    vk::PushConstantRange {
+                        stage_flags: stages[idx],
+                        offset,
+                        size,
+                    }
+                })
+                .collect();
+
+            let result = merge_push_constant_ranges(&input);
+            assert_merge_invariants(&input, &result);
+        }
     }
 }

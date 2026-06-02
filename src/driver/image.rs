@@ -1,9 +1,11 @@
 //! Image resource types
 
 use {
-    super::{DriverError, device::Device, format_aspect_mask},
+    super::{
+        DriverError, access_type_from_u8, access_type_into_u8, device::Device, format_aspect_mask,
+    },
     ash::vk::{self, ImageCreateInfo},
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     gpu_allocator::{
         MemoryLocation,
         vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
@@ -14,6 +16,7 @@ use {
         fmt::{Debug, Formatter},
         mem::{replace, take},
         ops::DerefMut,
+        sync::atomic::{AtomicU8, Ordering},
         thread::panicking,
     },
     vk_sync::AccessType,
@@ -22,10 +25,11 @@ use {
 #[cfg(feature = "parking_lot")]
 use parking_lot::{Mutex, MutexGuard};
 
+use std::marker::PhantomData;
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::{Mutex, MutexGuard};
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "checked")]
 fn assert_aspect_mask_supported(aspect_mask: vk::ImageAspectFlags) {
     use vk::ImageAspectFlags as A;
 
@@ -62,432 +66,60 @@ pub(crate) fn image_subresource_range_intersects(
         && lhs.base_mip_level + lhs.level_count > rhs.base_mip_level
 }
 
-/// Smart pointer handle to an [image] object.
-///
-/// Also contains information about the object.
-///
-/// ```no_run
-/// # use ash::vk;
-/// # use vk_sync::AccessType;
-/// # use vk_graph::driver::DriverError;
-/// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::driver::image::{Image, ImageInfo};
-/// # fn main() -> Result<(), DriverError> {
-/// # let device = Device::create(DeviceInfo::default())?;
-/// let fmt = vk::Format::R8G8B8A8_UNORM;
-/// let usage = vk::ImageUsageFlags::SAMPLED;
-/// let info = ImageInfo::image_2d(320, 200, fmt, usage);
-/// let my_img = Image::create(&device, info)?;
-///
-/// assert_eq!(my_img.info, info);
-/// assert_ne!(my_img.handle, vk::Image::null());
-/// # Ok(()) }
-/// ```
-///
-/// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
-#[read_only::cast]
-pub struct Image {
-    accesses: Mutex<ImageAccess<AccessType>>,
-    allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
-
-    /// The device which owns this image resource.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub device: Device,
-
-    /// The native Vulkan resource handle of this image.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub handle: vk::Image,
-
-    #[allow(clippy::type_complexity)]
-    image_view_cache: Mutex<HashMap<ImageViewInfo, ImageView>>,
-
-    /// Information used to create this resource.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub info: ImageInfo,
-
-    /// A name for debugging purposes.
-    pub name: Option<String>,
+#[derive(Debug)]
+enum Access {
+    Uniform(UniformAccess),
+    Dense(Mutex<DenseAccess<AccessType>>),
 }
 
-impl Image {
-    /// Creates a new image on the given device.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```no_run
-    /// # use std::sync::Arc;
-    /// # use ash::vk;
-    /// # use vk_graph::driver::DriverError;
-    /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::image::{Image, ImageInfo};
-    /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::create(DeviceInfo::default())?;
-    /// let info = ImageInfo::image_2d(
-    ///     32,
-    ///     32,
-    ///     vk::Format::R8G8B8A8_UNORM,
-    ///     vk::ImageUsageFlags::SAMPLED,
-    /// );
-    /// let image = Image::create(&device, info)?;
-    ///
-    /// assert_ne!(image.handle, vk::Image::null());
-    /// assert_eq!(image.info.width, 32);
-    /// assert_eq!(image.info.height, 32);
-    /// # Ok(()) }
-    /// ```
-    #[profiling::function]
-    pub fn create(device: &Device, info: impl Into<ImageInfo>) -> Result<Self, DriverError> {
-        let info: ImageInfo = info.into();
+impl Access {
+    fn new(info: ImageInfo, access: AccessType) -> Self {
+        let aspect_count = format_aspect_mask(info.fmt).as_raw().count_ones() as u8;
 
-        //trace!("create: {:?}", &info);
-        trace!("create");
-
-        assert!(
-            !info.usage.is_empty(),
-            "Unspecified image usage {:?}",
-            info.usage
-        );
-
-        let accesses = Mutex::new(ImageAccess::new(info, AccessType::Nothing));
-
-        let device = device.clone();
-        let create_info: ImageCreateInfo = info.into();
-        let create_info =
-            create_info.queue_family_indices(&device.physical_device.queue_family_indices);
-        let handle = unsafe {
-            device.create_image(&create_info, None).map_err(|err| {
-                warn!("unable to create image: {err}");
-
-                DriverError::Unsupported
-            })?
-        };
-        let requirements = unsafe { device.get_image_memory_requirements(handle) };
-        let allocation_scheme = if info.dedicated {
-            AllocationScheme::DedicatedImage(handle)
+        if aspect_count == 1 && info.array_layer_count == 1 && info.mip_level_count == 1 {
+            Self::Uniform(UniformAccess::new(access))
         } else {
-            AllocationScheme::GpuAllocatorManaged
-        };
-        let allocation = {
-            profiling::scope!("allocate");
-
-            Device::with_allocator(&device, |allocator| {
-                allocator
-                    .allocate(&AllocationCreateDesc {
-                        name: "image",
-                        requirements,
-                        location: MemoryLocation::GpuOnly,
-                        linear: false,
-                        allocation_scheme,
-                    })
-                    .map_err(|err| {
-                        warn!("unable to allocate image memory: {err}");
-
-                        unsafe {
-                            device.destroy_image(handle, None);
-                        }
-
-                        DriverError::from_alloc_err(err)
-                    })
-                    .and_then(|allocation| {
-                        if let Err(err) = unsafe {
-                            device.bind_image_memory(
-                                handle,
-                                allocation.memory(),
-                                allocation.offset(),
-                            )
-                        } {
-                            warn!("unable to bind image memory: {err}");
-
-                            if let Err(err) = allocator.free(allocation) {
-                                warn!("unable to free image allocation: {err}")
-                            }
-
-                            unsafe {
-                                device.destroy_image(handle, None);
-                            }
-
-                            Err(DriverError::OutOfMemory)
-                        } else {
-                            Ok(allocation)
-                        }
-                    })
-            })
-        }?;
-
-        debug_assert_ne!(handle, vk::Image::null());
-
-        Ok(Self {
-            accesses,
-            allocation: Some(allocation),
-            device,
-            handle,
-            image_view_cache: Mutex::new(Default::default()),
-            info,
-            name: None,
-        })
+            Self::Dense(Mutex::new(DenseAccess::new(info, access)))
+        }
     }
 
-    /// Keeps track of some next `access` which affects a `range` this image.
-    ///
-    /// Returns the previous access for which a pipeline barrier should be used to prevent data
-    /// corruption.
-    ///
-    /// # Note
-    ///
-    /// Used to maintain object state when passing a _vk-graph_-created `vk::Image` handle to
-    /// external code such as [_Ash_] or [_Erupt_] bindings.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```no_run
-    /// # use std::sync::Arc;
-    /// # use ash::vk;
-    /// # use vk_sync::AccessType;
-    /// # use vk_graph::driver::DriverError;
-    /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::image::{Image, ImageInfo};
-    /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::create(DeviceInfo::default())?;
-    /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
-    /// # let my_image = Image::create(&device, info)?;
-    /// # let my_subresource_range = vk::ImageSubresourceRange::default();
-    /// // Initially we want to "Read Other"
-    /// let next = AccessType::AnyShaderReadOther;
-    /// let mut prev = Image::access(&my_image, next, my_subresource_range);
-    /// assert_eq!(prev.next().unwrap().0, AccessType::Nothing);
-    ///
-    /// // External code may now "Read Other"; no barrier required
-    ///
-    /// // Subsequently we want to "Write"
-    /// let next = AccessType::FragmentShaderWrite;
-    /// let mut prev = Image::access(&my_image, next, my_subresource_range);
-    /// assert_eq!(prev.next().unwrap().0, AccessType::AnyShaderReadOther);
-    ///
-    /// // A barrier on "Read Other" before "Write" is required!
-    /// # Ok(()) }
-    /// ```
-    ///
-    /// [_Ash_]: https://crates.io/crates/ash
-    /// [_Erupt_]: https://crates.io/crates/erupt
-    #[profiling::function]
-    pub fn access(
+    fn swap(
         &self,
         access: AccessType,
-        mut access_range: vk::ImageSubresourceRange,
-    ) -> impl Iterator<Item = (AccessType, vk::ImageSubresourceRange)> + '_ {
-        #[cfg(debug_assertions)]
-        {
-            assert_aspect_mask_supported(access_range.aspect_mask);
+        access_range: vk::ImageSubresourceRange,
+    ) -> ImageAccessIter<'_> {
+        match self {
+            Self::Uniform(uniform) => {
+                ImageAccessIter::Uniform(Some(uniform.swap(access, access_range)))
+            }
+            Self::Dense(accesses) => {
+                let accesses = accesses.lock();
 
-            assert!(format_aspect_mask(self.info.fmt).contains(access_range.aspect_mask));
+                #[cfg(not(feature = "parking_lot"))]
+                let accesses = accesses.expect("poisoned image access lock");
+
+                ImageAccessIter::Dense(DenseAccessIter::new(accesses, access, access_range))
+            }
         }
-
-        if access_range.layer_count == vk::REMAINING_ARRAY_LAYERS {
-            debug_assert!(access_range.base_array_layer < self.info.array_layer_count);
-
-            access_range.layer_count = self.info.array_layer_count - access_range.base_array_layer
-        }
-
-        debug_assert!(
-            access_range.base_array_layer + access_range.layer_count <= self.info.array_layer_count
-        );
-
-        if access_range.level_count == vk::REMAINING_MIP_LEVELS {
-            debug_assert!(access_range.base_mip_level < self.info.mip_level_count);
-
-            access_range.level_count = self.info.mip_level_count - access_range.base_mip_level
-        }
-
-        debug_assert!(
-            access_range.base_mip_level + access_range.level_count <= self.info.mip_level_count
-        );
-
-        ImageAccessIter::new(self.lock_accesses(), access, access_range)
-    }
-
-    /// Sets the debugging name assigned to this image.
-    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-
-        self
-    }
-
-    /// Drops the given allocation, all views, and the handle.
-    #[profiling::function]
-    fn drop_allocation(&self, allocation: Allocation) {
-        {
-            profiling::scope!("views");
-
-            self.with_image_view_cache(|cache| cache.clear());
-        }
-
-        unsafe {
-            self.device.destroy_image(self.handle, None);
-        }
-
-        {
-            profiling::scope!("deallocate");
-
-            Device::with_allocator(&self.device, |allocator| allocator.free(allocation))
-        }
-        .unwrap_or_else(|err| warn!("unable to free image allocation: {err}"));
-    }
-
-    /// Consumes a Vulkan image created by some other library.
-    ///
-    /// The image is not destroyed automatically on drop, unlike images created through the
-    /// [`Image::create`] function.
-    #[profiling::function]
-    pub fn from_raw(device: &Device, handle: vk::Image, info: impl Into<ImageInfo>) -> Self {
-        let device = device.clone();
-        let info = info.into();
-
-        let accesses = ImageAccess::new(info, AccessType::Nothing);
-
-        Self {
-            accesses: Mutex::new(accesses),
-            allocation: None,
-            device,
-            handle,
-            image_view_cache: Mutex::new(Default::default()),
-            info,
-            name: None,
-        }
-    }
-
-    fn lock_accesses(&self) -> MutexGuard<'_, ImageAccess<AccessType>> {
-        let accesses = self.accesses.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let accesses = accesses.expect("poisoned image access lock");
-
-        accesses
-    }
-
-    /// Produces a new `Image` sharing the same Vulkan handle with independent access tracking.
-    ///
-    /// The returned image retains the handle, device, and debug name of `self` but starts with
-    /// no prior access history (`AccessType::Nothing`) and does not claim ownership of the image's
-    /// memory backing. Internal caches are moved out of `self` so they are not duplicated.
-    ///
-    /// This is used to create separate tracking instances for swapchain images that may be
-    /// used concurrently across different graph executions.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure the Vulkan image handle remains valid for the lifetime of the
-    /// returned `Image`. This function should only be called on swapchain images or other
-    /// platform or extension images.
-    #[profiling::function]
-    pub unsafe fn to_detached(&self) -> Self {
-        debug_assert!(self.allocation.is_none());
-
-        let image_view_cache = self.with_image_view_cache(take);
-
-        let Self { handle, info, .. } = *self;
-
-        Self {
-            accesses: Mutex::new(ImageAccess::new(info, AccessType::Nothing)),
-            allocation: None,
-            device: self.device.clone(),
-            handle,
-            image_view_cache: Mutex::new(image_view_cache),
-            info,
-            name: self.name.clone(),
-        }
-    }
-
-    #[profiling::function]
-    pub(crate) fn view(&self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
-        self.with_image_view_cache(|cache| {
-            Ok(match cache.entry(info) {
-                Entry::Occupied(entry) => entry.get().image_view,
-                Entry::Vacant(entry) => {
-                    entry
-                        .insert(ImageView::create(&self.device, info, self.handle)?)
-                        .image_view
-                }
-            })
-        })
-    }
-
-    fn with_image_view_cache<R>(
-        &self,
-        f: impl FnOnce(&mut HashMap<ImageViewInfo, ImageView>) -> R,
-    ) -> R {
-        let cache = self.image_view_cache.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let cache = cache.expect("poisoned image view lock");
-
-        let mut cache = cache;
-
-        f(&mut cache)
-    }
-}
-
-impl Debug for Image {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(name) = &self.name {
-            write!(f, "{} ({:?})", name, self.handle)
-        } else {
-            write!(f, "{:?}", self.handle)
-        }
-    }
-}
-
-impl Drop for Image {
-    // This function is not profiled because drop_allocation is
-    fn drop(&mut self) {
-        if panicking() {
-            return;
-        }
-
-        // When our allocation is some we allocated ourself; otherwise somebody
-        // else owns this image and we should not destroy it. Usually it's the swapchain...
-        if let Some(allocation) = self.allocation.take() {
-            Self::drop_allocation(self, allocation);
-        }
-    }
-}
-
-impl Eq for Image {}
-
-impl PartialEq for Image {
-    fn eq(&self, other: &Self) -> bool {
-        self.handle == other.handle
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct ImageAccess<A> {
+pub(crate) struct DenseAccess<A> {
     accesses: Box<[A]>,
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "checked")]
     array_layer_count: u32,
 
     aspect_count: u8,
     mip_level_count: u32,
 }
 
-impl<A> ImageAccess<A> {
-    pub fn new(info: ImageInfo, access: A) -> Self
-    where
-        A: Copy,
-    {
+impl<A: Copy> DenseAccess<A> {
+    pub(crate) fn new(info: ImageInfo, access: A) -> Self {
         let aspect_mask = format_aspect_mask(info.fmt);
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         assert_aspect_mask_supported(aspect_mask);
 
         let aspect_count = aspect_mask.as_raw().count_ones() as u8;
@@ -501,7 +133,7 @@ impl<A> ImageAccess<A> {
             ]
             .into_boxed_slice(),
 
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "checked")]
             array_layer_count,
 
             aspect_count,
@@ -509,32 +141,37 @@ impl<A> ImageAccess<A> {
         }
     }
 
-    pub fn access(
-        &mut self,
-        access: A,
-        access_range: vk::ImageSubresourceRange,
-    ) -> impl Iterator<Item = (A, vk::ImageSubresourceRange)> + '_
-    where
-        A: Copy + PartialEq,
-    {
-        ImageAccessIter::new(self, access, access_range)
-    }
-
     fn idx(&self, aspect: u8, array_layer: u32, mip_level: u32) -> usize {
-        // For a 3 Layer, 2 Mip, Depth/Stencil image:
-        // 0     1     2     3     4     5     6     7     8     9     10    11
-        // DL0M0 SL0M0 DL0M1 SL0M1 DL1M0 SL1M0 DL1M1 SL1M1 DL2M0 SL2M0 DL2M1 SL2M1
         let idx = (array_layer * self.aspect_count as u32 * self.mip_level_count
             + mip_level * self.aspect_count as u32
             + aspect as u32) as _;
 
-        debug_assert!(idx < self.accesses.len());
+        #[cfg(feature = "checked")]
+        assert!(
+            idx < self.accesses.len(),
+            "idx={idx}, aspect={aspect}, layer={array_layer}, mip={mip_level}, aspect_count={}, mip_level_count={}, array_layer_count={}, len={}",
+            self.aspect_count,
+            self.mip_level_count,
+            self.array_layer_count,
+            self.accesses.len(),
+        );
 
         idx
     }
 }
 
-struct ImageAccessIter<I, A> {
+impl<A: Copy + PartialEq> DenseAccess<A> {
+    pub(crate) fn swap(
+        &mut self,
+        access: A,
+        access_range: vk::ImageSubresourceRange,
+    ) -> DenseAccessIter<'_, &mut Self, A> {
+        DenseAccessIter::new(self, access, access_range)
+    }
+}
+
+pub(crate) struct DenseAccessIter<'a, I, A> {
+    __: PhantomData<&'a mut DenseAccess<A>>,
     access: A,
     access_range: ImageAccessRange,
     array_layer: u32,
@@ -543,15 +180,15 @@ struct ImageAccessIter<I, A> {
     mip_level: u32,
 }
 
-impl<I, A> ImageAccessIter<I, A> {
+impl<'a, I, A: Copy> DenseAccessIter<'a, I, A> {
     fn new(image: I, access: A, access_range: vk::ImageSubresourceRange) -> Self
     where
-        I: DerefMut<Target = ImageAccess<A>>,
+        I: DerefMut<Target = DenseAccess<A>>,
     {
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         assert_aspect_mask_supported(access_range.aspect_mask);
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         assert!(access_range.base_array_layer < image.array_layer_count);
 
         debug_assert!(access_range.base_mip_level < image.mip_level_count);
@@ -565,6 +202,7 @@ impl<I, A> ImageAccessIter<I, A> {
         let base_aspect = access_range.aspect_mask.as_raw().trailing_zeros() as _;
 
         Self {
+            __: PhantomData,
             access,
             array_layer: 0,
             aspect: 0,
@@ -582,10 +220,9 @@ impl<I, A> ImageAccessIter<I, A> {
     }
 }
 
-impl<I, A> Iterator for ImageAccessIter<I, A>
+impl<'a, I, A: Copy + PartialEq> Iterator for DenseAccessIter<'a, I, A>
 where
-    I: DerefMut<Target = ImageAccess<A>>,
-    A: Copy + PartialEq,
+    I: DerefMut<Target = DenseAccess<A>>,
 {
     type Item = (A, vk::ImageSubresourceRange);
 
@@ -706,9 +343,421 @@ where
                 }
             }
 
-            res.aspect_mask |= vk::ImageAspectFlags::from_raw(
-                (1 << (self.access_range.base_aspect + self.aspect)) as _,
-            )
+            res.aspect_mask = vk::ImageAspectFlags::from_raw(
+                res.aspect_mask.as_raw() | (1 << (self.access_range.base_aspect + self.aspect)),
+            );
+        }
+    }
+}
+
+/// Smart pointer handle to an [image] object.
+///
+/// Also contains information about the object.
+///
+/// ```no_run
+/// # use ash::vk;
+/// # use vk_sync::AccessType;
+/// # use vk_graph::driver::DriverError;
+/// # use vk_graph::driver::device::{Device, DeviceInfo};
+/// # use vk_graph::driver::image::{Image, ImageInfo};
+/// # fn main() -> Result<(), DriverError> {
+/// # let device = Device::create(DeviceInfo::default())?;
+/// let fmt = vk::Format::R8G8B8A8_UNORM;
+/// let usage = vk::ImageUsageFlags::SAMPLED;
+/// let info = ImageInfo::image_2d(320, 200, fmt, usage);
+/// let my_img = Image::create(&device, info)?;
+///
+/// assert_eq!(my_img.info, info);
+/// assert_ne!(my_img.handle, vk::Image::null());
+/// # Ok(()) }
+/// ```
+///
+/// [image]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkBuffer.html
+#[read_only::cast]
+pub struct Image {
+    access: Access,
+    allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
+
+    /// The device which owns this image resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
+    /// The native Vulkan resource handle of this image.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub handle: vk::Image,
+
+    #[allow(clippy::type_complexity)]
+    image_view_cache: Mutex<HashMap<ImageViewInfo, ImageView>>,
+
+    /// Information used to create this resource.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub info: ImageInfo,
+
+    /// A name for debugging purposes.
+    pub name: Option<String>,
+}
+
+impl Image {
+    /// Creates a new image on the given device.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use ash::vk;
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::image::{Image, ImageInfo};
+    /// # fn main() -> Result<(), DriverError> {
+    /// # let device = Device::create(DeviceInfo::default())?;
+    /// let info = ImageInfo::image_2d(
+    ///     32,
+    ///     32,
+    ///     vk::Format::R8G8B8A8_UNORM,
+    ///     vk::ImageUsageFlags::SAMPLED,
+    /// );
+    /// let image = Image::create(&device, info)?;
+    ///
+    /// assert_ne!(image.handle, vk::Image::null());
+    /// assert_eq!(image.info.width, 32);
+    /// assert_eq!(image.info.height, 32);
+    /// # Ok(()) }
+    /// ```
+    #[profiling::function]
+    pub fn create(device: &Device, info: impl Into<ImageInfo>) -> Result<Self, DriverError> {
+        let info = info.into();
+
+        //trace!("create: {:?}", &info);
+        trace!("create");
+
+        if info.usage.is_empty() {
+            return Err(DriverError::InvalidData);
+        }
+
+        let access = Access::new(info, AccessType::Nothing);
+
+        let device = device.clone();
+        let create_info: ImageCreateInfo = info.into();
+        let create_info =
+            create_info.queue_family_indices(&device.physical_device.queue_family_indices);
+        let handle = unsafe {
+            device.create_image(&create_info, None).map_err(|err| {
+                warn!("unable to create image: {err}");
+
+                DriverError::Unsupported
+            })?
+        };
+        let requirements = unsafe { device.get_image_memory_requirements(handle) };
+        let allocation_scheme = if info.dedicated {
+            AllocationScheme::DedicatedImage(handle)
+        } else {
+            AllocationScheme::GpuAllocatorManaged
+        };
+        let allocation = {
+            profiling::scope!("allocate");
+
+            Device::with_allocator(&device, |allocator| {
+                allocator
+                    .allocate(&AllocationCreateDesc {
+                        name: "image",
+                        requirements,
+                        location: MemoryLocation::GpuOnly,
+                        linear: false,
+                        allocation_scheme,
+                    })
+                    .map_err(|err| {
+                        warn!("unable to allocate image memory: {err}");
+
+                        unsafe {
+                            device.destroy_image(handle, None);
+                        }
+
+                        DriverError::from_alloc_err(err)
+                    })
+                    .and_then(|allocation| {
+                        if let Err(err) = unsafe {
+                            device.bind_image_memory(
+                                handle,
+                                allocation.memory(),
+                                allocation.offset(),
+                            )
+                        } {
+                            warn!("unable to bind image memory: {err}");
+
+                            if let Err(err) = allocator.free(allocation) {
+                                warn!("unable to free image allocation: {err}")
+                            }
+
+                            unsafe {
+                                device.destroy_image(handle, None);
+                            }
+
+                            Err(DriverError::OutOfMemory)
+                        } else {
+                            Ok(allocation)
+                        }
+                    })
+            })
+        }?;
+
+        debug_assert_ne!(handle, vk::Image::null());
+
+        Ok(Self {
+            access,
+            allocation: Some(allocation),
+            device,
+            handle,
+            image_view_cache: Mutex::new(Default::default()),
+            info,
+            name: None,
+        })
+    }
+
+    /// Keeps track of some next `access` which affects a `range` this image.
+    ///
+    /// Returns the previous access for which a pipeline barrier should be used to prevent data
+    /// corruption.
+    ///
+    /// # Note
+    ///
+    /// Used to maintain object state when passing a _vk-graph_-created `vk::Image` handle to
+    /// external code such as [_Ash_] or [_Erupt_] bindings.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use ash::vk;
+    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::DriverError;
+    /// # use vk_graph::driver::device::{Device, DeviceInfo};
+    /// # use vk_graph::driver::image::{Image, ImageInfo};
+    /// # fn main() -> Result<(), DriverError> {
+    /// # let device = Device::create(DeviceInfo::default())?;
+    /// # let info = ImageInfo::image_1d(1, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE);
+    /// # let my_image = Image::create(&device, info)?;
+    /// # let my_subresource_range = vk::ImageSubresourceRange::default();
+    /// // Initially we want to "Read Other"
+    /// let next = AccessType::AnyShaderReadOther;
+    /// let mut prev = Image::access(&my_image, next, my_subresource_range);
+    /// assert_eq!(prev.next().unwrap().0, AccessType::Nothing);
+    ///
+    /// // External code may now "Read Other"; no barrier required
+    ///
+    /// // Subsequently we want to "Write"
+    /// let next = AccessType::FragmentShaderWrite;
+    /// let mut prev = Image::access(&my_image, next, my_subresource_range);
+    /// assert_eq!(prev.next().unwrap().0, AccessType::AnyShaderReadOther);
+    ///
+    /// // A barrier on "Read Other" before "Write" is required!
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// [_Ash_]: https://crates.io/crates/ash
+    /// [_Erupt_]: https://crates.io/crates/erupt
+    #[profiling::function]
+    pub fn access(
+        &self,
+        access: AccessType,
+        mut access_range: vk::ImageSubresourceRange,
+    ) -> impl Iterator<Item = (AccessType, vk::ImageSubresourceRange)> + '_ {
+        #[cfg(feature = "checked")]
+        {
+            assert_aspect_mask_supported(access_range.aspect_mask);
+
+            assert!(format_aspect_mask(self.info.fmt).contains(access_range.aspect_mask));
+        }
+
+        if access_range.layer_count == vk::REMAINING_ARRAY_LAYERS {
+            debug_assert!(access_range.base_array_layer < self.info.array_layer_count);
+
+            access_range.layer_count = self.info.array_layer_count - access_range.base_array_layer
+        }
+
+        debug_assert!(
+            access_range.base_array_layer + access_range.layer_count <= self.info.array_layer_count
+        );
+
+        if access_range.level_count == vk::REMAINING_MIP_LEVELS {
+            debug_assert!(access_range.base_mip_level < self.info.mip_level_count);
+
+            access_range.level_count = self.info.mip_level_count - access_range.base_mip_level
+        }
+
+        debug_assert!(
+            access_range.base_mip_level + access_range.level_count <= self.info.mip_level_count
+        );
+
+        self.access.swap(access, access_range)
+    }
+
+    /// Sets the debugging name assigned to this image.
+    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+
+        self
+    }
+
+    /// Drops the given allocation, all views, and the handle.
+    #[profiling::function]
+    fn drop_allocation(&self, allocation: Allocation) {
+        {
+            profiling::scope!("views");
+
+            self.with_image_view_cache(|cache| cache.clear());
+        }
+
+        unsafe {
+            self.device.destroy_image(self.handle, None);
+        }
+
+        {
+            profiling::scope!("deallocate");
+
+            Device::with_allocator(&self.device, |allocator| allocator.free(allocation))
+        }
+        .unwrap_or_else(|err| warn!("unable to free image allocation: {err}"));
+    }
+
+    /// Consumes a Vulkan image created by some other library.
+    ///
+    /// The image is not destroyed automatically on drop, unlike images created through the
+    /// [`Image::create`] function.
+    #[profiling::function]
+    pub fn from_raw(device: &Device, handle: vk::Image, info: impl Into<ImageInfo>) -> Self {
+        let device = device.clone();
+        let info = info.into();
+
+        let access = Access::new(info, AccessType::Nothing);
+
+        Self {
+            access,
+            allocation: None,
+            device,
+            handle,
+            image_view_cache: Mutex::new(Default::default()),
+            info,
+            name: None,
+        }
+    }
+
+    /// Produces a new `Image` sharing the same Vulkan handle with independent access tracking.
+    ///
+    /// The returned image retains the handle, device, and debug name of `self` but starts with
+    /// no prior access history (`AccessType::Nothing`) and does not claim ownership of the image's
+    /// memory backing. Internal caches are moved out of `self` so they are not duplicated.
+    ///
+    /// This is used to create separate tracking instances for swapchain images that may be
+    /// used concurrently across different graph executions.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the Vulkan image handle remains valid for the lifetime of the
+    /// returned `Image`. This function should only be called on swapchain images or other
+    /// platform or extension images.
+    #[profiling::function]
+    pub unsafe fn to_detached(&self) -> Self {
+        debug_assert!(self.allocation.is_none());
+
+        let image_view_cache = self.with_image_view_cache(take);
+
+        let Self { handle, info, .. } = *self;
+
+        Self {
+            access: Access::new(info, AccessType::Nothing),
+            allocation: None,
+            device: self.device.clone(),
+            handle,
+            image_view_cache: Mutex::new(image_view_cache),
+            info,
+            name: self.name.clone(),
+        }
+    }
+
+    #[profiling::function]
+    pub(crate) fn view(&self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
+        self.with_image_view_cache(|cache| {
+            Ok(match cache.entry(info) {
+                Entry::Occupied(entry) => entry.get().image_view,
+                Entry::Vacant(entry) => {
+                    entry
+                        .insert(ImageView::create(&self.device, info, self.handle)?)
+                        .image_view
+                }
+            })
+        })
+    }
+
+    fn with_image_view_cache<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<ImageViewInfo, ImageView>) -> R,
+    ) -> R {
+        let cache = self.image_view_cache.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let cache = cache.expect("poisoned image view lock");
+
+        let mut cache = cache;
+
+        f(&mut cache)
+    }
+}
+
+impl Debug for Image {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(name) = &self.name {
+            write!(f, "{} ({:?})", name, self.handle)
+        } else {
+            write!(f, "{:?}", self.handle)
+        }
+    }
+}
+
+impl Drop for Image {
+    // This function is not profiled because drop_allocation is
+    fn drop(&mut self) {
+        if panicking() {
+            return;
+        }
+
+        // When our allocation is some we allocated ourself; otherwise somebody
+        // else owns this image and we should not destroy it. Usually it's the swapchain...
+        if let Some(allocation) = self.allocation.take() {
+            Self::drop_allocation(self, allocation);
+        }
+    }
+}
+
+impl Eq for Image {}
+
+impl PartialEq for Image {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+
+enum ImageAccessIter<'a> {
+    Uniform(Option<(AccessType, vk::ImageSubresourceRange)>),
+    Dense(DenseAccessIter<'a, MutexGuard<'a, DenseAccess<AccessType>>, AccessType>),
+}
+
+impl Iterator for ImageAccessIter<'_> {
+    type Item = (AccessType, vk::ImageSubresourceRange);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Uniform(item) => item.take(),
+            Self::Dense(iter) => iter.next(),
         }
     }
 }
@@ -726,13 +775,13 @@ struct ImageAccessRange {
 /// Information used to create an [`Image`] instance.
 #[derive(Builder, Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "ImageInfoBuilderError"),
+    build_fn(private, name = "fallible_build"),
     derive(Copy, Clone, Debug),
     pattern = "owned"
 )]
 pub struct ImageInfo {
     /// The number of layers in the image.
-    #[builder(default = "1", setter(strip_option))]
+    #[builder(default = "1")]
     pub array_layer_count: u32,
 
     /// Specifies a dedicated memory allocation managed by the Vulkan driver and not by the
@@ -743,49 +792,49 @@ pub struct ImageInfo {
     pub dedicated: bool,
 
     /// Image extent of the Z axis, when describing a three dimensional image.
-    #[builder(setter(strip_option))]
+    #[builder(default)]
     pub depth: u32,
 
     /// A bitmask of describing additional parameters of the image.
-    #[builder(default, setter(strip_option))]
+    #[builder(default)]
     pub flags: vk::ImageCreateFlags,
 
     /// The format and type of the texel blocks that will be contained in the image.
-    #[builder(setter(strip_option))]
+    #[builder(default = "vk::Format::UNDEFINED")]
     pub fmt: vk::Format,
 
     /// Image extent of the Y axis, when describing a two or three dimensional image.
-    #[builder(setter(strip_option))]
+    #[builder(default)]
     pub height: u32,
 
     /// The number of levels of detail available for minified sampling of the image.
-    #[builder(default = "1", setter(strip_option))]
+    #[builder(default = "1")]
     pub mip_level_count: u32,
 
     /// Specifies the number of [samples per texel].
     ///
     /// See [`VkImageCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkImageCreateInfo.html).
-    #[builder(default = "SampleCount::Type1", setter(strip_option))]
+    #[builder(default = "SampleCount::Type1")]
     pub sample_count: SampleCount,
 
     /// Specifies the tiling arrangement of the texel blocks in memory.
     ///
     /// The default value is [`vk::ImageTiling::OPTIMAL`].
-    #[builder(default = "vk::ImageTiling::OPTIMAL", setter(strip_option))]
+    #[builder(default = "vk::ImageTiling::OPTIMAL")]
     pub tiling: vk::ImageTiling,
 
     /// The basic dimensionality of the image.
     ///
     /// Layers in array textures do not count as a dimension for the purposes of the image type.
-    #[builder(setter(strip_option))]
+    #[builder(default = "vk::ImageType::TYPE_2D")]
     pub ty: vk::ImageType,
 
     /// A bitmask of describing the intended usage of the image.
-    #[builder(default, setter(strip_option))]
+    #[builder(default)]
     pub usage: vk::ImageUsageFlags,
 
     /// Image extent of the X axis.
-    #[builder(setter(strip_option))]
+    #[builder(default)]
     pub width: u32,
 }
 
@@ -961,36 +1010,14 @@ impl From<ImageInfo> for vk::ImageSubresourceRange {
 
 impl ImageInfoBuilder {
     /// Builds a new `ImageInfo`.
-    ///
-    /// # Panics
-    ///
-    /// If any of the following functions have not been called this function will panic:
-    ///
-    /// * `ty`
-    /// * `fmt`
-    /// * `width`
-    /// * `height`
-    /// * `depth`
     #[inline(always)]
     pub fn build(self) -> ImageInfo {
-        match self.fallible_build() {
-            Err(ImageInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        }
+        self.fallible_build().expect("all fields have defaults")
     }
 
     /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
     pub fn into_image_view(self) -> ImageViewInfoBuilder {
         self.build().into_image_view().into_builder()
-    }
-}
-
-#[derive(Debug)]
-struct ImageInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for ImageInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
     }
 }
 
@@ -1053,7 +1080,7 @@ impl Drop for ImageView {
 /// Information used to reinterpret an existing [`Image`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "ImageViewInfoBuilderError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -1065,6 +1092,7 @@ pub struct ImageViewInfo {
     pub array_layer_count: u32,
 
     /// The portion of the image that will be contained in the view.
+    #[builder(default = "vk::ImageAspectFlags::COLOR")]
     pub aspect_mask: vk::ImageAspectFlags,
 
     /// The first array layer that will be contained in the view.
@@ -1076,6 +1104,7 @@ pub struct ImageViewInfo {
     pub base_mip_level: u32,
 
     /// The format and type of the texel blocks that will be contained in the view.
+    #[builder(default = "vk::Format::UNDEFINED")]
     pub fmt: vk::Format,
 
     /// The number of mip levels that will be contained in the view.
@@ -1085,6 +1114,7 @@ pub struct ImageViewInfo {
     pub mip_level_count: u32,
 
     /// The basic dimensionality of the view.
+    #[builder(default = "vk::ImageViewType::TYPE_2D")]
     pub ty: vk::ImageViewType,
 }
 
@@ -1193,29 +1223,9 @@ impl From<ImageViewInfo> for vk::ImageSubresourceRange {
 
 impl ImageViewInfoBuilder {
     /// Builds a new 'ImageViewInfo'.
-    ///
-    /// # Panics
-    ///
-    /// If any of the following values have not been set this function will panic:
-    ///
-    /// * `ty`
-    /// * `fmt`
-    /// * `aspect_mask`
     #[inline(always)]
     pub fn build(self) -> ImageViewInfo {
-        match self.fallible_build() {
-            Err(ImageViewInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ImageViewInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for ImageViewInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
+        self.fallible_build().expect("all fields have defaults")
     }
 }
 
@@ -1276,9 +1286,45 @@ impl From<SampleCount> for vk::SampleCountFlags {
     }
 }
 
+#[derive(Debug)]
+struct UniformAccess {
+    access: AtomicU8,
+}
+
+impl UniformAccess {
+    fn new(access: AccessType) -> Self {
+        Self {
+            access: AtomicU8::new(access_type_into_u8(access)),
+        }
+    }
+
+    fn swap(
+        &self,
+        access: AccessType,
+        access_range: vk::ImageSubresourceRange,
+    ) -> (AccessType, vk::ImageSubresourceRange) {
+        debug_assert_eq!(access_range.base_array_layer, 0);
+        debug_assert_eq!(access_range.base_mip_level, 0);
+        debug_assert_eq!(access_range.layer_count, 1);
+        debug_assert_eq!(access_range.level_count, 1);
+        debug_assert_eq!(access_range.aspect_mask.as_raw().count_ones(), 1);
+
+        let prev_access = access_type_from_u8(
+            self.access
+                .swap(access_type_into_u8(access), Ordering::AcqRel),
+        );
+
+        (prev_access, access_range)
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use {super::*, std::ops::Range};
+    use {
+        super::*,
+        rand::{Rng, SeedableRng, rngs::SmallRng},
+        std::ops::Range,
+    };
 
     // ImageSubresourceRange does not implement PartialEq
     fn assert_access_ranges_eq(
@@ -1309,13 +1355,13 @@ mod test {
     pub fn image_access_basic() {
         use vk::ImageAspectFlags as A;
 
-        let mut image = ImageAccess::new(
+        let mut image = DenseAccess::new(
             image_subresource(vk::Format::R8G8B8A8_UNORM, 1, 1),
             AccessType::Nothing,
         );
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderWrite,
                 image_subresource_range(A::COLOR, 0..1, 0..1),
@@ -1332,7 +1378,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::COLOR, 0..1, 0..1),
@@ -1350,16 +1396,40 @@ mod test {
     }
 
     #[test]
+    pub fn image_access_uniform() {
+        use vk::ImageAspectFlags as A;
+
+        let image = Access::new(
+            image_subresource(vk::Format::R8G8B8A8_UNORM, 1, 1),
+            AccessType::Nothing,
+        );
+
+        let mut accesses = image.swap(
+            AccessType::AnyShaderWrite,
+            image_subresource_range(A::COLOR, 0..1, 0..1),
+        );
+
+        assert_access_ranges_eq(
+            accesses.next().unwrap(),
+            (
+                AccessType::Nothing,
+                image_subresource_range(A::COLOR, 0..1, 0..1),
+            ),
+        );
+        assert!(accesses.next().is_none());
+    }
+
+    #[test]
     pub fn image_access_color() {
         use vk::ImageAspectFlags as A;
 
-        let mut image = ImageAccess::new(
+        let mut image = DenseAccess::new(
             image_subresource(vk::Format::R8G8B8A8_UNORM, 3, 3),
             AccessType::Nothing,
         );
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderWrite,
                 image_subresource_range(A::COLOR, 0..3, 0..3),
@@ -1376,7 +1446,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::COLOR, 0..1, 0..1),
@@ -1393,7 +1463,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::ComputeShaderWrite,
                 image_subresource_range(A::COLOR, 0..3, 0..3),
@@ -1424,7 +1494,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::HostRead,
                 image_subresource_range(A::COLOR, 0..3, 0..3),
@@ -1441,7 +1511,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::HostWrite,
                 image_subresource_range(A::COLOR, 1..2, 1..2),
@@ -1458,7 +1528,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::GeometryShaderReadOther,
                 image_subresource_range(A::COLOR, 0..3, 0..3),
@@ -1503,7 +1573,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::VertexBuffer,
                 image_subresource_range(A::COLOR, 0..3, 1..2),
@@ -1520,7 +1590,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::ColorAttachmentRead,
                 image_subresource_range(A::COLOR, 0..3, 0..3),
@@ -1597,13 +1667,13 @@ mod test {
     pub fn image_access_layers() {
         use vk::ImageAspectFlags as A;
 
-        let mut image = ImageAccess::new(
+        let mut image = DenseAccess::new(
             image_subresource(vk::Format::R8G8B8A8_UNORM, 3, 1),
             AccessType::Nothing,
         );
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderWrite,
                 image_subresource_range(A::COLOR, 0..3, 0..1),
@@ -1620,7 +1690,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::COLOR, 2..3, 0..1),
@@ -1637,7 +1707,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::HostRead,
                 image_subresource_range(A::COLOR, 0..2, 0..1),
@@ -1654,7 +1724,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::COLOR, 0..1, 0..1),
@@ -1671,7 +1741,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::COLOR, 1..2, 0..1),
@@ -1688,7 +1758,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::HostWrite,
                 image_subresource_range(A::COLOR, 0..3, 0..1),
@@ -1709,13 +1779,13 @@ mod test {
     pub fn image_access_levels() {
         use vk::ImageAspectFlags as A;
 
-        let mut image = ImageAccess::new(
+        let mut image = DenseAccess::new(
             image_subresource(vk::Format::R8G8B8A8_UNORM, 1, 3),
             AccessType::Nothing,
         );
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderWrite,
                 image_subresource_range(A::COLOR, 0..1, 0..3),
@@ -1732,7 +1802,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::COLOR, 0..1, 2..3),
@@ -1749,7 +1819,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::HostRead,
                 image_subresource_range(A::COLOR, 0..1, 0..2),
@@ -1766,7 +1836,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::COLOR, 0..1, 0..1),
@@ -1783,7 +1853,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::COLOR, 0..1, 1..2),
@@ -1800,7 +1870,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::HostWrite,
                 image_subresource_range(A::COLOR, 0..1, 0..3),
@@ -1821,13 +1891,13 @@ mod test {
     pub fn image_access_depth_stencil() {
         use vk::ImageAspectFlags as A;
 
-        let mut image = ImageAccess::new(
+        let mut image = DenseAccess::new(
             image_subresource(vk::Format::D24_UNORM_S8_UINT, 4, 3),
             AccessType::Nothing,
         );
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderWrite,
                 image_subresource_range(A::DEPTH, 0..4, 0..1),
@@ -1844,7 +1914,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderWrite,
                 image_subresource_range(A::STENCIL, 0..4, 1..2),
@@ -1861,7 +1931,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::DEPTH | A::STENCIL, 0..4, 0..2),
@@ -1983,7 +2053,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AccelerationStructureBuildWrite,
                 image_subresource_range(A::DEPTH | A::STENCIL, 0..4, 0..2),
@@ -2000,7 +2070,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AccelerationStructureBuildRead,
                 image_subresource_range(A::DEPTH, 1..3, 0..2),
@@ -2021,13 +2091,13 @@ mod test {
     pub fn image_access_stencil() {
         use vk::ImageAspectFlags as A;
 
-        let mut image = ImageAccess::new(
+        let mut image = DenseAccess::new(
             image_subresource(vk::Format::S8_UINT, 2, 2),
             AccessType::Nothing,
         );
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderWrite,
                 image_subresource_range(A::STENCIL, 0..2, 0..1),
@@ -2044,7 +2114,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::AnyShaderReadOther,
                 image_subresource_range(A::STENCIL, 0..2, 1..2),
@@ -2061,7 +2131,7 @@ mod test {
         }
 
         {
-            let mut accesses = ImageAccessIter::new(
+            let mut accesses = DenseAccessIter::new(
                 &mut image,
                 AccessType::HostRead,
                 image_subresource_range(A::STENCIL, 0..2, 0..2),
@@ -2239,45 +2309,121 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: depth")]
-    pub fn image_info_builder_uninit_depth() {
-        ImageInfoBuilder::default().build();
+    pub fn image_info_builder_defaults() {
+        let info = ImageInfo {
+            array_layer_count: 1,
+            dedicated: false,
+            depth: 0,
+            flags: vk::ImageCreateFlags::empty(),
+            fmt: vk::Format::UNDEFINED,
+            height: 0,
+            mip_level_count: 1,
+            sample_count: SampleCount::Type1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            ty: vk::ImageType::TYPE_2D,
+            usage: vk::ImageUsageFlags::empty(),
+            width: 0,
+        };
+
+        assert_eq!(ImageInfoBuilder::default().build(), info);
+    }
+
+    fn image_access_fuzz(aspect_count: u8, array_layer_count: u32, mip_level_count: u32) {
+        const FUZZ_COUNT: usize = 100_000;
+        static ACCESS_TYPES: &[AccessType] = &[
+            AccessType::AnyShaderReadOther,
+            AccessType::AnyShaderWrite,
+            AccessType::ColorAttachmentRead,
+            AccessType::ColorAttachmentWrite,
+            AccessType::HostRead,
+            AccessType::HostWrite,
+            AccessType::Nothing,
+        ];
+
+        let fmt = match aspect_count {
+            1 => vk::Format::R8G8B8A8_UNORM,
+            2 => vk::Format::D24_UNORM_S8_UINT,
+            _ => unreachable!(),
+        };
+
+        let mut rng = SmallRng::seed_from_u64(42);
+        let total = (aspect_count as u32 * array_layer_count * mip_level_count) as usize;
+        let mut access = DenseAccess::new(
+            image_subresource(fmt, array_layer_count, mip_level_count),
+            AccessType::Nothing,
+        );
+        let mut data = vec![AccessType::Nothing; total];
+
+        let aspect_bits = format_aspect_mask(fmt);
+
+        for _ in 0..FUZZ_COUNT {
+            let new_access = ACCESS_TYPES[rng.random_range(..ACCESS_TYPES.len())];
+
+            // Pick a valid aspect mask from the format's supported aspects
+            let aspect_mask = if aspect_count == 2 && rng.random_bool(0.5) {
+                aspect_bits
+            } else {
+                let bit_index =
+                    rng.random_range(..aspect_count) + aspect_bits.as_raw().trailing_zeros() as u8;
+                vk::ImageAspectFlags::from_raw(1 << bit_index)
+            };
+
+            let layer_start = rng.random_range(..array_layer_count);
+            let layer_end = rng.random_range(layer_start + 1..=array_layer_count);
+            let mip_start = rng.random_range(..mip_level_count);
+            let mip_end = rng.random_range(mip_start + 1..=mip_level_count);
+
+            let range =
+                image_subresource_range(aspect_mask, layer_start..layer_end, mip_start..mip_end);
+
+            for (prev, range) in access.swap(new_access, range) {
+                let range_mask = range.aspect_mask.as_raw();
+                for ai in 0..range_mask.count_ones() as u8 {
+                    let bit = range_mask.trailing_zeros() + ai as u32;
+                    let a = (aspect_bits.as_raw() & ((1 << bit) - 1)).count_ones() as u8;
+                    for l in range.base_array_layer..range.base_array_layer + range.layer_count {
+                        for m in range.base_mip_level..range.base_mip_level + range.level_count {
+                            let idx = (l * aspect_count as u32 * mip_level_count
+                                + m * aspect_count as u32
+                                + a as u32) as usize;
+                            assert_eq!(
+                                data[idx], prev,
+                                "prev mismatch at aspect={a} layer={l} mip={m} idx={idx}: expected {prev:?}, got {:?}",
+                                data[idx],
+                            );
+                        }
+                    }
+                }
+            }
+
+            for a in 0..aspect_count {
+                let bit = aspect_bits.as_raw().trailing_zeros() as u8 + a;
+                if aspect_mask.as_raw() & (1 << bit) == 0 {
+                    continue;
+                }
+                for l in layer_start..layer_end {
+                    for m in mip_start..mip_end {
+                        let idx = access.idx(a, l, m);
+                        data[idx] = new_access;
+                    }
+                }
+            }
+        }
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: fmt")]
-    pub fn image_info_builder_uninit_fmt() {
-        ImageInfoBuilder::default().depth(1).build();
+    pub fn image_access_fuzz_small() {
+        image_access_fuzz(1, 3, 3);
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: height")]
-    pub fn image_info_builder_uninit_height() {
-        ImageInfoBuilder::default()
-            .depth(1)
-            .fmt(vk::Format::default())
-            .build();
+    pub fn image_access_fuzz_medium() {
+        image_access_fuzz(2, 4, 3);
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: ty")]
-    pub fn image_info_builder_uninit_ty() {
-        ImageInfoBuilder::default()
-            .depth(1)
-            .fmt(vk::Format::default())
-            .height(2)
-            .build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: width")]
-    pub fn image_info_builder_uninit_width() {
-        ImageInfoBuilder::default()
-            .depth(1)
-            .fmt(vk::Format::default())
-            .height(2)
-            .ty(vk::ImageType::TYPE_2D)
-            .build();
+    pub fn image_access_fuzz_large() {
+        image_access_fuzz(1, 10, 10);
     }
 
     fn image_subresource(
@@ -2378,25 +2524,10 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: aspect_mask")]
-    pub fn image_view_info_builder_uninit_aspect_mask() {
-        ImageViewInfoBuilder::default().build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: fmt")]
-    pub fn image_view_info_builder_unint_fmt() {
-        ImageViewInfoBuilder::default()
-            .aspect_mask(vk::ImageAspectFlags::empty())
-            .build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: ty")]
-    pub fn image_view_info_builder_unint_ty() {
-        ImageViewInfoBuilder::default()
-            .aspect_mask(vk::ImageAspectFlags::empty())
-            .fmt(vk::Format::default())
-            .build();
+    pub fn image_view_info_builder_defaults() {
+        assert_eq!(
+            ImageViewInfoBuilder::default().build(),
+            ImageViewInfo::new(vk::Format::UNDEFINED, vk::ImageViewType::TYPE_2D)
+        );
     }
 }

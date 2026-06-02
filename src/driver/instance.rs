@@ -3,7 +3,7 @@
 use {
     super::{DriverError, physical_device::PhysicalDevice},
     ash::{ext, khr, vk, vk::Handle},
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     log::{debug, error, trace, warn},
     raw_window_handle::{HasDisplayHandle, RawDisplayHandle},
     std::{
@@ -178,7 +178,7 @@ fn display_extension_names(
 //
 // Imported instances do not expose their enabled extension list, so we infer support by
 // checking that the VK_KHR_surface entry points resolve for this instance handle.
-fn has_surface_ext(entry: &ash::Entry, instance: vk::Instance) -> bool {
+fn has_vk_khr_surface(entry: &ash::Entry, instance: vk::Instance) -> bool {
     [
         c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
         c"vkGetPhysicalDeviceSurfaceFormatsKHR",
@@ -298,7 +298,7 @@ pub struct Instance {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub surface_ext: bool,
+    pub khr_surface: bool,
 }
 
 impl Clone for Instance {
@@ -306,8 +306,8 @@ impl Clone for Instance {
         Self {
             read_only: ReadOnlyInstance {
                 info: self.info,
-                surface_ext: self.surface_ext,
                 inner: self.inner.clone(),
+                khr_surface: self.khr_surface,
             },
         }
     }
@@ -380,7 +380,7 @@ impl Instance {
             ]);
         }
 
-        let surface_ext = extension_names.contains(&khr::surface::NAME);
+        let khr_surface = extension_names.contains(&khr::surface::NAME);
 
         let extension_name_ptrs = extension_names
             .iter()
@@ -494,7 +494,7 @@ impl Instance {
                     instance,
                     instance_created: true,
                 }),
-                surface_ext,
+                khr_surface,
             },
         })
     }
@@ -605,7 +605,7 @@ impl Instance {
 
                 DriverError::Unsupported
             })?;
-        let surface_ext = has_surface_ext(&entry, instance);
+        let khr_surface = has_vk_khr_surface(&entry, instance);
 
         let instance = unsafe { ash::Instance::load(entry.static_fn(), instance) };
 
@@ -621,7 +621,7 @@ impl Instance {
                     instance,
                     instance_created: false,
                 }),
-                surface_ext,
+                khr_surface,
             },
         })
     }
@@ -636,7 +636,7 @@ impl Debug for Instance {
 /// Information used to create an [`Instance`] instance.
 #[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "UninitializedFieldError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]

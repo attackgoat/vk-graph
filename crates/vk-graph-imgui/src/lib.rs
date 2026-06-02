@@ -28,7 +28,7 @@ use {
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{BlendInfo, GraphicPipeline, GraphicPipelineInfo},
+            graphic::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             shader::Shader,
             sync::AccessType,
@@ -44,7 +44,7 @@ use {
 pub struct ImGui {
     context: Context,
     font_atlas_image: Option<Arc<Lease<Image>>>,
-    pipeline: GraphicPipeline,
+    pipeline: GraphicsPipeline,
     platform: WinitPlatform,
 }
 
@@ -76,9 +76,9 @@ impl ImGui {
     pub fn new(device: &Device) -> Self {
         let mut context = Context::create();
         let platform = WinitPlatform::new(&mut context);
-        let pipeline = GraphicPipeline::create(
+        let pipeline = GraphicsPipeline::create(
             device,
-            GraphicPipelineInfo::builder()
+            GraphicsPipelineInfo::builder()
                 .blend(BlendInfo::PRE_MULTIPLIED_ALPHA)
                 .cull_mode(vk::CullModeFlags::NONE),
             [

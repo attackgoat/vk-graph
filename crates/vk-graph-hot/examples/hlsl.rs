@@ -3,9 +3,9 @@ use {
     std::path::PathBuf,
     vk_graph::{
         cmd::{LoadOp, StoreOp},
-        driver::graphic::GraphicPipelineInfo,
+        driver::graphic::GraphicsPipelineInfo,
     },
-    vk_graph_hot::{HotGraphicPipeline, HotShader},
+    vk_graph_hot::{HotGraphicsPipeline, HotShader},
     vk_graph_window::{Window, WindowError},
 };
 
@@ -19,13 +19,13 @@ fn main() -> Result<(), WindowError> {
     let args = Args::parse();
     let window = Window::builder().debug(args.debug).build()?;
 
-    // Create a graphic pipeline - the same as normal except for "Hot" prefixes and we provide the
+    // Create a graphics pipeline - the same as normal except for "Hot" prefixes and we provide the
     // shader source code path instead of the shader source code bytes
     let cargo_manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fill_image_path = cargo_manifest_dir.join("examples/res/fill_image.hlsl");
-    let pipeline = HotGraphicPipeline::create(
+    let pipeline = HotGraphicsPipeline::create(
         &window.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             HotShader::new_vertex(&fill_image_path).entry_name("vertex_main"),
             HotShader::new_fragment(&fill_image_path).entry_name("fragment_main"),

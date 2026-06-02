@@ -28,13 +28,13 @@ use {
             ash::vk::{self},
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicPipelineInfo},
+            graphic::{DepthStencilInfo, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             sync::AccessType,
         },
         pool::{Pool as _, lazy::LazyPool},
     },
-    vk_graph_hot::{HotGraphicPipeline, HotShader},
+    vk_graph_hot::{HotGraphicsPipeline, HotShader},
 };
 
 // Sets bits with index 0 and 1 for stereoscopic rendering
@@ -124,17 +124,17 @@ fn main() -> anyhow::Result<()> {
 
     let res_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("res");
 
-    let hands_pipeline = HotGraphicPipeline::create(
+    let hands_pipeline = HotGraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             HotShader::new_vertex(res_dir.join("model.vert")),
             HotShader::new_fragment(res_dir.join("hands.frag")),
         ],
     )?;
-    let mammoth_pipeline = HotGraphicPipeline::create(
+    let mammoth_pipeline = HotGraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             HotShader::new_vertex(res_dir.join("model.vert")),
             HotShader::new_fragment(res_dir.join("mammoth.frag")),

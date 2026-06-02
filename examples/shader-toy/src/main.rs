@@ -43,7 +43,7 @@ use {
         cmd::{LoadOp, StoreOp},
         driver::{
             ash::vk,
-            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
             sync::AccessType,
@@ -105,18 +105,18 @@ fn main() -> anyhow::Result<()> {
     // no depth/stencil
     // 1x sample count
     // one-sided
-    let buffer_pipeline = GraphicPipeline::create(
+    let buffer_pipeline = GraphicsPipeline::create(
         &window.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(res::shader::QUAD_VERT),
             Shader::new_fragment(res::shader::FLOCKAROO_BUF_FRAG),
         ],
     )
     .context("FLOCKAROO_BUF_FRAG")?;
-    let image_pipeline = GraphicPipeline::create(
+    let image_pipeline = GraphicsPipeline::create(
         &window.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(res::shader::QUAD_VERT),
             Shader::new_fragment(res::shader::FLOCKAROO_IMG_FRAG),

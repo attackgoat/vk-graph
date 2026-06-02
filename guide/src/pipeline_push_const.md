@@ -8,8 +8,8 @@ Check [`PhysicalDeviceLimits::max_push_constants_size`](https://docs.rs/vk-graph
 and keep the payload small.
 
 API docs: [`ComputeCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/compute/struct.ComputeCommandRef.html#method.push_constants),
-[`GraphicCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicCommandRef.html#method.push_constants),
-[`RayTraceCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTraceCommandRef.html#method.push_constants).
+[`GraphicsCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.push_constants),
+[`RayTracingCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.push_constants).
 
 ```glsl
 // render_mesh.glsl

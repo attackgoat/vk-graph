@@ -14,7 +14,7 @@ use {
     std::{cell::RefCell, ops::Deref},
 };
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "checked")]
 use crate::Execution;
 
 /// Recording interface for general Vulkan commands.
@@ -42,8 +42,11 @@ use crate::Execution;
 pub struct CommandRef<'a> {
     cmd: &'a crate::driver::cmd_buf::CommandBuffer,
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "checked")]
     exec: &'a Execution,
+
+    #[cfg(feature = "checked")]
+    graph_id: crate::GraphId,
 
     resources: &'a [AnyResource],
 }
@@ -52,12 +55,15 @@ impl<'a> CommandRef<'a> {
     pub(crate) fn new(
         cmd: &'a crate::driver::cmd_buf::CommandBuffer,
         resources: &'a [AnyResource],
-        #[cfg(debug_assertions)] exec: &'a Execution,
+        #[cfg(feature = "checked")] exec: &'a Execution,
+        #[cfg(feature = "checked")] graph_id: crate::GraphId,
     ) -> Self {
         Self {
             cmd,
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "checked")]
             exec,
+            #[cfg(feature = "checked")]
+            graph_id,
             resources,
         }
     }
@@ -215,9 +221,15 @@ impl<'a> CommandRef<'a> {
                 vk_infos
             };
 
+            let khr_acceleration_structure =
+                Device::expect_vk_khr_acceleration_structure(&self.cmd.device);
+
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd.device)
-                    .cmd_build_acceleration_structures(self.cmd.handle, &vk_infos, &vk_ranges);
+                khr_acceleration_structure.cmd_build_acceleration_structures(
+                    self.cmd.handle,
+                    &vk_infos,
+                    &vk_ranges,
+                );
             }
         });
 
@@ -294,15 +306,17 @@ impl<'a> CommandRef<'a> {
                 (vk_infos, vk_max_primitive_counts)
             };
 
+            let khr_acceleration_structure =
+                Device::expect_vk_khr_acceleration_structure(&self.cmd.device);
+
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd.device)
-                    .cmd_build_acceleration_structures_indirect(
-                        self.cmd.handle,
-                        &vk_infos,
-                        &tls.range_bases,
-                        &tls.range_strides,
-                        &vk_max_primitive_counts,
-                    );
+                khr_acceleration_structure.cmd_build_acceleration_structures_indirect(
+                    self.cmd.handle,
+                    &vk_infos,
+                    &tls.range_bases,
+                    &tls.range_strides,
+                    &vk_max_primitive_counts,
+                );
             }
         });
 
@@ -413,9 +427,15 @@ impl<'a> CommandRef<'a> {
                 vk_infos
             };
 
+            let khr_acceleration_structure =
+                Device::expect_vk_khr_acceleration_structure(&self.cmd.device);
+
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd.device)
-                    .cmd_build_acceleration_structures(self.cmd.handle, &vk_infos, &vk_ranges);
+                khr_acceleration_structure.cmd_build_acceleration_structures(
+                    self.cmd.handle,
+                    &vk_infos,
+                    &vk_ranges,
+                );
             }
         });
 
@@ -493,15 +513,17 @@ impl<'a> CommandRef<'a> {
                 (vk_infos, vk_max_primitive_counts)
             };
 
+            let khr_acceleration_structure =
+                Device::expect_vk_khr_acceleration_structure(&self.cmd.device);
+
             unsafe {
-                Device::expect_accel_struct_ext(&self.cmd.device)
-                    .cmd_build_acceleration_structures_indirect(
-                        self.cmd.handle,
-                        &vk_infos,
-                        &tls.range_bases,
-                        &tls.range_strides,
-                        &vk_max_primitive_counts,
-                    );
+                khr_acceleration_structure.cmd_build_acceleration_structures_indirect(
+                    self.cmd.handle,
+                    &vk_infos,
+                    &tls.range_bases,
+                    &tls.range_strides,
+                    &vk_max_primitive_counts,
+                );
             }
         });
 
@@ -514,6 +536,9 @@ impl<'a> CommandRef<'a> {
     where
         N: Node,
     {
+        #[cfg(feature = "checked")]
+        resource_node.assert_owner(self.graph_id);
+
         // You must have called an access function for this node on this execution before borrowing
         // the resource!
         //
@@ -522,7 +547,7 @@ impl<'a> CommandRef<'a> {
         // access type must first be specified so the correct barriers may be added.
         //
         // See: https://attackgoat.github.io/vk-graph/pipeline_sync.html
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         assert!(
             self.exec.accesses.contains_key(&resource_node.index()),
             "unexpected node access: call an access function first"

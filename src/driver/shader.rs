@@ -19,6 +19,7 @@ use {
         fmt::{Debug, Formatter},
         iter::repeat_n,
         ops::Deref,
+        panic::{AssertUnwindSafe, catch_unwind},
         thread::panicking,
     },
 };
@@ -726,6 +727,34 @@ pub struct Shader {
     vertex_input_state: Option<VertexInputState>,
 }
 
+macro_rules! shader_ctors {
+    ($(($name:ident, $flag:ident, $desc:literal),)*) => {
+        paste::paste! {
+            $(
+                #[doc = $desc]
+                ///
+                /// # Panics
+                ///
+                /// Panics if the shader code is invalid. Use [`try_build`](ShaderBuilder::try_build)
+                /// on the returned builder for a fallible path.
+                pub fn [<new_ $name>](spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
+                    ShaderBuilder::default().spirv(spirv).stage(vk::ShaderStageFlags::$flag)
+                }
+
+                #[doc = "Creates a "]
+                #[doc = $desc]
+                #[doc = ", returning an error if the SPIR-V is invalid."]
+                pub fn [<try_new_ $name>](spirv: impl Into<SpirvBinary>) -> Result<Shader, DriverError> {
+                    ShaderBuilder::default()
+                        .spirv(spirv)
+                        .stage(vk::ShaderStageFlags::$flag)
+                        .try_build()
+                }
+            )*
+        }
+    }
+}
+
 impl Shader {
     /// Specifies a shader with the given `stage` and shader code.
     #[allow(clippy::new_ret_no_self)]
@@ -733,130 +762,21 @@ impl Shader {
         ShaderBuilder::default().spirv(spirv).stage(stage)
     }
 
-    /// Creates a new ray trace shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_any_hit(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::ANY_HIT_KHR, spirv)
-    }
-
-    /// Creates a new ray trace shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_callable(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::CALLABLE_KHR, spirv)
-    }
-
-    /// Creates a new ray trace shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_closest_hit(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::CLOSEST_HIT_KHR, spirv)
-    }
-
-    /// Creates a new compute shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_compute(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::COMPUTE, spirv)
-    }
-
-    /// Creates a new fragment shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_fragment(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::FRAGMENT, spirv)
-    }
-
-    /// Creates a new geometry shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_geometry(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::GEOMETRY, spirv)
-    }
-
-    /// Creates a new ray trace shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_intersection(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::INTERSECTION_KHR, spirv)
-    }
-
-    /// Creates a new mesh shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
-    pub fn new_mesh(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::MESH_EXT, spirv)
-    }
-
-    /// Creates a new ray trace shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_miss(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::MISS_KHR, spirv)
-    }
-
-    /// Creates a new ray trace shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_ray_gen(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::RAYGEN_KHR, spirv)
-    }
-
-    /// Creates a new mesh task shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
-    pub fn new_task(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::TASK_EXT, spirv)
-    }
-
-    /// Creates a new tessellation control shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tessellation_ctrl(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, spirv)
-    }
-
-    /// Creates a new tessellation evaluation shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_tessellation_eval(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, spirv)
-    }
-
-    /// Creates a new vertex shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid or not a multiple of four bytes in length.
-    pub fn new_vertex(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
-        Self::new(vk::ShaderStageFlags::VERTEX, spirv)
+    shader_ctors! {
+        (any_hit, ANY_HIT_KHR, "Creates a new ray tracing any-hit shader."),
+        (callable, CALLABLE_KHR, "Creates a new ray tracing callable shader."),
+        (closest_hit, CLOSEST_HIT_KHR, "Creates a new ray tracing closest-hit shader."),
+        (compute, COMPUTE, "Creates a new compute shader."),
+        (fragment, FRAGMENT, "Creates a new fragment shader."),
+        (geometry, GEOMETRY, "Creates a new geometry shader."),
+        (intersection, INTERSECTION_KHR, "Creates a new ray tracing intersection shader."),
+        (mesh, MESH_EXT, "Creates a new mesh shader."),
+        (miss, MISS_KHR, "Creates a new ray tracing miss shader."),
+        (ray_gen, RAYGEN_KHR, "Creates a new ray tracing ray-generation shader."),
+        (task, TASK_EXT, "Creates a new task shader."),
+        (tessellation_ctrl, TESSELLATION_CONTROL, "Creates a new tessellation control shader."),
+        (tessellation_eval, TESSELLATION_EVALUATION, "Creates a new tessellation evaluation shader."),
+        (vertex, VERTEX, "Creates a new vertex shader."),
     }
 
     /// Returns the input and write attachments of a shader.
@@ -980,7 +900,7 @@ impl Shader {
     #[profiling::function]
     pub(super) fn merge_descriptor_bindings(
         descriptor_bindings: impl IntoIterator<Item = DescriptorBindingMap>,
-    ) -> DescriptorBindingMap {
+    ) -> Result<DescriptorBindingMap, DriverError> {
         fn merge_info(lhs: &mut DescriptorInfo, rhs: DescriptorInfo) -> bool {
             let (lhs_count, rhs_count) = match lhs {
                 DescriptorInfo::AccelerationStructure(lhs) => {
@@ -1085,11 +1005,16 @@ impl Shader {
         }
 
         #[profiling::function]
-        fn merge_pair(src: DescriptorBindingMap, dst: &mut DescriptorBindingMap) {
+        fn merge_pair(
+            src: DescriptorBindingMap,
+            dst: &mut DescriptorBindingMap,
+        ) -> Result<(), DriverError> {
             for (descriptor_binding, (descriptor_info, descriptor_flags)) in src.into_iter() {
                 if let Some((existing_info, existing_flags)) = dst.get_mut(&descriptor_binding) {
                     if !merge_info(existing_info, descriptor_info) {
-                        panic!("Inconsistent shader descriptors ({descriptor_binding:?})");
+                        warn!("inconsistent shader descriptors ({descriptor_binding:?})");
+
+                        return Err(DriverError::InvalidData);
                     }
 
                     *existing_flags |= descriptor_flags;
@@ -1097,15 +1022,17 @@ impl Shader {
                     dst.insert(descriptor_binding, (descriptor_info, descriptor_flags));
                 }
             }
+
+            Ok(())
         }
 
         let mut descriptor_bindings = descriptor_bindings.into_iter();
         let mut res = descriptor_bindings.next().unwrap_or_default();
         for descriptor_binding in descriptor_bindings {
-            merge_pair(descriptor_binding, &mut res);
+            merge_pair(descriptor_binding, &mut res)?;
         }
 
-        res
+        Ok(res)
     }
 
     #[profiling::function]
@@ -1140,6 +1067,29 @@ impl Shader {
 
     #[profiling::function]
     fn reflect_entry_point(
+        entry_name: &str,
+        spirv: impl Into<SpirvBinary>,
+        specialization: Option<&SpecializationMap>,
+    ) -> Result<EntryPoint, DriverError> {
+        // spq-core can panic on malformed SPIR-V instead of returning Err, for example:
+        // `range start index 5 out of range for slice of length 0` from spq-core/src/parse/bin.rs.
+        catch_unwind(AssertUnwindSafe(|| {
+            Self::reflect_entry_point_unchecked(entry_name, spirv, specialization)
+        }))
+        .map_err(|_| {
+            warn!("invalid shader reflection entry point: panic");
+
+            DriverError::InvalidData
+        })?
+        .map_err(|err| {
+            warn!("invalid shader reflection entry point: {err}");
+
+            DriverError::InvalidData
+        })
+    }
+
+    #[profiling::function]
+    fn reflect_entry_point_unchecked(
         entry_name: &str,
         spirv: impl Into<SpirvBinary>,
         specialization: Option<&SpecializationMap>,
@@ -1401,18 +1351,43 @@ impl Debug for Shader {
     }
 }
 
-impl From<ShaderBuilder> for Shader {
-    fn from(shader: ShaderBuilder) -> Self {
-        shader.build()
+impl TryFrom<ShaderBuilder> for Shader {
+    type Error = DriverError;
+
+    fn try_from(shader: ShaderBuilder) -> Result<Self, Self::Error> {
+        shader.try_build()
     }
 }
 
-impl<T> From<T> for Shader
-where
-    T: Into<SpirvBinary>,
-{
-    fn from(spirv: T) -> Self {
-        Shader::from_spirv(spirv).build()
+impl TryFrom<&[u8]> for Shader {
+    type Error = DriverError;
+
+    fn try_from(spirv: &[u8]) -> Result<Self, Self::Error> {
+        Shader::from_spirv(spirv).try_build()
+    }
+}
+
+impl TryFrom<&[u32]> for Shader {
+    type Error = DriverError;
+
+    fn try_from(spirv: &[u32]) -> Result<Self, Self::Error> {
+        Shader::from_spirv(spirv).try_build()
+    }
+}
+
+impl TryFrom<Vec<u8>> for Shader {
+    type Error = DriverError;
+
+    fn try_from(spirv: Vec<u8>) -> Result<Self, Self::Error> {
+        Shader::from_spirv(spirv).try_build()
+    }
+}
+
+impl TryFrom<Vec<u32>> for Shader {
+    type Error = DriverError;
+
+    fn try_from(spirv: Vec<u32>) -> Result<Self, Self::Error> {
+        Shader::from_spirv(spirv).try_build()
     }
 }
 
@@ -1424,12 +1399,13 @@ impl ShaderBuilder {
     }
 
     /// Builds a new `Shader`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the SPIR-V is invalid. Prefer [`try_build`](Self::try_build) for a fallible path.
     pub fn build(self) -> Shader {
-        let entry_name = self.entry_name.clone().unwrap_or_else(|| "main".to_owned());
-
-        self.try_build().unwrap_or_else(|_| {
-            panic!("invalid or unsupported shader code for entry name '{entry_name}'")
-        })
+        self.try_build()
+            .unwrap_or_else(|err| panic!("invalid or unsupported shader code: {err}"))
     }
 
     /// Specifies a manually-defined image sampler.
@@ -1475,22 +1451,17 @@ impl ShaderBuilder {
     /// Attempts to build a new `Shader`.
     pub fn try_build(mut self) -> Result<Shader, DriverError> {
         let entry_name = self.entry_name.as_deref().unwrap_or("main");
-        let entry_point = Shader::reflect_entry_point(
-            entry_name,
-            self.spirv
-                .as_ref()
-                .map(|spirv| spirv.words())
-                .expect("missing spirv code"),
-            self.specialization
-                .as_ref()
-                .map(|opt| opt.as_ref())
-                .unwrap_or_default(),
-        )
-        .map_err(|err| {
-            warn!("invalid shader reflection entry point: {err}");
-
-            DriverError::InvalidData
-        })?;
+        let spirv = self
+            .spirv
+            .as_ref()
+            .map(|spirv| spirv.words())
+            .ok_or(DriverError::InvalidData)?;
+        let specialization = self
+            .specialization
+            .as_ref()
+            .map(|opt| opt.as_ref())
+            .unwrap_or_default();
+        let entry_point = Shader::reflect_entry_point(entry_name, spirv, specialization)?;
 
         if self.stage.unwrap_or_default().is_empty() {
             self.stage = Some(match entry_point.exec_model {
@@ -1628,5 +1599,36 @@ mod test {
         let builder = Builder::default().build();
 
         assert_eq!(info, builder);
+    }
+
+    #[test]
+    pub fn invalid_spirv_try_into_driver_value() {
+        assert!(Shader::try_from(vec![0u32]).is_err());
+    }
+
+    #[test]
+    pub fn merge_descriptor_bindings_rejects_mismatched_descriptors() {
+        let mut lhs = DescriptorBindingMap::default();
+        lhs.insert(
+            Descriptor::from(0),
+            (
+                DescriptorInfo::UniformBuffer(1),
+                vk::ShaderStageFlags::VERTEX,
+            ),
+        );
+
+        let mut rhs = DescriptorBindingMap::default();
+        rhs.insert(
+            Descriptor::from(0),
+            (
+                DescriptorInfo::StorageBuffer(1),
+                vk::ShaderStageFlags::FRAGMENT,
+            ),
+        );
+
+        assert!(matches!(
+            Shader::merge_descriptor_bindings([lhs, rhs]),
+            Err(DriverError::InvalidData)
+        ));
     }
 }

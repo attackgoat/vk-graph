@@ -10,7 +10,7 @@ use vk_graph::{
         ash::vk,
         buffer::BufferInfo,
         device::Device,
-        graphic::{BlendInfo, GraphicPipeline, GraphicPipelineInfo},
+        graphic::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
         image::{Image, ImageInfo},
         shader::Shader,
         sync::AccessType,
@@ -35,7 +35,7 @@ pub struct Egui {
     egui_winit: egui_winit::State,
     textures: HashMap<egui::TextureId, Arc<Lease<Image>>>,
     cache: HashPool,
-    ppl: GraphicPipeline,
+    ppl: GraphicsPipeline,
     next_tex_id: u64,
     user_textures: HashMap<egui::TextureId, AnyImageNode>,
 }
@@ -43,9 +43,9 @@ pub struct Egui {
 impl Egui {
     /// Creates a new `egui` renderer for the given device and display target.
     pub fn new(device: &Device, display_target: &dyn HasDisplayHandle) -> Self {
-        let ppl = GraphicPipeline::create(
+        let ppl = GraphicsPipeline::create(
             device,
-            GraphicPipelineInfo::builder()
+            GraphicsPipelineInfo::builder()
                 .blend(BlendInfo {
                     blend_enable: true,
                     src_color_blend_factor: vk::BlendFactor::ONE,

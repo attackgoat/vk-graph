@@ -74,5 +74,5 @@ impl HotComputePipeline {
     }
 }
 
-pipeline!(Compute);
-pipeline_handle!(Compute);
+pipeline!(ComputePipeline);
+pipeline_handle!(HotComputePipeline);

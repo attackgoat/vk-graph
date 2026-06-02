@@ -44,5 +44,8 @@ jobs:
       - name: Install mdBook
         run: cargo install --locked mdbook --version 0.5.3
 
-      - name: Run CI checks
-        run: bin/check --allow-dirty --no-gpu
+      - name: Run CI checks (debug)
+        run: bin/check --skip-vulkan
+
+      - name: Run CI checks (release)
+        run: bin/check --release --skip-vulkan

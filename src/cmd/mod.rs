@@ -1,4 +1,21 @@
 //! Strongly-typed [`Graph`] commands.
+//!
+//! ## Lifecycle
+//!
+//! Commands follow a builder-style chain:
+//!
+//! 1. [`Graph::begin_cmd`] opens a [`Command`].
+//! 2. Declare resource accesses with [`Command::resource_access`] or bind a shader pipeline
+//!    with [`Command::bind_pipeline`], returning a [`PipelineCommand`].
+//! 3. With a pipeline, declare shader bindings with [`PipelineCommand::shader_resource_access`].
+//! 4. Record work with [`record_cmd`](Command::record_cmd) — available on both
+//!    [`Command`] and [`PipelineCommand`].
+//! 5. The command auto-closes when dropped or when [`Graph::into_submission`] is called.
+//!
+//! A single command can call `record_cmd` multiple times — each call creates a separate
+//! "execution" within that command. Executions within a command stay in the specified
+//! order, but the graph system may re-order entire commands or merge them during
+//! submission for optimal scheduling.
 
 mod cmd_ref;
 mod compute;
@@ -12,9 +29,9 @@ pub use self::{
         UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
     },
     compute::ComputeCommandRef,
-    graphic::{ClearColorValue, GraphicCommandRef, LoadOp, StoreOp},
+    graphic::{ClearColorValue, GraphicsCommandRef, LoadOp, StoreOp},
     pipeline::{Pipeline, PipelineCommand},
-    ray_trace::RayTraceCommandRef,
+    ray_trace::RayTracingCommandRef,
 };
 
 use {
@@ -66,6 +83,8 @@ impl<'a> Command<'a> {
         let cmd_idx = graph.cmds.len();
         graph.cmds.push(CommandData {
             execs: vec![Default::default()], // We start off with a default execution!
+
+            #[cfg(debug_assertions)]
             name: None,
         });
 
@@ -102,10 +121,10 @@ impl<'a> Command<'a> {
     /// -|-
     /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_,
     /// ComputePipeline>`]
-    /// [`GraphicPipeline`](crate::driver::graphic::GraphicPipeline)|[`PipelineCommand<'_,
-    /// GraphicPipeline>`]
-    /// [`RayTracePipeline`](crate::driver::ray_trace::RayTracePipeline)|[`PipelineCommand<'_,
-    /// RayTracePipeline>`]
+    /// [`GraphicsPipeline`](crate::driver::graphic::GraphicsPipeline)|[`PipelineCommand<'_,
+    /// GraphicsPipeline>`]
+    /// [`RayTracingPipeline`](crate::driver::ray_trace::RayTracingPipeline)|[`PipelineCommand<'_,
+    /// RayTracingPipeline>`]
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'a>,
@@ -152,6 +171,8 @@ impl<'a> Command<'a> {
         subresource: SubresourceRange,
         access: AccessType,
     ) {
+        self.graph.assert_node_owner(&resource_node);
+
         let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());
@@ -525,7 +546,7 @@ pub(super) struct SubresourceAccess {
 }
 
 /// Describes the interpretation of a resource.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub enum ViewInfo {
     /// Acceleration structures are always whole resources.

@@ -1,7 +1,7 @@
 //! Window swapchain creation, acquisition, and presentation helpers.
 
 use {
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     log::{trace, warn},
     std::{
         error::Error,
@@ -226,7 +226,7 @@ impl Swapchain {
         )?;
 
         // submission.record_node_dependencies(&mut *self.pool, cmd, swapchain_image)?;
-        submission.queue_resource(swapchain_image, pool, &mut exec.cmd)?;
+        submission.queue_cmds_for_resource(&mut exec.cmd, swapchain_image, pool)?;
 
         {
             let swapchain_image = submission.resource(swapchain_image);
@@ -405,7 +405,7 @@ impl std::fmt::Display for SwapchainError {
 /// Information used to create a [`Swapchain`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "SwapchainInfoBuilderError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -417,6 +417,7 @@ pub struct SwapchainInfo {
     pub command_buffer_count: usize,
 
     /// The initial height of the surface.
+    #[builder(default)]
     pub height: u32,
 
     /// The minimum number of presentable images that the application needs. The implementation
@@ -478,9 +479,11 @@ pub struct SwapchainInfo {
     pub queue_family_index: u32,
 
     /// The format and color space of the surface.
+    #[builder(default)]
     pub surface: vk::SurfaceFormatKHR,
 
     /// The initial width of the surface.
+    #[builder(default)]
     pub width: u32,
 }
 
@@ -533,37 +536,9 @@ impl From<SwapchainInfo> for swapchain::SwapchainInfo {
 
 impl SwapchainInfoBuilder {
     /// Builds a new `SwapchainInfo`.
-    ///
-    /// # Panics
-    ///
-    /// If any of the following values have not been set this function will panic.
-    ///
-    /// * `command_buffer_count`
-    /// * `width`
-    /// * `height`
-    /// * `surface`
     #[inline(always)]
     pub fn build(self) -> SwapchainInfo {
-        let info = match self.fallible_build() {
-            Err(SwapchainInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        };
-
-        assert_ne!(
-            info.command_buffer_count, 0,
-            "Field value invalid: command_buffer_count"
-        );
-
-        info
-    }
-}
-
-#[derive(Debug)]
-struct SwapchainInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for SwapchainInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
+        self.fallible_build().expect("all fields have defaults")
     }
 }
 
@@ -629,34 +604,20 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field value invalid: command_buffer_count")]
-    pub fn swapchain_info_builder_uninit_command_buffer_count() {
-        Builder::default()
-            .height(1)
-            .surface(vk::SurfaceFormatKHR::default())
-            .width(1)
-            .command_buffer_count(0)
-            .build();
-    }
+    pub fn swapchain_info_builder_defaults() {
+        let info = Builder::default().build();
 
-    #[test]
-    #[should_panic(expected = "Field not initialized: height")]
-    pub fn swapchain_info_builder_uninit_height() {
-        Builder::default().build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: surface")]
-    pub fn swapchain_info_builder_uninit_surface() {
-        Builder::default().height(1).build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Field not initialized: width")]
-    pub fn swapchain_info_builder_uninit_width() {
-        Builder::default()
-            .height(1)
-            .surface(vk::SurfaceFormatKHR::default())
-            .build();
+        assert_eq!(
+            info,
+            Info {
+                command_buffer_count: 4,
+                height: 0,
+                min_image_count: 2,
+                present_mode: vk::PresentModeKHR::MAILBOX,
+                queue_family_index: 0,
+                surface: vk::SurfaceFormatKHR::default(),
+                width: 0,
+            }
+        );
     }
 }

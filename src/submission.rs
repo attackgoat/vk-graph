@@ -13,8 +13,8 @@ use {
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
             device::Device,
             format_aspect_mask,
-            graphic::{DepthStencilInfo, GraphicPipeline},
-            image::{Image, ImageAccess},
+            graphic::{DepthStencilInfo, GraphicsPipeline},
+            image::{DenseAccess, Image},
             initial_image_layout_access, is_read_access, is_write_access,
             pipeline_stage_access_flags,
             render_pass::{RenderPass, RenderPassInfo},
@@ -38,7 +38,7 @@ use {
     },
 };
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(feature = "checked"))]
 use std::hint::unreachable_unchecked;
 
 const fn image_access_layout(access: AccessType) -> ImageLayout {
@@ -215,7 +215,7 @@ impl Submission {
 
     #[profiling::function]
     fn allow_merge_passes(lhs: &CommandData, rhs: &CommandData) -> bool {
-        fn first_graphic_pipeline(pass: &CommandData) -> Option<&GraphicPipeline> {
+        fn first_graphic_pipeline(pass: &CommandData) -> Option<&GraphicsPipeline> {
             pass.execs
                 .first()
                 .and_then(|exec| exec.pipeline.as_ref().map(ExecutionPipeline::as_graphic))
@@ -420,7 +420,7 @@ impl Submission {
 
     #[profiling::function]
     fn begin_render_pass(
-        cmd: &CommandBuffer,
+        cmd_buf: &CommandBuffer,
         bindings: &[AnyResource],
         pass: &CommandData,
         physical_pass: &mut PhysicalPass,
@@ -591,8 +591,8 @@ impl Submission {
                 RenderPass::framebuffer(render_pass, FramebufferInfo { attachments })?;
 
             unsafe {
-                cmd.device.cmd_begin_render_pass(
-                    cmd.handle,
+                cmd_buf.device.cmd_begin_render_pass(
+                    cmd_buf.handle,
                     &vk::RenderPassBeginInfo::default()
                         .render_pass(render_pass.handle)
                         .framebuffer(framebuffer)
@@ -612,7 +612,7 @@ impl Submission {
 
     #[profiling::function]
     fn bind_descriptor_sets(
-        cmd: &CommandBuffer,
+        cmd_buf: &CommandBuffer,
         pipeline: &ExecutionPipeline,
         physical_pass: &PhysicalPass,
         exec_idx: usize,
@@ -637,8 +637,8 @@ impl Submission {
                 trace!("    bind descriptor sets {:?}", descriptor_sets);
 
                 unsafe {
-                    cmd.device.cmd_bind_descriptor_sets(
-                        cmd.handle,
+                    cmd_buf.device.cmd_bind_descriptor_sets(
+                        cmd_buf.handle,
                         pipeline.bind_point(),
                         pipeline.layout(),
                         0,
@@ -652,7 +652,7 @@ impl Submission {
 
     #[profiling::function]
     fn bind_pipeline(
-        cmd: &mut CommandBuffer,
+        cmd_buf: &mut CommandBuffer,
         physical_pass: &mut PhysicalPass,
         exec_idx: usize,
         pipeline: &mut ExecutionPipeline,
@@ -667,7 +667,7 @@ impl Submission {
                     ("graphic", pipeline.debug_name(), vk::Pipeline::null())
                 }
                 ExecutionPipeline::RayTrace(pipeline) => {
-                    ("ray trace", pipeline.debug_name(), pipeline.handle())
+                    ("ray tracing", pipeline.debug_name(), pipeline.handle())
                 }
             };
             if let Some(name) = name {
@@ -691,8 +691,9 @@ impl Submission {
         };
 
         unsafe {
-            cmd.device
-                .cmd_bind_pipeline(cmd.handle, pipeline_bind_point, pipeline);
+            cmd_buf
+                .device
+                .cmd_bind_pipeline(cmd_buf.handle, pipeline_bind_point, pipeline);
         }
 
         Ok(())
@@ -1091,7 +1092,7 @@ impl Submission {
             let pipeline = exec
                 .pipeline
                 .as_ref()
-                .expect("missing graphic pipeline")
+                .expect("missing graphics pipeline")
                 .expect_graphic();
             let mut subpass_info = SubpassInfo::with_capacity(attachment_count);
 
@@ -1753,7 +1754,7 @@ impl Submission {
                         .expect_first_exec()
                         .pipeline
                         .as_ref()
-                        .expect("missing graphic pipeline")
+                        .expect("missing graphics pipeline")
                         .expect_graphic()
                         .inner
                         .descriptor_info
@@ -1838,7 +1839,7 @@ impl Submission {
                     );
                 }
 
-                let mut name = pass.name.take().unwrap_or_default();
+                let mut name = pass.name().to_owned();
 
                 // Grow the merged pass once, not per merge
                 {
@@ -1865,7 +1866,10 @@ impl Submission {
                     pass.execs.append(&mut other.execs);
                 }
 
-                pass.name = Some(name);
+                #[cfg(debug_assertions)]
+                {
+                    pass.name = Some(name);
+                }
 
                 self.graph.cmds.push(pass);
                 idx += 1 + end - start;
@@ -1900,6 +1904,8 @@ impl Submission {
     /// data left to inspect afterwards!
     #[profiling::function]
     pub fn node_stages(&self, node: impl Node) -> vk::PipelineStageFlags {
+        self.graph.assert_node_owner(&node);
+
         let node_idx = node.index();
         let mut res = Default::default();
 
@@ -1931,7 +1937,7 @@ impl Submission {
 
     #[profiling::function]
     fn record_execution_barriers<'a>(
-        cmd: &CommandBuffer,
+        cmd_buf: &CommandBuffer,
         resources: &mut [AnyResource],
         accesses: impl Iterator<Item = (&'a NodeIndex, &'a Vec<SubresourceAccess>)>,
     ) {
@@ -1982,10 +1988,10 @@ impl Submission {
                     AnyResource::AccelerationStructure(..)
                     | AnyResource::AccelerationStructureLease(..) => {
                         let Some(accel_struct) = resource.as_accel_struct() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2005,10 +2011,10 @@ impl Submission {
                     }
                     AnyResource::Buffer(..) | AnyResource::BufferLease(..) => {
                         let Some(buffer) = resource.as_buffer() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2040,10 +2046,10 @@ impl Submission {
                     | AnyResource::ImageLease(..)
                     | AnyResource::SwapchainImage(..) => {
                         let Some(image) = resource.as_image() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2170,8 +2176,8 @@ impl Submission {
             );
 
             pipeline_barrier(
-                &cmd.device,
-                cmd.handle,
+                &cmd_buf.device,
+                cmd_buf.handle,
                 global_barrier,
                 &buffer_barriers.collect::<Box<_>>(),
                 &image_barriers.collect::<Box<_>>(),
@@ -2181,7 +2187,7 @@ impl Submission {
 
     #[profiling::function]
     fn record_image_layout_transitions(
-        cmd: &CommandBuffer,
+        cmd_buf: &CommandBuffer,
         resources: &mut [AnyResource],
         pass: &mut CommandData,
     ) {
@@ -2200,7 +2206,7 @@ impl Submission {
         #[derive(Default)]
         struct Tls {
             images: Vec<ImageResourceBarrier>,
-            initial_layouts: HashMap<usize, ImageAccess<bool>>,
+            initial_layouts: HashMap<usize, DenseAccess<bool>>,
         }
 
         TLS.with_borrow_mut(|tls| {
@@ -2224,10 +2230,10 @@ impl Submission {
                     AnyResource::AccelerationStructure(..)
                     | AnyResource::AccelerationStructureLease(..) => {
                         let Some(accel_struct) = resource.as_accel_struct() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2237,10 +2243,10 @@ impl Submission {
                     }
                     AnyResource::Buffer(..) | AnyResource::BufferLease(..) => {
                         let Some(buffer) = resource.as_buffer() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
@@ -2252,10 +2258,10 @@ impl Submission {
                                 ..
                             } = subresource_access
                             else {
-                                #[cfg(debug_assertions)]
+                                #[cfg(feature = "checked")]
                                 unreachable!();
 
-                                #[cfg(not(debug_assertions))]
+                                #[cfg(not(feature = "checked"))]
                                 unsafe {
                                     // This cannot be reached because PassRef enforces the subrange
                                     // is of type N::Subresource
@@ -2271,19 +2277,20 @@ impl Submission {
                     | AnyResource::ImageLease(..)
                     | AnyResource::SwapchainImage(..) => {
                         let Some(image) = resource.as_image() else {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "checked")]
                             unreachable!();
 
-                            #[cfg(not(debug_assertions))]
+                            #[cfg(not(feature = "checked"))]
                             unsafe {
                                 unreachable_unchecked()
                             }
                         };
 
+                        // TODO: Optimize this path for single-aspect single-layer single-mip images
                         let initial_layout = tls
                             .initial_layouts
                             .entry(node_idx)
-                            .or_insert_with(|| ImageAccess::new(image.info, true));
+                            .or_insert_with(|| DenseAccess::new(image.info, true));
 
                         for subresource_access in accesses {
                             let &SubresourceAccess {
@@ -2291,10 +2298,10 @@ impl Submission {
                                 subresource: SubresourceRange::Image(access_range),
                             } = subresource_access
                             else {
-                                #[cfg(debug_assertions)]
+                                #[cfg(feature = "checked")]
                                 unreachable!();
 
-                                #[cfg(not(debug_assertions))]
+                                #[cfg(not(feature = "checked"))]
                                 unsafe {
                                     // This cannot be reached because PassRef enforces the subrange
                                     // is of type N::Subresource
@@ -2304,7 +2311,7 @@ impl Submission {
                             };
 
                             for (initial_layout, layout_range) in
-                                initial_layout.access(false, access_range)
+                                initial_layout.swap(false, access_range)
                             {
                                 for (prev_access, range) in
                                     Image::access(image, access, layout_range)
@@ -2359,8 +2366,8 @@ impl Submission {
             );
 
             pipeline_barrier(
-                &cmd.device,
-                cmd.handle,
+                &cmd_buf.device,
+                cmd_buf.handle,
                 None,
                 &[],
                 &image_barriers.collect::<Box<_>>(),
@@ -2372,7 +2379,7 @@ impl Submission {
     fn record_node_passes<P>(
         &mut self,
         pool: &mut P,
-        cmd: &mut CommandBuffer,
+        cmd_buf: &mut CommandBuffer,
         node_idx: usize,
         end_pass_idx: usize,
     ) -> Result<(), DriverError>
@@ -2388,7 +2395,7 @@ impl Submission {
             schedule.passes.clear();
 
             self.schedule_node_passes(node_idx, end_pass_idx, schedule);
-            self.record_scheduled_passes(pool, cmd, schedule, end_pass_idx)
+            self.record_scheduled_passes(pool, cmd_buf, schedule, end_pass_idx)
         })
     }
 
@@ -2396,7 +2403,7 @@ impl Submission {
     fn record_scheduled_passes<P>(
         &mut self,
         pool: &mut P,
-        cmd: &mut CommandBuffer,
+        cmd_buf: &mut CommandBuffer,
         schedule: &mut Schedule,
         end_pass_idx: usize,
     ) -> Result<(), DriverError>
@@ -2408,7 +2415,6 @@ impl Submission {
         }
 
         // // Print some handy details or hit a breakpoint if you set the flag
-        // #[cfg(debug_assertions)]
         // if log_enabled!(Debug) && self.graph.debug {
         //     debug!("resolving the following graph:\n\n{:#?}\n\n", self.graph);
         // }
@@ -2423,6 +2429,9 @@ impl Submission {
         self.merge_scheduled_passes(&mut schedule.passes);
         self.lease_scheduled_resources(pool, &schedule.passes)?;
 
+        #[cfg(feature = "checked")]
+        let graph_id = self.graph.graph_id();
+
         for pass_idx in schedule.passes.iter().copied() {
             let pass = &mut self.graph.cmds[pass_idx];
 
@@ -2434,11 +2443,11 @@ impl Submission {
             trace!("recording pass [{}: {}]", pass_idx, pass.name());
 
             if !physical_pass.exec_descriptor_sets.is_empty() {
-                Self::write_descriptor_sets(cmd, &self.graph.resources, pass, physical_pass)?;
+                Self::write_descriptor_sets(cmd_buf, &self.graph.resources, pass, physical_pass)?;
             }
 
             let render_area = if is_graphic {
-                Self::record_image_layout_transitions(cmd, &mut self.graph.resources, pass);
+                Self::record_image_layout_transitions(cmd_buf, &mut self.graph.resources, pass);
 
                 let render_area = vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
@@ -2446,7 +2455,7 @@ impl Submission {
                 };
 
                 Self::begin_render_pass(
-                    cmd,
+                    cmd_buf,
                     &self.graph.resources,
                     pass,
                     physical_pass,
@@ -2468,12 +2477,12 @@ impl Submission {
                 let exec = &mut pass.execs[exec_idx];
 
                 if is_graphic && exec_idx > 0 {
-                    Self::next_subpass(cmd);
+                    Self::next_subpass(cmd_buf);
                 }
 
                 if let Some(pipeline) = exec.pipeline.as_mut() {
                     Self::bind_pipeline(
-                        cmd,
+                        cmd_buf,
                         physical_pass,
                         exec_idx,
                         pipeline,
@@ -2485,7 +2494,7 @@ impl Submission {
 
                         // In this case we set the viewport and scissor for the user
                         Self::set_viewport(
-                            cmd,
+                            cmd_buf,
                             render_area.offset.x as _,
                             render_area.offset.y as _,
                             render_area.extent.width as _,
@@ -2499,7 +2508,7 @@ impl Submission {
                                 .unwrap_or(0.0..1.0),
                         );
                         Self::set_scissor(
-                            cmd,
+                            cmd_buf,
                             render_area.offset.x,
                             render_area.offset.y,
                             render_area.extent.width,
@@ -2507,12 +2516,12 @@ impl Submission {
                         );
                     }
 
-                    Self::bind_descriptor_sets(cmd, pipeline, physical_pass, exec_idx);
+                    Self::bind_descriptor_sets(cmd_buf, pipeline, physical_pass, exec_idx);
                 }
 
                 if !is_graphic {
                     Self::record_execution_barriers(
-                        cmd,
+                        cmd_buf,
                         &mut self.graph.resources,
                         exec.accesses.iter(),
                     );
@@ -2525,16 +2534,18 @@ impl Submission {
 
                     let exec_func = exec.func.take().expect("missing command function").0;
                     exec_func(crate::cmd::CommandRef::new(
-                        cmd,
+                        cmd_buf,
                         &self.graph.resources,
-                        #[cfg(debug_assertions)]
+                        #[cfg(feature = "checked")]
                         exec,
+                        #[cfg(feature = "checked")]
+                        graph_id,
                     ));
                 }
             }
 
             if is_graphic {
-                self.end_render_pass(cmd);
+                self.end_render_pass(cmd_buf);
             }
         }
 
@@ -2556,7 +2567,7 @@ impl Submission {
                     if pass_idx == schedule_idx {
                         // This was a scheduled pass - store it!
 
-                        cmd.drop_after_executed((
+                        cmd_buf.drop_after_executed((
                             pass,
                             self.physical_passes.pop().expect("missing physical pass"),
                         ));
@@ -2831,10 +2842,10 @@ impl Submission {
         });
     }
 
-    fn set_scissor(cmd: &CommandBuffer, x: i32, y: i32, width: u32, height: u32) {
+    fn set_scissor(cmd_buf: &CommandBuffer, x: i32, y: i32, width: u32, height: u32) {
         unsafe {
-            cmd.device.cmd_set_scissor(
-                cmd.handle,
+            cmd_buf.device.cmd_set_scissor(
+                cmd_buf.handle,
                 0,
                 slice::from_ref(&vk::Rect2D {
                     extent: vk::Extent2D { width, height },
@@ -2845,7 +2856,7 @@ impl Submission {
     }
 
     fn set_viewport(
-        cmd: &CommandBuffer,
+        cmd_buf: &CommandBuffer,
         x: f32,
         y: f32,
         width: f32,
@@ -2853,8 +2864,8 @@ impl Submission {
         depth: Range<f32>,
     ) {
         unsafe {
-            cmd.device.cmd_set_viewport(
-                cmd.handle,
+            cmd_buf.device.cmd_set_viewport(
+                cmd_buf.handle,
                 0,
                 slice::from_ref(&vk::Viewport {
                     x,
@@ -2898,13 +2909,7 @@ impl Submission {
 
         Device::with_queue(&cmd.device, queue_family_index, queue_index, |queue| {
             Device::end_command_buffer(&cmd.device, cmd.handle)?;
-
-            unsafe {
-                cmd.device
-                    .reset_fences(slice::from_ref(&cmd.fence))
-                    .map_err(|_| DriverError::OutOfMemory)?;
-            }
-
+            Device::reset_fences(&cmd.device, slice::from_ref(&cmd.fence))?;
             Device::queue_submit(
                 &cmd.device,
                 queue,
@@ -2914,7 +2919,7 @@ impl Submission {
                 cmd.fence,
             )?;
 
-            Ok(())
+            Ok::<_, DriverError>(())
         })?;
 
         // This graph contains references to buffers, images, and other resources which must be kept
@@ -2927,12 +2932,12 @@ impl Submission {
         Ok(cmd)
     }
 
-    /// Records any pending render graph passes that have not been previously scheduled.
+    /// Records any pending graph commands that have not been previously scheduled.
     #[profiling::function]
     pub fn submit_cmd_buf<P>(
         &mut self,
         pool: &mut P,
-        cmd: &mut CommandBuffer,
+        cmd_buf: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -2952,21 +2957,27 @@ impl Submission {
             schedule.passes.clear();
             schedule.passes.extend(0..self.graph.cmds.len());
 
-            self.record_scheduled_passes(pool, cmd, schedule, self.graph.cmds.len())
+            self.record_scheduled_passes(pool, cmd_buf, schedule, self.graph.cmds.len())
         })
     }
 
-    /// Records any pending render graph passes that the given node requires.
+    /// Records any pending graph commands that the given node requires into `cmd_buf`.
+    ///
+    /// This is a mutating execution step, not a pure query. It records work into the provided
+    /// command buffer and updates this submission's scheduling state so those commands are not
+    /// recorded again later.
     #[profiling::function]
-    pub fn queue_resource<P>(
+    pub fn queue_cmds_for_resource<P>(
         &mut self,
+        cmd_buf: &mut CommandBuffer,
         resource_node: impl Node,
         pool: &mut P,
-        cmd: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
     {
+        self.graph.assert_node_owner(&resource_node);
+
         let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());
@@ -2976,33 +2987,39 @@ impl Submission {
         }
 
         let end_pass_idx = self.graph.cmds.len();
-        self.record_node_passes(pool, cmd, node_idx, end_pass_idx)
+        self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)
     }
 
-    /// Records any pending render graph passes that are required by the given node, but does not
-    /// record any passes that actually contain the given node.
+    /// Records any pending graph commands required by the given node into `cmd`, but does not
+    /// record any command that actually accesses the given node.
     ///
-    /// As a side effect, the graph is optimized for the given node. Future calls may further
-    /// optimize the graph, but only on top of the existing optimizations. This only matters if
-    /// you are pulling multiple images out and you care - in that case pull the "most
-    /// important" image first.
+    /// This is a mutating execution step, not a pure query. It records work into the provided
+    /// command buffer, updates this submission's scheduling state, and may reorder later recorded
+    /// work.
+    ///
+    /// The call order matters when extracting multiple outputs from the same submission. This
+    /// method optimizes the schedule for the requested node, and later calls can only optimize on
+    /// top of that existing state. If you are pulling multiple outputs and care about their final
+    /// ordering, record the most important output first.
     #[profiling::function]
-    pub fn queue_resource_dependencies<P>(
+    pub fn queue_cmds_for_resource_dependencies<P>(
         &mut self,
+        cmd_buf: &mut CommandBuffer,
         resource_node: impl Node,
         pool: &mut P,
-        cmd: &mut CommandBuffer,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
     {
+        self.graph.assert_node_owner(&resource_node);
+
         let node_idx = resource_node.index();
 
         debug_assert!(self.graph.resources.get(node_idx).is_some());
 
         // We record up to but not including the first pass which accesses the target node
         if let Some(end_pass_idx) = self.graph.first_node_access_pass_index(resource_node) {
-            self.record_node_passes(pool, cmd, node_idx, end_pass_idx)?;
+            self.record_node_passes(pool, cmd_buf, node_idx, end_pass_idx)?;
         }
 
         Ok(())
@@ -3010,7 +3027,7 @@ impl Submission {
 
     #[profiling::function]
     fn write_descriptor_sets(
-        cmd: &CommandBuffer,
+        cmd_buf: &CommandBuffer,
         bindings: &[AnyResource],
         pass: &CommandData,
         physical_pass: &PhysicalPass,
@@ -3328,7 +3345,8 @@ impl Submission {
             );
 
             unsafe {
-                cmd.device
+                cmd_buf
+                    .device
                     .update_descriptor_sets(tls.descriptors.as_slice(), &[]);
             }
         }

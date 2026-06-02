@@ -7,6 +7,9 @@ modern Vulkan commands[^modern].
 This guide book will walk you through the mental model of this crate and help explain how it maps to
 Vulkan API usage.
 
+Source code and issues live on the [GitHub repository](https://github.com/attackgoat/vk-graph).
+If you find a problem in this guide, please [open an issue](https://github.com/attackgoat/vk-graph/issues).
+
 > [!IMPORTANT]
 > Users should be familiar with the Vulkan
 [_specification_](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html)
@@ -48,7 +51,7 @@ The driver is based off the popular `ash` crate and `vk-sync`; reasoned as follo
 [_`Corange`_](https://github.com/orangeduck/Corange)
 <i class="fa-solid fa-arrow-up-right-from-square"></i>
 - 2020 --- Project migrated to Github and named `screen-13`
-- 2022 --- v0.2 released with `RenderGraph` type based on
+- 2022 --- v0.2 released with an earlier graph API based on
 [_`Kajiya`_](https://github.com/EmbarkStudios/kajiya)
 <i class="fa-solid fa-arrow-up-right-from-square"></i>
 - 2026 --- Project renamed `vk-graph` (v0.14)

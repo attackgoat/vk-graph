@@ -3,7 +3,7 @@
 use {
     super::{DriverError, device::Device},
     ash::vk,
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     gpu_allocator::{
         MemoryLocation,
         vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
@@ -537,7 +537,7 @@ where
         debug_assert!(access_range.start < access_range.end);
         debug_assert!(access_range.end <= buffer.size);
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "checked")]
         {
             let access_start = |(_, access_start): &(AccessType, vk::DeviceSize)| *access_start;
 
@@ -728,7 +728,7 @@ where
 /// Information used to create a [`Buffer`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(private, name = "fallible_build", error = "BufferInfoBuilderError"),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -760,6 +760,7 @@ pub struct BufferInfo {
     pub host_write: bool,
 
     /// Size in bytes of the buffer to be created.
+    #[builder(default)]
     pub size: vk::DeviceSize,
 
     /// A bitmask of specifying allowed usages of the buffer.
@@ -840,21 +841,14 @@ impl From<BufferInfoBuilder> for BufferInfo {
 
 impl BufferInfoBuilder {
     /// Builds a new `BufferInfo`.
-    ///    
-    /// # Panics
     ///
-    /// If any of the following values have not been set this function will panic:
-    ///
-    /// * `size`
-    ///
-    /// If `alignment` is not a power to two this function will panic.
+    /// If `alignment` is not a power to two and the `checked` feature is active this function will
+    /// panic.
     #[inline(always)]
     pub fn build(self) -> BufferInfo {
-        let res = match self.fallible_build() {
-            Err(BufferInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        };
+        let res = self.fallible_build().expect("all fields have defaults");
 
+        #[cfg(feature = "checked")]
         assert!(
             res.alignment.is_power_of_two(),
             "Alignment must be a power of two"
@@ -864,17 +858,8 @@ impl BufferInfoBuilder {
     }
 }
 
-#[derive(Debug)]
-struct BufferInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for BufferInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
-    }
-}
-
 /// Specifies a range of buffer data.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BufferSubresourceRange {
     /// The start of range.
     pub start: vk::DeviceSize,
@@ -1361,9 +1346,11 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: size")]
-    pub fn buffer_info_builder_uninit_size() {
-        Builder::default().build();
+    pub fn buffer_info_builder_default_size() {
+        assert_eq!(
+            Builder::default().build(),
+            Info::device_mem(0, vk::BufferUsageFlags::empty())
+        );
     }
 
     fn buffer_subresource_range(

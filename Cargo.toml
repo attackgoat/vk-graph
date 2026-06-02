@@ -47,7 +47,8 @@ categories = ["game-development", "multimedia::images", "rendering::engine"]
 description = "A high-performance Vulkan driver with automatic resource management and execution."
 
 [features]
-default = ["loaded", "parking_lot"]
+default = ["checked", "loaded", "parking_lot"]
+checked = []
 ash-molten=["loaded", "dep:ash-molten"]
 linked=["ash/linked"]
 loaded=["ash/loaded"]

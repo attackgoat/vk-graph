@@ -6,8 +6,8 @@ require exclusive access to the `Graph` itself.
 
 API docs: [`Submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html),
 [`Submission::queue_submit`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_submit),
-[`Submission::queue_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_resource),
-[`Submission::queue_resource_dependencies`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_resource_dependencies),
+[`Submission::queue_cmds_for_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_cmds_for_resource),
+[`Submission::queue_cmds_for_resource_dependencies`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_cmds_for_resource_dependencies),
 [`CommandBuffer::has_executed`](https://docs.rs/vk-graph/latest/vk_graph/driver/cmd_buf/struct.CommandBuffer.html#method.has_executed).
 
 More precisely, `vk-graph` stores the most recent access type of each subresource of a resource. As
@@ -17,16 +17,17 @@ updated.
 Resource state is updated during the following function calls:
 
 - `Submission::queue_submit`
-- `Submission::queue_resource`
-- `Submission::queue_resource_dependencies`
+- `Submission::queue_cmds_for_resource`
+- `Submission::queue_cmds_for_resource_dependencies`
 
 > [!CAUTION]
-> Do not call any `Submission` queue function that accesses buffers, images, or acceleration
+> Do not call any `Submission` recording or queue function that accesses buffers, images, or acceleration
 > structures currently being submitted on other threads.
 
 ## Execution
 
-The provided `Submission` queue functions are designed to support a typical swapchain-based
+The provided `Submission` recording and queue functions are designed to support a typical
+swapchain-based
 workflow:
 1. Queue all commands the swapchain depends on
 1. Acquire swapchain
@@ -66,5 +67,5 @@ See:
 <i class="fa-solid fa-arrow-up-right-from-square"></i>
 
 
-[^threads]: The internal implementation of `GraphicPipeline` does do a bit of caching in order to
+[^threads]: The internal implementation of `GraphicsPipeline` does do a bit of caching in order to
 improve performance, however this behavior should not generate issues with any reasonable workload.

@@ -22,7 +22,7 @@ use {
             buffer::{Buffer, BufferInfo},
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             physical_device::Vulkan10Features,
             shader::{Shader, SpecializationMap},
@@ -729,7 +729,7 @@ fn create_blur_y_pipeline(device: &Device) -> Result<ComputePipeline, DriverErro
     ComputePipeline::create(device, ComputePipelineInfo::default(), shader)
 }
 
-fn create_debug_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+fn create_debug_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -793,9 +793,9 @@ fn create_debug_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError
         "#
     );
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()),
@@ -803,7 +803,7 @@ fn create_debug_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError
     )
 }
 
-fn create_mesh_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+fn create_mesh_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -903,9 +903,9 @@ fn create_mesh_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError>
         "#
     );
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice())
@@ -914,7 +914,7 @@ fn create_mesh_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError>
     )
 }
 
-fn create_shadow_pipeline(device: &Device) -> Result<GraphicPipeline, DriverError> {
+fn create_shadow_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -971,9 +971,9 @@ fn create_shadow_pipeline(device: &Device) -> Result<GraphicPipeline, DriverErro
         "#
     );
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             Shader::new_vertex(vert.as_slice()),
             Shader::new_fragment(frag.as_slice()),
@@ -983,7 +983,7 @@ fn create_shadow_pipeline(device: &Device) -> Result<GraphicPipeline, DriverErro
 
 fn create_shadow_pipeline_with_geometry_shader(
     device: &Device,
-) -> Result<GraphicPipeline, DriverError> {
+) -> Result<GraphicsPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 450 core
@@ -1171,9 +1171,9 @@ fn create_shadow_pipeline_with_geometry_shader(
         "#
     );
 
-    let info = GraphicPipelineInfo::default();
+    let info = GraphicsPipelineInfo::default();
 
-    GraphicPipeline::create(
+    GraphicsPipeline::create(
         device,
         info,
         [

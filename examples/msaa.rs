@@ -13,7 +13,7 @@ use {
             DriverError,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicPipeline, GraphicPipelineInfo},
+            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{ImageInfo, SampleCount},
             physical_device::Vulkan10Limits,
         },
@@ -341,7 +341,7 @@ fn load_cube_mesh(device: &Device) -> Result<Model, DriverError> {
 fn create_mesh_pipeline(
     device: &Device,
     sample_count: SampleCount,
-) -> Result<GraphicPipeline, DriverError> {
+) -> Result<GraphicsPipeline, DriverError> {
     let vert = glsl!(
         r#"
         #version 460 core
@@ -397,9 +397,9 @@ fn create_mesh_pipeline(
         "#
     );
 
-    let info = GraphicPipelineInfo::builder().samples(sample_count);
+    let info = GraphicsPipelineInfo::builder().samples(sample_count);
 
-    GraphicPipeline::create(device, info, [vert.as_slice(), frag.as_slice()])
+    GraphicsPipeline::create(device, info, [vert.as_slice(), frag.as_slice()])
 }
 
 #[derive(Parser)]

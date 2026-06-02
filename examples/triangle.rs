@@ -9,7 +9,7 @@ use {
         cmd::{LoadOp, StoreOp},
         driver::{
             buffer::Buffer,
-            graphic::{GraphicPipeline, GraphicPipelineInfo},
+            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
         },
     },
     vk_graph_window::{Window, WindowError},
@@ -17,16 +17,16 @@ use {
     vk_sync::AccessType,
 };
 
-// A Vulkan triangle using a graphic pipeline, vertex/fragment shaders, and index/vertex buffers.
+// A Vulkan triangle using a graphics pipeline, vertex/fragment shaders, and index/vertex buffers.
 fn main() -> Result<(), WindowError> {
     pretty_env_logger::init();
     profile_with_puffin::init();
 
     let args = Args::parse();
     let window = Window::builder().debug(args.debug).build()?;
-    let triangle_pipeline = GraphicPipeline::create(
+    let triangle_pipeline = GraphicsPipeline::create(
         &window.device,
-        GraphicPipelineInfo::default(),
+        GraphicsPipelineInfo::default(),
         [
             glsl!(
                 r#"

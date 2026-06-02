@@ -44,7 +44,7 @@ used to execute custom command streams.
 
 Features of the graph:
 
- - Compute, graphic, and ray-trace pipelines
+ - Compute, graphics, and ray tracing pipelines
  - Automatic Vulkan management (render passes, subpasses, descriptors, pools, _etc._)
  - Automatic render pass scheduling, re-ordering, merging, with resource aliasing
  - Interoperable with existing Vulkan code
@@ -77,6 +77,9 @@ _vk-graph_ puts a lot of functionality behind optional features in order to opti
 compile time for the most common use cases. The following features are
 available.
 
+- **`checked`** *(enabled by default)* — Runtime validation of common misuse patterns
+  (missing access declarations, buffer bounds, image aspects) that the Vulkan Validation Layer
+  cannot catch. Disable for zero-overhead in validated releases.
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
 - **`profile-with-*`** — Use the specified profiling backend:

@@ -3,7 +3,7 @@
 use {
     super::{Buffer, BufferInfo, DriverError, device::Device},
     ash::vk,
-    derive_builder::{Builder, UninitializedFieldError},
+    derive_builder::Builder,
     log::warn,
     std::{
         ffi::c_void,
@@ -114,25 +114,29 @@ impl AccelerationStructure {
                 .buffer(buffer.handle)
                 .size(info.size);
 
-            let accel_struct_ext = Device::expect_accel_struct_ext(device);
+            let khr_acceleration_structure = Device::expect_vk_khr_acceleration_structure(device);
 
-            unsafe { accel_struct_ext.create_acceleration_structure(&create_info, None) }.map_err(
-                |err| {
-                    warn!("unable to create acceleration structure: {err}");
+            unsafe {
+                khr_acceleration_structure
+                    .create_acceleration_structure(&create_info, None)
+                    .map_err(|err| {
+                        warn!("unable to create acceleration structure: {err}");
 
-                    match err {
-                        vk::Result::ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS => {
-                            warn!("invalid acceleration structure opaque capture address: {err}");
-                            DriverError::InvalidData
+                        match err {
+                            vk::Result::ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS => {
+                                warn!(
+                                    "invalid acceleration structure opaque capture address: {err}"
+                                );
+                                DriverError::InvalidData
+                            }
+                            vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                            _ => {
+                                warn!("unsupported acceleration structure creation: {err}");
+                                DriverError::Unsupported
+                            }
                         }
-                        vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
-                        _ => {
-                            warn!("unsupported acceleration structure creation: {err}");
-                            DriverError::Unsupported
-                        }
-                    }
-                },
-            )?
+                    })?
+            }
         };
 
         Ok(Self {
@@ -226,10 +230,11 @@ impl AccelerationStructure {
     /// ```
     #[profiling::function]
     pub fn device_address(&self) -> vk::DeviceAddress {
-        let accel_struct_ext = Device::expect_accel_struct_ext(&self.buffer.device);
+        let khr_acceleration_structure =
+            Device::expect_vk_khr_acceleration_structure(&self.buffer.device);
 
         unsafe {
-            accel_struct_ext.get_acceleration_structure_device_address(
+            khr_acceleration_structure.get_acceleration_structure_device_address(
                 &vk::AccelerationStructureDeviceAddressInfoKHR::default()
                     .acceleration_structure(self.handle),
             )
@@ -323,10 +328,10 @@ impl AccelerationStructure {
                 .flags(info.flags)
                 .geometries(&tls.geometries);
             let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-            let accel_struct_ext = Device::expect_accel_struct_ext(device);
+            let khr_acceleration_structure = Device::expect_vk_khr_acceleration_structure(device);
 
             unsafe {
-                accel_struct_ext.get_acceleration_structure_build_sizes(
+                khr_acceleration_structure.get_acceleration_structure_build_sizes(
                     vk::AccelerationStructureBuildTypeKHR::HOST_OR_DEVICE,
                     &info,
                     &tls.max_primitive_counts,
@@ -361,10 +366,11 @@ impl Drop for AccelerationStructure {
             return;
         }
 
-        let accel_struct_ext = Device::expect_accel_struct_ext(&self.buffer.device);
+        let khr_acceleration_structure =
+            Device::expect_vk_khr_acceleration_structure(&self.buffer.device);
 
         unsafe {
-            accel_struct_ext.destroy_acceleration_structure(self.handle, None);
+            khr_acceleration_structure.destroy_acceleration_structure(self.handle, None);
         }
     }
 }
@@ -661,11 +667,7 @@ impl<G> AccelerationStructureGeometryInfo<G> {
 /// Information used to create an [`AccelerationStructure`] instance.
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
-    build_fn(
-        private,
-        name = "fallible_build",
-        error = "AccelerationStructureInfoBuilderError"
-    ),
+    build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
     pattern = "owned"
 )]
@@ -677,6 +679,7 @@ pub struct AccelerationStructureInfo {
     /// The size of the backing buffer that will store the acceleration structure.
     ///
     /// Use [`AccelerationStructure::size_of`] to calculate this value.
+    #[builder(default)]
     pub size: vk::DeviceSize,
 }
 
@@ -727,27 +730,9 @@ impl From<AccelerationStructureInfo> for () {
 
 impl AccelerationStructureInfoBuilder {
     /// Builds a new `AccelerationStructureInfo`.
-    ///
-    /// # Panics
-    ///
-    /// If any of the following values have not been set this function will panic:
-    ///
-    /// * `size`
     #[inline(always)]
     pub fn build(self) -> AccelerationStructureInfo {
-        match self.fallible_build() {
-            Err(AccelerationStructureInfoBuilderError(err)) => panic!("{err}"),
-            Ok(info) => info,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct AccelerationStructureInfoBuilderError(UninitializedFieldError);
-
-impl From<UninitializedFieldError> for AccelerationStructureInfoBuilderError {
-    fn from(err: UninitializedFieldError) -> Self {
-        Self(err)
+        self.fallible_build().expect("all fields have defaults")
     }
 }
 
@@ -840,8 +825,12 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Field not initialized: size")]
-    pub fn accel_struct_info_builder_uninit_size() {
-        Builder::default().build();
+    pub fn accel_struct_info_builder_default_size() {
+        let info = Info {
+            size: 0,
+            ty: vk::AccelerationStructureTypeKHR::GENERIC,
+        };
+
+        assert_eq!(Builder::default().build(), info);
     }
 }
