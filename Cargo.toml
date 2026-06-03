@@ -91,8 +91,8 @@ log = "0.4"
 meshopt = "0.2"
 polyhedron-ops = ">=0.2, <=0.2.4"
 pretty_env_logger = "0.5"
-puffin = "0.19"
-puffin_http = "0.16"
+puffin = "0.20"
+puffin_http = "0.17"
 rand = "0.9"
 reqwest = { version = "0.12", features = ["blocking"] }
 vk-graph-fx.workspace = true
