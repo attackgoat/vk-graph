@@ -1,7 +1,8 @@
 use {
     super::{AttachmentIndex, cmd_ref::CommandRef, pipeline::PipelineCommand},
     crate::{
-        Attachment, Node, SubresourceAccess,
+        Attachment, ColorAttachment, ColorResolve, DepthStencilAttachment, DepthStencilResolve,
+        LoadOp, Node, StoreOp, SubresourceAccess,
         cmd::SubresourceRange,
         driver::{
             graphic::{DepthStencilInfo, GraphicsPipeline},
@@ -436,6 +437,201 @@ impl PipelineCommand<'_, GraphicsPipeline> {
 }
 
 impl PipelineCommand<'_, GraphicsPipeline> {
+    fn is_input_attachment(&self, attachment_idx: AttachmentIndex) -> bool {
+        self.cmd
+            .cmd()
+            .expect_last_pipeline()
+            .expect_graphic()
+            .inner
+            .input_attachments
+            .contains(&attachment_idx)
+    }
+
+    fn set_color_attachment(
+        &mut self,
+        attachment_idx: AttachmentIndex,
+        attachment: Attachment,
+        load: LoadOp<[f32; 4]>,
+    ) {
+        let is_input = self.is_input_attachment(attachment_idx);
+        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
+
+        if let Some(state) = exec.attachments.color_attachment_mut(attachment_idx) {
+            #[cfg(feature = "checked")]
+            assert!(
+                Attachment::are_compatible(Some(attachment), Some(state.attachment)),
+                "incompatible with existing attachment"
+            );
+
+            state.attachment = attachment;
+            state.load = load;
+            state.is_input = is_input;
+            state.is_attachment = true;
+        } else {
+            exec.attachments.set_color_attachment(
+                attachment_idx,
+                ColorAttachment {
+                    attachment,
+                    load,
+                    store: StoreOp::DontCare,
+                    resolve: None,
+                    is_input,
+                    is_attachment: true,
+                },
+            );
+        }
+    }
+
+    fn set_depth_stencil_attachment(
+        &mut self,
+        attachment: Attachment,
+        load: LoadOp<vk::ClearDepthStencilValue>,
+    ) {
+        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
+
+        if let Some(state) = exec.attachments.depth_stencil_attachment_mut() {
+            #[cfg(feature = "checked")]
+            assert!(
+                Attachment::are_compatible(Some(attachment), Some(state.attachment)),
+                "incompatible with existing attachment"
+            );
+
+            state.attachment = attachment;
+            state.load = load;
+            state.is_attachment = true;
+        } else {
+            exec.attachments
+                .set_depth_stencil_attachment(DepthStencilAttachment {
+                    attachment,
+                    load,
+                    store: StoreOp::DontCare,
+                    resolve: None,
+                    is_attachment: true,
+                });
+        }
+    }
+
+    fn set_color_store(&mut self, attachment_idx: AttachmentIndex, attachment: Attachment) {
+        let is_input = self.is_input_attachment(attachment_idx);
+        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
+
+        if let Some(state) = exec.attachments.color_attachment_mut(attachment_idx) {
+            #[cfg(feature = "checked")]
+            assert!(
+                Attachment::are_compatible(Some(attachment), Some(state.attachment)),
+                "incompatible with existing attachment"
+            );
+
+            state.attachment = attachment;
+            state.store = StoreOp::Store;
+            state.is_attachment = true;
+            state.is_input = is_input;
+        } else {
+            exec.attachments.set_color_attachment(
+                attachment_idx,
+                ColorAttachment {
+                    attachment,
+                    load: LoadOp::DontCare,
+                    store: StoreOp::Store,
+                    resolve: None,
+                    is_input,
+                    is_attachment: true,
+                },
+            );
+        }
+    }
+
+    fn set_depth_stencil_store(&mut self, attachment: Attachment) {
+        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
+
+        if let Some(state) = exec.attachments.depth_stencil_attachment_mut() {
+            #[cfg(feature = "checked")]
+            assert!(
+                Attachment::are_compatible(Some(attachment), Some(state.attachment)),
+                "incompatible with existing attachment"
+            );
+
+            state.attachment = attachment;
+            state.store = StoreOp::Store;
+            state.is_attachment = true;
+        } else {
+            exec.attachments
+                .set_depth_stencil_attachment(DepthStencilAttachment {
+                    attachment,
+                    load: LoadOp::DontCare,
+                    store: StoreOp::Store,
+                    resolve: None,
+                    is_attachment: true,
+                });
+        }
+    }
+
+    fn set_color_resolve(
+        &mut self,
+        src_attachment_idx: AttachmentIndex,
+        dst_attachment_idx: AttachmentIndex,
+        attachment: Attachment,
+    ) {
+        let is_input = self.is_input_attachment(dst_attachment_idx);
+        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
+
+        if let Some(state) = exec.attachments.color_attachment_mut(dst_attachment_idx) {
+            state.resolve = Some(ColorResolve {
+                attachment,
+                src_attachment_idx,
+            });
+            state.is_input = is_input;
+        } else {
+            exec.attachments.set_color_attachment(
+                dst_attachment_idx,
+                ColorAttachment {
+                    attachment,
+                    load: LoadOp::DontCare,
+                    store: StoreOp::DontCare,
+                    resolve: Some(ColorResolve {
+                        attachment,
+                        src_attachment_idx,
+                    }),
+                    is_input,
+                    is_attachment: false,
+                },
+            );
+        }
+    }
+
+    fn set_depth_stencil_resolve(
+        &mut self,
+        dst_attachment_idx: AttachmentIndex,
+        attachment: Attachment,
+        depth_mode: Option<ResolveMode>,
+        stencil_mode: Option<ResolveMode>,
+    ) {
+        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
+
+        if let Some(state) = exec.attachments.depth_stencil_attachment_mut() {
+            state.resolve = Some(DepthStencilResolve {
+                attachment,
+                dst_attachment_idx,
+                depth_mode,
+                stencil_mode,
+            });
+        } else {
+            exec.attachments
+                .set_depth_stencil_attachment(DepthStencilAttachment {
+                    attachment,
+                    load: LoadOp::DontCare,
+                    store: StoreOp::DontCare,
+                    resolve: Some(DepthStencilResolve {
+                        attachment,
+                        dst_attachment_idx,
+                        depth_mode,
+                        stencil_mode,
+                    }),
+                    is_attachment: false,
+                });
+        }
+    }
+
     fn attach_color(
         &mut self,
         image: impl Into<AnyImageNode>,
@@ -447,67 +643,10 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        debug_assert!(
-            !self
-                .cmd
-                .cmd()
-                .expect_last_exec()
-                .color_clears
-                .contains_key(&attachment_idx),
-            "color attachment {attachment_idx} already attached via clear"
-        );
-        debug_assert!(
-            !self
-                .cmd
-                .cmd()
-                .expect_last_exec()
-                .color_loads
-                .contains_key(&attachment_idx),
-            "color attachment {attachment_idx} already attached via load"
-        );
-
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .color_attachments
-            .insert(
-                attachment_idx,
-                Attachment::new(image_view_info, sample_count, node_idx),
-            );
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_resolves
-                    .get(&attachment_idx)
-                    .map(|(attachment, _)| *attachment),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_attachments
-                    .get(&attachment_idx)
-                    .copied()
-            ),
-            "color attachment {attachment_idx} incompatible with existing resolve"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_stores
-                    .get(&attachment_idx)
-                    .copied(),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_attachments
-                    .get(&attachment_idx)
-                    .copied()
-            ),
-            "color attachment {attachment_idx} incompatible with existing store"
+        self.set_color_attachment(
+            attachment_idx,
+            Attachment::new(image_view_info, sample_count, node_idx),
+            LoadOp::DontCare,
         );
 
         self.cmd.push_subresource_access(
@@ -529,46 +668,9 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        debug_assert!(
-            self.cmd
-                .cmd()
-                .expect_last_exec()
-                .depth_stencil_clear
-                .is_none(),
-            "depth/stencil attachment already attached via clear"
-        );
-        debug_assert!(
-            self.cmd
-                .cmd()
-                .expect_last_exec()
-                .depth_stencil_load
-                .is_none(),
-            "depth/stencil attachment already attached via load"
-        );
-
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .depth_stencil_attachment =
-            Some(Attachment::new(image_view_info, sample_count, node_idx));
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_resolve
-                    .map(|(attachment, ..)| attachment),
-                self.cmd.cmd().expect_last_exec().depth_stencil_attachment
-            ),
-            "depth/stencil attachment incompatible with existing resolve"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd.cmd().expect_last_exec().depth_stencil_store,
-                self.cmd.cmd().expect_last_exec().depth_stencil_attachment
-            ),
-            "depth/stencil attachment incompatible with existing store"
+        self.set_depth_stencil_attachment(
+            Attachment::new(image_view_info, sample_count, node_idx),
+            LoadOp::DontCare,
         );
 
         self.cmd.push_subresource_access(
@@ -608,70 +710,10 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let color: vk::ClearColorValue = color.into();
         let color = unsafe { color.float32 };
 
-        debug_assert!(
-            !self
-                .cmd
-                .cmd()
-                .expect_last_exec()
-                .color_attachments
-                .contains_key(&attachment_idx),
-            "color attachment {attachment_idx} already attached"
-        );
-        debug_assert!(
-            !self
-                .cmd
-                .cmd()
-                .expect_last_exec()
-                .color_loads
-                .contains_key(&attachment_idx),
-            "color attachment {attachment_idx} already attached via load"
-        );
-
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .color_clears
-            .insert(
-                attachment_idx,
-                (
-                    Attachment::new(image_view_info, sample_count, node_idx),
-                    color,
-                ),
-            );
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_resolves
-                    .get(&attachment_idx)
-                    .map(|(attachment, _)| *attachment),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_clears
-                    .get(&attachment_idx)
-                    .map(|(attachment, _)| *attachment)
-            ),
-            "color attachment {attachment_idx} clear incompatible with existing resolve"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_stores
-                    .get(&attachment_idx)
-                    .copied(),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_clears
-                    .get(&attachment_idx)
-                    .map(|(attachment, _)| *attachment)
-            ),
-            "color attachment {attachment_idx} clear incompatible with existing store"
+        self.set_color_attachment(
+            attachment_idx,
+            Attachment::new(image_view_info, sample_count, node_idx),
+            LoadOp::Clear(color),
         );
 
         let mut image_access = AccessType::ColorAttachmentWrite;
@@ -728,56 +770,9 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        debug_assert!(
-            self.cmd
-                .cmd()
-                .expect_last_exec()
-                .depth_stencil_attachment
-                .is_none(),
-            "depth/stencil attachment already attached"
-        );
-        debug_assert!(
-            self.cmd
-                .cmd()
-                .expect_last_exec()
-                .depth_stencil_load
-                .is_none(),
-            "depth/stencil attachment already attached via load"
-        );
-
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .depth_stencil_clear = Some((
+        self.set_depth_stencil_attachment(
             Attachment::new(image_view_info, sample_count, node_idx),
-            vk::ClearDepthStencilValue { depth, stencil },
-        ));
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_resolve
-                    .map(|(attachment, ..)| attachment),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_clear
-                    .map(|(attachment, _)| attachment)
-            ),
-            "depth/stencil attachment clear incompatible with existing resolve"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd.cmd().expect_last_exec().depth_stencil_store,
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_clear
-                    .map(|(attachment, _)| attachment)
-            ),
-            "depth/stencil attachment clear incompatible with existing store"
+            LoadOp::Clear(vk::ClearDepthStencilValue { depth, stencil }),
         );
 
         let mut image_access = if image_view_info
@@ -880,67 +875,10 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        debug_assert!(
-            !self
-                .cmd
-                .cmd()
-                .expect_last_exec()
-                .color_attachments
-                .contains_key(&attachment_idx),
-            "color attachment {attachment_idx} already attached"
-        );
-        debug_assert!(
-            !self
-                .cmd
-                .cmd()
-                .expect_last_exec()
-                .color_clears
-                .contains_key(&attachment_idx),
-            "color attachment {attachment_idx} already attached via clear"
-        );
-
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .color_loads
-            .insert(
-                attachment_idx,
-                Attachment::new(image_view_info, sample_count, node_idx),
-            );
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_resolves
-                    .get(&attachment_idx)
-                    .map(|(attachment, _)| *attachment),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_loads
-                    .get(&attachment_idx)
-                    .copied()
-            ),
-            "color attachment {attachment_idx} load incompatible with existing resolve"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_stores
-                    .get(&attachment_idx)
-                    .copied(),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_loads
-                    .get(&attachment_idx)
-                    .copied()
-            ),
-            "color attachment {attachment_idx} load incompatible with existing store"
+        self.set_color_attachment(
+            attachment_idx,
+            Attachment::new(image_view_info, sample_count, node_idx),
+            LoadOp::Load,
         );
 
         let mut image_access = AccessType::ColorAttachmentRead;
@@ -995,43 +933,9 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        debug_assert!(
-            self.cmd
-                .cmd()
-                .expect_last_exec()
-                .depth_stencil_attachment
-                .is_none(),
-            "depth/stencil attachment already attached"
-        );
-        debug_assert!(
-            self.cmd
-                .cmd()
-                .expect_last_exec()
-                .depth_stencil_clear
-                .is_none(),
-            "depth/stencil attachment already attached via clear"
-        );
-
-        self.cmd.cmd_mut().expect_last_exec_mut().depth_stencil_load =
-            Some(Attachment::new(image_view_info, sample_count, node_idx));
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_resolve
-                    .map(|(attachment, ..)| attachment),
-                self.cmd.cmd().expect_last_exec().depth_stencil_load
-            ),
-            "depth/stencil attachment load incompatible with existing resolve"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd.cmd().expect_last_exec().depth_stencil_store,
-                self.cmd.cmd().expect_last_exec().depth_stencil_load
-            ),
-            "depth/stencil attachment load incompatible with existing store"
+        self.set_depth_stencil_attachment(
+            Attachment::new(image_view_info, sample_count, node_idx),
+            LoadOp::Load,
         );
 
         let mut image_access = AccessType::DepthStencilAttachmentRead;
@@ -1095,65 +999,9 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .color_stores
-            .insert(
-                attachment_idx,
-                Attachment::new(image_view_info, sample_count, node_idx),
-            );
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_attachments
-                    .get(&attachment_idx)
-                    .copied(),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_stores
-                    .get(&attachment_idx)
-                    .copied()
-            ),
-            "color attachment {attachment_idx} store incompatible with existing attachment"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_clears
-                    .get(&attachment_idx)
-                    .map(|(attachment, _)| *attachment),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_stores
-                    .get(&attachment_idx)
-                    .copied()
-            ),
-            "color attachment {attachment_idx} store incompatible with existing clear"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_loads
-                    .get(&attachment_idx)
-                    .copied(),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_stores
-                    .get(&attachment_idx)
-                    .copied()
-            ),
-            "color attachment {attachment_idx} store incompatible with existing load"
+        self.set_color_store(
+            attachment_idx,
+            Attachment::new(image_view_info, sample_count, node_idx),
         );
 
         let mut image_access = AccessType::ColorAttachmentWrite;
@@ -1208,36 +1056,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .depth_stencil_store = Some(Attachment::new(image_view_info, sample_count, node_idx));
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd.cmd().expect_last_exec().depth_stencil_attachment,
-                self.cmd.cmd().expect_last_exec().depth_stencil_store
-            ),
-            "depth/stencil attachment store incompatible with existing attachment"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .depth_stencil_clear
-                    .map(|(attachment, _)| attachment),
-                self.cmd.cmd().expect_last_exec().depth_stencil_store
-            ),
-            "depth/stencil attachment store incompatible with existing clear"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd.cmd().expect_last_exec().depth_stencil_load,
-                self.cmd.cmd().expect_last_exec().depth_stencil_store
-            ),
-            "depth/stencil attachment store incompatible with existing load"
-        );
+        self.set_depth_stencil_store(Attachment::new(image_view_info, sample_count, node_idx));
 
         let mut image_access = if image_view_info
             .aspect_mask
@@ -1340,68 +1159,10 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .color_resolves
-            .insert(
-                dst_attachment_idx,
-                (
-                    Attachment::new(image_view_info, sample_count, node_idx),
-                    src_attachment_idx,
-                ),
-            );
-
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_attachments
-                    .get(&dst_attachment_idx)
-                    .copied(),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_resolves
-                    .get(&dst_attachment_idx)
-                    .map(|(attachment, _)| *attachment)
-            ),
-            "color attachment {dst_attachment_idx} resolve conflict",
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_clears
-                    .get(&dst_attachment_idx)
-                    .map(|(attachment, _)| *attachment),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_resolves
-                    .get(&dst_attachment_idx)
-                    .map(|(attachment, _)| *attachment)
-            ),
-            "color attachment {dst_attachment_idx} resolve incompatible with existing clear"
-        );
-        debug_assert!(
-            Attachment::are_compatible(
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_loads
-                    .get(&dst_attachment_idx)
-                    .copied(),
-                self.cmd
-                    .cmd()
-                    .expect_last_exec()
-                    .color_resolves
-                    .get(&dst_attachment_idx)
-                    .map(|(attachment, _)| *attachment)
-            ),
-            "color attachment {dst_attachment_idx} resolve incompatible with existing load"
+        self.set_color_resolve(
+            src_attachment_idx,
+            dst_attachment_idx,
+            Attachment::new(image_view_info, sample_count, node_idx),
         );
 
         let mut image_access = AccessType::ColorAttachmentWrite;
@@ -1459,15 +1220,12 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let node_idx = image.index();
         let ImageInfo { sample_count, .. } = self.resource(image).info;
 
-        self.cmd
-            .cmd_mut()
-            .expect_last_exec_mut()
-            .depth_stencil_resolve = Some((
-            Attachment::new(image_view_info, sample_count, node_idx),
+        self.set_depth_stencil_resolve(
             dst_attachment_idx,
+            Attachment::new(image_view_info, sample_count, node_idx),
             depth_mode,
             stencil_mode,
-        ));
+        );
 
         let mut image_access = if image_view_info
             .aspect_mask
@@ -2304,25 +2062,6 @@ impl<'a> Deref for GraphicsCommandRef<'a> {
     }
 }
 
-/// Specifies the state of a color or combined depth and stencil attachment image during graphic
-/// render pass framebuffer load operations.
-///
-/// Use this to specify the desired contents of any image before use in a pipeline command buffer.
-#[derive(Clone, Copy, Debug)]
-pub enum LoadOp<T> {
-    /// Clears the attachment.
-    ///
-    /// `T` will be [ClearColorValue] for color images or [vk::ClearDepthStencilValue] for
-    /// combined depth and stencil images.
-    Clear(T),
-
-    /// The attachment will become undefined and reads will produce garbage data.
-    DontCare,
-
-    /// The attachment will be preserved in memory.
-    Load,
-}
-
 impl LoadOp<ClearColorValue> {
     /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
     pub const CLEAR_BLACK_ALPHA_ONE: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ONE);
@@ -2360,17 +2099,4 @@ impl LoadOp<vk::ClearDepthStencilValue> {
     pub fn clear_depth_stencil(depth: f32, stencil: u32) -> Self {
         Self::Clear(vk::ClearDepthStencilValue { depth, stencil })
     }
-}
-
-/// Specifies the state of a color or combined depth and stencil attachment image after graphic
-/// render pass framebuffer store operations.
-///
-/// Use this to specify the desired contents of any image after use in a pipeline command buffer.
-#[derive(Clone, Copy, Debug)]
-pub enum StoreOp {
-    /// The attachment will become undefined and reads will produce garbage data.
-    DontCare,
-
-    /// The attachment will be preserved in memory.
-    Store,
 }

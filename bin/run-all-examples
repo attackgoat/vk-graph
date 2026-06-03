@@ -64,6 +64,9 @@ run() {
     fi
 }
 
+# Build all examples and bins first to get failures fast
+cargo build --workspace --examples --bins
+
 # Run the "test" example first
 cargo run --example fuzzer
 

@@ -23,15 +23,18 @@ mod graphic;
 mod pipeline;
 mod ray_trace;
 
-pub use self::{
-    cmd_ref::{
-        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
-        UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
+pub use {
+    self::{
+        cmd_ref::{
+            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
+            UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
+        },
+        compute::ComputeCommandRef,
+        graphic::{ClearColorValue, GraphicsCommandRef},
+        pipeline::{Pipeline, PipelineCommand},
+        ray_trace::RayTracingCommandRef,
     },
-    compute::ComputeCommandRef,
-    graphic::{ClearColorValue, GraphicsCommandRef, LoadOp, StoreOp},
-    pipeline::{Pipeline, PipelineCommand},
-    ray_trace::RayTracingCommandRef,
+    super::{LoadOp, StoreOp},
 };
 
 use {

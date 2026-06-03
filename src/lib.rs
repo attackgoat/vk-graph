@@ -60,8 +60,10 @@ use {
         cmp::Ord,
         collections::{BTreeMap, HashMap},
         fmt::{Debug, Formatter},
+        mem,
         ops::Range,
         ops::{Deref, DerefMut},
+        slice::Iter,
     },
     vk_sync::AccessType,
 };
@@ -73,52 +75,6 @@ type GraphId = u64;
 
 #[cfg(feature = "checked")]
 static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Default)]
-struct ExecutionAccesses {
-    entries: Vec<(NodeIndex, Vec<SubresourceAccess>)>,
-    lookup: HashMap<NodeIndex, usize>,
-}
-
-impl ExecutionAccesses {
-    fn contains(&self, node_idx: NodeIndex) -> bool {
-        self.lookup.contains_key(&node_idx)
-    }
-
-    fn get(&self, node_idx: NodeIndex) -> Option<&[SubresourceAccess]> {
-        self.lookup
-            .get(&node_idx)
-            .map(|&entry_idx| self.entries[entry_idx].1.as_slice())
-    }
-
-    fn get_mut(&mut self, node_idx: &NodeIndex) -> Option<&mut [SubresourceAccess]> {
-        self.lookup
-            .get(node_idx)
-            .copied()
-            .map(|entry_idx| self.entries[entry_idx].1.as_mut_slice())
-    }
-
-    fn iter(&self) -> impl Iterator<Item = (NodeIndex, &[SubresourceAccess])> + '_ {
-        self.entries
-            .iter()
-            .map(|(node_idx, accesses)| (*node_idx, accesses.as_slice()))
-    }
-
-    fn push(&mut self, node_idx: NodeIndex, access: SubresourceAccess) {
-        if let Some(&entry_idx) = self.lookup.get(&node_idx) {
-            self.entries[entry_idx].1.push(access);
-        } else {
-            self.lookup.insert(node_idx, self.entries.len());
-            self.entries.push((node_idx, vec![access]));
-        }
-    }
-}
-
-impl Debug for ExecutionAccesses {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.entries.fmt(f)
-    }
-}
 
 #[derive(Debug)]
 #[doc(hidden)]
@@ -255,31 +211,315 @@ impl Attachment {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ColorAttachment {
+    attachment: Attachment,
+    load: LoadOp<[f32; 4]>,
+    store: StoreOp,
+    resolve: Option<ColorResolve>,
+    is_input: bool,
+    is_attachment: bool,
+}
+
+#[derive(Debug, Default)]
+struct ExecutionAttachmentMap {
+    color: Vec<Option<ColorAttachment>>,
+    depth_stencil: Option<DepthStencilAttachment>,
+}
+
+impl ExecutionAttachmentMap {
+    fn color_attachment(&self, attachment_idx: AttachmentIndex) -> Option<&ColorAttachment> {
+        self.color
+            .get(attachment_idx as usize)
+            .and_then(|slot| slot.as_ref())
+    }
+
+    fn color_attachment_mut(
+        &mut self,
+        attachment_idx: AttachmentIndex,
+    ) -> Option<&mut ColorAttachment> {
+        self.color
+            .get_mut(attachment_idx as usize)
+            .and_then(|slot| slot.as_mut())
+    }
+
+    fn color_attachments(&self) -> impl Iterator<Item = (AttachmentIndex, &ColorAttachment)> + '_ {
+        self.color
+            .iter()
+            .enumerate()
+            .filter_map(|(attachment_idx, slot)| {
+                Some((attachment_idx as AttachmentIndex, slot.as_ref()?))
+            })
+    }
+
+    fn depth_stencil_attachment(&self) -> Option<&DepthStencilAttachment> {
+        self.depth_stencil.as_ref()
+    }
+
+    fn depth_stencil_attachment_mut(&mut self) -> Option<&mut DepthStencilAttachment> {
+        self.depth_stencil.as_mut()
+    }
+
+    fn set_color_attachment(
+        &mut self,
+        attachment_idx: AttachmentIndex,
+        attachment: ColorAttachment,
+    ) {
+        let attachment_idx = attachment_idx as usize;
+
+        if self.color.len() <= attachment_idx {
+            self.color.resize(attachment_idx + 1, None);
+        }
+
+        #[cfg(feature = "checked")]
+        {
+            let existing_attachment = self.color[attachment_idx]
+                .as_ref()
+                .map(|&color| color.attachment);
+
+            assert!(
+                Attachment::are_compatible(existing_attachment, Some(attachment.attachment)),
+                "incompatible with existing attachment"
+            );
+        }
+
+        self.color[attachment_idx] = Some(attachment);
+    }
+
+    fn set_depth_stencil_attachment(&mut self, attachment: DepthStencilAttachment) {
+        #[cfg(feature = "checked")]
+        {
+            let existing_attachment = self
+                .depth_stencil
+                .as_ref()
+                .map(|&depth_stencil| depth_stencil.attachment);
+
+            assert!(
+                Attachment::are_compatible(existing_attachment, Some(attachment.attachment)),
+                "incompatible with existing attachment"
+            );
+        }
+
+        self.depth_stencil = Some(attachment);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ColorResolve {
+    attachment: Attachment,
+    src_attachment_idx: AttachmentIndex,
+}
+
+#[derive(Debug)]
+struct CommandData {
+    execs: Vec<Execution>,
+
+    #[cfg(debug_assertions)]
+    name: Option<String>,
+}
+
+impl CommandData {
+    fn descriptor_pools_sizes(
+        &self,
+    ) -> impl Iterator<Item = impl Iterator<Item = (&vk::DescriptorType, &u32)>> {
+        self.execs
+            .iter()
+            .flat_map(|exec| &exec.pipeline)
+            .map(|pipeline| {
+                pipeline
+                    .descriptor_info()
+                    .pool_sizes
+                    .values()
+                    .flat_map(HashMap::iter)
+            })
+    }
+
+    fn expect_first_exec(&self) -> &Execution {
+        self.execs.first().expect("missing command execution")
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the execution list is empty (a command always has at least one execution).
+    fn expect_last_exec(&self) -> &Execution {
+        self.execs.last().expect("missing command execution")
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the execution list is empty (a command always has at least one execution).
+    fn expect_last_exec_mut(&mut self) -> &mut Execution {
+        self.execs.last_mut().expect("missing command execution")
+    }
+
+    fn expect_last_pipeline(&self) -> &ExecutionPipeline {
+        self.expect_last_exec()
+            .pipeline
+            .as_ref()
+            .expect("missing command pipeline")
+    }
+
+    fn name(&self) -> &str {
+        const DEFAULT: &str = "command";
+
+        #[cfg(not(debug_assertions))]
+        {
+            DEFAULT
+        }
+
+        #[cfg(debug_assertions)]
+        self.name.as_deref().unwrap_or(DEFAULT)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DepthStencilAttachment {
+    attachment: Attachment,
+    load: LoadOp<vk::ClearDepthStencilValue>,
+    store: StoreOp,
+    resolve: Option<DepthStencilResolve>,
+    is_attachment: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DepthStencilResolve {
+    attachment: Attachment,
+    dst_attachment_idx: AttachmentIndex,
+    depth_mode: Option<ResolveMode>,
+    stencil_mode: Option<ResolveMode>,
+}
+
+enum ExecutionAccess {
+    Building(ExecutionAccessBuilder),
+    Frozen(Box<[NodeAccess]>),
+}
+
+impl ExecutionAccess {
+    fn contains(&self, node_idx: NodeIndex) -> bool {
+        match self {
+            Self::Building(builder) => builder.lookup.contains_key(&node_idx),
+            Self::Frozen(entries) => entries.iter().any(|entry| entry.node_idx == node_idx),
+        }
+    }
+
+    fn freeze(&mut self) {
+        let Self::Building(builder) = mem::take(self) else {
+            return;
+        };
+
+        *self = Self::Frozen(
+            builder
+                .entries
+                .into_iter()
+                .map(|entry| NodeAccess {
+                    node_idx: entry.node_idx,
+                    accesses: entry.accesses.into_boxed_slice(),
+                })
+                .collect(),
+        );
+    }
+
+    fn get(&self, node_idx: NodeIndex) -> Option<&[SubresourceAccess]> {
+        match self {
+            Self::Building(builder) => builder
+                .lookup
+                .get(&node_idx)
+                .map(|&entry_idx| builder.entries[entry_idx].accesses.as_slice()),
+            Self::Frozen(entries) => entries
+                .iter()
+                .find(|entry| entry.node_idx == node_idx)
+                .map(|entry| entry.accesses.as_ref()),
+        }
+    }
+
+    fn get_mut(&mut self, node_idx: &NodeIndex) -> Option<&mut [SubresourceAccess]> {
+        let Self::Building(builder) = self else {
+            panic!("execution accesses are frozen")
+        };
+
+        builder
+            .lookup
+            .get(node_idx)
+            .copied()
+            .map(|entry_idx| builder.entries[entry_idx].accesses.as_mut_slice())
+    }
+
+    fn iter(&self) -> ExecutionAccessIter<'_> {
+        match self {
+            Self::Building(builder) => ExecutionAccessIter::Building(builder.entries.iter()),
+            Self::Frozen(entries) => ExecutionAccessIter::Frozen(entries.iter()),
+        }
+    }
+
+    fn push(&mut self, node_idx: NodeIndex, access: SubresourceAccess) {
+        let Self::Building(builder) = self else {
+            panic!("execution accesses are frozen")
+        };
+
+        let idx = *builder.lookup.entry(node_idx).or_insert_with(|| {
+            let idx = builder.entries.len();
+            builder.entries.push(NodeAccessBuilder {
+                node_idx,
+                accesses: Vec::new(),
+            });
+
+            idx
+        });
+        builder.entries[idx].accesses.push(access);
+    }
+}
+
+impl Debug for ExecutionAccess {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Building(builder) => builder.entries.fmt(f),
+            Self::Frozen(entries) => entries.fmt(f),
+        }
+    }
+}
+
+impl Default for ExecutionAccess {
+    fn default() -> Self {
+        Self::Building(Default::default())
+    }
+}
+
+#[derive(Debug, Default)]
+struct ExecutionAccessBuilder {
+    entries: Vec<NodeAccessBuilder>,
+    lookup: HashMap<NodeIndex, usize>,
+}
+
+enum ExecutionAccessIter<'a> {
+    Building(Iter<'a, NodeAccessBuilder>),
+    Frozen(Iter<'a, NodeAccess>),
+}
+
+impl<'a> Iterator for ExecutionAccessIter<'a> {
+    type Item = (NodeIndex, &'a [SubresourceAccess]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            ExecutionAccessIter::Building(iter) => iter
+                .next()
+                .map(|entry| (entry.node_idx, entry.accesses.as_slice())),
+            ExecutionAccessIter::Frozen(iter) => iter
+                .next()
+                .map(|entry| (entry.node_idx, entry.accesses.as_ref())),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Execution {
-    accesses: ExecutionAccesses,
+    accesses: ExecutionAccess,
+    attachments: ExecutionAttachmentMap,
     bindings: BTreeMap<Binding, (NodeIndex, ViewInfo)>,
 
     correlated_view_mask: u32,
     depth_stencil: Option<DepthStencilInfo>,
     render_area: Option<vk::Rect2D>,
     view_mask: u32,
-
-    color_attachments: HashMap<AttachmentIndex, Attachment>,
-    color_clears: HashMap<AttachmentIndex, (Attachment, [f32; 4])>,
-    color_loads: HashMap<AttachmentIndex, Attachment>,
-    color_resolves: HashMap<AttachmentIndex, (Attachment, AttachmentIndex)>,
-    color_stores: HashMap<AttachmentIndex, Attachment>,
-    depth_stencil_attachment: Option<Attachment>,
-    depth_stencil_clear: Option<(Attachment, vk::ClearDepthStencilValue)>,
-    depth_stencil_load: Option<Attachment>,
-    depth_stencil_resolve: Option<(
-        Attachment,
-        AttachmentIndex,
-        Option<ResolveMode>,
-        Option<ResolveMode>,
-    )>,
-    depth_stencil_store: Option<Attachment>,
 
     func: Option<ExecutionFunction>,
     pipeline: Option<ExecutionPipeline>,
@@ -291,18 +531,12 @@ impl Debug for Execution {
         // FnOnce.
         f.debug_struct("Execution")
             .field("accesses", &self.accesses)
+            .field("attachments", &self.attachments)
             .field("bindings", &self.bindings)
+            .field("correlated_view_mask", &self.correlated_view_mask)
             .field("depth_stencil", &self.depth_stencil)
-            .field("color_attachments", &self.color_attachments)
-            .field("color_clears", &self.color_clears)
-            .field("color_loads", &self.color_loads)
-            .field("color_resolves", &self.color_resolves)
-            .field("color_stores", &self.color_stores)
-            .field("depth_stencil_attachment", &self.depth_stencil_attachment)
-            .field("depth_stencil_clear", &self.depth_stencil_clear)
-            .field("depth_stencil_load", &self.depth_stencil_load)
-            .field("depth_stencil_resolve", &self.depth_stencil_resolve)
-            .field("depth_stencil_store", &self.depth_stencil_store)
+            .field("render_area", &self.render_area)
+            .field("view_mask", &self.view_mask)
             .field("pipeline", &self.pipeline)
             .finish()
     }
@@ -384,68 +618,6 @@ impl ExecutionPipeline {
             ExecutionPipeline::Graphic(_) => vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             ExecutionPipeline::RayTrace(_) => vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
         }
-    }
-}
-
-#[derive(Debug)]
-struct CommandData {
-    execs: Vec<Execution>,
-
-    #[cfg(debug_assertions)]
-    name: Option<String>,
-}
-
-impl CommandData {
-    fn descriptor_pools_sizes(
-        &self,
-    ) -> impl Iterator<Item = impl Iterator<Item = (&vk::DescriptorType, &u32)>> {
-        self.execs
-            .iter()
-            .flat_map(|exec| &exec.pipeline)
-            .map(|pipeline| {
-                pipeline
-                    .descriptor_info()
-                    .pool_sizes
-                    .values()
-                    .flat_map(HashMap::iter)
-            })
-    }
-
-    fn expect_first_exec(&self) -> &Execution {
-        self.execs.first().expect("missing command execution")
-    }
-
-    /// # Panics
-    ///
-    /// Panics if the execution list is empty (a command always has at least one execution).
-    fn expect_last_exec(&self) -> &Execution {
-        self.execs.last().expect("missing command execution")
-    }
-
-    /// # Panics
-    ///
-    /// Panics if the execution list is empty (a command always has at least one execution).
-    fn expect_last_exec_mut(&mut self) -> &mut Execution {
-        self.execs.last_mut().expect("missing command execution")
-    }
-
-    fn expect_last_pipeline(&self) -> &ExecutionPipeline {
-        self.expect_last_exec()
-            .pipeline
-            .as_ref()
-            .expect("missing command pipeline")
-    }
-
-    fn name(&self) -> &str {
-        const DEFAULT: &str = "command";
-
-        #[cfg(not(debug_assertions))]
-        {
-            DEFAULT
-        }
-
-        #[cfg(debug_assertions)]
-        self.name.as_deref().unwrap_or(DEFAULT)
     }
 }
 
@@ -1048,6 +1220,10 @@ impl Graph {
             debug_assert!(cmd.expect_last_exec().func.is_none());
 
             cmd.execs.pop();
+
+            for exec in &mut cmd.execs {
+                exec.accesses.freeze();
+            }
         }
 
         Submission::new(self)
@@ -1129,6 +1305,25 @@ impl Graph {
     }
 }
 
+/// Specifies the state of a color or combined depth and stencil attachment image during graphic
+/// render pass framebuffer load operations.
+///
+/// Use this to specify the desired contents of any image before use in a pipeline command buffer.
+#[derive(Clone, Copy, Debug)]
+pub enum LoadOp<T> {
+    /// Clears the attachment.
+    ///
+    /// `T` will be [ClearColorValue] for color images or [vk::ClearDepthStencilValue] for
+    /// combined depth and stencil images.
+    Clear(T),
+
+    /// The attachment will become undefined and reads will produce garbage data.
+    DontCare,
+
+    /// The attachment will be preserved in memory.
+    Load,
+}
+
 /// A Vulkan resource which has been bound to a [`Graph`].
 ///
 /// See [`Graph::bind_resource`].
@@ -1146,6 +1341,18 @@ pub trait Node: private::Sealed {
 
     #[doc(hidden)]
     fn assert_owner(&self, _graph_id: GraphId) {}
+}
+
+#[derive(Debug)]
+struct NodeAccess {
+    node_idx: NodeIndex,
+    accesses: Box<[SubresourceAccess]>,
+}
+
+#[derive(Debug)]
+struct NodeAccessBuilder {
+    node_idx: NodeIndex,
+    accesses: Vec<SubresourceAccess>,
 }
 
 mod private {
@@ -1327,6 +1534,19 @@ impl DerefMut for ResourceMap {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.resources
     }
+}
+
+/// Specifies the state of a color or combined depth and stencil attachment image after graphic
+/// render pass framebuffer store operations.
+///
+/// Use this to specify the desired contents of any image after use in a pipeline command buffer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StoreOp {
+    /// The attachment will become undefined and reads will produce garbage data.
+    DontCare,
+
+    /// The attachment will be preserved in memory.
+    Store,
 }
 
 #[cfg(test)]
