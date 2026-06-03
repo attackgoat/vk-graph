@@ -4,7 +4,7 @@
 
 API docs: [`Graph::begin_cmd`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.begin_cmd),
 [`Command::record_cmd`](https://docs.rs/vk-graph/latest/vk_graph/cmd/struct.Command.html#method.record_cmd),
-[`Graph::into_submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.into_submission).
+[`Graph::finalize`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.finalize).
 
 - Built-in graph commands such as `copy_buffer`, `clear_color_image`, and `update_buffer`
 - Explicit command-buffer recording through `begin_cmd().record_cmd(...)`

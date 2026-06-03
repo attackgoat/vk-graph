@@ -131,7 +131,7 @@ fn exclusive_sum(
 
     let output_buf = graph.resource(output_buf).clone();
     let mut cmd = graph
-        .into_submission()
+        .finalize()
         .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();

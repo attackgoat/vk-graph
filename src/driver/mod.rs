@@ -1026,6 +1026,10 @@ fn merge_push_constant_ranges(pcr: &[vk::PushConstantRange]) -> Vec<vk::PushCons
     }
 }
 
+pub(super) const fn pack_queue(family: u32, index: u32) -> u64 {
+    (family as u64) << 32 | index as u64
+}
+
 pub(super) const fn pipeline_stage_access_flags(
     access_type: vk_sync::AccessType,
 ) -> (vk::PipelineStageFlags, vk::AccessFlags) {
@@ -1224,6 +1228,10 @@ pub(super) const fn pipeline_stage_access_flags(
         ty::MeshShaderWrite => (stage::MESH_SHADER_EXT, access::SHADER_WRITE),
         ty::TaskShaderWrite => (stage::TASK_SHADER_EXT, access::SHADER_WRITE),
     }
+}
+
+pub(super) const fn unpack_queue(val: u64) -> (u32, u32) {
+    ((val >> 32) as u32, val as u32)
 }
 
 /// Describes the general category of all graphics driver failure cases.

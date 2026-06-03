@@ -321,9 +321,9 @@ impl GraphicsPipeline {
     /// The correct pipeline stages will be enabled based on the provided shaders. See [Shader] for
     /// details on all available stages.
     ///
-    /// # Panics
-    ///
-    /// If shader code is not a multiple of four bytes.
+    /// `shaders` may contain pre-built [`Shader`] values or any inputs that can be converted into
+    /// them. Invalid shader data is returned as [`DriverError::InvalidData`] through the `Result`
+    /// instead of panicking.
     ///
     /// # Examples
     ///

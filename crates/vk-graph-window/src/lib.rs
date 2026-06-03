@@ -287,7 +287,11 @@ impl Window {
                 });
             }
 
-            fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ()) {
+            fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ()) {
+                info!("signal received, exiting event loop");
+
+                event_loop.exit();
+
                 if let Some(ActiveWindow { events, .. }) = self.active_window.as_mut() {
                     events.push(Event::UserEvent(event));
                 }
@@ -415,6 +419,15 @@ impl Window {
             primary_monitor: None,
         };
 
+        let proxy = self.read_only.event_loop.create_proxy();
+        if let Err(e) = ctrlc::set_handler(move || {
+            trace!("received SIGINT/SIGTERM");
+
+            let _ = proxy.send_event(());
+        }) {
+            warn!("failed to set Ctrl-C handler: {e}");
+        }
+
         self.read_only.event_loop.run_app(&mut app)?;
 
         if let Some(ActiveWindow {
@@ -486,9 +499,8 @@ impl WindowBuilder {
 
     /// Enables Vulkan graphics debugging layers.
     ///
-    /// _NOTE:_ Any validation warnings or errors will cause the current thread to park itself after
-    /// describing the error using the `log` crate. This makes it easy to attach a debugger and see
-    /// what is causing the issue directly.
+    /// _NOTE:_ Validation errors will only park the current thread for debugger attach when the
+    /// process is attached to an interactive terminal. Otherwise they continue after logging.
     ///
     /// ## Platform-specific
     ///

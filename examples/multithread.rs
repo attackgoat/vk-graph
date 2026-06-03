@@ -109,12 +109,20 @@ fn main() -> anyhow::Result<()> {
                 // Clear a new image to a cycling color
                 let mut graph = Graph::default();
                 let image = graph.bind_resource(
-                    pool.resource(ImageInfo::image_2d(
-                        10,
-                        10,
-                        vk::Format::R8G8B8A8_UNORM,
-                        vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
-                    ))
+                    pool.resource(
+                        ImageInfo::image_2d(
+                            10,
+                            10,
+                            vk::Format::R8G8B8A8_UNORM,
+                            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
+                        )
+                        .into_builder()
+                        .sharing_mode(if args.concurrent {
+                            vk::SharingMode::CONCURRENT
+                        } else {
+                            vk::SharingMode::EXCLUSIVE
+                        }),
+                    )
                     .unwrap(),
                 );
                 graph.clear_color_image(
@@ -131,7 +139,7 @@ fn main() -> anyhow::Result<()> {
 
                 // Submit on a queue we are reserving for only this thread to use
                 graph
-                    .into_submission()
+                    .finalize()
                     .queue_submit(&mut pool, secondary_queue_family_index, queue_index)
                     .unwrap();
 
@@ -264,7 +272,7 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
 
     // This copy happens in queue index 0!
     graph
-        .into_submission()
+        .finalize()
         .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     BitmapFont::new(device, font, [page_0])
@@ -275,4 +283,9 @@ struct Args {
     /// Enable Vulkan SDK validation layers
     #[arg(long)]
     debug: bool,
+
+    /// Use concurrent sharing mode (Vulkan implementation automatically transfers ownership)
+    /// instead of the default exclusive (vk-graph automatically tracks and transfers ownership)
+    #[arg(long)]
+    concurrent: bool,
 }

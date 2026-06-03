@@ -29,9 +29,9 @@ pub struct ComputePipeline {
 impl ComputePipeline {
     /// Creates a new compute pipeline on the given device.
     ///
-    /// # Panics
-    ///
-    /// If shader code is not a multiple of four bytes.
+    /// `shader` may be a pre-built [`Shader`] or any input that can be converted into one.
+    /// Invalid shader data is returned as [`DriverError::InvalidData`] through the `Result`
+    /// instead of panicking.
     ///
     /// # Examples
     ///

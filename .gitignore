@@ -5,3 +5,5 @@ imgui.ini
 libdxcompiler.so
 **/*.pak
 **/*.profraw
+fuzz/artifacts
+fuzz/corpus

@@ -2,42 +2,107 @@
 
 set -e
 
+TIMEOUT=
+
+if [ "$#" -gt 0 ]; then
+    if [ "$1" = "--timeout" ] && [ "$#" -ge 2 ]; then
+        TIMEOUT=$2
+        shift 2
+    else
+        echo "usage: $0 [--timeout SECONDS]" >&2
+        exit 1
+    fi
+fi
+
+xdotool=""
+if [ -n "$TIMEOUT" ]; then
+    if command -v xdotool >/dev/null 2>&1; then
+        xdotool="xdotool"
+    else
+        echo "run-all-examples: WARNING xdotool not found, using timeout fallback" >&2
+    fi
+fi
+
+close_windows() {
+    _children=$(pgrep -P "$1" 2>/dev/null || true)
+
+    # Try to close any X11 windows owned by PID $1, and ignores failure
+    "$xdotool" search --pid "$1" windowclose >/dev/null 2>&1 || true
+
+    for _ch in $_children; do
+        close_windows "$_ch"
+    done
+}
+
+ok_or_timeout() {
+    if "$@"; then
+        return 0
+    fi
+
+    _ret=$?
+    [ "$_ret" -eq 124 ] && return 0
+    return "$_ret"
+}
+
+run() {
+    # If there is no timeout we just run the command
+    if [ -z "$TIMEOUT" ]; then
+        "$@"
+        return
+    fi
+
+    if [ -n "$xdotool" ]; then
+        # Close the window with a window message after a timeout
+        "$@" &
+        _PID=$!
+        sleep "$TIMEOUT"
+        close_windows "$_PID"
+        ok_or_timeout wait "$_PID"
+    else
+        # Kill the process after a timeout
+        ok_or_timeout timeout "$TIMEOUT" "$@"
+    fi
+}
+
 # Run the "test" example first
 cargo run --example fuzzer
 
 # Run all regular examples, in debug mode, next
-cargo run -p vk-graph-window --example hello_world -- --debug
-cargo run --example app -- --debug
-cargo run --example aliasing -- --debug
-cargo run --example cpu_readback -- --debug
-cargo run --example subgroup_ops -- --debug
-cargo run --example bindless -- --debug
-cargo run --example image_sampler -- --debug
-cargo run --example image_sampler -- --debug --hlsl
-cargo run --example image_sampler -- --debug --separate
-cargo run --example image_sampler -- --debug --hlsl --separate
-cargo run --example vertex_layout -- --debug
-cargo run --example font_bmp -- --debug
-cargo run --example egui -- --debug
-cargo run --example imgui -- --debug
-cargo run --example min_max -- --debug
-cargo run --example mip_compute -- --debug
-cargo run --example mip_graphic -- --debug
-cargo run --example multithread -- --debug
-cargo run --example multipass -- --debug
-cargo run --example msaa -- --debug
-cargo run --example triangle -- --debug
-cargo run --example rt_triangle -- --debug
-cargo run --example ray_trace -- --debug
-cargo run --example transitions -- --debug
-cargo run --example vsm_omni -- --debug
-cargo run --example vsm_omni -- --debug --geometry-shader
-cargo run --example ray_omni -- --debug
-cargo run -p skeletal-anim -- --debug
+run cargo run -p vk-graph-window --example hello_world -- --debug
+run cargo run --example app -- --debug
+run cargo run --example aliasing -- --debug
+run cargo run --example cpu_readback -- --debug
+run cargo run --example subgroup_ops -- --debug
+run cargo run --example bindless -- --debug
+run cargo run --example image_sampler -- --debug
+run cargo run --example image_sampler -- --debug --hlsl
+run cargo run --example image_sampler -- --debug --separate
+run cargo run --example image_sampler -- --debug --hlsl --separate
+run cargo run --example vertex_layout -- --debug
+run cargo run --example font_bmp -- --debug
+run cargo run --example egui -- --debug
+run cargo run --example imgui -- --debug
+run cargo run --example min_max -- --debug
+run cargo run --example mip_compute -- --debug
+run cargo run --example mip_graphic -- --debug
+run cargo run --example multithread -- --debug
+run cargo run --example multithread -- --debug --concurrent
+run cargo run --example multithread --release
+run cargo run --example multithread --release -- --concurrent
+run cargo run --example multipass -- --debug
+run cargo run --example msaa -- --debug
+run cargo run --example triangle -- --debug
+run cargo run --example rt_triangle -- --debug
+run cargo run --example ray_trace -- --debug
+run cargo run --example transitions -- --debug
+run cargo run --example vsm_omni -- --debug
+run cargo run --example vsm_omni -- --debug --geometry-shader
+run cargo run --example ray_omni -- --debug
+run cargo run -p skeletal-anim -- --debug
 
 # Hot-reload examples
-cargo run -p vk-graph-hot --example glsl -- --debug
-cargo run -p vk-graph-hot --example hlsl -- --debug
+run cargo run -p vk-graph-hot --example glsl -- --debug
+run cargo run -p vk-graph-hot --example hlsl -- --debug
 
 # Run this one in release mode
-cargo run -p shader-toy --release -- --debug
+run cargo run -p shader-toy --release -- --debug

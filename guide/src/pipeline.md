@@ -77,7 +77,7 @@ graph
 # Ok(()) }
 ```
 
-A call to `Graph::end_cmd` is not requried. The _end-command_ method exists to support builder-style
+A call to `Graph::end_cmd` is not required. The _end-command_ method exists to support builder-style
 function-chaining. In the above example two commands are built and added to the graph.
 
 ## Shaders

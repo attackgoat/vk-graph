@@ -250,7 +250,7 @@ impl ImageLoader {
         let image = graph.resource(image).clone();
 
         graph
-            .into_submission()
+            .finalize()
             .queue_submit(&mut self.pool, queue_family_index, queue_index)?;
 
         Ok(image)

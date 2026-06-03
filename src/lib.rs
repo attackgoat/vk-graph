@@ -18,8 +18,7 @@ pub mod cmd;
 pub mod driver;
 pub mod node;
 pub mod pool;
-
-mod submission;
+pub mod submission;
 
 use std::sync::Arc;
 
@@ -33,9 +32,8 @@ use crate::{
         swapchain::SwapchainImage,
     },
     pool::Lease,
+    submission::Submission,
 };
-
-pub use self::submission::Submission;
 
 use {
     self::{
@@ -75,6 +73,52 @@ type GraphId = u64;
 
 #[cfg(feature = "checked")]
 static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Default)]
+struct ExecutionAccesses {
+    entries: Vec<(NodeIndex, Vec<SubresourceAccess>)>,
+    lookup: HashMap<NodeIndex, usize>,
+}
+
+impl ExecutionAccesses {
+    fn contains(&self, node_idx: NodeIndex) -> bool {
+        self.lookup.contains_key(&node_idx)
+    }
+
+    fn get(&self, node_idx: NodeIndex) -> Option<&[SubresourceAccess]> {
+        self.lookup
+            .get(&node_idx)
+            .map(|&entry_idx| self.entries[entry_idx].1.as_slice())
+    }
+
+    fn get_mut(&mut self, node_idx: &NodeIndex) -> Option<&mut [SubresourceAccess]> {
+        self.lookup
+            .get(node_idx)
+            .copied()
+            .map(|entry_idx| self.entries[entry_idx].1.as_mut_slice())
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (NodeIndex, &[SubresourceAccess])> + '_ {
+        self.entries
+            .iter()
+            .map(|(node_idx, accesses)| (*node_idx, accesses.as_slice()))
+    }
+
+    fn push(&mut self, node_idx: NodeIndex, access: SubresourceAccess) {
+        if let Some(&entry_idx) = self.lookup.get(&node_idx) {
+            self.entries[entry_idx].1.push(access);
+        } else {
+            self.lookup.insert(node_idx, self.entries.len());
+            self.entries.push((node_idx, vec![access]));
+        }
+    }
+}
+
+impl Debug for ExecutionAccesses {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.entries.fmt(f)
+    }
+}
 
 #[derive(Debug)]
 #[doc(hidden)]
@@ -213,7 +257,7 @@ impl Attachment {
 
 #[derive(Default)]
 struct Execution {
-    accesses: HashMap<NodeIndex, Vec<SubresourceAccess>>,
+    accesses: ExecutionAccesses,
     bindings: BTreeMap<Binding, (NodeIndex, ViewInfo)>,
 
     correlated_view_mask: u32,
@@ -986,7 +1030,7 @@ impl Graph {
 
         for (pass_idx, pass) in self.cmds.iter().enumerate() {
             for exec in pass.execs.iter() {
-                if exec.accesses.contains_key(&node_idx) {
+                if exec.accesses.contains(node_idx) {
                     return Some(pass_idx);
                 }
             }
@@ -998,7 +1042,7 @@ impl Graph {
     /// Finalizes the graph and provides an object with functions for submitting the resulting
     /// commands.
     #[profiling::function]
-    pub fn into_submission(mut self) -> Submission {
+    pub fn finalize(mut self) -> Submission {
         // The final execution of each pass has no function
         for cmd in &mut self.cmds {
             debug_assert!(cmd.expect_last_exec().func.is_none());
@@ -1009,8 +1053,22 @@ impl Graph {
         Submission::new(self)
     }
 
-    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given bound resource node represents.
+    /// Returns a borrow of the Vulkan resource represented by `resource_node`.
+    ///
+    /// The exact return type depends on the node type:
+    ///
+    /// - Concrete nodes such as [`BufferNode`] and [`ImageNode`] return the exact stored handle
+    ///   type, such as
+    ///   `&Arc<Buffer>` or `&Arc<Image>`.
+    /// - Erased nodes such as [`AnyBufferNode`] and [`AnyImageNode`] return a borrow of the
+    ///   underlying resource,
+    ///   such as `&Buffer` or `&Image`.
+    ///
+    /// This distinction lets erased node enums unify owned, leased, and swapchain-backed resources
+    /// behind a single resource view.
+    ///
+    /// Node ownership is validated here when the `checked` feature is enabled. With `checked`
+    /// disabled, callers must ensure `resource_node` came from this graph.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
         N: Node,

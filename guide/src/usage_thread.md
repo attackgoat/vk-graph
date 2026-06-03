@@ -5,9 +5,11 @@ Resources are externally synchronized, and mutable graph-building APIs such as `
 require exclusive access to the `Graph` itself.
 
 API docs: [`Submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html),
+[`RecordedSubmission`](https://docs.rs/vk-graph/latest/vk_graph/struct.RecordedSubmission.html),
 [`Submission::queue_submit`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_submit),
-[`Submission::queue_cmds_for_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_cmds_for_resource),
-[`Submission::queue_cmds_for_resource_dependencies`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_cmds_for_resource_dependencies),
+[`Submission::record_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.record_resource),
+[`Submission::record_resource_dependencies`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.record_resource_dependencies),
+[`RecordedSubmission::queue_submit`](https://docs.rs/vk-graph/latest/vk_graph/struct.RecordedSubmission.html#method.queue_submit),
 [`CommandBuffer::has_executed`](https://docs.rs/vk-graph/latest/vk_graph/driver/cmd_buf/struct.CommandBuffer.html#method.has_executed).
 
 More precisely, `vk-graph` stores the most recent access type of each subresource of a resource. As
@@ -17,8 +19,9 @@ updated.
 Resource state is updated during the following function calls:
 
 - `Submission::queue_submit`
-- `Submission::queue_cmds_for_resource`
-- `Submission::queue_cmds_for_resource_dependencies`
+- `Submission::record_resource`
+- `Submission::record_resource_dependencies`
+- `RecordedSubmission::queue_submit`
 
 > [!CAUTION]
 > Do not call any `Submission` recording or queue function that accesses buffers, images, or acceleration
@@ -45,7 +48,7 @@ For example, there is no race condition or thread contention caused by using the
 two threads.[^threads] In fact, there is no runtime overhead at all from this.
 
 Additionally, it is safe to build `Graph` instances, bind resources, record command buffers, and
-call `Graph::into_submission` at *any* time on *any* thread, as long as each `Graph` instance is not
+call `Graph::finalize` at *any* time on *any* thread, as long as each `Graph` instance is not
 mutably shared across threads at the same time.
 
 These patterns are safe:

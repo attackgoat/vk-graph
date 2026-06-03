@@ -1,3 +1,22 @@
+//! Submission and recording types.
+//!
+//! This module contains the execution-facing types produced by [`Graph::finalize`].
+//!
+//! Typical usage starts with a [`Submission`], which represents a finalized graph that has not yet
+//! been bound to a command buffer:
+//!
+//! - Use [`Submission::queue_submit`] for the one-shot path that allocates, records, and submits a
+//!   command buffer internally.
+//! - Use [`Submission::record`], [`Submission::record_resource`], or
+//!   [`Submission::record_resource_dependencies`] to bind the submission to an existing command
+//!   buffer and obtain a [`RecordedSubmission`].
+//!
+//! A [`RecordedSubmission`] keeps the remaining graph work paired with the command buffer it was
+//! recorded into. This typestate prevents recording with one command buffer and accidentally
+//! submitting with another.
+//!
+//! [`Graph::finalize`]: crate::Graph::finalize
+
 use {
     super::{
         AnyResource, Attachment, CommandData, ExecutionPipeline, Graph, Node, NodeIndex,
@@ -15,13 +34,15 @@ use {
             format_aspect_mask,
             graphic::{DepthStencilInfo, GraphicsPipeline},
             image::{DenseAccess, Image},
-            initial_image_layout_access, is_read_access, is_write_access,
+            initial_image_layout_access, is_read_access, is_write_access, pack_queue,
             pipeline_stage_access_flags,
             render_pass::{RenderPass, RenderPassInfo},
+            unpack_queue,
         },
         pool::{Lease, Pool},
     },
     ash::vk,
+    fixedbitset::FixedBitSet,
     log::{
         Level::{Debug, Trace},
         debug, log_enabled, trace, warn,
@@ -32,6 +53,7 @@ use {
         iter::repeat_n,
         ops::Range,
         slice,
+        sync::atomic::Ordering,
     },
     vk_sync::{
         AccessType, BufferBarrier, GlobalBarrier, ImageBarrier, ImageLayout, cmd::pipeline_barrier,
@@ -49,46 +71,96 @@ const fn image_access_layout(access: AccessType) -> ImageLayout {
     }
 }
 
-#[derive(Default)]
-struct AccessCache {
-    accesses: Vec<bool>,
-    binding_count: usize,
-    read_count: Vec<usize>,
-    reads: Vec<usize>,
+/// Maps the current access type to the concrete Vulkan image layout,
+/// replicating the vk_sync layout-selection logic used during barrier construction.
+fn access_type_to_layout(access: AccessType) -> vk::ImageLayout {
+    match access {
+        // ImageLayout::Optimal → use the layout from AccessInfo
+        AccessType::ColorAttachmentRead
+        | AccessType::ColorAttachmentReadWrite
+        | AccessType::ColorAttachmentWrite => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        AccessType::DepthStencilAttachmentRead => vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        AccessType::DepthStencilAttachmentReadWrite | AccessType::DepthStencilAttachmentWrite => {
+            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        }
+        AccessType::DepthAttachmentWriteStencilReadOnly => {
+            vk::ImageLayout::DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL
+        }
+        AccessType::StencilAttachmentWriteDepthReadOnly => {
+            vk::ImageLayout::DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL
+        }
+        AccessType::TransferRead => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        AccessType::TransferWrite => vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        // Shader reads of sampled images / input attachments
+        AccessType::VertexShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::FragmentShaderReadColorInputAttachment
+        | AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::TessellationControlShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::GeometryShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::MeshShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::TaskShaderReadSampledImageOrUniformTexelBuffer => {
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        }
+        AccessType::FragmentShaderReadDepthStencilInputAttachment => {
+            vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        }
+        // ImageLayout::General → GENERAL (or PRESENT_SRC_KHR for Present)
+        AccessType::Present => vk::ImageLayout::PRESENT_SRC_KHR,
+        // Everything else → GENERAL (safe fallback, covers ComputeShaderWrite,
+        // AnyShaderWrite, HostRead/Write, etc.)
+        _ => vk::ImageLayout::GENERAL,
+    }
 }
 
-impl AccessCache {
-    /// Finds the unique indexes of the node bindings which a given pass reads. Results are
-    /// returned in the opposite order the dependencies must be resolved in.
-    ///
-    /// Dependent upon means that the node is read from the pass.
+struct ReleaseGroup {
+    old_fam: u32,
+    old_idx: u32,
+    images: Vec<(vk::Image, AccessType, vk::ImageSubresourceRange)>,
+}
+
+#[derive(Debug)]
+struct ReleaseBundle {
+    #[allow(dead_code)]
+    cmd_buf: Lease<CommandBuffer>,
+
+    semaphore: vk::Semaphore,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PendingTransfer {
+    src_access: AccessType,
+    src_queue_family_index: u32,
+    src_queue_index: u32,
+    dst_queue_family_index: u32,
+}
+
+#[derive(Clone, Default)]
+struct AccessIndex {
+    passes_by_node: Vec<Vec<usize>>,
+    read_nodes_by_pass: Vec<Vec<usize>>,
+}
+
+impl AccessIndex {
     #[profiling::function]
     fn dependent_nodes(&self, pass_idx: usize) -> impl ExactSizeIterator<Item = usize> + '_ {
-        let pass_start = pass_idx * self.binding_count;
-        let pass_end = pass_start + self.read_count[pass_idx];
-        self.reads[pass_start..pass_end].iter().copied()
+        self.read_nodes_by_pass[pass_idx].iter().copied()
     }
 
-    /// Finds the unique indexes of the passes which write to a given node; with the restriction
-    /// to not inspect later passes. Results are returned in the opposite order the dependencies
-    /// must be resolved in.
-    ///
-    /// Dependent upon means that the pass writes to the node.
     #[profiling::function]
     fn dependent_passes(
         &self,
         node_idx: usize,
         end_pass_idx: usize,
     ) -> impl Iterator<Item = usize> + '_ {
-        self.accesses[node_idx..end_pass_idx * self.binding_count]
-            .iter()
-            .step_by(self.binding_count)
-            .enumerate()
-            .rev()
-            .filter_map(|(pass_idx, write)| write.then_some(pass_idx))
+        let passes = &self.passes_by_node[node_idx];
+        let end_idx = passes.partition_point(|&pass_idx| pass_idx < end_pass_idx);
+
+        passes[..end_idx].iter().rev().copied()
     }
 
-    /// Returns the unique indexes of the passes which are dependent on the given pass.
     #[profiling::function]
     fn interdependent_passes(
         &self,
@@ -100,53 +172,94 @@ impl AccessCache {
     }
 
     fn update(&mut self, graph: &Graph, end_pass_idx: usize) {
-        self.binding_count = graph.resources.len();
+        let binding_count = graph.resources.len();
 
-        let cache_len = self.binding_count * end_pass_idx;
+        self.passes_by_node.clear();
+        self.passes_by_node.resize_with(binding_count, Vec::new);
 
-        self.accesses.truncate(cache_len);
-        self.accesses.fill(false);
-        self.accesses.resize(cache_len, false);
-
-        self.read_count.clear();
-
-        self.reads.truncate(cache_len);
-        self.reads.fill(usize::MAX);
-        self.reads.resize(cache_len, usize::MAX);
+        self.read_nodes_by_pass.clear();
+        self.read_nodes_by_pass.resize_with(end_pass_idx, Vec::new);
 
         thread_local! {
-            static NODES: RefCell<Vec<bool>> = Default::default();
+            static SEEN_NODES: RefCell<(Vec<bool>, Vec<bool>)> = Default::default();
         }
 
-        NODES.with_borrow_mut(|nodes| {
-            nodes.truncate(self.binding_count);
-            nodes.fill(true);
-            nodes.resize(self.binding_count, true);
+        SEEN_NODES.with_borrow_mut(|(seen_nodes, seen_reads)| {
+            seen_nodes.truncate(binding_count);
+            seen_nodes.fill(false);
+            seen_nodes.resize(binding_count, false);
+
+            seen_reads.truncate(binding_count);
+            seen_reads.fill(false);
+            seen_reads.resize(binding_count, false);
 
             for (pass_idx, pass) in graph.cmds[0..end_pass_idx].iter().enumerate() {
-                let pass_start = pass_idx * self.binding_count;
-                let mut read_count = 0;
+                let read_nodes = &mut self.read_nodes_by_pass[pass_idx];
 
-                for (&node_idx, accesses) in pass.execs.iter().flat_map(|exec| exec.accesses.iter())
+                for (node_idx, accesses) in pass.execs.iter().flat_map(|exec| exec.accesses.iter())
                 {
-                    self.accesses[pass_start + node_idx] = true;
+                    if !seen_nodes[node_idx] {
+                        self.passes_by_node[node_idx].push(pass_idx);
+                        seen_nodes[node_idx] = true;
+                    }
 
-                    if nodes[node_idx]
+                    if !seen_reads[node_idx]
                         && is_read_access(accesses.first().expect("missing resource access").access)
                     {
-                        self.reads[pass_start + read_count] = node_idx;
-                        nodes[node_idx] = false;
-                        read_count += 1;
+                        read_nodes.push(node_idx);
+                        seen_reads[node_idx] = true;
                     }
                 }
 
-                if pass_idx + 1 < end_pass_idx {
-                    nodes.fill(true);
-                }
-
-                self.read_count.push(read_count);
+                seen_nodes.fill(false);
+                seen_reads.fill(false);
             }
         });
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AccessInfo {
+    access: vk::AccessFlags,
+    stages: vk::PipelineStageFlags,
+}
+
+impl AccessInfo {
+    fn new(access: AccessType) -> Self {
+        let (mut stages, access) = pipeline_stage_access_flags(access);
+        if stages.contains(vk::PipelineStageFlags::ALL_COMMANDS) {
+            stages |= vk::PipelineStageFlags::ALL_GRAPHICS;
+            stages &= !vk::PipelineStageFlags::ALL_COMMANDS;
+        }
+
+        Self { access, stages }
+    }
+}
+
+#[derive(Default)]
+struct RenderPassAccessHistory {
+    accesses_by_node: Vec<Vec<AccessInfo>>,
+}
+
+impl RenderPassAccessHistory {
+    fn new(node_count: usize) -> Self {
+        let mut accesses_by_node = Vec::with_capacity(node_count);
+        accesses_by_node.resize_with(node_count, Vec::new);
+
+        Self { accesses_by_node }
+    }
+
+    fn accesses(&self, node_idx: usize) -> &[AccessInfo] {
+        &self.accesses_by_node[node_idx]
+    }
+
+    fn record_pass(&mut self, pass: &CommandData) {
+        for exec in &pass.execs {
+            for (node_idx, accesses) in exec.accesses.iter() {
+                self.accesses_by_node[node_idx]
+                    .extend(accesses.iter().map(|access| AccessInfo::new(access.access)));
+            }
+        }
     }
 }
 
@@ -191,16 +304,34 @@ impl Drop for PhysicalPass {
     }
 }
 
-/// A structure which can optimize and submit [`Graph`] instances.
+/// A finalized graph execution plan.
 ///
-/// This pattern was derived from:
+/// `Submission` owns the remaining commands of a [`Graph`] after [`Graph::finalize`] has ended the
+/// graph-building phase. It supports two execution styles:
 ///
-/// <http://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/>
-/// <https://github.com/EmbarkStudios/kajiya>
+/// - [`Submission::queue_submit`] for a one-shot submission path.
+/// - [`Submission::record`], [`Submission::record_resource`], or
+///   [`Submission::record_resource_dependencies`] for explicit command-buffer recording, returning
+///   a [`RecordedSubmission`].
 #[derive(Debug)]
 pub struct Submission {
+    exclusive_image_indices: FixedBitSet,
     graph: Graph,
     physical_passes: Vec<PhysicalPass>,
+    pending_transfers: HashMap<vk::Image, PendingTransfer>,
+}
+
+/// A [`Submission`] bound to a specific command buffer for explicit recording and submission.
+#[derive(Debug)]
+#[read_only::cast]
+pub struct RecordedSubmission<'a> {
+    /// The command buffer bound to this recorded submission.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub cmd_buf: &'a mut CommandBuffer,
+
+    submission: Submission,
 }
 
 impl Submission {
@@ -208,9 +339,52 @@ impl Submission {
         let physical_passes = Vec::with_capacity(graph.cmds.len());
 
         Self {
+            exclusive_image_indices: FixedBitSet::with_capacity(graph.resources.len()),
             graph,
             physical_passes,
+            pending_transfers: HashMap::new(),
         }
+    }
+
+    fn is_framebuffer_space(stages: vk::PipelineStageFlags) -> bool {
+        stages.intersects(
+            vk::PipelineStageFlags::FRAGMENT_SHADER
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS
+                | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        )
+    }
+
+    fn record_subpass_dependency(
+        dependencies: &mut BTreeMap<(usize, usize), SubpassDependency>,
+        src_subpass: usize,
+        dst_subpass: usize,
+        prev: AccessInfo,
+        dst_stage_mask: vk::PipelineStageFlags,
+        curr: &mut AccessInfo,
+    ) -> bool {
+        let common_stages = curr.stages & prev.stages;
+        if common_stages.is_empty() {
+            return false;
+        }
+
+        let dep = dependencies
+            .entry((src_subpass, dst_subpass))
+            .or_insert_with(|| SubpassDependency::new(src_subpass as _, dst_subpass as _));
+
+        dep.src_stage_mask |= common_stages;
+        dep.src_access_mask |= prev.access;
+        dep.dst_stage_mask |= dst_stage_mask;
+        dep.dst_access_mask |= curr.access;
+
+        if Self::is_framebuffer_space(prev.stages | curr.stages) {
+            dep.dependency_flags |= vk::DependencyFlags::BY_REGION;
+        }
+
+        curr.stages &= !common_stages;
+        curr.access &= !prev.access;
+
+        curr.stages.is_empty()
     }
 
     #[profiling::function]
@@ -707,12 +881,8 @@ impl Submission {
         }
     }
 
-    /// Returns `true` when all recorded passes have been submitted to a driver command buffer.
-    ///
-    /// A fully-resolved graph contains no additional work and may be discarded, although doing so
-    /// will stall the GPU while the fences are waited on. It is preferrable to wait a few frame so
-    /// that the fences will have already been signalled.
-    pub fn is_submitted(&self) -> bool {
+    /// Returns `true` when this submission contains no more commands to record.
+    pub fn is_empty(&self) -> bool {
         self.graph.cmds.is_empty()
     }
 
@@ -829,6 +999,7 @@ impl Submission {
         &self,
         pool: &mut P,
         pass_idx: usize,
+        external_access_history: &RenderPassAccessHistory,
     ) -> Result<Lease<RenderPass>, DriverError>
     where
         P: Pool<RenderPassInfo, RenderPass>,
@@ -1241,156 +1412,64 @@ impl Submission {
         let dependencies =
             {
                 let mut dependencies = BTreeMap::new();
+                let mut pass_access_history = HashMap::<NodeIndex, Vec<(usize, AccessInfo)>>::new();
+
                 for (exec_idx, exec) in pass.execs.iter().enumerate() {
-                    // Check accesses
                     'accesses: for (node_idx, accesses) in exec.accesses.iter() {
-                        let (mut curr_stages, mut curr_access) = pipeline_stage_access_flags(
+                        let mut curr = AccessInfo::new(
                             accesses.first().expect("missing resource access").access,
                         );
-                        if curr_stages.contains(vk::PipelineStageFlags::ALL_COMMANDS) {
-                            curr_stages |= vk::PipelineStageFlags::ALL_GRAPHICS;
-                            curr_stages &= !vk::PipelineStageFlags::ALL_COMMANDS;
-                        }
 
-                        // First look for through earlier executions of this pass (in reverse order)
-                        for (prev_exec_idx, prev_exec) in
-                            pass.execs[0..exec_idx].iter().enumerate().rev()
-                        {
-                            if let Some(accesses) = prev_exec.accesses.get(node_idx) {
-                                for &SubresourceAccess { access, .. } in accesses {
-                                    // Is this previous execution access dependent on anything the
-                                    // current execution access
-                                    // is dependent upon?
-                                    let (mut prev_stages, prev_access) =
-                                        pipeline_stage_access_flags(access);
-                                    if prev_stages.contains(vk::PipelineStageFlags::ALL_COMMANDS) {
-                                        prev_stages |= vk::PipelineStageFlags::ALL_GRAPHICS;
-                                        prev_stages &= !vk::PipelineStageFlags::ALL_COMMANDS;
-                                    }
-
-                                    let common_stages = curr_stages & prev_stages;
-                                    if common_stages.is_empty() {
-                                        // No common dependencies
-                                        continue;
-                                    }
-
-                                    let dep = dependencies
-                                        .entry((prev_exec_idx, exec_idx))
-                                        .or_insert_with(|| {
-                                            SubpassDependency::new(
-                                                prev_exec_idx as _,
-                                                exec_idx as _,
-                                            )
-                                        });
-
-                                    // Wait for ...
-                                    dep.src_stage_mask |= common_stages;
-                                    dep.src_access_mask |= prev_access;
-
-                                    // ... before we:
-                                    dep.dst_stage_mask |= curr_stages;
-                                    dep.dst_access_mask |= curr_access;
-
-                                    // Do the source and destination stage masks both include
-                                    // framebuffer-space stages?
-                                    if (prev_stages | curr_stages).intersects(
-                                        vk::PipelineStageFlags::FRAGMENT_SHADER
-                                            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                                            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS
-                                            | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                                    ) {
-                                        dep.dependency_flags |= vk::DependencyFlags::BY_REGION;
-                                    }
-
-                                    curr_stages &= !common_stages;
-                                    curr_access &= !prev_access;
-
-                                    // Have we found all dependencies for this stage? If so no need
-                                    // to check external passes
-                                    if curr_stages.is_empty() {
-                                        continue 'accesses;
-                                    }
+                        if let Some(prev_accesses) = pass_access_history.get(&node_idx) {
+                            for &(prev_exec_idx, prev) in prev_accesses.iter().rev() {
+                                if Self::record_subpass_dependency(
+                                    &mut dependencies,
+                                    prev_exec_idx,
+                                    exec_idx,
+                                    prev,
+                                    curr.stages,
+                                    &mut curr,
+                                ) {
+                                    continue 'accesses;
                                 }
                             }
                         }
 
-                        // Second look in previous passes of the entire render graph
-                        for prev_subpass in self.graph.cmds[0..pass_idx]
-                            .iter()
-                            .rev()
-                            .flat_map(|pass| pass.execs.iter().rev())
-                        {
-                            if let Some(accesses) = prev_subpass.accesses.get(node_idx) {
-                                for &SubresourceAccess { access, .. } in accesses {
-                                    // Is this previous subpass access dependent on anything the
-                                    // current subpass access is
-                                    // dependent upon?
-                                    let (prev_stages, prev_access) =
-                                        pipeline_stage_access_flags(access);
-                                    let common_stages = curr_stages & prev_stages;
-                                    if common_stages.is_empty() {
-                                        // No common dependencies
-                                        continue;
-                                    }
-
-                                    let dep = dependencies
-                                        .entry((vk::SUBPASS_EXTERNAL as _, exec_idx))
-                                        .or_insert_with(|| {
-                                            SubpassDependency::new(
-                                                vk::SUBPASS_EXTERNAL as _,
-                                                exec_idx as _,
-                                            )
-                                        });
-
-                                    // Wait for ...
-                                    dep.src_stage_mask |= common_stages;
-                                    dep.src_access_mask |= prev_access;
-
-                                    // ... before we:
-                                    dep.dst_stage_mask |=
-                                        curr_stages.min(vk::PipelineStageFlags::ALL_GRAPHICS);
-                                    dep.dst_access_mask |= curr_access;
-
-                                    // If the source and destination stage masks both include
-                                    // framebuffer-space stages then we need the BY_REGION flag
-                                    if (prev_stages | curr_stages).intersects(
-                                        vk::PipelineStageFlags::FRAGMENT_SHADER
-                                            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                                            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS
-                                            | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                                    ) {
-                                        dep.dependency_flags |= vk::DependencyFlags::BY_REGION;
-                                    }
-
-                                    curr_stages &= !common_stages;
-                                    curr_access &= !prev_access;
-
-                                    // If we found all dependencies for this stage there is no need
-                                    // to check external passes
-                                    if curr_stages.is_empty() {
-                                        continue 'accesses;
-                                    }
-                                }
+                        for &prev in external_access_history.accesses(node_idx).iter().rev() {
+                            if Self::record_subpass_dependency(
+                                &mut dependencies,
+                                vk::SUBPASS_EXTERNAL as usize,
+                                exec_idx,
+                                prev,
+                                curr.stages.min(vk::PipelineStageFlags::ALL_GRAPHICS),
+                                &mut curr,
+                            ) {
+                                continue 'accesses;
                             }
                         }
 
-                        // Fall back to external dependencies
-                        if !curr_stages.is_empty() {
+                        if !curr.stages.is_empty() {
                             let dep = dependencies
-                                .entry((vk::SUBPASS_EXTERNAL as _, exec_idx))
+                                .entry((vk::SUBPASS_EXTERNAL as usize, exec_idx))
                                 .or_insert_with(|| {
-                                    SubpassDependency::new(vk::SUBPASS_EXTERNAL as _, exec_idx as _)
+                                    SubpassDependency::new(vk::SUBPASS_EXTERNAL, exec_idx as _)
                                 });
 
-                            // Wait for ...
-                            dep.src_stage_mask |= curr_stages;
-                            dep.src_access_mask |= curr_access;
-
-                            // ... before we:
+                            dep.src_stage_mask |= curr.stages;
+                            dep.src_access_mask |= curr.access;
                             dep.dst_stage_mask |= vk::PipelineStageFlags::TOP_OF_PIPE;
                             dep.dst_access_mask =
                                 vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE;
                         }
+                    }
+
+                    for (node_idx, accesses) in exec.accesses.iter() {
+                        let prev_accesses = pass_access_history.entry(node_idx).or_default();
+                        prev_accesses.extend(
+                            accesses
+                                .iter()
+                                .map(|access| (exec_idx, AccessInfo::new(access.access))),
+                        );
                     }
 
                     // Look for attachments of this exec being read or written in other execs of the
@@ -1702,11 +1781,14 @@ impl Submission {
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
     {
+        let mut render_pass_access_history =
+            RenderPassAccessHistory::new(self.graph.resources.len());
+
         for pass_idx in schedule.iter().copied() {
             // At the time this function runs the pass will already have been optimized into a
             // larger pass made out of anything that might have been merged into it - so we
             // only care about one pass at a time here
-            let pass = &mut self.graph.cmds[pass_idx];
+            let pass = &self.graph.cmds[pass_idx];
 
             trace!("requesting [{pass_idx}: {}]", pass.name());
 
@@ -1773,10 +1855,12 @@ impl Submission {
                 .map(|pipeline| pipeline.is_graphic())
                 .unwrap_or_default()
             {
-                Some(self.lease_render_pass(pool, pass_idx)?)
+                Some(self.lease_render_pass(pool, pass_idx, &render_pass_access_history)?)
             } else {
                 None
             };
+
+            render_pass_access_history.record_pass(pass);
 
             self.physical_passes.push(PhysicalPass {
                 descriptor_pool,
@@ -1903,15 +1987,15 @@ impl Submission {
     /// Note that this value must be retrieved before resolving a node as there will be no
     /// data left to inspect afterwards!
     #[profiling::function]
-    pub fn node_stages(&self, node: impl Node) -> vk::PipelineStageFlags {
-        self.graph.assert_node_owner(&node);
+    pub fn resource_stages(&self, resource_node: impl Node) -> vk::PipelineStageFlags {
+        self.graph.assert_node_owner(&resource_node);
 
-        let node_idx = node.index();
+        let node_idx = resource_node.index();
         let mut res = Default::default();
 
         'pass: for pass in self.graph.cmds.iter() {
             for exec in pass.execs.iter() {
-                if exec.accesses.contains_key(&node_idx) {
+                if exec.accesses.contains(node_idx) {
                     res |= pass
                         .execs
                         .iter()
@@ -1939,7 +2023,8 @@ impl Submission {
     fn record_execution_barriers<'a>(
         cmd_buf: &CommandBuffer,
         resources: &mut [AnyResource],
-        accesses: impl Iterator<Item = (&'a NodeIndex, &'a Vec<SubresourceAccess>)>,
+        accesses: impl Iterator<Item = (NodeIndex, &'a [SubresourceAccess])>,
+        pending_transfers: &HashMap<vk::Image, PendingTransfer>,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
         thread_local! {
@@ -1982,7 +2067,7 @@ impl Submission {
             // the render pass request function)
 
             for (node_idx, accesses) in accesses {
-                let resource = &resources[*node_idx];
+                let resource = &resources[node_idx];
 
                 match resource {
                     AnyResource::AccelerationStructure(..)
@@ -2167,8 +2252,16 @@ impl Submission {
                         previous_layout: image_access_layout(*prev_access),
                         discard_contents: *prev_access == AccessType::Nothing
                             || is_write_access(*next_access),
-                        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                        src_queue_family_index: pending_transfers
+                            .get(&image)
+                            .map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                                transfer.src_queue_family_index
+                            }),
+                        dst_queue_family_index: pending_transfers
+                            .get(&image)
+                            .map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                                transfer.dst_queue_family_index
+                            }),
                         image,
                         range,
                     }
@@ -2190,6 +2283,7 @@ impl Submission {
         cmd_buf: &CommandBuffer,
         resources: &mut [AnyResource],
         pass: &mut CommandData,
+        pending_transfers: &HashMap<vk::Image, PendingTransfer>,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
         thread_local! {
@@ -2213,11 +2307,7 @@ impl Submission {
             tls.images.clear();
             tls.initial_layouts.clear();
 
-            for (node_idx, accesses) in pass
-                .execs
-                .iter_mut()
-                .flat_map(|exec| exec.accesses.iter())
-                .map(|(node_idx, accesses)| (*node_idx, accesses))
+            for (node_idx, accesses) in pass.execs.iter_mut().flat_map(|exec| exec.accesses.iter())
             {
                 debug_assert!(resources.get(node_idx).is_some());
 
@@ -2357,8 +2447,16 @@ impl Submission {
                         previous_accesses: slice::from_ref(prev_access),
                         previous_layout: image_access_layout(*prev_access),
                         discard_contents,
-                        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                        src_queue_family_index: pending_transfers
+                            .get(image)
+                            .map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                                transfer.src_queue_family_index
+                            }),
+                        dst_queue_family_index: pending_transfers
+                            .get(image)
+                            .map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                                transfer.dst_queue_family_index
+                            }),
                         image: *image,
                         range: *range,
                     }
@@ -2391,12 +2489,65 @@ impl Submission {
         }
 
         SCHEDULE.with_borrow_mut(|schedule| {
-            schedule.access_cache.update(&self.graph, end_pass_idx);
+            schedule.access_index.update(&self.graph, end_pass_idx);
             schedule.passes.clear();
 
             self.schedule_node_passes(node_idx, end_pass_idx, schedule);
             self.record_scheduled_passes(pool, cmd_buf, schedule, end_pass_idx)
         })
+    }
+
+    fn track_pending_transfers(&mut self, schedule: &Schedule, queue_family_index: u32) {
+        for pass_idx in schedule.passes.iter().copied() {
+            let pass = &self.graph.cmds[pass_idx];
+
+            for (node_idx, accesses) in pass.execs.iter().flat_map(|exec| exec.accesses.iter()) {
+                if !accesses
+                    .iter()
+                    .any(|access| matches!(access.subresource, SubresourceRange::Image(..)))
+                {
+                    continue;
+                }
+
+                let Some(image) = self.graph.resources[node_idx].as_image() else {
+                    continue;
+                };
+
+                if image.info.sharing_mode == vk::SharingMode::CONCURRENT {
+                    continue;
+                }
+
+                self.exclusive_image_indices.insert(node_idx);
+
+                if image.current_access() == AccessType::Nothing {
+                    continue;
+                }
+
+                let (src_queue_family_index, src_queue_index) =
+                    unpack_queue(image.queue_packed.load(Ordering::Acquire));
+
+                if src_queue_family_index == queue_family_index {
+                    continue;
+                }
+
+                let transfer = PendingTransfer {
+                    src_access: image.current_access(),
+                    src_queue_family_index,
+                    src_queue_index,
+                    dst_queue_family_index: queue_family_index,
+                };
+
+                self.pending_transfers
+                    .entry(image.handle)
+                    .and_modify(|existing| {
+                        debug_assert_eq!(
+                            *existing, transfer,
+                            "conflicting queue transfer recorded for image"
+                        );
+                    })
+                    .or_insert(transfer);
+            }
+        }
     }
 
     #[profiling::function]
@@ -2425,9 +2576,10 @@ impl Submission {
         );
 
         // Optimize the schedule; requesting the required resources it needs
-        Self::reorder_scheduled_passes(schedule, end_pass_idx);
+        schedule.reorder_passes(end_pass_idx);
         self.merge_scheduled_passes(&mut schedule.passes);
         self.lease_scheduled_resources(pool, &schedule.passes)?;
+        self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index);
 
         #[cfg(feature = "checked")]
         let graph_id = self.graph.graph_id();
@@ -2447,7 +2599,12 @@ impl Submission {
             }
 
             let render_area = if is_graphic {
-                Self::record_image_layout_transitions(cmd_buf, &mut self.graph.resources, pass);
+                Self::record_image_layout_transitions(
+                    cmd_buf,
+                    &mut self.graph.resources,
+                    pass,
+                    &self.pending_transfers,
+                );
 
                 let render_area = vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
@@ -2524,6 +2681,7 @@ impl Submission {
                         cmd_buf,
                         &mut self.graph.resources,
                         exec.accesses.iter(),
+                        &self.pending_transfers,
                     );
                 }
 
@@ -2630,65 +2788,6 @@ impl Submission {
         vk::Extent2D { height, width }
     }
 
-    #[profiling::function]
-    fn reorder_scheduled_passes(schedule: &mut Schedule, end_pass_idx: usize) {
-        // It must be a party
-        if schedule.passes.len() < 3 {
-            return;
-        }
-
-        let mut scheduled = 0;
-
-        thread_local! {
-            static UNSCHEDULED: RefCell<Vec<bool>> = Default::default();
-        }
-
-        UNSCHEDULED.with_borrow_mut(|unscheduled| {
-            unscheduled.truncate(end_pass_idx);
-            unscheduled.fill(true);
-            unscheduled.resize(end_pass_idx, true);
-
-            // Re-order passes by maximizing the distance between dependent nodes
-            while scheduled < schedule.passes.len() {
-                let mut best_idx = scheduled;
-                let pass_idx = schedule.passes[best_idx];
-                let mut best_overlap_factor = schedule
-                    .access_cache
-                    .interdependent_passes(pass_idx, end_pass_idx)
-                    .count();
-
-                for (idx, pass_idx) in schedule.passes[best_idx + 1..schedule.passes.len()]
-                    .iter()
-                    .enumerate()
-                {
-                    let mut overlap_factor = 0;
-
-                    for other_pass_idx in schedule
-                        .access_cache
-                        .interdependent_passes(*pass_idx, end_pass_idx)
-                    {
-                        if unscheduled[other_pass_idx] {
-                            // This pass can't be the candidate because it depends on unfinished
-                            // work
-                            break;
-                        }
-
-                        overlap_factor += 1;
-                    }
-
-                    if overlap_factor > best_overlap_factor {
-                        best_idx += idx + 1;
-                        best_overlap_factor = overlap_factor;
-                    }
-                }
-
-                unscheduled[schedule.passes[best_idx]] = false;
-                schedule.passes.swap(scheduled, best_idx);
-                scheduled += 1;
-            }
-        });
-    }
-
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
     /// which the given node represents.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
@@ -2727,7 +2826,7 @@ impl Submission {
 
             // Schedule the first set of passes for the node we're trying to resolve
             for pass_idx in schedule
-                .access_cache
+                .access_index
                 .dependent_passes(node_idx, end_pass_idx)
             {
                 trace!(
@@ -2740,7 +2839,7 @@ impl Submission {
                 unscheduled[pass_idx] = false;
                 schedule.passes.push(pass_idx);
 
-                for node_idx in schedule.access_cache.dependent_nodes(pass_idx) {
+                for node_idx in schedule.access_index.dependent_nodes(pass_idx) {
                     trace!("    node {node_idx} is dependent");
 
                     let unresolved = &mut unresolved[node_idx];
@@ -2758,7 +2857,7 @@ impl Submission {
                 trace!("  node {node_idx} is dependent");
 
                 for pass_idx in schedule
-                    .access_cache
+                    .access_index
                     .dependent_passes(node_idx, pass_idx + 1)
                 {
                     let unscheduled = &mut unscheduled[pass_idx];
@@ -2771,7 +2870,7 @@ impl Submission {
                             self.graph.cmds[pass_idx].name()
                         );
 
-                        for node_idx in schedule.access_cache.dependent_nodes(pass_idx) {
+                        for node_idx in schedule.access_index.dependent_nodes(pass_idx) {
                             trace!("    node {node_idx} is dependent");
 
                             let unresolved = &mut unresolved[node_idx];
@@ -2879,8 +2978,19 @@ impl Submission {
         }
     }
 
-    /// Submits the remaining commands stored in this instance.
-    #[profiling::function]
+    /// Records and submits the remaining commands stored in this instance.
+    ///
+    /// This is the one-shot execution path for a finalized graph. It:
+    ///
+    /// 1. Leases a command buffer from `pool` for `queue_family_index`.
+    /// 2. Waits for that command buffer's prior submission to complete.
+    /// 3. Begins recording, records all remaining graph commands, ends recording, and submits.
+    /// 4. Returns the leased command buffer so the caller can observe completion or wait on it.
+    ///
+    /// The returned command buffer owns the submission fence and keeps the graph resources alive
+    /// until execution completes. Callers should treat it as in-flight until
+    /// [`CommandBuffer::has_executed`] or [`CommandBuffer::wait_until_executed`] indicates the GPU
+    /// has finished using it.
     pub fn queue_submit<P>(
         mut self,
         pool: &mut P,
@@ -2894,47 +3004,222 @@ impl Submission {
     {
         trace!("submit");
 
-        let mut cmd = pool.resource(CommandBufferInfo::new(queue_family_index as _))?;
-
-        cmd.wait_until_executed()?;
-
-        Device::begin_command_buffer(
-            &cmd.device,
-            cmd.handle,
+        // Phase 1: Get the main command buffer and record commands. This also discovers any
+        // ownership transfers required by the scheduled work.
+        let mut cmd_buf = pool.resource(CommandBufferInfo::new(queue_family_index as _))?;
+        cmd_buf.wait_until_executed()?;
+        cmd_buf.begin(
             &vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
+        self.record_impl(pool, &mut cmd_buf)?;
+        cmd_buf.end()?;
+        self.queue_submit_recorded(pool, &mut cmd_buf, queue_index, &[], &[], &[])?;
 
-        self.submit_cmd_buf(pool, &mut cmd)?;
+        Ok(cmd_buf)
+    }
 
-        Device::with_queue(&cmd.device, queue_family_index, queue_index, |queue| {
-            Device::end_command_buffer(&cmd.device, cmd.handle)?;
-            Device::reset_fences(&cmd.device, slice::from_ref(&cmd.fence))?;
-            Device::queue_submit(
-                &cmd.device,
-                queue,
-                slice::from_ref(
-                    &vk::SubmitInfo::default().command_buffers(slice::from_ref(&cmd.handle)),
-                ),
-                cmd.fence,
-            )?;
+    /// Submits commands already recorded into `cmd_buf`, along with any ownership-transfer release
+    /// work required by this submission.
+    ///
+    /// Does not call begin or end on the command buffer.
+    fn queue_submit_recorded<P>(
+        self,
+        pool: &mut P,
+        cmd_buf: &mut CommandBuffer,
+        queue_index: u32,
+        wait_semaphores: &[vk::Semaphore],
+        wait_stage_mask: &[vk::PipelineStageFlags],
+        signal_semaphores: &[vk::Semaphore],
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<CommandBufferInfo, CommandBuffer>,
+    {
+        let queue_family_index = cmd_buf.info.queue_family_index;
+
+        // Phase 2: Build RELEASE submissions for any transfers discovered while recording.
+        let mut release_groups: Vec<ReleaseGroup> = Vec::new();
+        for resource in self.graph.resources.iter() {
+            let Some(image) = resource.as_image() else {
+                continue;
+            };
+            let Some(&transfer) = self.pending_transfers.get(&image.handle) else {
+                continue;
+            };
+            let subresource_range = vk::ImageSubresourceRange {
+                aspect_mask: format_aspect_mask(image.info.fmt),
+                base_mip_level: 0,
+                level_count: vk::REMAINING_MIP_LEVELS,
+                base_array_layer: 0,
+                layer_count: vk::REMAINING_ARRAY_LAYERS,
+            };
+            if let Some(group) = release_groups.iter_mut().find(|g| {
+                g.old_fam == transfer.src_queue_family_index
+                    && g.old_idx == transfer.src_queue_index
+            }) {
+                group
+                    .images
+                    .push((image.handle, transfer.src_access, subresource_range));
+            } else {
+                release_groups.push(ReleaseGroup {
+                    old_fam: transfer.src_queue_family_index,
+                    old_idx: transfer.src_queue_index,
+                    images: vec![(image.handle, transfer.src_access, subresource_range)],
+                });
+            }
+        }
+
+        // Phase 3: For each unique old queue, submit a RELEASE barrier.
+        let mut release_bundles: Vec<ReleaseBundle> = Vec::new();
+        if !release_groups.is_empty() {
+            for group in &release_groups {
+                let mut release_cmd = pool.resource(CommandBufferInfo::new(group.old_fam as _))?;
+                release_cmd.wait_until_executed()?;
+                release_cmd.reset_fence()?;
+                let semaphore = release_cmd.release_semaphore()?;
+
+                Device::begin_command_buffer(
+                    &release_cmd.device,
+                    release_cmd.handle,
+                    &vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )?;
+
+                let barriers: Box<[_]> = group
+                    .images
+                    .iter()
+                    .map(|&(handle, current_access, subresource_range)| {
+                        let layout = access_type_to_layout(current_access);
+                        vk::ImageMemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                            .dst_access_mask(vk::AccessFlags::empty())
+                            .old_layout(layout)
+                            .new_layout(layout)
+                            .src_queue_family_index(group.old_fam)
+                            .dst_queue_family_index(queue_family_index)
+                            .image(handle)
+                            .subresource_range(subresource_range)
+                    })
+                    .collect();
+
+                unsafe {
+                    release_cmd.device.cmd_pipeline_barrier(
+                        release_cmd.handle,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &barriers,
+                    );
+                }
+
+                Device::with_queue(&release_cmd.device, group.old_fam, group.old_idx, |queue| {
+                    Device::end_command_buffer(&release_cmd.device, release_cmd.handle)?;
+                    Device::queue_submit(
+                        &release_cmd.device,
+                        queue,
+                        slice::from_ref(
+                            &vk::SubmitInfo::default()
+                                .command_buffers(slice::from_ref(&release_cmd.handle))
+                                .signal_semaphores(slice::from_ref(&semaphore)),
+                        ),
+                        release_cmd.fence,
+                    )?;
+
+                    Ok::<_, DriverError>(())
+                })?;
+
+                release_bundles.push(ReleaseBundle {
+                    cmd_buf: release_cmd,
+                    semaphore,
+                });
+            }
+        }
+
+        // Phase 4: Submit the main command buffer, waiting on release semaphores if any.
+        Device::with_queue(&cmd_buf.device, queue_family_index, queue_index, |queue| {
+            Device::reset_fences(&cmd_buf.device, slice::from_ref(&cmd_buf.fence))?;
+
+            let release_wait_semaphores = release_bundles
+                .iter()
+                .map(|b| b.semaphore)
+                .collect::<Box<[_]>>();
+            let release_wait_stages =
+                repeat_n(vk::PipelineStageFlags::ALL_COMMANDS, release_bundles.len())
+                    .collect::<Box<[_]>>();
+
+            let merged_wait_semaphores = wait_semaphores
+                .iter()
+                .copied()
+                .chain(release_wait_semaphores.iter().copied())
+                .collect::<Box<[_]>>();
+            let merged_wait_stages = wait_stage_mask
+                .iter()
+                .copied()
+                .chain(release_wait_stages.iter().copied())
+                .collect::<Box<[_]>>();
+
+            let mut submit_info = vk::SubmitInfo::default()
+                .command_buffers(slice::from_ref(&cmd_buf.handle))
+                .signal_semaphores(signal_semaphores);
+
+            if !merged_wait_semaphores.is_empty() {
+                submit_info = submit_info
+                    .wait_semaphores(&merged_wait_semaphores)
+                    .wait_dst_stage_mask(&merged_wait_stages);
+            };
+
+            cmd_buf.queue_submit(queue, slice::from_ref(&submit_info))?;
 
             Ok::<_, DriverError>(())
         })?;
+
+        // Phase 5: Update queue ownership for all exclusive images touched by this submission.
+        for node_idx in self.exclusive_image_indices.ones() {
+            if let Some(resource) = self.graph.resources[node_idx].as_image() {
+                resource.queue_packed.store(
+                    pack_queue(queue_family_index, queue_index),
+                    Ordering::Release,
+                );
+            }
+        }
+
+        // Keep release bundles alive until the main submission completes.
+        for bundle in release_bundles {
+            cmd_buf.drop_after_executed(bundle);
+        }
 
         // This graph contains references to buffers, images, and other resources which must be kept
         // alive until this graph execution completes on the GPU. Once those references are dropped
         // they will return to the pool for other things to use. The drop will happen the next time
         // someone tries to lease a command buffer and we notice this one has returned and the fence
         // has been signalled.
-        cmd.drop_after_executed(self);
+        cmd_buf.drop_after_executed(self);
 
-        Ok(cmd)
+        Ok(())
     }
 
-    /// Records any pending graph commands that have not been previously scheduled.
+    /// Records any remaining graph commands into `cmd_buf` and returns a [`RecordedSubmission`].
     #[profiling::function]
-    pub fn submit_cmd_buf<P>(
+    pub fn record<'a, P>(
+        mut self,
+        pool: &mut P,
+        cmd_buf: &'a mut CommandBuffer,
+    ) -> Result<RecordedSubmission<'a>, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.record_impl(pool, cmd_buf)?;
+
+        Ok(RecordedSubmission {
+            cmd_buf,
+            submission: self,
+        })
+    }
+
+    #[profiling::function]
+    fn record_impl<P>(
         &mut self,
         pool: &mut P,
         cmd_buf: &mut CommandBuffer,
@@ -2952,7 +3237,7 @@ impl Submission {
 
         SCHEDULE.with_borrow_mut(|schedule| {
             schedule
-                .access_cache
+                .access_index
                 .update(&self.graph, self.graph.cmds.len());
             schedule.passes.clear();
             schedule.passes.extend(0..self.graph.cmds.len());
@@ -2961,17 +3246,36 @@ impl Submission {
         })
     }
 
-    /// Records any pending graph commands that the given node requires into `cmd_buf`.
+    /// Records any remaining graph commands that the given node requires into `cmd_buf` and
+    /// returns a [`RecordedSubmission`].
     ///
     /// This is a mutating execution step, not a pure query. It records work into the provided
     /// command buffer and updates this submission's scheduling state so those commands are not
     /// recorded again later.
     #[profiling::function]
-    pub fn queue_cmds_for_resource<P>(
+    pub fn record_resource<'a, P>(
+        mut self,
+        pool: &mut P,
+        cmd_buf: &'a mut CommandBuffer,
+        resource_node: impl Node,
+    ) -> Result<RecordedSubmission<'a>, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.record_resource_impl(pool, cmd_buf, resource_node)?;
+
+        Ok(RecordedSubmission {
+            cmd_buf,
+            submission: self,
+        })
+    }
+
+    #[profiling::function]
+    fn record_resource_impl<P>(
         &mut self,
+        pool: &mut P,
         cmd_buf: &mut CommandBuffer,
         resource_node: impl Node,
-        pool: &mut P,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -3002,11 +3306,29 @@ impl Submission {
     /// top of that existing state. If you are pulling multiple outputs and care about their final
     /// ordering, record the most important output first.
     #[profiling::function]
-    pub fn queue_cmds_for_resource_dependencies<P>(
+    pub fn record_resource_dependencies<'a, P>(
+        mut self,
+        pool: &mut P,
+        cmd_buf: &'a mut CommandBuffer,
+        resource_node: impl Node,
+    ) -> Result<RecordedSubmission<'a>, DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.record_resource_dependencies_impl(pool, cmd_buf, resource_node)?;
+
+        Ok(RecordedSubmission {
+            cmd_buf,
+            submission: self,
+        })
+    }
+
+    #[profiling::function]
+    fn record_resource_dependencies_impl<P>(
         &mut self,
+        pool: &mut P,
         cmd_buf: &mut CommandBuffer,
         resource_node: impl Node,
-        pool: &mut P,
     ) -> Result<(), DriverError>
     where
         P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
@@ -3272,7 +3594,10 @@ impl Submission {
                                         .map(|attachment| (attachment, exec))
                                 })
                                 .expect("input attachment not written");
-                            let late = &write_exec.accesses[&attachment.target]
+                            let late = write_exec
+                                .accesses
+                                .get(attachment.target)
+                                .expect("missing input attachment access")
                                 .last()
                                 .expect("missing input attachment access");
                             let image_range = late.subresource.expect_image();
@@ -3355,14 +3680,542 @@ impl Submission {
     }
 }
 
+impl<'a> RecordedSubmission<'a> {
+    /// Returns `true` when this submission contains no more commands to record.
+    pub fn is_empty(&self) -> bool {
+        self.submission.is_empty()
+    }
+
+    /// Returns the stages that process the given resource.
+    #[profiling::function]
+    pub fn resource_stages(&self, resource_node: impl Node) -> vk::PipelineStageFlags {
+        self.submission.resource_stages(resource_node)
+    }
+
+    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
+    /// which the given node represents.
+    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
+    where
+        N: Node,
+    {
+        self.submission.resource(resource_node)
+    }
+
+    /// Records any remaining graph commands into this submission's command buffer.
+    #[profiling::function]
+    pub fn record<P>(&mut self, pool: &mut P) -> Result<(), DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.submission.record_impl(pool, self.cmd_buf)
+    }
+
+    /// Records any remaining graph commands required by the given resource into this submission's
+    /// command buffer.
+    #[profiling::function]
+    pub fn record_resource<P>(
+        &mut self,
+        pool: &mut P,
+        resource_node: impl Node,
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.submission
+            .record_resource_impl(pool, self.cmd_buf, resource_node)
+    }
+
+    /// Records any remaining prerequisite commands for the given resource into this submission's
+    /// command buffer, excluding passes that directly access the resource.
+    #[profiling::function]
+    pub fn record_resource_dependencies<P>(
+        &mut self,
+        pool: &mut P,
+        resource_node: impl Node,
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        self.submission
+            .record_resource_dependencies_impl(pool, self.cmd_buf, resource_node)
+    }
+
+    /// Submits this recorded submission's command buffer.
+    ///
+    /// Use this after binding a [`Submission`] to an existing command buffer with
+    /// [`Submission::record`], [`Submission::record_resource`], or
+    /// [`Submission::record_resource_dependencies`].
+    ///
+    /// Callers are responsible for beginning and ending the bound command buffer themselves.
+    /// This method only submits the already-recorded command buffer to `queue_index`, waiting on
+    /// `wait_semaphores` at `wait_stage_mask` and signaling `signal_semaphores` when complete.
+    ///
+    /// This consumes the `RecordedSubmission`, ensuring the recorded graph work stays paired with
+    /// the command buffer it was recorded into. After submission, the caller still owns that same
+    /// command buffer and should treat it as in-flight until execution completes.
+    pub fn queue_submit<P>(
+        self,
+        pool: &mut P,
+        queue_index: u32,
+        wait_semaphores: &[vk::Semaphore],
+        wait_stage_mask: &[vk::PipelineStageFlags],
+        signal_semaphores: &[vk::Semaphore],
+    ) -> Result<(), DriverError>
+    where
+        P: Pool<CommandBufferInfo, CommandBuffer>,
+    {
+        let Self {
+            cmd_buf,
+            submission,
+        } = self;
+
+        submission.queue_submit_recorded(
+            pool,
+            cmd_buf,
+            queue_index,
+            wait_semaphores,
+            wait_stage_mask,
+            signal_semaphores,
+        )
+    }
+}
+
 impl From<Graph> for Submission {
     fn from(val: Graph) -> Self {
-        val.into_submission()
+        val.finalize()
     }
 }
 
 #[derive(Default)]
 struct Schedule {
-    access_cache: AccessCache,
+    access_index: AccessIndex,
+    interdependent: Vec<Vec<usize>>,
     passes: Vec<usize>,
+}
+
+impl Schedule {
+    #[profiling::function]
+    fn reorder_passes(&mut self, end_pass_idx: usize) {
+        if self.passes.len() < 3 {
+            return;
+        }
+
+        let pass_count = self.passes.len();
+
+        for dep_passes in self.interdependent.iter_mut() {
+            dep_passes.clear();
+        }
+
+        self.interdependent.resize_with(pass_count, Vec::new);
+
+        let mut local_of_global = vec![usize::MAX; end_pass_idx];
+
+        for (local_idx, &pass_idx) in self.passes.iter().enumerate() {
+            local_of_global[pass_idx] = local_idx;
+        }
+
+        let mut seen_deps = FixedBitSet::with_capacity(pass_count);
+
+        for (local_idx, &pass_idx) in self.passes.iter().enumerate() {
+            for dep_pass_idx in self
+                .access_index
+                .interdependent_passes(pass_idx, end_pass_idx)
+            {
+                let dep_local_idx = local_of_global[dep_pass_idx];
+                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+                    continue;
+                }
+
+                if !seen_deps.put(dep_local_idx) {
+                    self.interdependent[local_idx].push(dep_local_idx);
+                }
+            }
+
+            for dep_pass_idx in self
+                .access_index
+                .interdependent_passes(pass_idx, end_pass_idx)
+            {
+                let dep_local_idx = local_of_global[dep_pass_idx];
+                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
+                    seen_deps.set(dep_local_idx, false);
+                }
+            }
+        }
+
+        let mut scheduled = FixedBitSet::with_capacity(pass_count);
+        let mut scheduled_count = 0;
+
+        while scheduled_count < pass_count {
+            let mut best_idx = scheduled_count;
+            let mut best_overlap = self.interdependent[best_idx].len();
+
+            for idx in (scheduled_count + 1)..pass_count {
+                let mut overlap = 0;
+
+                for &dep_local in &self.interdependent[idx] {
+                    if scheduled.contains(dep_local) {
+                        overlap += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if overlap > best_overlap {
+                    best_overlap = overlap;
+                    best_idx = idx;
+                }
+            }
+
+            scheduled.insert(best_idx);
+            self.passes.swap(scheduled_count, best_idx);
+            self.interdependent.swap(scheduled_count, best_idx);
+            scheduled_count += 1;
+        }
+    }
+}
+
+#[doc(hidden)]
+pub mod fuzz {
+    use {
+        super::{AccessIndex, Schedule},
+        fixedbitset::FixedBitSet,
+    };
+
+    pub fn check_schedule_reordering(pass_count: usize, resource_passes: &[Vec<usize>]) {
+        let pass_count = pass_count.min(256);
+        if pass_count == 0 {
+            return;
+        }
+
+        let access_index = build_access_index(pass_count, resource_passes);
+
+        let mut schedule = Schedule {
+            access_index: access_index.clone(),
+            passes: (0..pass_count).collect(),
+            ..Default::default()
+        };
+
+        schedule.reorder_passes(pass_count);
+
+        let reordered = schedule.passes.clone();
+
+        assert_eq!(reordered.len(), pass_count, "reordered pass count changed");
+
+        let mut sorted = reordered.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            (0..pass_count).collect::<Vec<_>>(),
+            "reordered passes are not a permutation"
+        );
+
+        let mut repeat = Schedule {
+            access_index: access_index.clone(),
+            passes: (0..pass_count).collect(),
+            ..Default::default()
+        };
+        repeat.reorder_passes(pass_count);
+        assert_eq!(reordered, repeat.passes, "reordering is not deterministic");
+
+        let expected = reference_reorder(access_index, pass_count);
+        assert_eq!(
+            reordered, expected,
+            "reordering diverged from reference implementation"
+        );
+    }
+
+    fn build_access_index(pass_count: usize, resource_passes: &[Vec<usize>]) -> AccessIndex {
+        let mut passes_by_node = Vec::with_capacity(resource_passes.len());
+        let mut read_nodes_by_pass = vec![Vec::new(); pass_count];
+
+        for (node_idx, passes) in resource_passes.iter().enumerate() {
+            let mut normalized = passes
+                .iter()
+                .copied()
+                .filter(|&pass_idx| pass_idx < pass_count)
+                .collect::<Vec<_>>();
+            normalized.sort_unstable();
+            normalized.dedup();
+
+            for &pass_idx in &normalized {
+                read_nodes_by_pass[pass_idx].push(node_idx);
+            }
+
+            passes_by_node.push(normalized);
+        }
+
+        AccessIndex {
+            passes_by_node,
+            read_nodes_by_pass,
+        }
+    }
+
+    fn reference_reorder(access_index: AccessIndex, pass_count: usize) -> Vec<usize> {
+        let mut passes = (0..pass_count).collect::<Vec<_>>();
+        if passes.len() < 3 {
+            return passes;
+        }
+
+        let mut interdependent = vec![Vec::new(); pass_count];
+        let mut local_of_global = vec![usize::MAX; pass_count];
+        let mut seen_deps = FixedBitSet::with_capacity(pass_count);
+        let mut scheduled = FixedBitSet::with_capacity(pass_count);
+
+        for (local_idx, &pass_idx) in passes.iter().enumerate() {
+            local_of_global[pass_idx] = local_idx;
+        }
+
+        for (local_idx, &pass_idx) in passes.iter().enumerate() {
+            for dep_pass_idx in access_index.interdependent_passes(pass_idx, pass_count) {
+                let dep_local_idx = local_of_global[dep_pass_idx];
+                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+                    continue;
+                }
+
+                if !seen_deps.put(dep_local_idx) {
+                    interdependent[local_idx].push(dep_local_idx);
+                }
+            }
+
+            for dep_pass_idx in access_index.interdependent_passes(pass_idx, pass_count) {
+                let dep_local_idx = local_of_global[dep_pass_idx];
+                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
+                    seen_deps.set(dep_local_idx, false);
+                }
+            }
+        }
+
+        let mut scheduled_count = 0;
+        while scheduled_count < pass_count {
+            let mut best_idx = scheduled_count;
+            let mut best_overlap = interdependent[best_idx].len();
+
+            for (idx, dep_passes) in interdependent[..pass_count]
+                .iter()
+                .enumerate()
+                .skip(scheduled_count + 1)
+            {
+                let mut overlap = 0;
+
+                for &dep_local in dep_passes {
+                    if scheduled.contains(dep_local) {
+                        overlap += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if overlap > best_overlap {
+                    best_overlap = overlap;
+                    best_idx = idx;
+                }
+            }
+
+            scheduled.insert(best_idx);
+            passes.swap(scheduled_count, best_idx);
+            interdependent.swap(scheduled_count, best_idx);
+            scheduled_count += 1;
+        }
+
+        passes
+    }
+}
+
+#[doc(hidden)]
+pub mod bench {
+    use super::{AccessIndex, Schedule};
+
+    /// Synthetic workload description for scheduler benchmarks.
+    #[derive(Clone, Copy, Debug)]
+    pub struct ReorderBenchSpec {
+        /// Number of scheduled passes.
+        pub pass_count: usize,
+
+        /// Number of resources participating in the schedule.
+        pub resource_count: usize,
+
+        /// Typical pass count for short-lived resources.
+        pub short_lived_uses: usize,
+
+        /// Number of long-lived resources shared across many passes.
+        pub long_lived_resource_count: usize,
+
+        /// Typical pass count for each long-lived resource.
+        pub long_lived_uses: usize,
+    }
+
+    /// Reusable benchmark harness for `Schedule::reorder_passes`.
+    pub struct ReorderBenchHarness {
+        schedule: Schedule,
+        original_passes: Vec<usize>,
+        end_pass_idx: usize,
+    }
+
+    impl ReorderBenchHarness {
+        /// Builds a deterministic synthetic schedule for benchmarking.
+        pub fn new(spec: ReorderBenchSpec) -> Self {
+            assert!(spec.pass_count > 0, "pass_count must be greater than zero");
+            assert!(
+                spec.resource_count > 0,
+                "resource_count must be greater than zero"
+            );
+            assert!(
+                spec.short_lived_uses > 0,
+                "short_lived_uses must be greater than zero"
+            );
+
+            let mut passes_by_node = vec![Vec::new(); spec.resource_count];
+            let mut read_nodes_by_pass = vec![Vec::new(); spec.pass_count];
+
+            for (node_idx, passes) in passes_by_node.iter_mut().enumerate() {
+                let is_long_lived = node_idx < spec.long_lived_resource_count;
+                let uses = if is_long_lived {
+                    spec.long_lived_uses.max(spec.short_lived_uses)
+                } else {
+                    spec.short_lived_uses
+                }
+                .min(spec.pass_count);
+
+                let seed = splitmix64(node_idx as u64 ^ ((spec.pass_count as u64) << 32));
+                let stride = odd_stride(seed, spec.pass_count);
+                let start = (seed as usize) % spec.pass_count;
+                let cluster_len = uses.max(1).min(spec.pass_count);
+
+                passes.reserve(uses);
+
+                for use_idx in 0..uses {
+                    let pass_idx = if is_long_lived {
+                        (start + use_idx * stride) % spec.pass_count
+                    } else {
+                        (start + use_idx % cluster_len + (use_idx / cluster_len) * stride)
+                            % spec.pass_count
+                    };
+
+                    passes.push(pass_idx);
+                }
+
+                passes.sort_unstable();
+                passes.dedup();
+
+                while passes.len() < uses {
+                    let next_pass =
+                        (start + passes.len() * stride + passes.len()) % spec.pass_count;
+                    if passes.binary_search(&next_pass).is_err() {
+                        passes.push(next_pass);
+                    }
+                }
+
+                passes.sort_unstable();
+
+                for &pass_idx in passes.iter() {
+                    read_nodes_by_pass[pass_idx].push(node_idx);
+                }
+            }
+
+            for nodes in &mut read_nodes_by_pass {
+                nodes.sort_unstable();
+                nodes.dedup();
+            }
+
+            let passes = (0..spec.pass_count).collect::<Vec<_>>();
+
+            Self {
+                schedule: Schedule {
+                    access_index: AccessIndex {
+                        passes_by_node,
+                        read_nodes_by_pass,
+                    },
+                    passes: passes.clone(),
+                    ..Default::default()
+                },
+                original_passes: passes,
+                end_pass_idx: spec.pass_count,
+            }
+        }
+
+        /// Restores the original schedule, reorders it once, and returns a checksum.
+        pub fn reorder_once(&mut self) -> u64 {
+            self.schedule.passes.clear();
+            self.schedule
+                .passes
+                .extend(self.original_passes.iter().copied());
+
+            self.schedule.reorder_passes(self.end_pass_idx);
+
+            self.schedule
+                .passes
+                .iter()
+                .enumerate()
+                .fold(0u64, |checksum, (idx, &pass_idx)| {
+                    checksum.wrapping_mul(1_099_511_628_211).wrapping_add(
+                        ((idx as u64) << 32) ^ pass_idx as u64 ^ 0x9e37_79b9_7f4a_7c15,
+                    )
+                })
+        }
+    }
+
+    fn odd_stride(seed: u64, pass_count: usize) -> usize {
+        let stride = ((seed >> 32) as usize % pass_count.max(2)) | 1;
+
+        stride.min(pass_count.max(1) - 1).max(1)
+    }
+
+    fn splitmix64(mut value: u64) -> u64 {
+        value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccessIndex, Schedule};
+
+    fn schedule_with_access_index(
+        passes: &[usize],
+        passes_by_node: &[&[usize]],
+        read_nodes_by_pass: &[&[usize]],
+    ) -> Schedule {
+        Schedule {
+            access_index: AccessIndex {
+                passes_by_node: passes_by_node
+                    .iter()
+                    .map(|passes| passes.to_vec())
+                    .collect(),
+                read_nodes_by_pass: read_nodes_by_pass
+                    .iter()
+                    .map(|nodes| nodes.to_vec())
+                    .collect(),
+            },
+            passes: passes.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reorder_scheduled_passes_matches_original_seed_choice() {
+        let mut schedule = schedule_with_access_index(
+            &[0, 1, 2, 3],
+            &[&[0, 1], &[1, 2], &[1, 3]],
+            &[&[0], &[0, 1, 2], &[1], &[2]],
+        );
+
+        schedule.reorder_passes(4);
+
+        assert_eq!(schedule.passes, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn reorder_scheduled_passes_keeps_disconnected_groups_deterministic() {
+        let mut schedule = schedule_with_access_index(
+            &[0, 1, 2, 3, 4],
+            &[&[0, 1, 2], &[3, 4]],
+            &[&[0], &[0], &[0], &[1], &[1]],
+        );
+
+        schedule.reorder_passes(5);
+
+        assert_eq!(schedule.passes, vec![0, 1, 2, 3, 4]);
+    }
 }

@@ -79,7 +79,8 @@ available.
 
 - **`checked`** *(enabled by default)* — Runtime validation of common misuse patterns
   (missing access declarations, buffer bounds, image aspects) that the Vulkan Validation Layer
-  cannot catch. Disable for zero-overhead in validated releases.
+  cannot catch, including cross-graph node ownership checks. Disable for zero-overhead in
+  validated releases.
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
 - **`profile-with-*`** — Use the specified profiling backend:

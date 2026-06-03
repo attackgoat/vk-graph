@@ -549,7 +549,7 @@ impl<'a> CommandRef<'a> {
         // See: https://attackgoat.github.io/vk-graph/pipeline_sync.html
         #[cfg(feature = "checked")]
         assert!(
-            self.exec.accesses.contains_key(&resource_node.index()),
+            self.exec.accesses.contains(resource_node.index()),
             "unexpected node access: call an access function first"
         );
 

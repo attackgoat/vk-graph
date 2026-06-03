@@ -37,9 +37,9 @@ impl RayTracingPipeline {
     /// The number and composition of the `shader_groups` parameter must match the actual shaders
     /// provided.
     ///
-    /// # Panics
-    ///
-    /// If shader code is not a multiple of four bytes.
+    /// `shaders` may contain pre-built [`Shader`] values or any inputs that can be converted into
+    /// them. Invalid shader data is returned as [`DriverError::InvalidData`] through the `Result`
+    /// instead of panicking.
     ///
     /// # Examples
     ///

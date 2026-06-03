@@ -1,0 +1,23 @@
+[package]
+name = "vk-graph-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1.4", features = ["derive"] }
+libfuzzer-sys = "0.4"
+vk-graph = { path = ".." }
+
+[[bin]]
+name = "submission_schedule"
+path = "fuzz_targets/submission_schedule.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = []
