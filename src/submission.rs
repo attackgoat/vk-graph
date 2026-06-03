@@ -137,7 +137,7 @@ struct PendingTransfer {
     dst_queue_family_index: u32,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct AccessIndex {
     passes_by_node: Vec<Vec<usize>>,
     read_nodes_by_pass: Vec<Vec<usize>>,
@@ -2576,7 +2576,7 @@ impl Submission {
         );
 
         // Optimize the schedule; requesting the required resources it needs
-        Self::reorder_scheduled_passes(schedule, end_pass_idx);
+        schedule.reorder_passes(end_pass_idx);
         self.merge_scheduled_passes(&mut schedule.passes);
         self.lease_scheduled_resources(pool, &schedule.passes)?;
         self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index);
@@ -2786,93 +2786,6 @@ impl Submission {
         }
 
         vk::Extent2D { height, width }
-    }
-
-    #[profiling::function]
-    fn reorder_scheduled_passes(schedule: &mut Schedule, end_pass_idx: usize) {
-        // It must be a party
-        if schedule.passes.len() < 3 {
-            return;
-        }
-
-        let pass_count = schedule.passes.len();
-
-        schedule.local_indices.truncate(end_pass_idx);
-        schedule.local_indices.fill(usize::MAX);
-        schedule.local_indices.resize(end_pass_idx, usize::MAX);
-
-        schedule.interdependent.truncate(pass_count);
-        for interdependent in &mut schedule.interdependent {
-            interdependent.clear();
-        }
-
-        schedule.interdependent.resize_with(pass_count, Vec::new);
-
-        schedule.seen_deps.clear();
-        schedule.seen_deps.grow(pass_count);
-
-        schedule.unscheduled.clear();
-        schedule.unscheduled.grow(end_pass_idx);
-
-        for (local_idx, &pass_idx) in schedule.passes.iter().enumerate() {
-            schedule.local_indices[pass_idx] = local_idx;
-            schedule.unscheduled.insert(pass_idx);
-        }
-
-        for (local_idx, &pass_idx) in schedule.passes.iter().enumerate() {
-            for dep_pass_idx in schedule
-                .access_index
-                .interdependent_passes(pass_idx, end_pass_idx)
-            {
-                let dep_local_idx = schedule.local_indices[dep_pass_idx];
-                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
-                    continue;
-                }
-
-                if !schedule.seen_deps.put(dep_local_idx) {
-                    schedule.interdependent[local_idx].push(dep_pass_idx);
-                }
-            }
-
-            for dep_pass_idx in schedule
-                .access_index
-                .interdependent_passes(pass_idx, end_pass_idx)
-            {
-                let dep_local_idx = schedule.local_indices[dep_pass_idx];
-                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
-                    schedule.seen_deps.set(dep_local_idx, false);
-                }
-            }
-        }
-
-        let mut scheduled = 0;
-        while scheduled < pass_count {
-            let mut best_idx = scheduled;
-            let mut best_overlap_factor = schedule.interdependent[best_idx].len();
-
-            for idx in (scheduled + 1)..pass_count {
-                let mut overlap_factor = 0;
-
-                for &dep_pass_idx in &schedule.interdependent[idx] {
-                    if schedule.unscheduled.contains(dep_pass_idx) {
-                        break;
-                    }
-
-                    overlap_factor += 1;
-                }
-
-                if overlap_factor > best_overlap_factor {
-                    best_overlap_factor = overlap_factor;
-                    best_idx = idx;
-                }
-            }
-
-            let best_pass_idx = schedule.passes[best_idx];
-            schedule.unscheduled.set(best_pass_idx, false);
-            schedule.passes.swap(scheduled, best_idx);
-            schedule.interdependent.swap(scheduled, best_idx);
-            scheduled += 1;
-        }
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
@@ -3877,8 +3790,432 @@ impl From<Graph> for Submission {
 struct Schedule {
     access_index: AccessIndex,
     interdependent: Vec<Vec<usize>>,
-    local_indices: Vec<usize>,
     passes: Vec<usize>,
-    seen_deps: FixedBitSet,
-    unscheduled: FixedBitSet,
+}
+
+impl Schedule {
+    #[profiling::function]
+    fn reorder_passes(&mut self, end_pass_idx: usize) {
+        if self.passes.len() < 3 {
+            return;
+        }
+
+        let pass_count = self.passes.len();
+
+        for dep_passes in self.interdependent.iter_mut() {
+            dep_passes.clear();
+        }
+
+        self.interdependent.resize_with(pass_count, Vec::new);
+
+        let mut local_of_global = vec![usize::MAX; end_pass_idx];
+
+        for (local_idx, &pass_idx) in self.passes.iter().enumerate() {
+            local_of_global[pass_idx] = local_idx;
+        }
+
+        let mut seen_deps = FixedBitSet::with_capacity(pass_count);
+
+        for (local_idx, &pass_idx) in self.passes.iter().enumerate() {
+            for dep_pass_idx in self
+                .access_index
+                .interdependent_passes(pass_idx, end_pass_idx)
+            {
+                let dep_local_idx = local_of_global[dep_pass_idx];
+                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+                    continue;
+                }
+
+                if !seen_deps.put(dep_local_idx) {
+                    self.interdependent[local_idx].push(dep_local_idx);
+                }
+            }
+
+            for dep_pass_idx in self
+                .access_index
+                .interdependent_passes(pass_idx, end_pass_idx)
+            {
+                let dep_local_idx = local_of_global[dep_pass_idx];
+                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
+                    seen_deps.set(dep_local_idx, false);
+                }
+            }
+        }
+
+        let mut scheduled = FixedBitSet::with_capacity(pass_count);
+        let mut scheduled_count = 0;
+
+        while scheduled_count < pass_count {
+            let mut best_idx = scheduled_count;
+            let mut best_overlap = self.interdependent[best_idx].len();
+
+            for idx in (scheduled_count + 1)..pass_count {
+                let mut overlap = 0;
+
+                for &dep_local in &self.interdependent[idx] {
+                    if scheduled.contains(dep_local) {
+                        overlap += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if overlap > best_overlap {
+                    best_overlap = overlap;
+                    best_idx = idx;
+                }
+            }
+
+            scheduled.insert(best_idx);
+            self.passes.swap(scheduled_count, best_idx);
+            self.interdependent.swap(scheduled_count, best_idx);
+            scheduled_count += 1;
+        }
+    }
+}
+
+#[doc(hidden)]
+pub mod fuzz {
+    use {
+        super::{AccessIndex, Schedule},
+        fixedbitset::FixedBitSet,
+    };
+
+    pub fn check_schedule_reordering(pass_count: usize, resource_passes: &[Vec<usize>]) {
+        let pass_count = pass_count.min(256);
+        if pass_count == 0 {
+            return;
+        }
+
+        let access_index = build_access_index(pass_count, resource_passes);
+
+        let mut schedule = Schedule {
+            access_index: access_index.clone(),
+            passes: (0..pass_count).collect(),
+            ..Default::default()
+        };
+
+        schedule.reorder_passes(pass_count);
+
+        let reordered = schedule.passes.clone();
+
+        assert_eq!(reordered.len(), pass_count, "reordered pass count changed");
+
+        let mut sorted = reordered.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            (0..pass_count).collect::<Vec<_>>(),
+            "reordered passes are not a permutation"
+        );
+
+        let mut repeat = Schedule {
+            access_index: access_index.clone(),
+            passes: (0..pass_count).collect(),
+            ..Default::default()
+        };
+        repeat.reorder_passes(pass_count);
+        assert_eq!(reordered, repeat.passes, "reordering is not deterministic");
+
+        let expected = reference_reorder(access_index, pass_count);
+        assert_eq!(
+            reordered, expected,
+            "reordering diverged from reference implementation"
+        );
+    }
+
+    fn build_access_index(pass_count: usize, resource_passes: &[Vec<usize>]) -> AccessIndex {
+        let mut passes_by_node = Vec::with_capacity(resource_passes.len());
+        let mut read_nodes_by_pass = vec![Vec::new(); pass_count];
+
+        for (node_idx, passes) in resource_passes.iter().enumerate() {
+            let mut normalized = passes
+                .iter()
+                .copied()
+                .filter(|&pass_idx| pass_idx < pass_count)
+                .collect::<Vec<_>>();
+            normalized.sort_unstable();
+            normalized.dedup();
+
+            for &pass_idx in &normalized {
+                read_nodes_by_pass[pass_idx].push(node_idx);
+            }
+
+            passes_by_node.push(normalized);
+        }
+
+        AccessIndex {
+            passes_by_node,
+            read_nodes_by_pass,
+        }
+    }
+
+    fn reference_reorder(access_index: AccessIndex, pass_count: usize) -> Vec<usize> {
+        let mut passes = (0..pass_count).collect::<Vec<_>>();
+        if passes.len() < 3 {
+            return passes;
+        }
+
+        let mut interdependent = vec![Vec::new(); pass_count];
+        let mut local_of_global = vec![usize::MAX; pass_count];
+        let mut seen_deps = FixedBitSet::with_capacity(pass_count);
+        let mut scheduled = FixedBitSet::with_capacity(pass_count);
+
+        for (local_idx, &pass_idx) in passes.iter().enumerate() {
+            local_of_global[pass_idx] = local_idx;
+        }
+
+        for (local_idx, &pass_idx) in passes.iter().enumerate() {
+            for dep_pass_idx in access_index.interdependent_passes(pass_idx, pass_count) {
+                let dep_local_idx = local_of_global[dep_pass_idx];
+                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+                    continue;
+                }
+
+                if !seen_deps.put(dep_local_idx) {
+                    interdependent[local_idx].push(dep_local_idx);
+                }
+            }
+
+            for dep_pass_idx in access_index.interdependent_passes(pass_idx, pass_count) {
+                let dep_local_idx = local_of_global[dep_pass_idx];
+                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
+                    seen_deps.set(dep_local_idx, false);
+                }
+            }
+        }
+
+        let mut scheduled_count = 0;
+        while scheduled_count < pass_count {
+            let mut best_idx = scheduled_count;
+            let mut best_overlap = interdependent[best_idx].len();
+
+            for (idx, dep_passes) in interdependent[..pass_count]
+                .iter()
+                .enumerate()
+                .skip(scheduled_count + 1)
+            {
+                let mut overlap = 0;
+
+                for &dep_local in dep_passes {
+                    if scheduled.contains(dep_local) {
+                        overlap += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if overlap > best_overlap {
+                    best_overlap = overlap;
+                    best_idx = idx;
+                }
+            }
+
+            scheduled.insert(best_idx);
+            passes.swap(scheduled_count, best_idx);
+            interdependent.swap(scheduled_count, best_idx);
+            scheduled_count += 1;
+        }
+
+        passes
+    }
+}
+
+#[doc(hidden)]
+pub mod bench {
+    use super::{AccessIndex, Schedule};
+
+    /// Synthetic workload description for scheduler benchmarks.
+    #[derive(Clone, Copy, Debug)]
+    pub struct ReorderBenchSpec {
+        /// Number of scheduled passes.
+        pub pass_count: usize,
+
+        /// Number of resources participating in the schedule.
+        pub resource_count: usize,
+
+        /// Typical pass count for short-lived resources.
+        pub short_lived_uses: usize,
+
+        /// Number of long-lived resources shared across many passes.
+        pub long_lived_resource_count: usize,
+
+        /// Typical pass count for each long-lived resource.
+        pub long_lived_uses: usize,
+    }
+
+    /// Reusable benchmark harness for `Schedule::reorder_passes`.
+    pub struct ReorderBenchHarness {
+        schedule: Schedule,
+        original_passes: Vec<usize>,
+        end_pass_idx: usize,
+    }
+
+    impl ReorderBenchHarness {
+        /// Builds a deterministic synthetic schedule for benchmarking.
+        pub fn new(spec: ReorderBenchSpec) -> Self {
+            assert!(spec.pass_count > 0, "pass_count must be greater than zero");
+            assert!(
+                spec.resource_count > 0,
+                "resource_count must be greater than zero"
+            );
+            assert!(
+                spec.short_lived_uses > 0,
+                "short_lived_uses must be greater than zero"
+            );
+
+            let mut passes_by_node = vec![Vec::new(); spec.resource_count];
+            let mut read_nodes_by_pass = vec![Vec::new(); spec.pass_count];
+
+            for (node_idx, passes) in passes_by_node.iter_mut().enumerate() {
+                let is_long_lived = node_idx < spec.long_lived_resource_count;
+                let uses = if is_long_lived {
+                    spec.long_lived_uses.max(spec.short_lived_uses)
+                } else {
+                    spec.short_lived_uses
+                }
+                .min(spec.pass_count);
+
+                let seed = splitmix64(node_idx as u64 ^ ((spec.pass_count as u64) << 32));
+                let stride = odd_stride(seed, spec.pass_count);
+                let start = (seed as usize) % spec.pass_count;
+                let cluster_len = uses.max(1).min(spec.pass_count);
+
+                passes.reserve(uses);
+
+                for use_idx in 0..uses {
+                    let pass_idx = if is_long_lived {
+                        (start + use_idx * stride) % spec.pass_count
+                    } else {
+                        (start + use_idx % cluster_len + (use_idx / cluster_len) * stride)
+                            % spec.pass_count
+                    };
+
+                    passes.push(pass_idx);
+                }
+
+                passes.sort_unstable();
+                passes.dedup();
+
+                while passes.len() < uses {
+                    let next_pass =
+                        (start + passes.len() * stride + passes.len()) % spec.pass_count;
+                    if passes.binary_search(&next_pass).is_err() {
+                        passes.push(next_pass);
+                    }
+                }
+
+                passes.sort_unstable();
+
+                for &pass_idx in passes.iter() {
+                    read_nodes_by_pass[pass_idx].push(node_idx);
+                }
+            }
+
+            for nodes in &mut read_nodes_by_pass {
+                nodes.sort_unstable();
+                nodes.dedup();
+            }
+
+            let passes = (0..spec.pass_count).collect::<Vec<_>>();
+
+            Self {
+                schedule: Schedule {
+                    access_index: AccessIndex {
+                        passes_by_node,
+                        read_nodes_by_pass,
+                    },
+                    passes: passes.clone(),
+                    ..Default::default()
+                },
+                original_passes: passes,
+                end_pass_idx: spec.pass_count,
+            }
+        }
+
+        /// Restores the original schedule, reorders it once, and returns a checksum.
+        pub fn reorder_once(&mut self) -> u64 {
+            self.schedule.passes.clear();
+            self.schedule
+                .passes
+                .extend(self.original_passes.iter().copied());
+
+            self.schedule.reorder_passes(self.end_pass_idx);
+
+            self.schedule
+                .passes
+                .iter()
+                .enumerate()
+                .fold(0u64, |checksum, (idx, &pass_idx)| {
+                    checksum.wrapping_mul(1_099_511_628_211).wrapping_add(
+                        ((idx as u64) << 32) ^ pass_idx as u64 ^ 0x9e37_79b9_7f4a_7c15,
+                    )
+                })
+        }
+    }
+
+    fn odd_stride(seed: u64, pass_count: usize) -> usize {
+        let stride = ((seed >> 32) as usize % pass_count.max(2)) | 1;
+
+        stride.min(pass_count.max(1) - 1).max(1)
+    }
+
+    fn splitmix64(mut value: u64) -> u64 {
+        value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccessIndex, Schedule};
+
+    fn schedule_with_access_index(
+        passes: &[usize],
+        passes_by_node: &[&[usize]],
+        read_nodes_by_pass: &[&[usize]],
+    ) -> Schedule {
+        Schedule {
+            access_index: AccessIndex {
+                passes_by_node: passes_by_node
+                    .iter()
+                    .map(|passes| passes.to_vec())
+                    .collect(),
+                read_nodes_by_pass: read_nodes_by_pass
+                    .iter()
+                    .map(|nodes| nodes.to_vec())
+                    .collect(),
+            },
+            passes: passes.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reorder_scheduled_passes_matches_original_seed_choice() {
+        let mut schedule = schedule_with_access_index(
+            &[0, 1, 2, 3],
+            &[&[0, 1], &[1, 2], &[1, 3]],
+            &[&[0], &[0, 1, 2], &[1], &[2]],
+        );
+
+        schedule.reorder_passes(4);
+
+        assert_eq!(schedule.passes, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn reorder_scheduled_passes_keeps_disconnected_groups_deterministic() {
+        let mut schedule = schedule_with_access_index(
+            &[0, 1, 2, 3, 4],
+            &[&[0, 1, 2], &[3, 4]],
+            &[&[0], &[0], &[0], &[1], &[1]],
+        );
+
+        schedule.reorder_passes(5);
+
+        assert_eq!(schedule.passes, vec![0, 1, 2, 3, 4]);
+    }
 }

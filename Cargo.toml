@@ -82,6 +82,7 @@ anyhow = "1.0"
 bmfont = { version = "0.3", default-features = false }
 bytemuck = "1.25"
 clap = { version = "4.5", features = ["derive"] }
+criterion = "0.5"
 glam = { version = "0.32", features = ["bytemuck"] }
 half = { version = "2.4", features = ["bytemuck"] }
 hassle-rs = "0.11"
@@ -102,3 +103,7 @@ vk-shader-macros = "0.2"
 tobj = "4.0"
 winit.workspace = true
 winit_input_helper = "0.17"
+
+[[bench]]
+name = "submission_reorder"
+harness = false

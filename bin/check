@@ -68,7 +68,7 @@ run "workspace clippy (no checked)" cargo clippy $PROFILE --all-targets --worksp
 run "workspace tests" env RUSTFLAGS="-D warnings" cargo test $PROFILE --all-targets --workspace --no-default-features --features loaded
 
 if [ "$RUN_VULKAN" -eq 1 ]; then
-    run "integration tests" env RUSTFLAGS="-D warnings" cargo test $PROFILE --workspace integration -- --ignored --test-threads=1
+    run "vulkan tests" env RUSTFLAGS="-D warnings" cargo test $PROFILE --workspace vulkan -- --ignored --test-threads=1
 fi
 
 run "workspace doctests" env RUSTFLAGS="-D warnings" cargo test $PROFILE --workspace --doc
