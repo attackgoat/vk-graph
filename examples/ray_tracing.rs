@@ -21,7 +21,7 @@ use {
             device::Device,
             image::ImageInfo,
             physical_device::RayTracingPipelineProperties,
-            ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
+            ray_tracing::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
             shader::Shader,
         },
         pool::{Pool as _, hash::HashPool},
@@ -597,7 +597,7 @@ fn main() -> anyhow::Result<()> {
         load_scene_buffers(&window.device)?;
 
     // ------------------------------------------------------------------------------------------ //
-    // Create the bottom level acceleration structure
+    // Create the bottom-level acceleration structure
     // ------------------------------------------------------------------------------------------ //
 
     let blas_geometry_info = AccelerationStructureGeometryInfo::blas([(
@@ -659,7 +659,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     // ------------------------------------------------------------------------------------------ //
-    // Create the top level acceleration structure
+    // Create the top-level acceleration structure
     // ------------------------------------------------------------------------------------------ //
 
     let tlas_geometry_info = AccelerationStructureGeometryInfo::tlas([(
@@ -781,7 +781,7 @@ fn main() -> anyhow::Result<()> {
                     .resource(ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        frame.graph.resource(frame.swapchain_image).info.fmt,
+                        frame.graph.resource(frame.swapchain_image).info.format,
                         vk::ImageUsageFlags::STORAGE
                             | vk::ImageUsageFlags::TRANSFER_DST
                             | vk::ImageUsageFlags::TRANSFER_SRC,

@@ -116,7 +116,7 @@ fn create_pak_bindings(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> anyhow::
         bindings.push_str("\"#;\n");
     }
 
-    write(dst, bindings).context("Unable to bindings text")?;
+    write(dst, bindings).context("Unable to write bindings text")?;
 
     Ok(())
 }
@@ -144,7 +144,7 @@ fn create_shader_bindings(
         bindings.push_str("\"));\n");
     }
 
-    write(dst, bindings).context("Unable to bindings text")?;
+    write(dst, bindings).context("Unable to write bindings text")?;
 
     Ok(())
 }

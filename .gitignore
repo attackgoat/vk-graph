@@ -7,3 +7,4 @@ libdxcompiler.so
 **/*.profraw
 fuzz/artifacts
 fuzz/corpus
+graphify-out

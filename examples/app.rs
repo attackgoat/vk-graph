@@ -11,7 +11,7 @@ use {
         },
         pool::hash::HashPool,
     },
-    vk_graph_window::swapchain::{Swapchain, SwapchainError, SwapchainInfo},
+    vk_graph_window::graphchain::{Graphchain, GraphchainError, GraphchainInfo},
     winit::{
         application::ApplicationHandler,
         error::EventLoopError,
@@ -53,9 +53,9 @@ impl ApplicationHandler for Application {
             .first()
             .copied()
             .unwrap();
-        let swapchain = Swapchain::new(
+        let graphchain = Graphchain::new(
             surface,
-            SwapchainInfo::new(window_size.width, window_size.height, surface_format)
+            GraphchainInfo::new(window_size.width, window_size.height, surface_format)
                 .into_builder()
                 .present_mode(present_mode),
         )
@@ -64,7 +64,7 @@ impl ApplicationHandler for Application {
         let swapchain_pool = HashPool::new(&device);
 
         self.0 = Some(Context {
-            swapchain,
+            graphchain,
             swapchain_pool,
             window,
         });
@@ -81,10 +81,10 @@ impl ApplicationHandler for Application {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                let mut swapchain_info = context.swapchain.info;
-                swapchain_info.width = size.width;
-                swapchain_info.height = size.height;
-                context.swapchain.set_info(swapchain_info);
+                let mut info = context.graphchain.info;
+                info.width = size.width;
+                info.height = size.height;
+                context.graphchain.set_info(info);
             }
             WindowEvent::RedrawRequested => {
                 if let Err(err) = context.draw() {
@@ -109,14 +109,14 @@ struct Args {
 }
 
 struct Context {
-    swapchain: Swapchain,
+    graphchain: Graphchain,
     swapchain_pool: HashPool,
     window: Window,
 }
 
 impl Context {
-    fn draw(&mut self) -> Result<(), SwapchainError> {
-        if let Some(swapchain_image) = self.swapchain.acquire_next_image()? {
+    fn draw(&mut self) -> Result<(), GraphchainError> {
+        if let Some(swapchain_image) = self.graphchain.acquire_next_image()? {
             let mut graph = Graph::default();
             let swapchain_image = graph.bind_resource(swapchain_image);
 
@@ -124,7 +124,7 @@ impl Context {
             graph.clear_color_image(swapchain_image, [1.0, 0.0, 1.0, 1.0]);
 
             self.window.pre_present_notify();
-            self.swapchain
+            self.graphchain
                 .present_image(&mut self.swapchain_pool, graph, swapchain_image, 0)?;
         }
 

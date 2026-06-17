@@ -16,7 +16,7 @@ use {
         driver::{
             buffer::Buffer,
             device::Device,
-            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             shader::{SamplerInfo, Shader},
         },
@@ -31,7 +31,7 @@ use {
 ///
 /// Note that manually specifying image samplers is completely optional, valid defaults will be used
 /// if they are not specified when creating the shader which uses them. Additionally, you could
-/// instead use use name suffixes such as _llr or _nne for linear/linear repeat or nearest/nearest
+/// instead use name suffixes such as _llr or _nne for linear/linear repeat or nearest/nearest
 /// clamp-to-edge.
 ///
 /// You may run this example program with either --hlsl or --separate arguments as follows:
@@ -152,12 +152,14 @@ fn create_pipeline(
             )
         }
         (true, false) => {
-            // HLSL combined image sampler: include_glsl uses shaderc which does not support this,
-            // so we are using hassle_rs which uses dxc. You must follow the
-            // instructions listed here to use hassle_rs:
-            // See: https://github.com/Traverse-Research/hassle-rs
-            // See: https://github.com/microsoft/DirectXShaderCompiler/wiki/Vulkan-combined-image-sampler-type
-            // See: https://github.com/google/shaderc/issues/1310
+            /*
+            HLSL combined image sampler: include_glsl uses shaderc which does not support this, so
+            we are using hassle_rs which uses dxc. You must follow the instructions listed here to
+            use hassle_rs:
+            See: https://github.com/Traverse-Research/hassle-rs
+            See: https://github.com/microsoft/DirectXShaderCompiler/wiki/Vulkan-combined-image-sampler-type
+            See: https://github.com/google/shaderc/issues/1310
+            */
             Shader::new_fragment(
                 compile_hlsl(
                     "fragment.hlsl",
@@ -231,7 +233,7 @@ fn create_pipeline(
     };
 
     // Use the builder pattern to specify an image sampler at the combined binding index (0) or
-    // separate binding index (1).
+    // separate binding index (1)
     let sampler_binding = args.separate as u32;
     frag_shader = frag_shader.image_sampler(sampler_binding, sampler_info);
 

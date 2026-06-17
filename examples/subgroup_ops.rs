@@ -130,12 +130,12 @@ fn exclusive_sum(
         });
 
     let output_buf = graph.resource(output_buf).clone();
-    let mut cmd = graph
+    let mut fence = graph
         .finalize()
         .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();
-    cmd.wait_until_executed()?;
+    fence.wait_signaled()?;
 
     println!(
         "Waited {}μs (len={})",

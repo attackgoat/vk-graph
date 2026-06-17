@@ -3,7 +3,7 @@ use {
     std::path::PathBuf,
     vk_graph::{
         cmd::{LoadOp, StoreOp},
-        driver::graphic::GraphicsPipelineInfo,
+        driver::graphics::GraphicsPipelineInfo,
     },
     vk_graph_hot::{HotGraphicsPipeline, HotShader},
     vk_graph_window::{Window, WindowError},

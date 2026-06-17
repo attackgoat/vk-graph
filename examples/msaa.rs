@@ -13,7 +13,7 @@ use {
             DriverError,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{ImageInfo, SampleCount},
             physical_device::Vulkan10Limits,
         },
@@ -109,7 +109,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 &mesh_noaa_pipeline
             })
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
             .resource_access(cube_vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, scene_uniform_buf, AccessType::AnyShaderReadUniformBuffer);
 
@@ -119,7 +119,7 @@ fn main() -> anyhow::Result<()> {
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        cmd.resource(frame.swapchain_image).info.fmt,
+                        cmd.resource(frame.swapchain_image).info.format,
                         vk::ImageUsageFlags::COLOR_ATTACHMENT
                             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     )

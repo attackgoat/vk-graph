@@ -1,8 +1,8 @@
-<image alt="Preview" src="../../.github/img/vr.png" width=40%>
+<img alt="Preview" src="../../.github/img/vr.png" width=40%>
 
 # Virtual Reality Example
 
-_Exaimine the skeleton of a Woolly Mammoth using the hands of Abraham Lincoln_
+_Examine the skeleton of a Woolly Mammoth using the hands of Abraham Lincoln_
 
 This example uses assets from the Smithsonian collection to create a real-life-size display in VR.
 Any OpenXR-supported VR headset should work.
@@ -13,9 +13,9 @@ link against a system loader instead.
 
 - Asset loading
 - Basic VR handling/driver code
-- Normal mapping using Mikktspace
+- Normal mapping using MikkTSpace
 - Hot shader reloading
 
 ## Tested Platforms
 
-- Windows/Valve Index on SteamVR @ 144hz
+- Windows/Valve Index on SteamVR @ 144 Hz

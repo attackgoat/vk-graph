@@ -1,29 +1,27 @@
-<image alt="Preview" src="../../.github/img/shader-toy.png">
+<img alt="Preview" src="../../.github/img/shader-toy.png">
 
-# Shader Toy Example
+# Shadertoy Example
 
 This example uses computational fluid dynamics to create an effect like spilled paint. The original
 shader code comes from [Florian Berger](https://www.shadertoy.com/view/MsGSRd) and is attached to a
 permissive [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/) license.
 
-The implementation is presented as close as possible to the original usage on Shader Toy, but it
-would not be recommended to use it directly - you probably want to use compute pipelines for things
-like this. Also there are numerous unused descriptor bindings and push constant ranges which could
-be removed; but those are standard things all Shader Toys require.
+The implementation stays close to the original Shadertoy usage. For production code, a compute
+pipeline would usually be a better fit for this kind of effect. The example also keeps the unused
+descriptor bindings and push constant ranges that standard Shadertoy-style pipelines expect.
 
 ## Details
 
-See the `build.rs` script: it packs the hefty (they are actually not hefty) images into a `.pak`
-file. This makes it easier for the example to be run in other places, but of course all this is
-overkill for this actual example. It also pre-compiles the shader code from GLSL to SPIR-V.
+See the `build.rs` script: it packs the example images into a `.pak` file. This makes the example
+easier to run from different working directories. It also pre-compiles the shader code from GLSL to
+SPIR-V.
 
 ### Adding/Changing files
 
-The `pak.toml` file references the images used in this example using a glob see line 6 in that file.
+The `pak.toml` file references the images used in this example using a glob; see line 6 in that file.
 
-If we add a reference directly to that file the build script will pick up and pack the new file. If
-we let the glob continue to reference files you might want to ask the build script to look again,
-like so:
+If you add a file reference directly to `pak.toml`, the build script will pick up and pack the new
+file. If the glob should pick up new files instead, ask the build script to look again:
 
 ```bash
 touch res/pak.toml

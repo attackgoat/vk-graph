@@ -64,7 +64,7 @@ graph
     .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::DontCare)
     .record_cmd(move |cmd| {
         cmd
-            .push_constants(some_u8_slice)
+            .push_constants(0, some_u8_slice)
             .draw(6, 1, 0, 0);
     });
 ```
@@ -83,6 +83,8 @@ available.
   validated releases.
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
+- **`ash-molten`** — Enable `ash-molten` support for MoltenVK-based platforms.
+- **`parking_lot`** *(enabled by default)* — Use `parking_lot` synchronization primitives.
 - **`profile-with-*`** — Use the specified profiling backend:
   `profile-with-puffin`, `profile-with-optick`, `profile-with-superluminal`, or
   `profile-with-tracy`
@@ -102,7 +104,7 @@ To enable logging, set the `RUST_LOG` environment variable to `trace`, `debug`, 
 _You may also filter messages, for example:_
 
 ```bash
-RUST_LOG=vk_graph::driver=trace,vk_graph=warn cargo run --example ray_trace
+RUST_LOG=vk_graph::driver=trace,vk_graph=warn cargo run --example ray_tracing
 ```
 
 ```
@@ -141,10 +143,10 @@ Included are some examples you might find helpful:
 - [`hello_world.rs`](crates/vk-graph-window/examples/hello_world.rs) — Displays a window on the
   screen. Please start here.
 - [`triangle.rs`](examples/triangle.rs) — Shaders and full setup of index/vertex buffers; < 100 LOC.
-- [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass shader toy using the original
+- [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass Shadertoy using the original
   shader code.
 
-See the [example code](examples/README.md), 
+See the [example code](examples/README.md),
 [documentation](https://docs.rs/vk-graph/latest/vk_graph/), or helpful
 [guide book](https://attackgoat.github.io/vk-graph) for more information.
 

@@ -20,10 +20,10 @@ use {
     vk_sync::AccessType,
 };
 
-/// This program demonstrates a single render pass which uses multiple executions to record a chain
-/// of image copies which reduce an input image from 4x4 into 2x2 and finally 1x1. This is useful
-/// for GPU-based mesh instance culling, where the depth buffer is summarized into a mip chain that
-/// can be queried to find the maximum depth for a given render area.
+/// This program demonstrates a single compute command which uses multiple executions to record a
+/// chain of image copies which reduce an input image from 4x4 into 2x2 and finally 1x1. This is
+/// useful for GPU-based mesh instance culling, where the depth buffer is summarized into a mip chain
+/// that can be queried to find the maximum depth for a given render area.
 ///
 /// This technique is also known as a depth pyramid.
 fn main() -> Result<(), DriverError> {
@@ -160,10 +160,10 @@ fn main() -> Result<(), DriverError> {
 
     let depth_pixel = graph.resource(depth_pixel).clone();
 
-    graph
+    let mut fence = graph
         .finalize()
-        .queue_submit(&mut HashPool::new(&device), 0, 0)?
-        .wait_until_executed()?;
+        .queue_submit(&mut HashPool::new(&device), 0, 0)?;
+    fence.wait_signaled()?;
 
     let depth_pixel = f32::from_ne_bytes(Buffer::mapped_slice(&depth_pixel).try_into().unwrap());
 

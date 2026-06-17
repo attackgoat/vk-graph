@@ -1,6 +1,6 @@
 // Adapted from https://github.com/gl-transitions/gl-transitions
 // NOTE: Some are rough or broken and need a bit of care - others should be optimized for production
-// use.
+// use
 
 use {
     log::trace,
@@ -143,8 +143,8 @@ pub enum Transition {
     },
     Fade,
     FadeGrayscale {
-        /// if 0.0, the image directly turn grayscale, if 0.9, the grayscale transition phase is
-        /// very important
+        /// If `0.0`, the image turns grayscale directly; if `0.9`, the grayscale transition phase
+        /// is very important.
         intensity: f32,
     },
     FilmBurn {
@@ -183,13 +183,13 @@ pub enum Transition {
         luma_map: AnyImageNode,
     },
     LuminanceMelt {
-        /// Direction of movement :  0 : up, 1, down
+        /// Direction of movement: `false` for up, `true` for down.
         direction: bool,
 
-        /// Luminance threshold
+        /// Luminance threshold.
         threshold: f32,
 
-        /// Does the movement takes effect above or below luminance threshold ?
+        /// Whether movement takes effect above or below the luminance threshold.
         above: bool,
     },
     Morph {

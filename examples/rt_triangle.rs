@@ -18,7 +18,7 @@ use {
             buffer::{Buffer, BufferInfo},
             device::Device,
             physical_device::RayTracingPipelineProperties,
-            ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
+            ray_tracing::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
             shader::Shader,
         },
         pool::hash::HashPool,
@@ -262,7 +262,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     // ------------------------------------------------------------------------------------------ //
-    // Create the bottom level acceleration structure
+    // Create the bottom-level acceleration structure
     // ------------------------------------------------------------------------------------------ //
 
     let blas_geometry_info = AccelerationStructureGeometryInfo::blas([(
@@ -324,7 +324,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     // ------------------------------------------------------------------------------------------ //
-    // Create the top level acceleration structure
+    // Create the top-level acceleration structure
     // ------------------------------------------------------------------------------------------ //
 
     let tlas_geometry_info = AccelerationStructureGeometryInfo::tlas([(

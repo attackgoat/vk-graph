@@ -38,7 +38,7 @@ use {
             buffer::{Buffer, BufferInfo},
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo, StencilMode},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo, StencilMode},
             image::{ImageInfo, SampleCount},
             physical_device::Vulkan10Limits,
             render_pass::ResolveMode,
@@ -600,7 +600,7 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .clear_color_image(images[3], [0f32; 4])
         .clear_color_image(images[4], [0f32; 4])
         .begin_cmd()
-        .debug_name("graphic-bindless")
+        .debug_name("graphics-bindless")
         .bind_pipeline(&pipeline)
         .shader_resource_access(
             (0, [0]),
@@ -775,7 +775,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .as_slice(),
     );
 
-    let swapchain_format = frame.graph.resource(frame.swapchain_image).info.fmt;
+    let swapchain_format = frame.graph.resource(frame.swapchain_image).info.format;
     let msaa_color_image = frame.graph.bind_resource(
         pool.resource(
             ImageInfo::image_2d(
@@ -1523,8 +1523,8 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
     frame.graph.clear_color_image(images[0], [0f32; 4]);
     frame.graph.clear_color_image(images[1], [0f32; 4]);
 
-    // a and b should merge into one renderpass with two subpasses; however the use of images[1] in
-    // b should have a pipeline barrier (on the clear we just did) before the pass starts.
+    // a and b should merge into one render pass with two subpasses; however the use of images[1] in
+    // b should have a pipeline barrier (on the clear we just did) before the pass starts
     frame
         .graph
         .begin_cmd()

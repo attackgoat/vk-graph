@@ -67,7 +67,7 @@ impl Preprocessor for GuideHelper {
         insert_vulkan_sdk_version(&mut book);
 
         // mdBook renders the raw `#` lines literally, but compile-only example
-        // lines should still keep those lines available for doctests.
+        // lines should still keep those lines available for doctests
         if _ctx.renderer == "html" {
             hide_hidden_lines(&mut book);
         }
@@ -231,7 +231,7 @@ fn should_hide_lines_in_fence(info: &str) -> bool {
 
     let lang = info.split(',').map(str::trim).next().unwrap_or_default();
 
-    !matches!(lang, "text" | "plain" | "plaintext" | "md" | "markdown")
+    matches!(lang, "rust" | "rs") || info.split(',').map(str::trim).any(|part| part == "no_run")
 }
 
 fn vulkan_sdk_version_for_ash(major: u64, minor: u64) -> &'static str {
@@ -267,6 +267,9 @@ mod test {
             "let graph = Graph::new();\n",
             "# let _ = graph;\n",
             "```\n\n",
+            "```rust,no_run\n",
+            "# let _ = Graph::new();\n",
+            "```\n\n",
             "```text\n",
             "# keep this line\n",
             "```\n\n",
@@ -287,13 +290,17 @@ mod test {
                 "```rust\n",
                 "let graph = Graph::new();\n",
                 "```\n\n",
+                "```rust,no_run\n",
+                "```\n\n",
                 "```text\n",
                 "# keep this line\n",
                 "```\n\n",
                 "```toml\n",
+                "# Cargo.toml\n",
                 "[dependencies]\n",
                 "```\n\n",
                 "```bash\n",
+                "# See: \"Shader Compilation\"\n",
                 "run-example\n",
                 "```\n",
             )

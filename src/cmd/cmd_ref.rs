@@ -1,6 +1,6 @@
 use {
     crate::{
-        AnyAccelerationStructureNode, AnyResource, Node,
+        AnyAccelerationStructureNode, AnyResource, Execution, Node,
         driver::{
             accel_struct::{
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
@@ -13,9 +13,6 @@ use {
     log::trace,
     std::{cell::RefCell, ops::Deref},
 };
-
-#[cfg(feature = "checked")]
-use crate::Execution;
 
 /// Recording interface for general Vulkan commands.
 ///
@@ -48,6 +45,7 @@ pub struct CommandRef<'a> {
     #[cfg(feature = "checked")]
     graph_id: crate::GraphId,
 
+    node_map: Option<&'a [usize]>,
     resources: &'a [AnyResource],
 }
 
@@ -55,16 +53,19 @@ impl<'a> CommandRef<'a> {
     pub(crate) fn new(
         cmd: &'a crate::driver::cmd_buf::CommandBuffer,
         resources: &'a [AnyResource],
-        #[cfg(feature = "checked")] exec: &'a Execution,
+        exec: &'a Execution,
         #[cfg(feature = "checked")] graph_id: crate::GraphId,
     ) -> Self {
         Self {
             cmd,
+            node_map: exec.node_map.as_deref(),
+            resources,
+
             #[cfg(feature = "checked")]
             exec,
+
             #[cfg(feature = "checked")]
-            graph_id,
-            resources,
+            graph_id: exec.stream_graph_id.unwrap_or(graph_id),
         }
     }
 
@@ -159,7 +160,7 @@ impl<'a> CommandRef<'a> {
     /// See also:
     ///
     /// - [`examples/ray_omni.rs`](/examples/ray_omni.rs)
-    /// - [`examples/ray_trace.rs`](/examples/ray_trace.rs)
+    /// - [`examples/ray_tracing.rs`](/examples/ray_tracing.rs)
     /// - [`examples/rt_triangle.rs`](/examples/rt_triangle.rs)
     pub fn build_accel_struct(&self, infos: &[BuildAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
@@ -321,6 +322,10 @@ impl<'a> CommandRef<'a> {
         });
 
         self
+    }
+
+    pub(crate) fn clone_resource_at(&self, node_idx: usize) -> AnyResource {
+        self.resources[node_idx].clone()
     }
 
     pub(crate) fn cmd_push_constants(
@@ -539,21 +544,28 @@ impl<'a> CommandRef<'a> {
         #[cfg(feature = "checked")]
         resource_node.assert_owner(self.graph_id);
 
-        // You must have called an access function for this node on this execution before borrowing
-        // the resource!
-        //
-        // Why: Code that attempts to access this function is attempting to get access to the Vulkan
-        // resource (buffer, image, or acceleration structure). In order to access any resources the
-        // access type must first be specified so the correct barriers may be added.
-        //
-        // See: https://attackgoat.github.io/vk-graph/pipeline_sync.html
+        let mut node_idx = resource_node.index();
+        if let Some(node_map) = self.node_map {
+            node_idx = node_map[node_idx];
+        }
+
+        /*
+        You must have called an access function for this node on this execution before borrowing
+        the resource!
+
+        Code that attempts to access this function is attempting to get access to the Vulkan
+        resource (buffer, image, or acceleration structure). In order to access any resources the
+        access type must first be specified so the correct barriers may be added.
+
+        See: https://attackgoat.github.io/vk-graph/pipeline_sync.html
+        */
         #[cfg(feature = "checked")]
         assert!(
-            self.exec.accesses.contains(resource_node.index()),
+            self.exec.accesses.contains(node_idx),
             "unexpected node access: call an access function first"
         );
 
-        resource_node.borrow(self.resources)
+        resource_node.borrow_at(self.resources, node_idx)
     }
 }
 
@@ -617,7 +629,7 @@ pub struct BuildAccelerationStructureIndirectInfo {
     /// Specifies the geometry data to use when building the acceleration structure.
     pub build_data: AccelerationStructureGeometryInfo<AccelerationStructureGeometry>,
 
-    /// A buffer device addresses which points to `data.geometry.len()`
+    /// A buffer device address which points to `data.geometry.len()`
     /// [vk::AccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
     /// addresses where geometry data is stored.
     pub range_base: vk::DeviceAddress,
@@ -661,7 +673,7 @@ pub struct UpdateAccelerationStructureIndirectInfo {
     /// The acceleration structure to be written.
     pub dst_accel_struct: AnyAccelerationStructureNode,
 
-    /// A buffer device addresses which points to `data.geometry.len()`
+    /// A buffer device address which points to `data.geometry.len()`
     /// [vk::AccelerationStructureBuildRangeInfoKHR] structures defining dynamic offsets to the
     /// addresses where geometry data is stored.
     pub range_base: vk::DeviceAddress,

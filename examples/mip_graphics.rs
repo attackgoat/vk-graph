@@ -13,7 +13,7 @@ use {
         driver::{
             DriverError,
             device::Device,
-            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             shader::{SamplerInfoBuilder, Shader},
         },
@@ -178,9 +178,11 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
     let image_info = image.info;
     let image = graph.bind_resource(image);
 
-    // NOTE: Each pass writes to a different mip level, and so although it's the same image they are
-    // unable to be used as a single pass so we must call begin_pass for each. Without starting a
-    // new pass for each level the Vulkan framebuffer would be set to the size of the first image.
+    /*
+    NOTE: Each command writes to a different mip level, and so although it's the same image they are
+    unable to be used as a single render pass. Without starting a new command for each level the
+    Vulkan framebuffer would be set to the size of the first image.
+    */
     for mip_level in 0..image_info.mip_level_count {
         graph
             .begin_cmd()

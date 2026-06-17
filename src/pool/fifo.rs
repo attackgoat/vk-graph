@@ -1,7 +1,10 @@
 //! Pool which requests from a single bucket per resource type.
 
 use {
-    super::{Cache, Lease, Pool, PoolConfig, lease_command_buffer, with_cache},
+    super::{
+        BufferHostMappingCompatibility, Cache, Lease, Pool, PoolConfig, compatible_buffer_info,
+        with_cache,
+    },
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -162,13 +165,11 @@ impl Pool<BufferInfo, Buffer> for FifoPool {
                 // and superset of usage flags)
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
-                    if (item.info.dedicated & info.dedicated) == info.dedicated
-                        && item.info.host_read == info.host_read
-                        && item.info.host_write == info.host_write
-                        && item.info.alignment >= info.alignment
-                        && item.info.size >= info.size
-                        && item.info.usage.contains(info.usage)
-                    {
+                    if compatible_buffer_info(
+                        &item.info,
+                        &info,
+                        BufferHostMappingCompatibility::Exact,
+                    ) {
                         let item = cache.swap_remove(idx);
 
                         return Some(Lease::new(cache_ref.clone(), item));
@@ -197,13 +198,11 @@ impl Pool<CommandBufferInfo, CommandBuffer> for FifoPool {
             .entry(info.queue_family_index)
             .or_insert_with(PoolConfig::default_cache);
 
-        let item = with_cache(cache_ref, lease_command_buffer)
-            .map(Ok)
-            .unwrap_or_else(|| {
-                debug!("Creating new {}", stringify!(CommandBuffer));
+        let item = with_cache(cache_ref, Vec::pop).map(Ok).unwrap_or_else(|| {
+            debug!("Creating new {}", stringify!(CommandBuffer));
 
-                CommandBuffer::create(&self.device, info)
-            })?;
+            CommandBuffer::create(&self.device, info)
+        })?;
 
         // Drop anything we were holding from the last submission
         //item.wait_until_executed()?;
@@ -276,9 +275,9 @@ impl Pool<ImageInfo, Image> for FifoPool {
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
                     if item.info.array_layer_count == info.array_layer_count
-                        && item.info.dedicated == info.dedicated
+                        && item.info.alloc_dedicated == info.alloc_dedicated
                         && item.info.depth == info.depth
-                        && item.info.fmt == info.fmt
+                        && item.info.format == info.format
                         && item.info.height == info.height
                         && item.info.mip_level_count == info.mip_level_count
                         && item.info.sample_count == info.sample_count

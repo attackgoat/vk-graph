@@ -9,24 +9,26 @@ if [ "$#" -gt 0 ]; then
         TIMEOUT=$2
         shift 2
     else
-        echo "usage: $0 [--timeout SECONDS]" >&2
+        printf 'usage: %s [--timeout SECONDS]\n' "$0" >&2
         exit 1
     fi
 fi
 
 xdotool=""
 if [ -n "$TIMEOUT" ]; then
-    if command -v xdotool >/dev/null 2>&1; then
+    if [ -n "$DISPLAY" ] \
+        && command -v xdotool >/dev/null 2>&1 \
+        && xdotool getdisplaygeometry >/dev/null 2>&1; then
         xdotool="xdotool"
     else
-        echo "run-all-examples: WARNING xdotool not found, using timeout fallback" >&2
+        printf "run-all-examples: WARNING xdotool unavailable, using timeout fallback" >&2
     fi
 fi
 
 close_windows() {
     _children=$(pgrep -P "$1" 2>/dev/null || true)
 
-    # Try to close any X11 windows owned by PID $1, and ignores failure
+    # Try to close any X11 windows owned by PID $1, ignoring failure
     "$xdotool" search --pid "$1" windowclose >/dev/null 2>&1 || true
 
     for _ch in $_children; do
@@ -87,7 +89,7 @@ run cargo run --example egui -- --debug
 run cargo run --example imgui -- --debug
 run cargo run --example min_max -- --debug
 run cargo run --example mip_compute -- --debug
-run cargo run --example mip_graphic -- --debug
+run cargo run --example mip_graphics -- --debug
 run cargo run --example multithread -- --debug
 run cargo run --example multithread -- --debug --concurrent
 run cargo run --example multithread --release
@@ -96,7 +98,7 @@ run cargo run --example multipass -- --debug
 run cargo run --example msaa -- --debug
 run cargo run --example triangle -- --debug
 run cargo run --example rt_triangle -- --debug
-run cargo run --example ray_trace -- --debug
+run cargo run --example ray_tracing -- --debug
 run cargo run --example transitions -- --debug
 run cargo run --example vsm_omni -- --debug
 run cargo run --example vsm_omni -- --debug --geometry-shader

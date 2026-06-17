@@ -1,18 +1,23 @@
 //! Command buffer types
 
 use {
-    super::{DriverError, device::Device},
-    ash::vk,
+    super::{DriverError, device::Device, fence::Fence},
+    ash::vk::{self, Handle as _},
     derive_builder::Builder,
-    log::{error, trace, warn},
-    std::{fmt::Debug, slice, thread::panicking},
+    log::warn,
+    std::{
+        fmt::{Debug, Formatter},
+        slice,
+        thread::panicking,
+    },
 };
 
 // TODO: Expose command functions so the fence, device, waiting flags do not
 // need to be public
 
-/// Represents a Vulkan command buffer to which some work has been submitted.
-#[derive(Debug)]
+/// Represents a Vulkan command buffer allocation.
+///
+/// See [`VkCommandBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkCommandBuffer.html).
 #[read_only::cast]
 pub struct CommandBuffer {
     /// The device which owns this command buffer resource.
@@ -20,14 +25,6 @@ pub struct CommandBuffer {
     /// _Note:_ This field is read-only.
     #[readonly]
     pub device: Device,
-
-    droppables: Vec<Box<dyn Debug + Send + 'static>>,
-
-    /// The native Vulkan fence handle of this command buffer.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub fence: vk::Fence,
 
     /// The native Vulkan resource handle of this command buffer.
     ///
@@ -48,11 +45,15 @@ impl CommandBuffer {
     ///
     /// This is a thin wrapper around [`ash::Device::begin_command_buffer`] that maps Vulkan errors
     /// to [`DriverError`] variants.
+    ///
+    /// See [`vkBeginCommandBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkBeginCommandBuffer.html).
     pub fn begin(&self, info: &vk::CommandBufferBeginInfo) -> Result<(), DriverError> {
         Device::begin_command_buffer(&self.device, self.handle, info)
     }
 
     /// Creates a command buffer allocation backed by a transient resettable command pool.
+    ///
+    /// See [`vkAllocateCommandBuffers`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkAllocateCommandBuffers.html).
     #[profiling::function]
     pub fn create(
         device: &Device,
@@ -100,19 +101,84 @@ impl CommandBuffer {
                 }
                 _ => DriverError::Unsupported,
             }
-        })?[0];
+        })?
+        .into_iter()
+        .find(|handle| !handle.is_null())
+        .ok_or_else(|| {
+            warn!("missing command buffer handle");
 
-        let fence = Device::create_fence(&device, false)?;
+            DriverError::Unsupported
+        })?;
 
         Ok(Self {
             device,
-            droppables: vec![],
-            fence,
             handle,
             info,
             pool,
             release_semaphore: None,
         })
+    }
+
+    /// Ends recording this command buffer.
+    ///
+    /// This is a thin wrapper around [`ash::Device::end_command_buffer`] that maps Vulkan errors
+    /// to [`DriverError`] variants.
+    ///
+    /// See [`vkEndCommandBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkEndCommandBuffer.html).
+    pub fn end(&self) -> Result<(), DriverError> {
+        Device::end_command_buffer(&self.device, self.handle)
+    }
+
+    /// Ends recording a render pass.
+    pub fn end_render_pass(&self) {
+        unsafe {
+            self.device.cmd_end_render_pass(self.handle);
+        }
+    }
+
+    /// Submits command buffers to a queue using `fence`.
+    ///
+    /// This method does not begin, end, or reset `self` or `fence`. Callers are expected to
+    /// submit only executable command buffers and to manage fence waits and resets as needed.
+    ///
+    /// Typical handling is:
+    ///
+    /// 1. Begin recording with [`Self::begin`].
+    /// 2. Record commands.
+    /// 3. End recording with [`Self::end`].
+    /// 4. Submit this command buffer with `queue_submit`.
+    /// 5. Later, wait for completion with [`Fence::is_signaled`] or [`Fence::wait_signaled`].
+    /// 6. Before re-submitting this same command buffer, reset the fence with [`Fence::reset`],
+    ///    then begin recording again.
+    ///
+    /// See [`vkQueueSubmit`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkQueueSubmit.html).
+    pub fn queue_submit(
+        &self,
+        queue: vk::Queue,
+        fence: &mut Fence,
+        submits: &[vk::SubmitInfo],
+    ) -> Result<(), DriverError> {
+        Device::queue_submit(&self.device, queue, submits, fence.handle)?;
+        fence.mark_queued();
+
+        Ok(())
+    }
+
+    /// Submits command buffers to a queue using `vkQueueSubmit2` (Vulkan 1.3 core or
+    /// `VK_KHR_synchronization2`).
+    ///
+    /// See [`vkQueueSubmit2`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkQueueSubmit2.html)
+    /// and [`VK_KHR_synchronization2`](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_synchronization2.html).
+    pub fn queue_submit2(
+        &self,
+        queue: vk::Queue,
+        fence: &mut Fence,
+        submits: &[vk::SubmitInfo2],
+    ) -> Result<(), DriverError> {
+        Device::queue_submit2(&self.device, queue, submits, fence.handle)?;
+        fence.mark_queued();
+
+        Ok(())
     }
 
     /// Returns a cached semaphore used to signal temporary queue-ownership release submissions.
@@ -126,109 +192,51 @@ impl CommandBuffer {
 
         let semaphore = Device::create_semaphore(&self.device)?;
 
+        Device::try_set_debug_utils_object_name(&self.device, semaphore, "queue ownership release");
+
         self.release_semaphore = Some(semaphore);
 
         Ok(semaphore)
     }
 
-    /// Drops an item after execution has been completed.
-    pub fn drop_after_executed(&mut self, x: impl Debug + Send + 'static) {
-        self.droppables.push(Box::new(x));
+    /// Sets the debugging name assigned to this command buffer.
+    pub fn set_debug_name(&self, name: impl AsRef<str>) {
+        Device::try_set_debug_utils_object_name(&self.device, self.handle, &name);
+        Device::try_set_private_data_object_name(
+            &self.device,
+            vk::ObjectType::COMMAND_BUFFER,
+            self.handle,
+            &name,
+        );
     }
 
-    /// Signals that execution has completed and it is time to drop anything we collected.
-    #[profiling::function]
-    fn drop_fenced(&mut self) {
-        if !self.droppables.is_empty() {
-            trace!("dropping {} shared references", self.droppables.len());
+    /// Sets the debugging name assigned to this command buffer.
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
+        self.set_debug_name(name);
+
+        self
+    }
+}
+
+impl AsRef<CommandBuffer> for CommandBuffer {
+    fn as_ref(&self) -> &CommandBuffer {
+        self
+    }
+}
+
+impl Debug for CommandBuffer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut res = f.debug_struct(stringify!(CommandBuffer));
+
+        if let Some(debug_name) = &Device::private_data_object_name(
+            &self.device,
+            vk::ObjectType::COMMAND_BUFFER,
+            self.handle,
+        ) {
+            res.field("debug_name", debug_name);
         }
 
-        self.droppables.clear();
-    }
-
-    /// Ends recording this command buffer.
-    ///
-    /// This is a thin wrapper around [`ash::Device::end_command_buffer`] that maps Vulkan errors
-    /// to [`DriverError`] variants.
-    pub fn end(&self) -> Result<(), DriverError> {
-        Device::end_command_buffer(&self.device, self.handle)
-    }
-
-    /// Returns `true` after the GPU has executed the most recent submission associated with this
-    /// command buffer's fence.
-    ///
-    /// See [`Self::wait_until_executed`] to block until execution completes.
-    #[profiling::function]
-    pub fn has_executed(&self) -> Result<bool, DriverError> {
-        let res = unsafe { self.device.get_fence_status(self.fence) };
-
-        match res {
-            Ok(status) => Ok(status),
-            Err(err) if err == vk::Result::ERROR_DEVICE_LOST => {
-                error!("invalid device state: lost");
-
-                Err(DriverError::InvalidData)
-            }
-            Err(err) => {
-                // VK_SUCCESS and VK_NOT_READY handled by get_fence_status in ash
-                // VK_ERROR_DEVICE_LOST already handled above, so no idea what happened
-                error!("unable to get fence status: {err}");
-
-                Err(DriverError::InvalidData)
-            }
-        }
-    }
-
-    /// Resets the embedded fence to the unsignaled state.
-    ///
-    /// This is typically used before re-submitting the command buffer after a prior submission has
-    /// completed.
-    pub fn reset_fence(&self) -> Result<(), DriverError> {
-        Device::reset_fences(&self.device, slice::from_ref(&self.fence))
-    }
-
-    /// Submits command buffers to a queue using this command buffer's fence.
-    ///
-    /// This method does not begin, end, or reset `self`, or reset `self`'s fence. Callers are
-    /// expected to submit only executable command buffers and to manage fence reset as needed
-    /// before re-submitting this same command buffer.
-    ///
-    /// Typical handling is:
-    ///
-    /// 1. Begin recording with [`Self::begin`].
-    /// 2. Record commands.
-    /// 3. End recording with [`Self::end`].
-    /// 4. Submit this command buffer with `queue_submit`.
-    /// 5. Later, wait for completion with [`Self::has_executed`] or
-    ///    [`Self::wait_until_executed`].
-    /// 6. Before re-submitting this same command buffer, reset its fence with
-    ///    [`Self::reset_fence`], then begin recording again.
-    pub fn queue_submit(
-        &self,
-        queue: vk::Queue,
-        submits: &[vk::SubmitInfo],
-    ) -> Result<(), DriverError> {
-        Device::queue_submit(&self.device, queue, submits, self.fence)
-    }
-
-    /// Stalls by blocking the current thread until the GPU has executed the previous submission to
-    /// this command buffer.
-    ///
-    /// See [`Self::has_executed`] to check without blocking.
-    ///
-    /// This method does not reset the embedded fence before returning. If you later call
-    /// [`Self::reset_fence`], then [`Self::has_executed`] will return `false` until the next
-    /// submission completes.
-    #[profiling::function]
-    pub fn wait_until_executed(&mut self) -> Result<(), DriverError> {
-        if self.droppables.is_empty() {
-            return Ok(());
-        }
-
-        Device::wait_for_fence(&self.device, &self.fence)?;
-        self.drop_fenced();
-
-        Ok(())
+        res.field("handle", &self.handle).finish_non_exhaustive()
     }
 }
 
@@ -239,9 +247,11 @@ impl Drop for CommandBuffer {
             return;
         }
 
-        if self.wait_until_executed().is_err() {
-            return;
-        }
+        Device::try_clear_private_data_object_name(
+            &self.device,
+            vk::ObjectType::COMMAND_BUFFER,
+            self.handle,
+        );
 
         unsafe {
             if let Some(semaphore) = self.release_semaphore.take() {
@@ -251,7 +261,6 @@ impl Drop for CommandBuffer {
             self.device
                 .free_command_buffers(self.pool, slice::from_ref(&self.handle));
             self.device.destroy_command_pool(self.pool, None);
-            self.device.destroy_fence(self.fence, None);
         }
     }
 }

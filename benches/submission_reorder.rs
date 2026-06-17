@@ -10,7 +10,7 @@ fn submission_reorder_bench(c: &mut Criterion) {
         (
             "sparse",
             ReorderBenchSpec {
-                pass_count: 128,
+                cmd_count: 128,
                 resource_count: 64,
                 short_lived_uses: 3,
                 long_lived_resource_count: 0,
@@ -20,7 +20,7 @@ fn submission_reorder_bench(c: &mut Criterion) {
         (
             "mixed",
             ReorderBenchSpec {
-                pass_count: 512,
+                cmd_count: 512,
                 resource_count: 128,
                 short_lived_uses: 3,
                 long_lived_resource_count: 4,
@@ -30,7 +30,7 @@ fn submission_reorder_bench(c: &mut Criterion) {
         (
             "mixed",
             ReorderBenchSpec {
-                pass_count: 1024,
+                cmd_count: 1024,
                 resource_count: 192,
                 short_lived_uses: 3,
                 long_lived_resource_count: 8,
@@ -40,7 +40,7 @@ fn submission_reorder_bench(c: &mut Criterion) {
         (
             "mixed",
             ReorderBenchSpec {
-                pass_count: 2000,
+                cmd_count: 2000,
                 resource_count: 256,
                 short_lived_uses: 2,
                 long_lived_resource_count: 12,
@@ -49,11 +49,11 @@ fn submission_reorder_bench(c: &mut Criterion) {
         ),
     ] {
         let mut harness = ReorderBenchHarness::new(spec);
-        group.throughput(Throughput::Elements(spec.pass_count as u64));
+        group.throughput(Throughput::Elements(spec.cmd_count as u64));
         group.bench_with_input(
             BenchmarkId::new(
                 shape,
-                format!("{}p_{}r", spec.pass_count, spec.resource_count),
+                format!("{}c_{}r", spec.cmd_count, spec.resource_count),
             ),
             &spec,
             |b, _| {

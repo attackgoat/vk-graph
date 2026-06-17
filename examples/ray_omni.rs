@@ -28,7 +28,7 @@ use {
             },
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
         },
@@ -122,12 +122,8 @@ fn main() -> anyhow::Result<()> {
             .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
             .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, camera_buf, AccessType::AnyShaderReadUniformBuffer)
-            .shader_resource_access(
-                1,
-                scene_tlas,
-                AccessType::RayTracingShaderReadAccelerationStructure,
-            )
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .shader_resource_access(1, scene_tlas, AccessType::FragmentShaderReadOther)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
             .depth_stencil_attachment_image(
                 depth_image,
                 LoadOp::CLEAR_ONE_STENCIL_ZERO,
@@ -335,7 +331,7 @@ fn create_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
                 1000.0
             );
 
-            // Traverse the acceleration structure and store the first intersection, if any.
+            // Traverse the acceleration structure and store the first intersection, if any
             rayQueryProceedEXT(rayQuery);
 
             // If the intersection has hit a triangle, the fragment is shadowed

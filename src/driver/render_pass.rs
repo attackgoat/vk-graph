@@ -4,10 +4,10 @@ use {
     super::{
         DriverError,
         device::Device,
-        graphic::{DepthStencilInfo, GraphicsPipeline},
+        graphics::{DepthStencilInfo, GraphicsPipeline},
         image::SampleCount,
     },
-    ash::vk,
+    ash::vk::{self, Handle},
     log::{trace, warn},
     std::{
         collections::{HashMap, hash_map::Entry},
@@ -19,7 +19,7 @@ use {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct AttachmentInfo {
     pub flags: vk::AttachmentDescriptionFlags,
-    pub fmt: vk::Format,
+    pub format: vk::Format,
     pub sample_count: SampleCount,
     pub load_op: vk::AttachmentLoadOp,
     pub store_op: vk::AttachmentStoreOp,
@@ -33,7 +33,7 @@ impl From<AttachmentInfo> for vk::AttachmentDescription2<'_> {
     fn from(value: AttachmentInfo) -> Self {
         vk::AttachmentDescription2::default()
             .flags(value.flags)
-            .format(value.fmt)
+            .format(value.format)
             .samples(value.sample_count.into())
             .load_op(value.load_op)
             .store_op(value.store_op)
@@ -48,7 +48,7 @@ impl Default for AttachmentInfo {
     fn default() -> Self {
         AttachmentInfo {
             flags: vk::AttachmentDescriptionFlags::MAY_ALIAS,
-            fmt: vk::Format::UNDEFINED,
+            format: vk::Format::UNDEFINED,
             sample_count: SampleCount::Type1,
             initial_layout: vk::ImageLayout::UNDEFINED,
             load_op: vk::AttachmentLoadOp::DONT_CARE,
@@ -99,9 +99,11 @@ struct GraphicPipelineKey {
 }
 
 /// Vulkan render pass state and cached framebuffer/pipeline objects for compatible attachments.
+///
+/// See [`VkRenderPass`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRenderPass.html).
 #[derive(Debug)]
 #[read_only::cast]
-pub struct RenderPass {
+pub(crate) struct RenderPass {
     /// The device which owns this render pass resource.
     ///
     /// _Note:_ This field is read-only.
@@ -121,7 +123,7 @@ pub struct RenderPass {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub info: RenderPassInfo,
+    pub(crate) info: RenderPassInfo,
 }
 
 impl RenderPass {
@@ -334,7 +336,24 @@ impl RenderPass {
             subpass_idx,
         });
         if let Entry::Occupied(entry) = entry {
-            return Ok(*entry.get());
+            let pipeline_handle = *entry.get();
+
+            if let Some(name) = Device::private_data_object_name(
+                &self.device,
+                vk::ObjectType::PIPELINE_LAYOUT,
+                pipeline.inner.layout,
+            ) && match Device::private_data_object_name(
+                &self.device,
+                vk::ObjectType::PIPELINE,
+                pipeline_handle,
+            ) {
+                None => true,
+                Some(previous) => previous != name,
+            } {
+                pipeline.set_variant_debug_name(pipeline_handle, self.handle, subpass_idx, &name);
+            }
+
+            return Ok(pipeline_handle);
         }
 
         let entry = match entry {
@@ -417,7 +436,7 @@ impl RenderPass {
             .vertex_input_state(&vertex_input_state)
             .viewport_state(&viewport_state);
 
-        let pipeline = unsafe {
+        let pipeline_handle = unsafe {
             self.device.create_graphics_pipelines(
                 Device::pipeline_cache(&self.device),
                 slice::from_ref(&create_info),
@@ -428,11 +447,33 @@ impl RenderPass {
             warn!("create_graphics_pipelines: {err}\n{:#?}", create_info);
 
             DriverError::Unsupported
-        })?[0];
+        })?
+        .into_iter()
+        .find(|handle| !handle.is_null())
+        .ok_or_else(|| {
+            warn!("missing pipeline handle");
 
-        entry.insert(pipeline);
+            DriverError::Unsupported
+        })?;
 
-        Ok(pipeline)
+        if let Some(name) = Device::private_data_object_name(
+            &self.device,
+            vk::ObjectType::PIPELINE_LAYOUT,
+            pipeline.inner.layout,
+        ) && match Device::private_data_object_name(
+            &self.device,
+            vk::ObjectType::PIPELINE,
+            pipeline_handle,
+        ) {
+            None => true,
+            Some(previous) => previous != name,
+        } {
+            pipeline.set_variant_debug_name(pipeline_handle, self.handle, subpass_idx, &name);
+        }
+
+        entry.insert(pipeline_handle);
+
+        Ok(pipeline_handle)
     }
 }
 
@@ -450,6 +491,13 @@ impl Drop for RenderPass {
         }
 
         for (_, pipeline) in self.graphic_pipelines.drain() {
+            Device::clear_private_data_object_name(
+                &self.device,
+                vk::ObjectType::PIPELINE,
+                pipeline,
+            )
+            .unwrap_or_else(|err| warn!("unable to clear private data object name: {err}"));
+
             unsafe {
                 self.device.destroy_pipeline(pipeline, None);
             }
@@ -462,14 +510,18 @@ impl Drop for RenderPass {
 }
 
 /// Attachment, subpass, and dependency information used to create a [`RenderPass`].
+///
+/// See [`VkRenderPassCreateInfo2`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRenderPassCreateInfo2.html).
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
-pub struct RenderPassInfo {
+pub(crate) struct RenderPassInfo {
     pub(crate) attachments: Vec<AttachmentInfo>,
     pub(crate) subpasses: Vec<SubpassInfo>,
     pub(crate) dependencies: Vec<SubpassDependency>,
 }
 
-/// Specifying depth and stencil resolve modes.
+/// Specifies depth and stencil resolve modes.
+///
+/// See [`VkResolveModeFlagBits`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkResolveModeFlagBits.html).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ResolveMode {
     /// The result of the resolve operation is the average of the sample values.

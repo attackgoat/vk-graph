@@ -86,10 +86,10 @@ fn guess_immutable_sampler(binding_name: &str) -> SamplerInfo {
 /// bound descriptor reference.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Descriptor {
-    /// Descriptor set index
+    /// Descriptor set index.
     pub set: u32,
 
-    /// Descriptor binding index
+    /// Descriptor binding index.
     pub binding: u32,
 }
 
@@ -283,9 +283,11 @@ impl PipelineDescriptorInfo {
 
             let mut create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
-            // The bindless flags have to be created for every descriptor set layout binding.
-            // See [`VkDescriptorSetLayoutBindingFlagsCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorSetLayoutBindingFlagsCreateInfo.html).
-            // Maybe using one vector and updating it would be more efficient.
+            /*
+            The bindless flags have to be created for every descriptor set layout binding.
+            See [`VkDescriptorSetLayoutBindingFlagsCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorSetLayoutBindingFlagsCreateInfo.html)
+            Maybe using one vector and updating it would be more efficient.
+            */
             let bindless_flags = vec![vk::DescriptorBindingFlags::PARTIALLY_BOUND; bindings.len()];
             let mut bindless_flags = if device
                 .physical_device
@@ -381,7 +383,9 @@ impl Sampler {
 
 impl Debug for Sampler {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.sampler)
+        f.debug_struct(stringify!(Sampler))
+            .field("handle", &self.sampler)
+            .finish_non_exhaustive()
     }
 }
 
@@ -407,6 +411,8 @@ impl Drop for Sampler {
 }
 
 /// Information used to create a [`vk::Sampler`] instance.
+///
+/// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build", error = "SamplerInfoBuilderError"),
@@ -418,58 +424,54 @@ pub struct SamplerInfo {
     #[builder(default)]
     pub flags: vk::SamplerCreateFlags,
 
-    /// Specify the magnification filter to apply to texture lookups.
+    /// Specifies the magnification filter to apply to texture lookups.
     ///
-    /// The default value is [`vk::Filter::NEAREST`]
+    /// The default value is [`vk::Filter::NEAREST`].
     #[builder(default)]
     pub mag_filter: vk::Filter,
 
-    /// Specify the minification filter to apply to texture lookups.
+    /// Specifies the minification filter to apply to texture lookups.
     ///
-    /// The default value is [`vk::Filter::NEAREST`]
+    /// The default value is [`vk::Filter::NEAREST`].
     #[builder(default)]
     pub min_filter: vk::Filter,
 
     /// A value specifying the mipmap filter to apply to lookups.
     ///
-    /// The default value is [`vk::SamplerMipmapMode::NEAREST`]
+    /// The default value is [`vk::SamplerMipmapMode::NEAREST`].
     #[builder(default)]
     pub mipmap_mode: vk::SamplerMipmapMode,
 
     /// A value specifying the addressing mode for U coordinates outside `[0, 1)`.
     ///
-    /// The default value is [`vk::SamplerAddressMode::REPEAT`]
+    /// The default value is [`vk::SamplerAddressMode::REPEAT`].
     #[builder(default)]
     pub address_mode_u: vk::SamplerAddressMode,
 
     /// A value specifying the addressing mode for V coordinates outside `[0, 1)`.
     ///
-    /// The default value is [`vk::SamplerAddressMode::REPEAT`]
+    /// The default value is [`vk::SamplerAddressMode::REPEAT`].
     #[builder(default)]
     pub address_mode_v: vk::SamplerAddressMode,
 
     /// A value specifying the addressing mode for W coordinates outside `[0, 1)`.
     ///
-    /// The default value is [`vk::SamplerAddressMode::REPEAT`]
+    /// The default value is [`vk::SamplerAddressMode::REPEAT`].
     #[builder(default)]
     pub address_mode_w: vk::SamplerAddressMode,
 
-    /// The bias to be added to mipmap LOD calculation and bias provided by image sampling
-    /// functions in SPIR-V, as described in the
-    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
-    /// section.
+    /// Bias added to the mipmap LOD calculation and to bias provided by SPIR-V image sampling
+    /// instructions.
     #[builder(default, setter(into))]
     pub mip_lod_bias: OrderedFloat<f32>,
 
-    /// Enables anisotropic filtering, as described in the
-    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
-    /// section
+    /// Enables anisotropic filtering.
     #[builder(default)]
     pub anisotropy_enable: bool,
 
     /// The anisotropy value clamp used by the sampler when `anisotropy_enable` is `true`.
     ///
-    /// If `anisotropy_enable` is `false`, max_anisotropy is ignored.
+    /// If [`anisotropy_enable`](Self::anisotropy_enable) is `false`, `max_anisotropy` is ignored.
     #[builder(default, setter(into))]
     pub max_anisotropy: OrderedFloat<f32>,
 
@@ -477,28 +479,23 @@ pub struct SamplerInfo {
     #[builder(default)]
     pub compare_enable: bool,
 
-    /// Specifies the comparison operator to apply to fetched data before filtering as described in
-    /// the
-    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
-    /// section.
+    /// Specifies the comparison operator to apply to fetched data before filtering.
     #[builder(default)]
     pub compare_op: vk::CompareOp,
 
-    /// Used to clamp the
-    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
+    /// Minimum LOD value used to clamp the computed level of detail.
     #[builder(default, setter(into))]
     pub min_lod: OrderedFloat<f32>,
 
-    /// Used to clamp the
-    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
+    /// Maximum LOD value used to clamp the computed level of detail.
     ///
-    /// To avoid clamping the maximum value, set maxLod to the constant `vk::LOD_CLAMP_NONE`.
+    /// To avoid clamping the maximum value, set `max_lod` to [`vk::LOD_CLAMP_NONE`].
     #[builder(default, setter(into))]
     pub max_lod: OrderedFloat<f32>,
 
-    /// Secifies the predefined border color to use.
+    /// Specifies the predefined border color to use.
     ///
-    /// The default value is [`vk::BorderColor::FLOAT_TRANSPARENT_BLACK`]
+    /// The default value is [`vk::BorderColor::FLOAT_TRANSPARENT_BLACK`].
     #[builder(default)]
     pub border_color: vk::BorderColor,
 
@@ -510,7 +507,6 @@ pub struct SamplerInfo {
     ///
     /// When set to `false` the range of image coordinates is zero to one.
     ///
-    /// See
     /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
     #[builder(default)]
     pub unnormalized_coordinates: bool,
@@ -520,10 +516,9 @@ pub struct SamplerInfo {
     /// Setting magnification filter ([`mag_filter`](Self::mag_filter)) to [`vk::Filter::NEAREST`]
     /// disables sampler reduction mode.
     ///
-    /// The default value is [`vk::SamplerReductionMode::WEIGHTED_AVERAGE`]
+    /// The default value is [`vk::SamplerReductionMode::WEIGHTED_AVERAGE`].
     ///
-    /// See
-    /// See [`VkSamplerCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerCreateInfo.html).
+    /// See [`VkSamplerReductionModeCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSamplerReductionModeCreateInfo.html).
     #[builder(default)]
     pub reduction_mode: vk::SamplerReductionMode,
 }
@@ -648,7 +643,10 @@ impl From<UninitializedFieldError> for SamplerInfoBuilderError {
     }
 }
 
-/// Describes a shader program which runs on some pipeline stage.
+/// Describes a shader program which runs on a pipeline stage.
+///
+/// See [`VkShaderModuleCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkShaderModuleCreateInfo.html)
+/// and [`VkPipelineShaderStageCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineShaderStageCreateInfo.html).
 #[allow(missing_docs)]
 #[derive(Builder, Clone)]
 #[builder(
@@ -664,6 +662,8 @@ pub struct Shader {
     pub entry_name: String,
 
     /// Data about Vulkan specialization constants.
+    ///
+    /// See [`VkSpecializationInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSpecializationInfo.html).
     ///
     /// # Examples
     ///
@@ -711,10 +711,14 @@ pub struct Shader {
     /// Although SPIR-V code is specified as `u32` values, this field uses `u8` in order to make
     /// loading from file simpler. You should always have a SPIR-V code length which is a multiple
     /// of four bytes, or an error will be returned during pipeline creation.
+    ///
+    /// See [`VkShaderModuleCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkShaderModuleCreateInfo.html).
     #[builder(setter(into))]
     pub spirv: SpirvBinary,
 
     /// The shader stage this structure applies to.
+    ///
+    /// See [`VkShaderStageFlagBits`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkShaderStageFlagBits.html).
     pub stage: vk::ShaderStageFlags,
 
     #[builder(private)]
@@ -757,6 +761,8 @@ macro_rules! shader_ctors {
 
 impl Shader {
     /// Specifies a shader with the given `stage` and shader code.
+    ///
+    /// See [`VkShaderModuleCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkShaderModuleCreateInfo.html).
     #[allow(clippy::new_ret_no_self)]
     pub fn new(stage: vk::ShaderStageFlags, spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         ShaderBuilder::default().spirv(spirv).stage(stage)
@@ -885,6 +891,8 @@ impl Shader {
     }
 
     /// Specifies a shader with the given shader code.
+    ///
+    /// See [`VkShaderModuleCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkShaderModuleCreateInfo.html).
     pub fn from_spirv(spirv: impl Into<SpirvBinary>) -> ShaderBuilder {
         ShaderBuilder::default().spirv(spirv)
     }
@@ -1071,8 +1079,10 @@ impl Shader {
         spirv: impl Into<SpirvBinary>,
         specialization: Option<&SpecializationMap>,
     ) -> Result<EntryPoint, DriverError> {
-        // spq-core can panic on malformed SPIR-V instead of returning Err, for example:
-        // `range start index 5 out of range for slice of length 0` from spq-core/src/parse/bin.rs.
+        /*
+        spirq can panic on malformed SPIR-V instead of returning Err, for example:
+        `range start index 5 out of range for slice of length 0` from spirq/src/parse/bin.rs
+        */
         catch_unwind(AssertUnwindSafe(|| {
             Self::reflect_entry_point_unchecked(entry_name, spirv, specialization)
         }))
@@ -1112,7 +1122,7 @@ impl Shader {
         }
 
         let entry_points = config.reflect().map_err(|err| {
-            error!("invalid spirv reflection data: {err}");
+            error!("invalid SPIR-V reflection data: {err}");
 
             DriverError::InvalidData
         })?;
@@ -1286,7 +1296,7 @@ impl Shader {
                 location,
                 binding,
                 format,
-                offset: byte_stride, // Figured out below - this data is iter'd in an unknown order
+                offset: byte_stride,
             });
         }
 
@@ -1345,9 +1355,13 @@ impl Shader {
 
 impl Debug for Shader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // We don't want the default formatter bc vec u8
-        // TODO: Better output message
-        f.write_str("Shader")
+        // Avoid dumping the embedded SPIR-V bytes in debug output.
+        f.debug_struct(stringify!(Shader))
+            .field("entry_name", &self.entry_name)
+            .field("stage", &self.stage)
+            .field("specialization", &self.specialization)
+            .field("reflected_vars", &self.entry_point.vars.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1420,7 +1434,7 @@ impl ShaderBuilder {
     /// index `2`, or if the descriptor set index is `0` simply specify `2` for the same case.
     ///
     /// _NOTE:_ When defining image samplers which are used in multiple stages of a single pipeline
-    /// you must only call this function on one of the shader stages, it does not matter which one.
+    /// you must only call this function on one of the shader stages; it does not matter which one.
     ///
     /// # Panics
     ///

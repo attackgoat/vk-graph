@@ -21,15 +21,17 @@ use {
     vk_sync::AccessType,
 };
 
-// Min/max sampler reduction is commonly used to create depth buffer mip-maps for use with gpu-based
-// visibility determination.
-//
-// Support for min/max sampling is core to Vulkan 1.2 however different graphics cards may have
-// varying supported properties which are detailed by the physical device property structures. This
-// example checks for that support.
-//
-// Note that this example only reduces the sample "depth image" once, and it does not fully occupy
-// the compute units of the GPU by using larger local group sizes.
+/*
+Min/max sampler reduction is commonly used to create depth buffer mip-maps for use with gpu-based
+visibility determination.
+
+Support for min/max sampling is core to Vulkan 1.2 however different graphics cards may have
+varying supported properties which are detailed by the physical device property structures. This
+example checks for that support.
+
+Note that this example only reduces the sample "depth image" once, and it does not fully occupy the
+compute units of the GPU by using larger local group sizes.
+*/
 fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
 
@@ -64,10 +66,10 @@ fn main() -> Result<(), DriverError> {
     let min_result_buf = copy_image_to_buffer(&device, &mut graph, min_reduced_image)?;
     let max_result_buf = copy_image_to_buffer(&device, &mut graph, max_reduced_image)?;
 
-    graph
+    let mut fence = graph
         .finalize()
-        .queue_submit(&mut HashPool::new(&device), 0, 0)?
-        .wait_until_executed()?;
+        .queue_submit(&mut HashPool::new(&device), 0, 0)?;
+    fence.wait_signaled()?;
 
     // For each image we have reduced each 2x2 pixel group into the min/max values of each group
     let min_result_data: &[f32] = cast_slice(Buffer::mapped_slice(&min_result_buf));
@@ -111,7 +113,7 @@ fn fill_depth_image(
         vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
     );
     let ImageInfo {
-        fmt,
+        format,
         ty,
         tiling,
         usage,
@@ -121,13 +123,13 @@ fn fill_depth_image(
 
     // Sometimes required because support is not 100% common: Check min/max reduction support
     // https://vulkan.gpuinfo.org/listdevicescoverage.php?extension=VK_EXT_sampler_filter_minmax&platform=all
-    let fmt_props = device.physical_device.format_properties(fmt);
+    let fmt_props = device.physical_device.format_properties(format);
     if !fmt_props.optimal_tiling_features.contains(
         vk::FormatFeatureFlags::SAMPLED_IMAGE
             | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
             | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_MINMAX,
     ) {
-        // In this case you might just fall back to a compute shader algorthm
+        // In this case you might just fall back to a compute shader algorithm
         warn!("Requested image does not support min/max reduction");
 
         return Err(DriverError::Unsupported);
@@ -145,7 +147,7 @@ fn fill_depth_image(
     // Not required, but good practice: Check image format support
     let image_fmt_props = device
         .physical_device
-        .image_format_properties(fmt, ty, tiling, usage, flags)?
+        .image_format_properties(format, ty, tiling, usage, flags)?
         .ok_or(DriverError::Unsupported)?;
     if size > image_fmt_props.max_extent.width || size > image_fmt_props.max_extent.height {
         // In this case you might use a smaller image

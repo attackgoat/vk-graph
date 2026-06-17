@@ -1,4 +1,4 @@
-// HACK: Test tooling for mbdook is lacking so this fix is applied:
+// HACK: Test tooling for mdBook is lacking so this fix is applied:
 // https://github.com/BurntSushi/jiff/blob/985b4156c4dbaf2ed69150a4ec4e6d5352f1d47e/book/doctest.rs
 
 #[doc = include_str!("src/cmd.md")]
@@ -6,12 +6,6 @@ pub mod cmd {}
 
 #[doc = include_str!("src/cmd_compute.md")]
 pub mod cmd_compute {}
-
-#[doc = include_str!("src/cmd_graphic.md")]
-pub mod cmd_graphic {}
-
-#[doc = include_str!("src/cmd_ray_trace.md")]
-pub mod cmd_ray_trace {}
 
 #[doc = include_str!("src/pipeline.md")]
 pub mod pipeline {}
@@ -45,3 +39,6 @@ pub mod usage_device {}
 
 #[doc = include_str!("src/usage_shader.md")]
 pub mod usage_shader {}
+
+#[doc = include_str!("src/usage_window.md")]
+pub mod usage_window {}

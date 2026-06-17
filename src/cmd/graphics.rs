@@ -5,7 +5,7 @@ use {
         LoadOp, Node, StoreOp, SubresourceAccess,
         cmd::SubresourceRange,
         driver::{
-            graphic::{DepthStencilInfo, GraphicsPipeline},
+            graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{
                 ImageInfo, ImageViewInfo, image_subresource_range_contains,
                 image_subresource_range_intersects,
@@ -28,7 +28,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
     ///
     /// Note: The default view (the whole image) is used for `image`.
     ///
-    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html).
     pub fn color_attachment_image(
         mut self,
         color_attachment: AttachmentIndex,
@@ -43,7 +43,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
     /// Sets the `color_attachment` attachment index of the following render pass to the given
     /// `image`, as interpreted by `image_view_info`.
     ///
-    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html).
     pub fn color_attachment_image_view(
         mut self,
         color_attachment: AttachmentIndex,
@@ -61,7 +61,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
     ///
     /// Note: The default view (the whole image) is used for `image`.
     ///
-    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html).
     pub fn color_attachment_resolve_image(
         mut self,
         msaa_attachment: AttachmentIndex,
@@ -75,7 +75,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
     /// Resolves a multi-sampled (MSAA) color image attachment into a single-sampled attachment
     /// using the given `image`, as interpreted by `image_view_info`.
     ///
-    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html).
     pub fn color_attachment_resolve_image_view(
         mut self,
         msaa_attachment: AttachmentIndex,
@@ -107,7 +107,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
     ///
     /// Note: The default view (the whole image) is used for `image`.
     ///
-    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html).
     pub fn depth_stencil_attachment_image(
         mut self,
         image: impl Into<AnyImageNode>,
@@ -126,7 +126,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
     ///
     /// Note: The default view (the whole image) is used for `image`.
     ///
-    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html).
     pub fn depth_stencil_attachment_image_view(
         mut self,
         image: impl Into<AnyImageNode>,
@@ -143,7 +143,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
     ///
     /// Note: The default view (the whole image) is used for `image`.
     ///
-    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html).
     pub fn depth_stencil_attachment_resolve_image(
         mut self,
         depth_stencil_attachment: AttachmentIndex,
@@ -165,7 +165,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
     ///
     /// Note: The default view (the whole image) is used for `image`.
     ///
-    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html)
+    /// See [_Render Pass_](https://docs.vulkan.org/spec/latest/chapters/renderpass.html).
     pub fn depth_stencil_attachment_resolve_image_view(
         mut self,
         depth_stencil_attachment: AttachmentIndex,
@@ -193,7 +193,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// Begin recording a graphics pipeline command buffer.
+    /// Begin recording graphics pipeline work for this graph command.
     pub fn record_cmd(
         mut self,
         func: impl FnOnce(GraphicsCommandRef<'_>) + Send + 'static,
@@ -202,13 +202,13 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// Begin recording a graphics pipeline command buffer.
+    /// Mutable-borrow form of [`Self::record_cmd`].
     pub fn record_cmd_mut(&mut self, func: impl FnOnce(GraphicsCommandRef<'_>) + Send + 'static) {
         let pipeline = self
             .cmd
             .cmd()
             .expect_last_pipeline()
-            .expect_graphic()
+            .expect_graphics()
             .clone();
 
         self.cmd.push_exec(move |cmd| {
@@ -216,9 +216,29 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         });
     }
 
+    pub(crate) fn record_stream_mut(
+        &mut self,
+        func: impl for<'r> Fn(GraphicsCommandRef<'r>) + Send + Sync + 'static,
+    ) {
+        let pipeline = self
+            .cmd
+            .cmd()
+            .expect_last_pipeline()
+            .expect_graphics()
+            .clone();
+
+        self.cmd.push_reusable_exec(move |cmd| {
+            func(GraphicsCommandRef {
+                cmd,
+                pipeline: pipeline.clone(),
+            });
+        });
+    }
+
+    /// Sets the render area used when beginning the render pass for subsequent command buffer
+    /// recordings of the current graph command.
+    ///
     /// See [`VkRenderPassBeginInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRenderPassBeginInfo.html).
-    /// field when beginning a render pass used by any subsequent command buffer recordings
-    /// of the current graph command.
     ///
     /// _NOTE:_ Setting this value will cause the viewport and scissor to be unset, which is not the
     /// default behavior. When this value is set you should call `set_viewport` and `set_scissor` on
@@ -232,7 +252,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::color_attachment_image`]
+    /// Mutable-borrow form of [`Self::color_attachment_image`].
     pub fn set_color_attachment_image(
         &mut self,
         color_attachment: AttachmentIndex,
@@ -241,14 +261,16 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         store: StoreOp,
     ) -> &mut Self {
         let image = image.into();
-        let image_view = self.resource(image).info;
+        let image_view: ImageViewInfo = self.cmd.graph.resources[image.index()]
+            .expect_image_info()
+            .into();
 
         self.set_color_attachment_image_view(color_attachment, image, image_view, load, store);
 
         self
     }
 
-    /// See [`Self::color_attachment_image_view`]
+    /// Mutable-borrow form of [`Self::color_attachment_image_view`].
     pub fn set_color_attachment_image_view(
         &mut self,
         color_attachment: AttachmentIndex,
@@ -279,7 +301,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::color_attachment_resolve_image`]
+    /// Mutable-borrow form of [`Self::color_attachment_resolve_image`].
     pub fn set_color_attachment_resolve_image(
         &mut self,
         msaa_attachment: AttachmentIndex,
@@ -287,7 +309,9 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         image: impl Into<AnyImageNode>,
     ) -> &mut Self {
         let image = image.into();
-        let image_view = self.resource(image).info;
+        let image_view: ImageViewInfo = self.cmd.graph.resources[image.index()]
+            .expect_image_info()
+            .into();
 
         self.set_color_attachment_resolve_image_view(
             msaa_attachment,
@@ -299,7 +323,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::color_attachment_resolve_image_view`]
+    /// Mutable-borrow form of [`Self::color_attachment_resolve_image_view`].
     pub fn set_color_attachment_resolve_image_view(
         &mut self,
         msaa_attachment: AttachmentIndex,
@@ -315,7 +339,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::depth_stencil`]
+    /// Mutable-borrow form of [`Self::depth_stencil`].
     pub fn set_depth_stencil(&mut self, depth_stencil: impl Into<DepthStencilInfo>) -> &mut Self {
         let depth_stencil = depth_stencil.into();
         let cmd = self.cmd.cmd_mut();
@@ -328,7 +352,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::depth_stencil_attachment_image`]
+    /// Mutable-borrow form of [`Self::depth_stencil_attachment_image`].
     pub fn set_depth_stencil_attachment_image(
         &mut self,
         image: impl Into<AnyImageNode>,
@@ -336,14 +360,16 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         store: StoreOp,
     ) -> &mut Self {
         let image = image.into();
-        let image_view_info = self.resource(image).info;
+        let image_view_info: ImageViewInfo = self.cmd.graph.resources[image.index()]
+            .expect_image_info()
+            .into();
 
         self.set_depth_stencil_attachment_image_view(image, image_view_info, load, store);
 
         self
     }
 
-    /// See [`Self::depth_stencil_attachment_image_view`]
+    /// Mutable-borrow form of [`Self::depth_stencil_attachment_image_view`].
     pub fn set_depth_stencil_attachment_image_view(
         &mut self,
         image: impl Into<AnyImageNode>,
@@ -373,7 +399,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::depth_stencil_attachment_resolve_image`]
+    /// Mutable-borrow form of [`Self::depth_stencil_attachment_resolve_image`].
     pub fn set_depth_stencil_attachment_resolve_image(
         &mut self,
         depth_stencil_attachment: AttachmentIndex,
@@ -382,7 +408,9 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         stencil_mode: Option<ResolveMode>,
     ) -> &mut Self {
         let image = image.into();
-        let image_view = self.resource(image).info;
+        let image_view: ImageViewInfo = self.cmd.graph.resources[image.index()]
+            .expect_image_info()
+            .into();
 
         self.set_depth_stencil_attachment_resolve_image_view(
             depth_stencil_attachment,
@@ -395,7 +423,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::depth_stencil_attachment_resolve_image_view`]
+    /// Mutable-borrow form of [`Self::depth_stencil_attachment_resolve_image_view`].
     pub fn set_depth_stencil_attachment_resolve_image_view(
         &mut self,
         depth_stencil_attachment: AttachmentIndex,
@@ -418,7 +446,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::multiview`]
+    /// Mutable-borrow form of [`Self::multiview`].
     pub fn set_multiview(&mut self, view_mask: u32, correlated_view_mask: u32) -> &mut Self {
         let cmd = self.cmd.cmd_mut();
         let exec = cmd.expect_last_exec_mut();
@@ -429,7 +457,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self
     }
 
-    /// See [`Self::render_area`]
+    /// Mutable-borrow form of [`Self::render_area`].
     pub fn set_render_area(&mut self, area: vk::Rect2D) -> &mut Self {
         self.cmd.cmd_mut().expect_last_exec_mut().render_area = Some(area);
         self
@@ -441,7 +469,7 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         self.cmd
             .cmd()
             .expect_last_pipeline()
-            .expect_graphic()
+            .expect_graphics()
             .inner
             .input_attachments
             .contains(&attachment_idx)
@@ -641,7 +669,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_color_attachment(
             attachment_idx,
@@ -666,7 +695,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_depth_stencil_attachment(
             Attachment::new(image_view_info, sample_count, node_idx),
@@ -704,7 +734,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         let color = color.into();
         let color: vk::ClearColorValue = color.into();
@@ -768,7 +799,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_depth_stencil_attachment(
             Attachment::new(image_view_info, sample_count, node_idx),
@@ -873,7 +905,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_color_attachment(
             attachment_idx,
@@ -931,7 +964,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_depth_stencil_attachment(
             Attachment::new(image_view_info, sample_count, node_idx),
@@ -997,7 +1031,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_color_store(
             attachment_idx,
@@ -1054,7 +1089,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_depth_stencil_store(Attachment::new(image_view_info, sample_count, node_idx));
 
@@ -1157,7 +1193,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_color_resolve(
             src_attachment_idx,
@@ -1218,7 +1255,8 @@ impl PipelineCommand<'_, GraphicsPipeline> {
         let image = image.into();
         let image_view_info = image_view_info.into();
         let node_idx = image.index();
-        let ImageInfo { sample_count, .. } = self.resource(image).info;
+        let ImageInfo { sample_count, .. } =
+            self.cmd.graph.resources[image.index()].expect_image_info();
 
         self.set_depth_stencil_resolve(
             dst_attachment_idx,
@@ -1352,7 +1390,7 @@ impl ClearColorValue {
     /// All zeros.
     pub const BLACK_ALPHA_ZERO: Self = Self::Float32([0.0, 0.0, 0.0, 0.0]);
 
-    /// RGB zeros and alpha ones.
+    /// RGB ones and alpha ones.
     pub const WHITE_ALPHA_ONE: Self = Self::Float32([1.0, 1.0, 1.0, 1.0]);
 
     /// RGB ones and alpha zeros.
@@ -1435,7 +1473,7 @@ impl From<ClearColorValue> for vk::ClearColorValue {
 /// # use vk_graph::cmd::{LoadOp, StoreOp};
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
+/// # use vk_graph::driver::graphics::{GraphicsPipeline, GraphicsPipelineInfo};
 /// # use vk_graph::driver::image::{Image, ImageInfo};
 /// # use vk_graph::Graph;
 /// # use vk_graph::driver::shader::Shader;
@@ -1488,7 +1526,7 @@ impl GraphicsCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
+    /// # use vk_graph::driver::graphics::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
@@ -1516,7 +1554,7 @@ impl GraphicsCommandRef<'_> {
     /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
     /// my_graph
     ///     .begin_cmd()
-    ///     .debug_name("my indexed geometry draw pass")
+    ///     .debug_name("my indexed geometry draw command")
     ///     .bind_pipeline(&my_graphic_pipeline)
     ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_idx_buf, AccessType::IndexBuffer)
@@ -1548,7 +1586,7 @@ impl GraphicsCommandRef<'_> {
         self
     }
 
-    /// Bind a vertex buffer to the current pass.
+    /// Binds a vertex buffer for the current graphics command.
     ///
     /// The vertex input binding is updated to start at `offset` from the start of `buffer`.
     ///
@@ -1563,7 +1601,7 @@ impl GraphicsCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
+    /// # use vk_graph::driver::graphics::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
@@ -1588,7 +1626,7 @@ impl GraphicsCommandRef<'_> {
     /// # let my_vtx_buf = my_graph.bind_resource(my_vtx_buf);
     /// my_graph
     ///     .begin_cmd()
-    ///     .debug_name("my unindexed geometry draw pass")
+    ///     .debug_name("my unindexed geometry draw command")
     ///     .bind_pipeline(&my_graphic_pipeline)
     ///     .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
     ///     .resource_access(my_vtx_buf, AccessType::VertexBuffer)
@@ -1621,7 +1659,8 @@ impl GraphicsCommandRef<'_> {
         self
     }
 
-    /// Binds multiple vertex buffers to the current pass, starting at the given `first_binding`.
+    /// Binds multiple vertex buffers for the current graphics command, starting at the given
+    /// `first_binding`.
     ///
     /// Each vertex input binding in `buffers` specifies an offset from the start of the
     /// corresponding buffer.
@@ -1750,7 +1789,7 @@ impl GraphicsCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
+    /// # use vk_graph::driver::graphics::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # use vk_graph::Graph;
@@ -1939,7 +1978,7 @@ impl GraphicsCommandRef<'_> {
 
     /// Updates push constants.
     ///
-    /// Push constants represent a high speed path to modify constant data in pipelines that is
+    /// Push constants represent a high-speed path to modify constant data in pipelines that is
     /// expected to outperform memory-backed resource updates.
     ///
     /// Push constant values can be updated incrementally, causing shader stages to read the new
@@ -1948,9 +1987,8 @@ impl GraphicsCommandRef<'_> {
     ///
     /// # Device limitations
     ///
-    /// See
-    /// [`device.physical_device.props.limits.max_push_constants_size`](vk::PhysicalDeviceLimits)
-    /// for the limits of the current device. You may also check [gpuinfo.org] for a listing of
+    /// See [`VkPhysicalDeviceLimits::maxPushConstantsSize`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceLimits.html)
+    /// for the limit of the current device. You may also check [gpuinfo.org] for a listing of
     /// reported limits on other devices.
     ///
     /// # Examples
@@ -1960,14 +1998,14 @@ impl GraphicsCommandRef<'_> {
     /// ```
     /// # vk_shader_macros::glsl!(r#"
     /// #version 450
-    /// #pragma shader_stage(compute)
+    /// #pragma shader_stage(fragment)
     ///
     /// layout(push_constant) uniform PushConstants {
     ///     layout(offset = 0) uint the_answer;
     /// } push_constants;
     ///
     /// void main() {
-    ///     // TODO: Add code!
+    ///     uint value = push_constants.the_answer;
     /// }
     /// # "#);
     /// ```
@@ -1977,7 +2015,7 @@ impl GraphicsCommandRef<'_> {
     /// # use vk_graph::cmd::{LoadOp, StoreOp};
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
+    /// # use vk_graph::driver::graphics::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::image::{Image, ImageInfo};
     /// # use vk_graph::Graph;
     /// # use vk_graph::driver::shader::Shader;
@@ -2024,9 +2062,11 @@ impl GraphicsCommandRef<'_> {
         self
     }
 
-    /// Set scissor rectangle dynamically for the current command.
+    /// Sets scissor rectangles dynamically for the current command.
     ///
     /// The default scissor state is no-clip.
+    ///
+    /// See [`vkCmdSetScissor`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetScissor.html).
     #[profiling::function]
     pub fn set_scissor(&self, first_scissor: u32, scissors: &[vk::Rect2D]) -> &Self {
         unsafe {
@@ -2038,10 +2078,12 @@ impl GraphicsCommandRef<'_> {
         self
     }
 
-    /// Set the viewport dynamically for the current command.
+    /// Sets viewports dynamically for the current command.
     ///
     /// The default viewport state is the entire render target as defined by all combined image
     /// attachments.
+    ///
+    /// See [`vkCmdSetViewport`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetViewport.html).
     #[profiling::function]
     pub fn set_viewport(&self, first_viewport: u32, viewports: &[vk::Viewport]) -> &Self {
         unsafe {
@@ -2063,16 +2105,16 @@ impl<'a> Deref for GraphicsCommandRef<'a> {
 }
 
 impl LoadOp<ClearColorValue> {
-    /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
+    /// A load operation which results in a color attachment filled with RGB zeros and alpha ones.
     pub const CLEAR_BLACK_ALPHA_ONE: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ONE);
 
     /// A load operation which results in a color attachment filled with zeros.
     pub const CLEAR_BLACK_ALPHA_ZERO: Self = Self::Clear(ClearColorValue::BLACK_ALPHA_ZERO);
 
-    /// A load operation which results in a color attachment filled with rgb zeros and alpha ones.
+    /// A load operation which results in a color attachment filled with RGB ones and alpha ones.
     pub const CLEAR_WHITE_ALPHA_ONE: Self = Self::Clear(ClearColorValue::WHITE_ALPHA_ONE);
 
-    /// A load operation which results in a color attachment filled with rgb ones and alpha zeros.
+    /// A load operation which results in a color attachment filled with RGB ones and alpha zeros.
     pub const CLEAR_WHITE_ALPHA_ZERO: Self = Self::Clear(ClearColorValue::WHITE_ALPHA_ZERO);
 
     /// Convenience constructor for clear color values.

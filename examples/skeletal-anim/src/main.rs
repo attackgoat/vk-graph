@@ -24,7 +24,7 @@ use {
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfoBuilder},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfoBuilder},
             image::{Image, ImageInfo},
             shader::Shader,
             sync::AccessType,
@@ -137,7 +137,7 @@ fn main() -> Result<(), WindowError> {
             .begin_cmd()
             .debug_name("🦴")
             .bind_pipeline(&pipeline)
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
             .resource_access(index_buf, AccessType::IndexBuffer)
             .resource_access(vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)

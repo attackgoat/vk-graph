@@ -18,22 +18,12 @@ pub mod cmd;
 pub mod driver;
 pub mod node;
 pub mod pool;
+pub mod stream;
 pub mod submission;
 
-use std::sync::Arc;
+mod lazy_str;
 
-#[cfg(feature = "checked")]
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use crate::{
-    cmd::{ClearColorValue, CommandRef},
-    driver::{
-        accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
-        swapchain::SwapchainImage,
-    },
-    pool::Lease,
-    submission::Submission,
-};
+pub use self::lazy_str::LazyStr;
 
 use {
     self::{
@@ -44,18 +34,30 @@ use {
             ImageLeaseNode, ImageNode, SwapchainImageNode,
         },
     },
-    crate::driver::{
-        DescriptorBindingMap,
-        compute::ComputePipeline,
-        format_aspect_mask, format_texel_block_extent, format_texel_block_size,
-        graphic::{DepthStencilInfo, GraphicsPipeline},
-        image::{ImageInfo, ImageViewInfo, SampleCount},
-        image_subresource_range_from_layers,
-        ray_trace::RayTracingPipeline,
-        render_pass::ResolveMode,
-        shader::PipelineDescriptorInfo,
+    crate::{
+        cmd::{ClearColorValue, CommandRef},
+        driver::{
+            DescriptorBindingMap,
+            accel_struct::AccelerationStructureInfo,
+            buffer::BufferInfo,
+            compute::ComputePipeline,
+            format_aspect_mask, format_texel_block_extent, format_texel_block_size,
+            graphics::{DepthStencilInfo, GraphicsPipeline},
+            image::{ImageInfo, ImageViewInfo, SampleCount},
+            image_subresource_range_from_layers,
+            ray_tracing::RayTracingPipeline,
+            render_pass::ResolveMode,
+            shader::PipelineDescriptorInfo,
+        },
+        driver::{
+            accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
+            swapchain::SwapchainImage,
+        },
+        pool::Lease,
+        submission::Submission,
     },
     ash::vk,
+    smallvec::SmallVec,
     std::{
         cmp::Ord,
         collections::{BTreeMap, HashMap},
@@ -64,28 +66,66 @@ use {
         ops::Range,
         ops::{Deref, DerefMut},
         slice::Iter,
+        sync::Arc,
     },
     vk_sync::AccessType,
 };
 
-type ExecFn = Box<dyn FnOnce(CommandRef) + Send>;
+#[cfg(feature = "checked")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+type CommandFn = Arc<dyn for<'a> Fn(CommandRef<'a>) + Send + Sync>;
+type CommandFnOnce = Box<dyn FnOnce(CommandRef) + Send>;
 type NodeIndex = usize;
 
-type GraphId = u64;
+#[cfg(feature = "checked")]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct GraphId(u64);
 
 #[cfg(feature = "checked")]
-static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
+impl GraphId {
+    fn next() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 #[derive(Debug)]
-#[doc(hidden)]
-pub enum AnyResource {
+enum AnyResource {
     AccelerationStructure(Arc<AccelerationStructure>),
+    AccelerationStructureArg(AccelerationStructureInfo),
     AccelerationStructureLease(Arc<Lease<AccelerationStructure>>),
     Buffer(Arc<Buffer>),
+    BufferArg(BufferInfo),
     BufferLease(Arc<Lease<Buffer>>),
     Image(Arc<Image>),
+    ImageArg(ImageInfo),
     ImageLease(Arc<Lease<Image>>),
     SwapchainImage(Box<SwapchainImage>),
+}
+
+impl Clone for AnyResource {
+    fn clone(&self) -> Self {
+        match self {
+            Self::AccelerationStructure(resource) => {
+                Self::AccelerationStructure(Arc::clone(resource))
+            }
+            Self::AccelerationStructureArg(info) => Self::AccelerationStructureArg(*info),
+            Self::AccelerationStructureLease(resource) => {
+                Self::AccelerationStructureLease(Arc::clone(resource))
+            }
+            Self::Buffer(resource) => Self::Buffer(Arc::clone(resource)),
+            Self::BufferArg(info) => Self::BufferArg(*info),
+            Self::BufferLease(resource) => Self::BufferLease(Arc::clone(resource)),
+            Self::Image(resource) => Self::Image(Arc::clone(resource)),
+            Self::ImageArg(info) => Self::ImageArg(*info),
+            Self::ImageLease(resource) => Self::ImageLease(Arc::clone(resource)),
+            Self::SwapchainImage(resource) => {
+                Self::SwapchainImage(Box::new(unsafe { resource.to_detached() }))
+            }
+        }
+    }
 }
 
 macro_rules! any_resource_from_arc {
@@ -131,7 +171,7 @@ impl AnyResource {
         Some(match self {
             Self::Image(resource) => resource,
             Self::ImageLease(resource) => resource,
-            Self::SwapchainImage(resource) => &resource.image,
+            Self::SwapchainImage(resource) => resource,
             _ => return None,
         })
     }
@@ -141,12 +181,42 @@ impl AnyResource {
             .expect("missing acceleration structure resource")
     }
 
+    pub(crate) fn expect_accel_struct_info(
+        &self,
+    ) -> crate::driver::accel_struct::AccelerationStructureInfo {
+        match self {
+            Self::AccelerationStructure(resource) => resource.info,
+            Self::AccelerationStructureArg(info) => *info,
+            Self::AccelerationStructureLease(resource) => resource.info,
+            _ => panic!("missing acceleration structure resource"),
+        }
+    }
+
     fn expect_buffer(&self) -> &Buffer {
         self.as_buffer().expect("missing buffer resource")
     }
 
+    pub(crate) fn expect_buffer_info(&self) -> crate::driver::buffer::BufferInfo {
+        match self {
+            Self::Buffer(resource) => resource.info,
+            Self::BufferArg(info) => *info,
+            Self::BufferLease(resource) => resource.info,
+            _ => panic!("missing buffer resource"),
+        }
+    }
+
     fn expect_image(&self) -> &Image {
         self.as_image().expect("missing image resource")
+    }
+
+    pub(crate) fn expect_image_info(&self) -> ImageInfo {
+        match self {
+            Self::Image(resource) => resource.info,
+            Self::ImageArg(info) => *info,
+            Self::ImageLease(resource) => resource.info,
+            Self::SwapchainImage(resource) => resource.info,
+            _ => panic!("missing image resource"),
+        }
     }
 }
 
@@ -169,7 +239,7 @@ impl Attachment {
             aspect_mask: image_view_info.aspect_mask,
             base_array_layer: image_view_info.base_array_layer,
             base_mip_level: image_view_info.base_mip_level,
-            format: image_view_info.fmt,
+            format: image_view_info.format,
             mip_level_count: image_view_info.mip_level_count,
             sample_count,
             target,
@@ -179,7 +249,7 @@ impl Attachment {
     fn are_compatible(lhs: Option<Self>, rhs: Option<Self>) -> bool {
         // Two attachment references are compatible if they have matching format and sample
         // count, or are both VK_ATTACHMENT_UNUSED or the pointer that would contain the
-        // reference is NULL.
+        // reference is NULL
         let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
             return true;
         };
@@ -202,12 +272,16 @@ impl Attachment {
             .into_builder()
             .array_layer_count(self.array_layer_count)
             .mip_level_count(self.mip_level_count)
-            .fmt(self.format)
+            .format(self.format)
             .into_image_view()
             .aspect_mask(self.aspect_mask)
             .base_array_layer(self.base_array_layer)
             .base_mip_level(self.base_mip_level)
             .build()
+    }
+
+    fn remap_nodes(&mut self, node_map: &[NodeIndex]) {
+        self.target = node_map[self.target];
     }
 }
 
@@ -221,7 +295,7 @@ struct ColorAttachment {
     is_attachment: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct ExecutionAttachmentMap {
     color: Vec<Option<ColorAttachment>>,
     depth_stencil: Option<DepthStencilAttachment>,
@@ -302,6 +376,24 @@ impl ExecutionAttachmentMap {
 
         self.depth_stencil = Some(attachment);
     }
+
+    fn remap_nodes(&mut self, node_map: &[NodeIndex]) {
+        for attachment in self.color.iter_mut().flatten() {
+            attachment.attachment.remap_nodes(node_map);
+
+            if let Some(resolve) = &mut attachment.resolve {
+                resolve.attachment.remap_nodes(node_map);
+            }
+        }
+
+        if let Some(attachment) = &mut self.depth_stencil {
+            attachment.attachment.remap_nodes(node_map);
+
+            if let Some(resolve) = &mut attachment.resolve {
+                resolve.attachment.remap_nodes(node_map);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -310,12 +402,14 @@ struct ColorResolve {
     src_attachment_idx: AttachmentIndex,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct CommandData {
     execs: Vec<Execution>,
 
     #[cfg(debug_assertions)]
     name: Option<String>,
+
+    stream_scope_id: Option<u64>,
 }
 
 impl CommandData {
@@ -362,13 +456,54 @@ impl CommandData {
     fn name(&self) -> &str {
         const DEFAULT: &str = "command";
 
+        #[cfg(debug_assertions)]
+        {
+            self.name.as_deref().unwrap_or(DEFAULT)
+        }
+
         #[cfg(not(debug_assertions))]
         {
             DEFAULT
         }
+    }
 
-        #[cfg(debug_assertions)]
-        self.name.as_deref().unwrap_or(DEFAULT)
+    fn remap_nodes(&mut self, node_map: &[NodeIndex]) {
+        for exec in &mut self.execs {
+            exec.remap_nodes(node_map);
+        }
+    }
+}
+
+enum CommandFunction {
+    Once(CommandFnOnce),
+    Reusable(CommandFn),
+}
+
+impl CommandFunction {
+    fn is_reusable(&self) -> bool {
+        matches!(self, Self::Reusable(_))
+    }
+
+    fn record(self, cmd: CommandRef<'_>) -> Option<Self> {
+        match self {
+            Self::Once(func) => {
+                func(cmd);
+                None
+            }
+            Self::Reusable(func) => {
+                func(cmd);
+                Some(Self::Reusable(func))
+            }
+        }
+    }
+}
+
+impl Clone for CommandFunction {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Once(_) => panic!("one-shot command callback cannot be cloned"),
+            Self::Reusable(func) => Self::Reusable(Arc::clone(func)),
+        }
     }
 }
 
@@ -389,16 +524,17 @@ struct DepthStencilResolve {
     stencil_mode: Option<ResolveMode>,
 }
 
+#[derive(Clone)]
 enum ExecutionAccess {
     Building(ExecutionAccessBuilder),
-    Frozen(Box<[NodeAccess]>),
+    Frozen(FrozenExecutionAccess),
 }
 
 impl ExecutionAccess {
     fn contains(&self, node_idx: NodeIndex) -> bool {
         match self {
             Self::Building(builder) => builder.lookup.contains_key(&node_idx),
-            Self::Frozen(entries) => entries.iter().any(|entry| entry.node_idx == node_idx),
+            Self::Frozen(frozen) => frozen.lookup.contains_key(&node_idx),
         }
     }
 
@@ -407,29 +543,16 @@ impl ExecutionAccess {
             return;
         };
 
-        *self = Self::Frozen(
-            builder
-                .entries
-                .into_iter()
-                .map(|entry| NodeAccess {
-                    node_idx: entry.node_idx,
-                    accesses: entry.accesses.into_boxed_slice(),
-                })
-                .collect(),
-        );
-    }
+        let ExecutionAccessBuilder { entries, lookup } = builder;
+        let entries = entries
+            .into_iter()
+            .map(|entry| NodeAccess {
+                node_idx: entry.node_idx,
+                accesses: entry.accesses.into_vec().into_boxed_slice(),
+            })
+            .collect();
 
-    fn get(&self, node_idx: NodeIndex) -> Option<&[SubresourceAccess]> {
-        match self {
-            Self::Building(builder) => builder
-                .lookup
-                .get(&node_idx)
-                .map(|&entry_idx| builder.entries[entry_idx].accesses.as_slice()),
-            Self::Frozen(entries) => entries
-                .iter()
-                .find(|entry| entry.node_idx == node_idx)
-                .map(|entry| entry.accesses.as_ref()),
-        }
+        *self = Self::Frozen(FrozenExecutionAccess { entries, lookup });
     }
 
     fn get_mut(&mut self, node_idx: &NodeIndex) -> Option<&mut [SubresourceAccess]> {
@@ -447,7 +570,7 @@ impl ExecutionAccess {
     fn iter(&self) -> ExecutionAccessIter<'_> {
         match self {
             Self::Building(builder) => ExecutionAccessIter::Building(builder.entries.iter()),
-            Self::Frozen(entries) => ExecutionAccessIter::Frozen(entries.iter()),
+            Self::Frozen(frozen) => ExecutionAccessIter::Frozen(frozen.entries.iter()),
         }
     }
 
@@ -460,12 +583,41 @@ impl ExecutionAccess {
             let idx = builder.entries.len();
             builder.entries.push(NodeAccessBuilder {
                 node_idx,
-                accesses: Vec::new(),
+                accesses: Default::default(),
             });
 
             idx
         });
         builder.entries[idx].accesses.push(access);
+    }
+
+    fn remap_nodes(&mut self, node_map: &[NodeIndex]) {
+        match self {
+            Self::Building(builder) => {
+                for entry in &mut builder.entries {
+                    entry.node_idx = node_map[entry.node_idx];
+                }
+
+                builder.lookup = builder
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, entry)| (entry.node_idx, idx))
+                    .collect();
+            }
+            Self::Frozen(frozen) => {
+                for entry in frozen.entries.iter_mut() {
+                    entry.node_idx = node_map[entry.node_idx];
+                }
+
+                frozen.lookup = frozen
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, entry)| (entry.node_idx, idx))
+                    .collect();
+            }
+        }
     }
 }
 
@@ -473,7 +625,7 @@ impl Debug for ExecutionAccess {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Building(builder) => builder.entries.fmt(f),
-            Self::Frozen(entries) => entries.fmt(f),
+            Self::Frozen(frozen) => frozen.entries.fmt(f),
         }
     }
 }
@@ -484,7 +636,7 @@ impl Default for ExecutionAccess {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct ExecutionAccessBuilder {
     entries: Vec<NodeAccessBuilder>,
     lookup: HashMap<NodeIndex, usize>,
@@ -508,9 +660,24 @@ impl<'a> Iterator for ExecutionAccessIter<'a> {
                 .map(|entry| (entry.node_idx, entry.accesses.as_ref())),
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+
+        (len, Some(len))
+    }
 }
 
-#[derive(Default)]
+impl ExactSizeIterator for ExecutionAccessIter<'_> {
+    fn len(&self) -> usize {
+        match self {
+            ExecutionAccessIter::Building(iter) => iter.len(),
+            ExecutionAccessIter::Frozen(iter) => iter.len(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
 struct Execution {
     accesses: ExecutionAccess,
     attachments: ExecutionAttachmentMap,
@@ -521,14 +688,32 @@ struct Execution {
     render_area: Option<vk::Rect2D>,
     view_mask: u32,
 
-    func: Option<ExecutionFunction>,
+    func: Option<CommandFunction>,
+    node_map: Option<Arc<[NodeIndex]>>,
     pipeline: Option<ExecutionPipeline>,
+
+    #[cfg(feature = "checked")]
+    stream_graph_id: Option<GraphId>,
+}
+
+impl Execution {
+    fn remap_nodes(&mut self, node_map: &[NodeIndex]) {
+        let original_node_map = Arc::<[NodeIndex]>::from(node_map.to_vec());
+        self.accesses.remap_nodes(node_map);
+        self.attachments.remap_nodes(node_map);
+
+        self.bindings = mem::take(&mut self.bindings)
+            .into_iter()
+            .map(|(binding, (node_idx, view))| (binding, (node_map[node_idx], view)))
+            .collect();
+        self.node_map = Some(original_node_map);
+    }
 }
 
 impl Debug for Execution {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // The only field missing is func which cannot easily be implemented because it is a
-        // FnOnce.
+        // FnOnce
         f.debug_struct("Execution")
             .field("accesses", &self.accesses)
             .field("attachments", &self.attachments)
@@ -542,18 +727,16 @@ impl Debug for Execution {
     }
 }
 
-struct ExecutionFunction(ExecFn);
-
 #[derive(Clone, Debug)]
 enum ExecutionPipeline {
     Compute(ComputePipeline),
-    Graphic(GraphicsPipeline),
-    RayTrace(RayTracingPipeline),
+    Graphics(GraphicsPipeline),
+    RayTracing(RayTracingPipeline),
 }
 
 impl ExecutionPipeline {
-    fn as_graphic(&self) -> Option<&GraphicsPipeline> {
-        if let Self::Graphic(pipeline) = self {
+    fn as_graphics(&self) -> Option<&GraphicsPipeline> {
+        if let Self::Graphics(pipeline) = self {
             Some(pipeline)
         } else {
             None
@@ -563,24 +746,24 @@ impl ExecutionPipeline {
     fn bind_point(&self) -> vk::PipelineBindPoint {
         match self {
             ExecutionPipeline::Compute(_) => vk::PipelineBindPoint::COMPUTE,
-            ExecutionPipeline::Graphic(_) => vk::PipelineBindPoint::GRAPHICS,
-            ExecutionPipeline::RayTrace(_) => vk::PipelineBindPoint::RAY_TRACING_KHR,
+            ExecutionPipeline::Graphics(_) => vk::PipelineBindPoint::GRAPHICS,
+            ExecutionPipeline::RayTracing(_) => vk::PipelineBindPoint::RAY_TRACING_KHR,
         }
     }
 
     fn descriptor_bindings(&self) -> &DescriptorBindingMap {
         match self {
             ExecutionPipeline::Compute(pipeline) => &pipeline.inner.descriptor_bindings,
-            ExecutionPipeline::Graphic(pipeline) => &pipeline.inner.descriptor_bindings,
-            ExecutionPipeline::RayTrace(pipeline) => &pipeline.inner.descriptor_bindings,
+            ExecutionPipeline::Graphics(pipeline) => &pipeline.inner.descriptor_bindings,
+            ExecutionPipeline::RayTracing(pipeline) => &pipeline.inner.descriptor_bindings,
         }
     }
 
     fn descriptor_info(&self) -> &PipelineDescriptorInfo {
         match self {
             ExecutionPipeline::Compute(pipeline) => &pipeline.inner.descriptor_info,
-            ExecutionPipeline::Graphic(pipeline) => &pipeline.inner.descriptor_info,
-            ExecutionPipeline::RayTrace(pipeline) => &pipeline.inner.descriptor_info,
+            ExecutionPipeline::Graphics(pipeline) => &pipeline.inner.descriptor_info,
+            ExecutionPipeline::RayTracing(pipeline) => &pipeline.inner.descriptor_info,
         }
     }
 
@@ -592,12 +775,12 @@ impl ExecutionPipeline {
         }
     }
 
-    fn expect_graphic(&self) -> &GraphicsPipeline {
-        self.as_graphic().expect("missing graphics pipeline")
+    fn expect_graphics(&self) -> &GraphicsPipeline {
+        self.as_graphics().expect("missing graphics pipeline")
     }
 
-    fn expect_ray_trace(&self) -> &RayTracingPipeline {
-        if let Self::RayTrace(pipeline) = self {
+    fn expect_ray_tracing(&self) -> &RayTracingPipeline {
+        if let Self::RayTracing(pipeline) = self {
             pipeline
         } else {
             panic!("missing ray tracing pipeline")
@@ -607,23 +790,21 @@ impl ExecutionPipeline {
     fn layout(&self) -> vk::PipelineLayout {
         match self {
             ExecutionPipeline::Compute(pipeline) => pipeline.inner.layout,
-            ExecutionPipeline::Graphic(pipeline) => pipeline.inner.layout,
-            ExecutionPipeline::RayTrace(pipeline) => pipeline.inner.layout,
-        }
-    }
-
-    fn stage(&self) -> vk::PipelineStageFlags {
-        match self {
-            ExecutionPipeline::Compute(_) => vk::PipelineStageFlags::COMPUTE_SHADER,
-            ExecutionPipeline::Graphic(_) => vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            ExecutionPipeline::RayTrace(_) => vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            ExecutionPipeline::Graphics(pipeline) => pipeline.inner.layout,
+            ExecutionPipeline::RayTracing(pipeline) => pipeline.inner.layout,
         }
     }
 }
 
+#[derive(Clone, Debug)]
+struct FrozenExecutionAccess {
+    entries: Box<[NodeAccess]>,
+    lookup: HashMap<NodeIndex, usize>,
+}
+
 /// A composable graph of Vulkan command buffer operations.
 ///
-/// `Graph` instances are are intended for one-time use.
+/// `Graph` instances are intended for one-time use.
 ///
 /// The design of this code originated with a combination of
 /// [`PassBuilder`](https://github.com/EmbarkStudios/kajiya/blob/main/crates/lib/kajiya-rg/src/pass_builder.rs)
@@ -645,7 +826,7 @@ impl Default for Graph {
             resources: Default::default(),
 
             #[cfg(feature = "checked")]
-            graph_id: NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed),
+            graph_id: GraphId::next(),
         }
     }
 }
@@ -685,7 +866,16 @@ impl Graph {
         resource.bind_graph(self)
     }
 
-    /// Copy an image, potentially performing format conversion.
+    pub(crate) fn bind_stream_arg_resource(&mut self, resource: AnyResource) -> NodeIndex {
+        self.resources.bind(resource)
+    }
+
+    /// Copies an image, potentially performing format conversion.
+    ///
+    /// Records a [`vkCmdBlitImage`] operation covering the full extent of the source and
+    /// destination images.
+    ///
+    /// [`vkCmdBlitImage`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdBlitImage.html
     pub fn blit_image(
         &mut self,
         src: impl Into<AnyImageNode>,
@@ -693,10 +883,10 @@ impl Graph {
         filter: vk::Filter,
     ) -> &mut Self {
         let src = src.into();
-        let src_info = self.resource(src).info;
+        let src_info = self.resources[src.index()].expect_image_info();
 
         let dst = dst.into();
-        let dst_info = self.resource(dst).info;
+        let dst_info = self.resources[dst.index()].expect_image_info();
 
         self.blit_image_region(
             src,
@@ -704,7 +894,7 @@ impl Graph {
             filter,
             [vk::ImageBlit {
                 src_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: format_aspect_mask(src_info.fmt),
+                    aspect_mask: format_aspect_mask(src_info.format),
                     mip_level: 0,
                     base_array_layer: 0,
                     layer_count: 1,
@@ -718,7 +908,7 @@ impl Graph {
                     },
                 ],
                 dst_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: format_aspect_mask(dst_info.fmt),
+                    aspect_mask: format_aspect_mask(dst_info.format),
                     mip_level: 0,
                     base_array_layer: 0,
                     layer_count: 1,
@@ -735,7 +925,12 @@ impl Graph {
         )
     }
 
-    /// Copy regions of an image, potentially performing format conversion.
+    /// Copies regions of an image, potentially performing format conversion.
+    ///
+    /// Records a [`vkCmdBlitImage`] operation. The caller supplies the Vulkan blit regions and
+    /// filter exactly as they will be passed to Vulkan.
+    ///
+    /// [`vkCmdBlitImage`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdBlitImage.html
     #[profiling::function]
     pub fn blit_image_region(
         &mut self,
@@ -746,6 +941,7 @@ impl Graph {
     ) -> &mut Self {
         let src = src.into();
         let dst = dst.into();
+        let regions = Arc::<[vk::ImageBlit]>::from(regions.as_ref());
 
         let mut cmd = self.begin_cmd().debug_name("blit image");
 
@@ -757,7 +953,7 @@ impl Graph {
             cmd.set_subresource_access(dst, dst_region, AccessType::TransferWrite);
         }
 
-        cmd.record_cmd(move |cmd| {
+        cmd.record_stream(move |cmd| {
             let src_image = cmd.resource(src).handle;
             let dst_image = cmd.resource(dst).handle;
 
@@ -776,7 +972,12 @@ impl Graph {
         .end_cmd()
     }
 
-    /// Clear a color image.
+    /// Clears a color image.
+    ///
+    /// Records a [`vkCmdClearColorImage`] operation for the full image subresource range described
+    /// by the image's [`ImageInfo`].
+    ///
+    /// [`vkCmdClearColorImage`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdClearColorImage.html
     #[profiling::function]
     pub fn clear_color_image(
         &mut self,
@@ -785,12 +986,12 @@ impl Graph {
     ) -> &mut Self {
         let color = color.into().into();
         let image = image.into();
-        let image_view = self.resource(image).info.into();
+        let image_view = self.resources[image.index()].expect_image_info().into();
 
         self.begin_cmd()
             .debug_name("clear color")
             .subresource_access(image, image_view, AccessType::TransferWrite)
-            .record_cmd(move |cmd| {
+            .record_stream(move |cmd| {
                 let image = cmd.resource(image);
 
                 unsafe {
@@ -807,6 +1008,11 @@ impl Graph {
     }
 
     /// Clears a depth/stencil image.
+    ///
+    /// Records a [`vkCmdClearDepthStencilImage`] operation for the full image subresource range
+    /// described by the image's [`ImageInfo`].
+    ///
+    /// [`vkCmdClearDepthStencilImage`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdClearDepthStencilImage.html
     #[profiling::function]
     pub fn clear_depth_stencil_image(
         &mut self,
@@ -815,12 +1021,12 @@ impl Graph {
         stencil: u32,
     ) -> &mut Self {
         let image = image.into();
-        let image_view = self.resource(image).info.into();
+        let image_view = self.resources[image.index()].expect_image_info().into();
 
         self.begin_cmd()
             .debug_name("clear depth/stencil")
             .subresource_access(image, image_view, AccessType::TransferWrite)
-            .record_cmd(move |cmd| {
+            .record_stream(move |cmd| {
                 let image = cmd.resource(image);
 
                 unsafe {
@@ -836,7 +1042,12 @@ impl Graph {
             .end_cmd()
     }
 
-    /// Copy data between buffers
+    /// Copies data between buffers.
+    ///
+    /// Records a [`vkCmdCopyBuffer`] operation covering the common size of the source and
+    /// destination buffers.
+    ///
+    /// [`vkCmdCopyBuffer`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdCopyBuffer.html
     pub fn copy_buffer(
         &mut self,
         src: impl Into<AnyBufferNode>,
@@ -844,8 +1055,8 @@ impl Graph {
     ) -> &mut Self {
         let src = src.into();
         let dst = dst.into();
-        let src_info = self.resource(src).info;
-        let dst_info = self.resource(dst).info;
+        let src_info = self.resources[src.index()].expect_buffer_info();
+        let dst_info = self.resources[dst.index()].expect_buffer_info();
 
         self.copy_buffer_region(
             src,
@@ -858,7 +1069,12 @@ impl Graph {
         )
     }
 
-    /// Copy data between buffer regions.
+    /// Copies data between buffer regions.
+    ///
+    /// Records a [`vkCmdCopyBuffer`] operation. The caller supplies the Vulkan copy regions exactly
+    /// as they will be passed to Vulkan.
+    ///
+    /// [`vkCmdCopyBuffer`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdCopyBuffer.html
     #[profiling::function]
     pub fn copy_buffer_region(
         &mut self,
@@ -868,16 +1084,17 @@ impl Graph {
     ) -> &mut Self {
         let src = src.into();
         let dst = dst.into();
+        let regions = Arc::<[vk::BufferCopy]>::from(regions.as_ref());
 
         #[cfg(feature = "checked")]
-        let src_size = self.resource(src).info.size;
+        let src_size = self.resources[src.index()].expect_buffer_info().size;
 
         #[cfg(feature = "checked")]
-        let dst_size = self.resource(dst).info.size;
+        let dst_size = self.resources[dst.index()].expect_buffer_info().size;
 
         let mut cmd = self.begin_cmd().debug_name("copy buffer");
 
-        for region in regions.as_ref() {
+        for region in regions.iter() {
             #[cfg(feature = "checked")]
             {
                 assert!(
@@ -904,26 +1121,30 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd(move |cmd| {
+        cmd.record_stream(move |cmd| {
             let src = cmd.resource(src);
             let dst = cmd.resource(dst);
 
             unsafe {
                 cmd.device
-                    .cmd_copy_buffer(cmd.handle, src.handle, dst.handle, regions.as_ref());
+                    .cmd_copy_buffer(cmd.handle, src.handle, dst.handle, &regions);
             }
         })
         .end_cmd()
     }
 
-    /// Copy data from a buffer into an image.
+    /// Copies data from a buffer into an image.
+    ///
+    /// Records a [`vkCmdCopyBufferToImage`] operation covering the full destination image.
+    ///
+    /// [`vkCmdCopyBufferToImage`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdCopyBufferToImage.html
     pub fn copy_buffer_to_image(
         &mut self,
         src: impl Into<AnyBufferNode>,
         dst: impl Into<AnyImageNode>,
     ) -> &mut Self {
         let dst = dst.into();
-        let dst_info = self.resource(dst).info;
+        let dst_info = self.resources[dst.index()].expect_image_info();
 
         self.copy_buffer_to_image_region(
             src,
@@ -933,7 +1154,7 @@ impl Graph {
                 buffer_row_length: dst_info.width,
                 buffer_image_height: dst_info.height,
                 image_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: format_aspect_mask(dst_info.fmt),
+                    aspect_mask: format_aspect_mask(dst_info.format),
                     mip_level: 0,
                     base_array_layer: 0,
                     layer_count: 1,
@@ -948,7 +1169,12 @@ impl Graph {
         )
     }
 
-    /// Copy data from a buffer into an image.
+    /// Copies data from a buffer into image regions.
+    ///
+    /// Records a [`vkCmdCopyBufferToImage`] operation. The caller supplies the Vulkan copy regions
+    /// exactly as they will be passed to Vulkan.
+    ///
+    /// [`vkCmdCopyBufferToImage`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdCopyBufferToImage.html
     #[profiling::function]
     pub fn copy_buffer_to_image_region(
         &mut self,
@@ -958,13 +1184,14 @@ impl Graph {
     ) -> &mut Self {
         let src = src.into();
         let dst = dst.into();
-        let dst_info = self.resource(dst).info;
+        let dst_info = self.resources[dst.index()].expect_image_info();
+        let regions = Arc::<[vk::BufferImageCopy]>::from(regions.as_ref());
 
         let mut cmd = self.begin_cmd().debug_name("copy buffer to image");
 
-        for region in regions.as_ref() {
-            let block_bytes_size = format_texel_block_size(dst_info.fmt);
-            let (block_height, block_width) = format_texel_block_extent(dst_info.fmt);
+        for region in regions.iter() {
+            let block_bytes_size = format_texel_block_size(dst_info.format);
+            let (block_height, block_width) = format_texel_block_extent(dst_info.format);
             let data_size = block_bytes_size
                 * (region.buffer_row_length / block_width)
                 * (region.buffer_image_height / block_height);
@@ -981,7 +1208,7 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd(move |cmd| {
+        cmd.record_stream(move |cmd| {
             let src = cmd.resource(src);
             let dst = cmd.resource(dst);
 
@@ -991,38 +1218,43 @@ impl Graph {
                     src.handle,
                     dst.handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    regions.as_ref(),
+                    &regions,
                 );
             }
         })
         .end_cmd()
     }
 
-    /// Copy all layers of a source image to a destination image.
+    /// Copies all layers of a source image to a destination image.
+    ///
+    /// Records a [`vkCmdCopyImage`] operation covering the common extent of the source and
+    /// destination images.
+    ///
+    /// [`vkCmdCopyImage`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdCopyImage.html
     pub fn copy_image(
         &mut self,
         src: impl Into<AnyImageNode>,
         dst: impl Into<AnyImageNode>,
     ) -> &mut Self {
         let src = src.into();
-        let src_info = self.resource(src).info;
+        let src_info = self.resources[src.index()].expect_image_info();
 
         let dst = dst.into();
-        let dst_info = self.resource(dst).info;
+        let dst_info = self.resources[dst.index()].expect_image_info();
 
         self.copy_image_region(
             src,
             dst,
             [vk::ImageCopy {
                 src_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: format_aspect_mask(src_info.fmt),
+                    aspect_mask: format_aspect_mask(src_info.format),
                     mip_level: 0,
                     base_array_layer: 0,
                     layer_count: src_info.array_layer_count,
                 },
                 src_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
                 dst_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: format_aspect_mask(dst_info.fmt),
+                    aspect_mask: format_aspect_mask(dst_info.format),
                     mip_level: 0,
                     base_array_layer: 0,
                     layer_count: src_info.array_layer_count,
@@ -1037,7 +1269,12 @@ impl Graph {
         )
     }
 
-    /// Copy data between images.
+    /// Copies data between image regions.
+    ///
+    /// Records a [`vkCmdCopyImage`] operation. The caller supplies the Vulkan copy regions exactly
+    /// as they will be passed to Vulkan.
+    ///
+    /// [`vkCmdCopyImage`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdCopyImage.html
     #[profiling::function]
     pub fn copy_image_region(
         &mut self,
@@ -1047,10 +1284,11 @@ impl Graph {
     ) -> &mut Self {
         let src = src.into();
         let dst = dst.into();
+        let regions = Arc::<[vk::ImageCopy]>::from(regions.as_ref());
 
         let mut cmd = self.begin_cmd().debug_name("copy image");
 
-        for region in regions.as_ref() {
+        for region in regions.iter() {
             cmd.set_subresource_access(
                 src,
                 image_subresource_range_from_layers(region.src_subresource),
@@ -1063,7 +1301,7 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd(move |cmd| {
+        cmd.record_stream(move |cmd| {
             let src = cmd.resource(src);
             let dst = cmd.resource(dst);
 
@@ -1074,14 +1312,18 @@ impl Graph {
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     dst.handle,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    regions.as_ref(),
+                    &regions,
                 );
             }
         })
         .end_cmd()
     }
 
-    /// Copy image data into a buffer.
+    /// Copies image data into a buffer.
+    ///
+    /// Records a [`vkCmdCopyImageToBuffer`] operation covering the full source image.
+    ///
+    /// [`vkCmdCopyImageToBuffer`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdCopyImageToBuffer.html
     pub fn copy_image_to_buffer(
         &mut self,
         src: impl Into<AnyImageNode>,
@@ -1090,7 +1332,7 @@ impl Graph {
         let src = src.into();
         let dst = dst.into();
 
-        let src_info = self.resource(src).info;
+        let src_info = self.resources[src.index()].expect_image_info();
 
         self.copy_image_to_buffer_region(
             src,
@@ -1100,7 +1342,7 @@ impl Graph {
                 buffer_row_length: src_info.width,
                 buffer_image_height: src_info.height,
                 image_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: format_aspect_mask(src_info.fmt),
+                    aspect_mask: format_aspect_mask(src_info.format),
                     mip_level: 0,
                     base_array_layer: 0,
                     layer_count: 1,
@@ -1115,7 +1357,12 @@ impl Graph {
         )
     }
 
-    /// Copy image data into a buffer.
+    /// Copies image region data into a buffer.
+    ///
+    /// Records a [`vkCmdCopyImageToBuffer`] operation. The caller supplies the Vulkan copy regions
+    /// exactly as they will be passed to Vulkan.
+    ///
+    /// [`vkCmdCopyImageToBuffer`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdCopyImageToBuffer.html
     #[profiling::function]
     pub fn copy_image_to_buffer_region(
         &mut self,
@@ -1124,14 +1371,15 @@ impl Graph {
         regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
     ) -> &mut Self {
         let src = src.into();
-        let src_info = self.resource(src).info;
+        let src_info = self.resources[src.index()].expect_image_info();
         let dst = dst.into();
+        let regions = Arc::<[vk::BufferImageCopy]>::from(regions.as_ref());
 
         let mut cmd = self.begin_cmd().debug_name("copy image to buffer");
 
-        for region in regions.as_ref() {
-            let block_bytes_size = format_texel_block_size(src_info.fmt);
-            let (block_height, block_width) = format_texel_block_extent(src_info.fmt);
+        for region in regions.iter() {
+            let block_bytes_size = format_texel_block_size(src_info.format);
+            let (block_height, block_width) = format_texel_block_extent(src_info.format);
             let data_size = block_bytes_size
                 * (region.buffer_row_length / block_width)
                 * (region.buffer_image_height / block_height);
@@ -1148,7 +1396,7 @@ impl Graph {
             );
         }
 
-        cmd.record_cmd(move |cmd| {
+        cmd.record_stream(move |cmd| {
             let src = cmd.resource(src);
             let dst = cmd.resource(dst);
 
@@ -1158,14 +1406,18 @@ impl Graph {
                     src.handle,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     dst.handle,
-                    regions.as_ref(),
+                    &regions,
                 );
             }
         })
         .end_cmd()
     }
 
-    /// Fill a region of a buffer with a fixed value.
+    /// Fills a region of a buffer with a fixed value.
+    ///
+    /// Records a [`vkCmdFillBuffer`] operation.
+    ///
+    /// [`vkCmdFillBuffer`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdFillBuffer.html
     pub fn fill_buffer(
         &mut self,
         buffer: impl Into<AnyBufferNode>,
@@ -1177,7 +1429,7 @@ impl Graph {
         self.begin_cmd()
             .debug_name("fill buffer")
             .subresource_access(buffer, region.clone(), AccessType::TransferWrite)
-            .record_cmd(move |cmd| {
+            .record_stream(move |cmd| {
                 let buffer = cmd.resource(buffer);
 
                 unsafe {
@@ -1193,7 +1445,7 @@ impl Graph {
             .end_cmd()
     }
 
-    /// Returns the index of the first pass which accesses a given node
+    /// Returns the index of the first command which accesses a given node.
     #[profiling::function]
     fn first_node_access_pass_index(&self, resource_node: impl Node) -> Option<usize> {
         self.assert_node_owner(&resource_node);
@@ -1215,7 +1467,7 @@ impl Graph {
     /// commands.
     #[profiling::function]
     pub fn finalize(mut self) -> Submission {
-        // The final execution of each pass has no function
+        // The final execution of each command has no function.
         for cmd in &mut self.cmds {
             debug_assert!(cmd.expect_last_exec().func.is_none());
 
@@ -1281,7 +1533,7 @@ impl Graph {
                 data.as_ref().len()
             );
 
-            let buffer_info = self.resource(buffer).info;
+            let buffer_info = self.resources[buffer.index()].expect_buffer_info();
 
             assert!(
                 data_end <= buffer_info.size,
@@ -1290,22 +1542,24 @@ impl Graph {
             );
         }
 
+        let data = Arc::<[u8]>::from(data.as_ref());
+
         self.begin_cmd()
             .debug_name("update buffer")
             .subresource_access(buffer, offset..data_end, AccessType::TransferWrite)
-            .record_cmd(move |cmd| {
+            .record_stream(move |cmd| {
                 let buffer = cmd.resource(buffer);
 
                 unsafe {
                     cmd.device
-                        .cmd_update_buffer(cmd.handle, buffer.handle, offset, data.as_ref());
+                        .cmd_update_buffer(cmd.handle, buffer.handle, offset, &data);
                 }
             })
             .end_cmd()
     }
 }
 
-/// Specifies the state of a color or combined depth and stencil attachment image during graphic
+/// Specifies the state of a color or combined depth and stencil attachment image during graphics
 /// render pass framebuffer load operations.
 ///
 /// Use this to specify the desired contents of any image before use in a pipeline command buffer.
@@ -1329,35 +1583,56 @@ pub enum LoadOp<T> {
 /// See [`Graph::bind_resource`].
 ///
 /// This trait is sealed and cannot be implemented outside of `vk-graph`.
-pub trait Node: private::Sealed {
-    /// The Vulkan buffer, image, or acceleration struction type.
+#[allow(private_bounds)]
+pub trait Node: private::NodeSealed {
+    /// The Vulkan buffer, image, or acceleration structure type.
     type Resource;
 
-    #[doc(hidden)]
-    fn borrow(self, resources: &[AnyResource]) -> &Self::Resource;
+    /// Synchronization state snapshot returned for this node's resource type.
+    type SyncInfo;
 
     #[doc(hidden)]
-    fn index(&self) -> NodeIndex;
-
-    #[doc(hidden)]
-    fn assert_owner(&self, _graph_id: GraphId) {}
+    fn index(&self) -> usize;
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct NodeAccess {
     node_idx: NodeIndex,
     accesses: Box<[SubresourceAccess]>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct NodeAccessBuilder {
     node_idx: NodeIndex,
-    accesses: Vec<SubresourceAccess>,
+    accesses: SmallVec<[SubresourceAccess; 2]>,
 }
 
 mod private {
-    /// Prevents external implementations of [`Node`] and [`Resource`].
-    pub trait Sealed {}
+    use super::{AnyResource, Node};
+
+    #[cfg(feature = "checked")]
+    use super::GraphId;
+
+    /// Prevents external implementations of [`Node`] and provides crate-private node internals.
+    pub(crate) trait NodeSealed: Sized {
+        fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource
+        where
+            Self: Node;
+
+        fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource
+        where
+            Self: Node,
+        {
+            debug_assert_eq!(self.index(), index);
+            self.borrow(resources)
+        }
+
+        #[cfg(feature = "checked")]
+        fn assert_owner(&self, _graph_id: GraphId) {}
+    }
+
+    /// Prevents external implementations of [`Resource`](super::Resource).
+    pub(crate) trait ResourceSealed {}
 }
 
 /// A Vulkan resource which may be bound to a [`Graph`].
@@ -1366,7 +1641,8 @@ mod private {
 /// [`Command::bind_resource`](crate::cmd::Command::bind_resource).
 ///
 /// This trait is sealed and cannot be implemented outside of `vk-graph`.
-pub trait Resource: private::Sealed {
+#[allow(private_bounds)]
+pub trait Resource: private::ResourceSealed {
     /// The resource handle type.
     type Node;
 
@@ -1374,7 +1650,7 @@ pub trait Resource: private::Sealed {
     fn bind_graph(self, _: &mut Graph) -> Self::Node;
 }
 
-impl private::Sealed for SwapchainImage {}
+impl private::ResourceSealed for SwapchainImage {}
 
 impl Resource for SwapchainImage {
     type Node = SwapchainImageNode;
@@ -1398,19 +1674,19 @@ impl Resource for SwapchainImage {
 macro_rules! resource {
     ($name:ident) => {
         paste::paste! {
-            impl private::Sealed for $name {}
-            impl private::Sealed for Arc<$name> {}
-            impl<'a> private::Sealed for &'a Arc<$name> {}
-            impl private::Sealed for Lease<$name> {}
-            impl private::Sealed for Arc<Lease<$name>> {}
-            impl<'a> private::Sealed for &'a Arc<Lease<$name>> {}
+            impl private::ResourceSealed for $name {}
+            impl private::ResourceSealed for Arc<$name> {}
+            impl<'a> private::ResourceSealed for &'a Arc<$name> {}
+            impl private::ResourceSealed for Lease<$name> {}
+            impl private::ResourceSealed for Arc<Lease<$name>> {}
+            impl<'a> private::ResourceSealed for &'a Arc<Lease<$name>> {}
 
             impl Resource for $name {
                 type Node = [<$name Node>];
 
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-                    // In this function we are resource a new item (Image or Buffer or etc)
+                    // Bind a new owned resource, such as Image or Buffer.
 
                     // We will return a new node
                     Arc::new(self).bind_graph(graph)
@@ -1422,8 +1698,7 @@ macro_rules! resource {
 
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-                    // In this function we are resource an existing resource (Arc<Image> or
-                    // Arc<Buffer> or etc)
+                    // Bind an existing shared resource, such as Arc<Image> or Arc<Buffer>.
 
                     // We will return an existing node, if possible
                     Self::Node::new(
@@ -1438,8 +1713,7 @@ macro_rules! resource {
                 type Node = [<$name Node>];
 
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-                    // In this function we are resource a borrowed resource (&Arc<Image> or
-                    // &Arc<Buffer> or etc)
+                    // Bind a borrowed shared resource, such as &Arc<Image> or &Arc<Buffer>.
 
                     Arc::clone(self).bind_graph(graph)
                 }
@@ -1450,8 +1724,7 @@ macro_rules! resource {
 
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-                    // In this function we are wrapping a newly pooled resource (Lease<Image> or
-                    // Lease<Buffer> or etc)
+                    // Bind a new pooled resource, such as Lease<Image> or Lease<Buffer>.
 
                     // We will return a new node
                     Arc::new(self).bind_graph(graph)
@@ -1463,8 +1736,8 @@ macro_rules! resource {
 
                 #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-                    // In this function we are wrapping an existing pooled resource
-                    // (Arc<Lease<Image>> or Arc<Lease<Buffer>> or etc)
+                    // Bind an existing shared pooled resource, such as Arc<Lease<Image>> or
+                    // Arc<Lease<Buffer>>.
 
                     // We will return an existing node, if possible
                     Self::Node::new(
@@ -1479,8 +1752,8 @@ macro_rules! resource {
                 type Node = [<$name LeaseNode>];
 
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
-                    // In this function we are resource a borrowed resource (&Arc<Lease<Image>> or
-                    // &Arc<Lease<Buffer>> or etc)
+                    // Bind a borrowed shared pooled resource, such as &Arc<Lease<Image>> or
+                    // &Arc<Lease<Buffer>>.
 
                     Arc::clone(self).bind_graph(graph)
                 }
@@ -1500,6 +1773,13 @@ struct ResourceMap {
 }
 
 impl ResourceMap {
+    pub(crate) fn from_resources(resources: Vec<AnyResource>) -> Self {
+        Self {
+            addr_index: HashMap::new(),
+            resources,
+        }
+    }
+
     fn bind(&mut self, resource: AnyResource) -> NodeIndex {
         let node_idx = self.resources.len();
         self.resources.push(resource);
@@ -1536,7 +1816,7 @@ impl DerefMut for ResourceMap {
     }
 }
 
-/// Specifies the state of a color or combined depth and stencil attachment image after graphic
+/// Specifies the state of a color or combined depth and stencil attachment image after graphics
 /// render pass framebuffer store operations.
 ///
 /// Use this to specify the desired contents of any image after use in a pipeline command buffer.
@@ -1712,7 +1992,7 @@ mod test {
                 let mut shared_accels = SharedNodes::<AccelerationStructure>::default();
                 let mut shared_accel_leases =
                     SharedNodes::<crate::pool::Lease<AccelerationStructure>>::default();
-                let accel_supported = device.physical_device.accel_struct_properties.is_some();
+                let accel_supported = device.physical_device.supports_acceleration_structure();
 
                 let mut resource_kinds = vec![
                     ResourceKind::OwnedBuffer,

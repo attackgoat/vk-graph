@@ -8,9 +8,11 @@ use {
 };
 
 /// Descriptor pool resource used to allocate descriptor sets for pipeline execution.
+///
+/// See [`VkDescriptorPool`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorPool.html).
 #[derive(Debug)]
 #[read_only::cast]
-pub struct DescriptorPool {
+pub(crate) struct DescriptorPool {
     /// The device which owns this descriptor pool resource.
     ///
     /// _Note:_ This field is read-only.
@@ -27,7 +29,7 @@ pub struct DescriptorPool {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub info: DescriptorPoolInfo,
+    pub(crate) info: DescriptorPoolInfo,
 }
 
 impl DescriptorPool {
@@ -223,8 +225,11 @@ impl Drop for DescriptorPool {
 }
 
 /// Descriptor counts and limits used to create a [`DescriptorPool`].
+///
+/// See [`VkDescriptorPoolCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorPoolCreateInfo.html)
+/// and [`VkDescriptorPoolSize`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorPoolSize.html).
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
-pub struct DescriptorPoolInfo {
+pub(crate) struct DescriptorPoolInfo {
     pub(crate) acceleration_structure_count: u32,
     pub(crate) combined_image_sampler_count: u32,
     pub(crate) input_attachment_count: u32,

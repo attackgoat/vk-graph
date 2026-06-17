@@ -15,7 +15,7 @@ use {
         driver::{
             DriverError,
             device::Device,
-            ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
+            ray_tracing::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
         },
     },
 };

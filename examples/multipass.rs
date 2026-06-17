@@ -13,7 +13,7 @@ use {
             DriverError,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
         },
@@ -105,7 +105,7 @@ fn main() -> anyhow::Result<()> {
         let light_buf = bind_light_buf(frame.graph, &mut pool);
         let push_const_data = write_push_consts(obj_pos, material);
 
-        let mut write = DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL;
+        let mut write = DepthStencilInfo::DEPTH_WRITE_LESS;
 
         // Depth Prepass
         frame

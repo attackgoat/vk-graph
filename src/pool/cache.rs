@@ -1,7 +1,9 @@
 //! Pool wrapper which enables memory-efficient resource caching.
 
 use {
-    super::{Lease, Pool},
+    super::{
+        BufferHostMappingCompatibility, Lease, Pool, compatible_buffer_info, compatible_image_info,
+    },
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -148,12 +150,7 @@ where
             profiling::scope!("check aliases");
 
             for (item_info, item) in &state.buffers {
-                if (item_info.dedicated & info.dedicated) == info.dedicated
-                    && item_info.host_read == info.host_read
-                    && item_info.host_write == info.host_write
-                    && item_info.alignment >= info.alignment
-                    && item_info.size >= info.size
-                    && item_info.usage.contains(info.usage)
+                if compatible_buffer_info(item_info, &info, BufferHostMappingCompatibility::Exact)
                     && let Some(item) = item.upgrade()
                 {
                     result = Some(item);
@@ -194,18 +191,7 @@ where
             profiling::scope!("check aliases");
 
             for (item_info, item) in &state.images {
-                if item_info.array_layer_count == info.array_layer_count
-                    && item_info.dedicated == info.dedicated
-                    && item_info.depth == info.depth
-                    && item_info.fmt == info.fmt
-                    && item_info.height == info.height
-                    && item_info.mip_level_count == info.mip_level_count
-                    && item_info.sample_count == info.sample_count
-                    && item_info.tiling == info.tiling
-                    && item_info.ty == info.ty
-                    && item_info.width == info.width
-                    && item_info.flags.contains(info.flags)
-                    && item_info.usage.contains(info.usage)
+                if compatible_image_info(item_info, &info)
                     && let Some(item) = item.upgrade()
                 {
                     result = Some(item);
@@ -268,8 +254,9 @@ where
     }
 }
 
+#[allow(private_bounds)]
 #[doc(hidden)]
-pub trait TaggedCacheResource<Tag>: Sized {
+pub trait TaggedCacheResource<Tag>: cache_private::TaggedCacheResourceSealed + Sized {
     type Item;
 
     fn resource<T>(
@@ -281,6 +268,16 @@ pub trait TaggedCacheResource<Tag>: Sized {
         Tag: Eq + Hash + Clone,
         T: Pool<Self, Self::Item>;
 }
+
+mod cache_private {
+    pub trait TaggedCacheResourceSealed {}
+}
+
+impl cache_private::TaggedCacheResourceSealed for AccelerationStructureInfo {}
+
+impl cache_private::TaggedCacheResourceSealed for BufferInfo {}
+
+impl cache_private::TaggedCacheResourceSealed for ImageInfo {}
 
 impl<Tag> TaggedCacheResource<Tag> for AccelerationStructureInfo
 where

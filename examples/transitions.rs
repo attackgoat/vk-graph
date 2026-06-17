@@ -90,7 +90,7 @@ fn main() -> anyhow::Result<()> {
         let blend_image =
             transition_pipeline.apply(frame.graph, bart_image, gulf_image, transition, progress);
 
-        // Draw UI: TODO: Sliders and value setters? That would be fun.
+        // Draw UI: TODO: Sliders and value setters? That would be fun
         let gui_image = imgui.draw(
             dt.as_secs_f32(),
             frame.events,

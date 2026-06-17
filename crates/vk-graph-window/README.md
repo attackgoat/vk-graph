@@ -11,4 +11,4 @@ cargo run --example hello_world
 See the workspace [guide book](https://attackgoat.github.io/vk-graph) and
 [examples](../../examples/README.md) for end-to-end usage.
 
-<image alt="hello_world.rs" src="../../.github/img/hello_world.png">
+<img alt="hello_world.rs" src="../../.github/img/hello_world.png">

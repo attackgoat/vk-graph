@@ -8,7 +8,7 @@ use {
             DriverError,
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
-            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             shader::Shader,
             sync::AccessType,
         },
@@ -90,7 +90,7 @@ impl ComputePresenter {
     }
 }
 
-/// Graphic-pipeline presenter for drawing an image into a swapchain image.
+/// Graphics pipeline presenter for drawing an image into a swapchain image.
 pub struct GraphicPresenter {
     pipeline: GraphicsPipeline,
 }
@@ -102,15 +102,15 @@ impl GraphicPresenter {
             device,
             GraphicsPipelineInfo::default(),
             [
-                Shader::new_vertex(include_glsl!("res/shader/graphic/present.vert").as_slice()),
-                Shader::new_fragment(include_glsl!("res/shader/graphic/present.frag").as_slice()),
+                Shader::new_vertex(include_glsl!("res/shader/graphics/present.vert").as_slice()),
+                Shader::new_fragment(include_glsl!("res/shader/graphics/present.frag").as_slice()),
             ],
         )?;
 
         Ok(Self { pipeline })
     }
 
-    /// Draws the given image into the swapchain image using a fullscreen graphic pass.
+    /// Draws the given image into the swapchain image using a fullscreen graphics pass.
     pub fn present_image(
         &self,
         graph: &mut Graph,
@@ -134,7 +134,7 @@ impl GraphicPresenter {
 
         graph
             .begin_cmd()
-            .debug_name("present (from graphic)")
+            .debug_name("present (from graphics)")
             .bind_pipeline(&self.pipeline)
             .shader_resource_access(
                 0,

@@ -1,12 +1,12 @@
 use {
     super::{PipelineCommand, cmd_ref::CommandRef},
-    crate::driver::{device::Device, ray_trace::RayTracingPipeline},
+    crate::driver::{device::Device, ray_tracing::RayTracingPipeline},
     ash::vk,
     std::ops::Deref,
 };
 
 impl PipelineCommand<'_, RayTracingPipeline> {
-    /// Begin recording a ray tracing pipeline command buffer.
+    /// Begin recording ray tracing pipeline work for this graph command.
     pub fn record_cmd(
         mut self,
         func: impl FnOnce(RayTracingCommandRef<'_>) + Send + 'static,
@@ -15,17 +15,36 @@ impl PipelineCommand<'_, RayTracingPipeline> {
         self
     }
 
-    /// Begin recording a ray tracing pipeline command buffer.
+    /// Mutable-borrow form of [`Self::record_cmd`].
     pub fn record_cmd_mut(&mut self, func: impl FnOnce(RayTracingCommandRef<'_>) + Send + 'static) {
         let pipeline = self
             .cmd
             .cmd()
             .expect_last_pipeline()
-            .expect_ray_trace()
+            .expect_ray_tracing()
             .clone();
 
         self.cmd.push_exec(move |cmd| {
             func(RayTracingCommandRef { cmd, pipeline });
+        });
+    }
+
+    pub(crate) fn record_stream_mut(
+        &mut self,
+        func: impl for<'r> Fn(RayTracingCommandRef<'r>) + Send + Sync + 'static,
+    ) {
+        let pipeline = self
+            .cmd
+            .cmd()
+            .expect_last_pipeline()
+            .expect_ray_tracing()
+            .clone();
+
+        self.cmd.push_reusable_exec(move |cmd| {
+            func(RayTracingCommandRef {
+                cmd,
+                pipeline: pipeline.clone(),
+            });
         });
     }
 }
@@ -44,7 +63,7 @@ impl PipelineCommand<'_, RayTracingPipeline> {
 /// # use ash::vk;
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
-/// # use vk_graph::driver::ray_trace::{
+/// # use vk_graph::driver::ray_tracing::{
 /// #     RayTracingPipeline,
 /// #     RayTracingPipelineInfo,
 /// #     RayTracingShaderGroup,
@@ -55,14 +74,14 @@ impl PipelineCommand<'_, RayTracingPipeline> {
 /// # let device = Device::create(DeviceInfo::default())?;
 /// # let info = RayTracingPipelineInfo::default();
 /// # let my_miss_code = [0u8; 1];
-/// # let my_ray_trace_pipeline = RayTracingPipeline::create(&device, info,
+/// # let my_ray_tracing_pipeline = RayTracingPipeline::create(&device, info,
 /// #     [Shader::new_miss(my_miss_code.as_slice())],
 /// #     [RayTracingShaderGroup::new_general(0)],
 /// # )?;
 /// # let mut my_graph = Graph::default();
 /// my_graph.begin_cmd()
 ///         .debug_name("my ray tracing command")
-///         .bind_pipeline(&my_ray_trace_pipeline)
+///         .bind_pipeline(&my_ray_tracing_pipeline)
 ///         .record_cmd(move |cmd| {
 ///             // During this closure we have access to the ray tracing functions!
 ///         });
@@ -76,7 +95,7 @@ pub struct RayTracingCommandRef<'a> {
 impl RayTracingCommandRef<'_> {
     /// Updates push constants.
     ///
-    /// Push constants represent a high speed path to modify constant data in pipelines that is
+    /// Push constants represent a high-speed path to modify constant data in pipelines that is
     /// expected to outperform memory-backed resource updates.
     ///
     /// Push constant values can be updated incrementally, causing shader stages to read the new
@@ -85,9 +104,8 @@ impl RayTracingCommandRef<'_> {
     ///
     /// # Device limitations
     ///
-    /// See
-    /// [`device.physical_device.props.limits.max_push_constants_size`](vk::PhysicalDeviceLimits)
-    /// for the limits of the current device. You may also check [gpuinfo.org] for a listing of
+    /// See [`VkPhysicalDeviceLimits::maxPushConstantsSize`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceLimits.html)
+    /// for the limit of the current device. You may also check [gpuinfo.org] for a listing of
     /// reported limits on other devices.
     ///
     /// # Examples
@@ -104,7 +122,7 @@ impl RayTracingCommandRef<'_> {
     /// } push_constants;
     ///
     /// void main() {
-    ///     // TODO: Add bindings to write things!
+    ///     uint value = push_constants.some_val;
     /// }
     /// # "#);
     /// ```
@@ -114,7 +132,7 @@ impl RayTracingCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::ray_trace::{
+    /// # use vk_graph::driver::ray_tracing::{
     /// #     RayTracingPipeline,
     /// #     RayTracingPipelineInfo,
     /// #     RayTracingShaderGroup,
@@ -126,7 +144,7 @@ impl RayTracingCommandRef<'_> {
     /// # let shader = [0u8; 1];
     /// # let info = RayTracingPipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
-    /// # let my_ray_trace_pipeline = RayTracingPipeline::create(&device, info,
+    /// # let my_ray_tracing_pipeline = RayTracingPipeline::create(&device, info,
     /// #     [Shader::new_miss(my_miss_code.as_slice())],
     /// #     [RayTracingShaderGroup::new_general(0)],
     /// # )?;
@@ -153,7 +171,7 @@ impl RayTracingCommandRef<'_> {
     /// # let mut my_graph = Graph::default();
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
-    ///         .bind_pipeline(&my_ray_trace_pipeline)
+    ///         .bind_pipeline(&my_ray_tracing_pipeline)
     ///         .record_cmd(move |cmd| {
     ///             cmd.push_constants(0, &[0xcb])
     ///                    .trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
@@ -174,10 +192,13 @@ impl RayTracingCommandRef<'_> {
         self
     }
 
-    /// Set the stack size dynamically for a ray tracing pipeline.
+    /// Sets the stack size dynamically for a ray tracing pipeline.
     ///
-    /// See
-    /// `RayTracingPipelineInfo::dynamic_stack_size` and see the Vulkan spec.
+    /// The pipeline must have been created with
+    /// [`RayTracingPipelineInfo::dynamic_stack_size`](crate::driver::ray_tracing::RayTracingPipelineInfo::dynamic_stack_size)
+    /// enabled.
+    ///
+    /// See [`vkCmdSetRayTracingPipelineStackSizeKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetRayTracingPipelineStackSizeKHR.html).
     #[profiling::function]
     pub fn set_stack_size(&self, pipeline_stack_size: u32) -> &Self {
         let khr_ray_tracing_pipeline = Device::expect_vk_khr_ray_tracing_pipeline(&self.cmd.device);
@@ -189,8 +210,10 @@ impl RayTracingCommandRef<'_> {
         );
 
         unsafe {
-            // Checked mode catches missing dynamic_stack_size enablement early. Other Vulkan
-            // validation remains the responsibility of the validation layer.
+            /*
+            Checked mode catches missing dynamic_stack_size enablement early. Other Vulkan
+            validation remains the responsibility of the validation layer.
+            */
             khr_ray_tracing_pipeline
                 .cmd_set_ray_tracing_pipeline_stack_size(self.cmd.handle, pipeline_stack_size);
         }
@@ -198,14 +221,18 @@ impl RayTracingCommandRef<'_> {
         self
     }
 
-    // TODO: If the rayTraversalPrimitiveCulling or rayQuery features are enabled, the
-    // SkipTrianglesKHR and SkipAABBsKHR ray flags can be specified when tracing a ray.
-    // SkipTrianglesKHR and SkipAABBsKHR are mutually exclusive.
+    /*
+    TODO: If the rayTraversalPrimitiveCulling or rayQuery features are enabled, the SkipTrianglesKHR
+    and SkipAABBsKHR ray flags can be specified when tracing a ray. SkipTrianglesKHR and
+    SkipAABBsKHR are mutually exclusive.
+    */
 
     /// Ray traces using the currently-bound [`RayTracingPipeline`] and the given shader binding
     /// tables.
     ///
     /// Shader binding tables must be constructed according to this [example].
+    ///
+    /// See [`vkCmdTraceRaysKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdTraceRaysKHR.html).
     ///
     /// # Examples
     ///
@@ -216,7 +243,7 @@ impl RayTracingCommandRef<'_> {
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
-    /// # use vk_graph::driver::ray_trace::{
+    /// # use vk_graph::driver::ray_tracing::{
     /// #     RayTracingPipeline,
     /// #     RayTracingPipelineInfo,
     /// #     RayTracingShaderGroup,
@@ -228,7 +255,7 @@ impl RayTracingCommandRef<'_> {
     /// # let shader = [0u8; 1];
     /// # let info = RayTracingPipelineInfo::default();
     /// # let my_miss_code = [0u8; 1];
-    /// # let my_ray_trace_pipeline = RayTracingPipeline::create(&device, info,
+    /// # let my_ray_tracing_pipeline = RayTracingPipeline::create(&device, info,
     /// #     [Shader::new_miss(my_miss_code.as_slice())],
     /// #     [RayTracingShaderGroup::new_general(0)],
     /// # )?;
@@ -255,14 +282,14 @@ impl RayTracingCommandRef<'_> {
     /// # let mut my_graph = Graph::default();
     /// my_graph.begin_cmd()
     ///         .debug_name("draw a cornell box")
-    ///         .bind_pipeline(&my_ray_trace_pipeline)
+    ///         .bind_pipeline(&my_ray_tracing_pipeline)
     ///         .record_cmd(move |cmd| {
     ///             cmd.trace_rays(&rgen_sbt, &hit_sbt, &miss_sbt, &call_sbt, 320, 200, 1);
     ///         });
     /// # Ok(()) }
     /// ```
     ///
-    /// [example]: https://github.com/attackgoat/vk-graph/blob/master/examples/ray_trace.rs
+    /// [example]: https://github.com/attackgoat/vk-graph/blob/master/examples/ray_tracing.rs
     #[allow(clippy::too_many_arguments)]
     #[profiling::function]
     pub fn trace_rays(

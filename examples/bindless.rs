@@ -12,7 +12,7 @@ use {
             DriverError,
             buffer::Buffer,
             device::Device,
-            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
         },
         pool::lazy::LazyPool,

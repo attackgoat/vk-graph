@@ -13,6 +13,8 @@ use {
 };
 
 /// Smart pointer handle to a [`vk::SurfaceKHR`] object.
+///
+/// See [`VkSurfaceKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSurfaceKHR.html).
 #[read_only::cast]
 pub struct Surface {
     /// The device which owns this surface resource.
@@ -27,7 +29,9 @@ pub struct Surface {
 }
 
 impl Surface {
-    /// Query surface capabilities
+    /// Queries surface capabilities.
+    ///
+    /// See [`vkGetPhysicalDeviceSurfaceCapabilitiesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetPhysicalDeviceSurfaceCapabilitiesKHR.html).
     pub fn capabilities(&self) -> Result<vk::SurfaceCapabilitiesKHR, DriverError> {
         let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
@@ -44,9 +48,11 @@ impl Surface {
         })
     }
 
-    /// Create a surface from a raw window display handle.
+    /// Creates a surface from a raw window display handle.
     ///
     /// `device` must have been created with platform specific surface extensions enabled.
+    ///
+    /// See [`VkSurfaceKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkSurfaceKHR.html).
     #[profiling::function]
     pub fn create(
         device: &Device,
@@ -85,6 +91,8 @@ impl Surface {
     }
 
     /// Lists the supported surface formats.
+    ///
+    /// See [`vkGetPhysicalDeviceSurfaceFormatsKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetPhysicalDeviceSurfaceFormatsKHR.html).
     #[profiling::function]
     pub fn formats(&self) -> Result<Vec<vk::SurfaceFormatKHR>, DriverError> {
         let khr_surface = Device::expect_vk_khr_surface(&self.device);
@@ -125,7 +133,32 @@ impl Surface {
         Self::linear(formats).unwrap_or_else(|| formats.first().copied().unwrap_or_default())
     }
 
+    /// Selects a supported composite alpha mode, preferring `requested` and then `OPAQUE`.
+    pub fn composite_alpha_or_default(
+        supported: vk::CompositeAlphaFlagsKHR,
+        requested: vk::CompositeAlphaFlagsKHR,
+    ) -> vk::CompositeAlphaFlagsKHR {
+        if supported.contains(requested) {
+            return requested;
+        }
+
+        if supported.contains(vk::CompositeAlphaFlagsKHR::OPAQUE) {
+            return vk::CompositeAlphaFlagsKHR::OPAQUE;
+        }
+
+        [
+            vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+            vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED,
+            vk::CompositeAlphaFlagsKHR::INHERIT,
+        ]
+        .into_iter()
+        .find(|mode| supported.contains(*mode))
+        .unwrap_or(requested)
+    }
+
     /// Returns `true` if the given queue family supports presentation on this surface.
+    ///
+    /// See [`vkGetPhysicalDeviceSurfaceSupportKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetPhysicalDeviceSurfaceSupportKHR.html).
     pub fn physical_device_support(&self, queue_family_index: u32) -> Result<bool, DriverError> {
         let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
@@ -149,7 +182,9 @@ impl Surface {
         }
     }
 
-    /// Query supported presentation modes.
+    /// Queries supported presentation modes.
+    ///
+    /// See [`vkGetPhysicalDeviceSurfacePresentModesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetPhysicalDeviceSurfacePresentModesKHR.html).
     pub fn present_modes(&self) -> Result<Vec<vk::PresentModeKHR>, DriverError> {
         let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
@@ -199,7 +234,10 @@ impl Surface {
 
 impl Debug for Surface {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Surface")
+        f.debug_struct(stringify!(Surface))
+            .field("handle", &self.handle)
+            .field("device", &self.device)
+            .finish_non_exhaustive()
     }
 }
 
@@ -292,6 +330,34 @@ mod test {
         assert_eq!(
             Surface::srgb_or_default(&formats).format,
             vk::Format::R16G16B16A16_SFLOAT
+        );
+    }
+
+    #[test]
+    fn composite_alpha_prefers_requested_supported_mode() {
+        let supported =
+            vk::CompositeAlphaFlagsKHR::OPAQUE | vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED;
+
+        assert_eq!(
+            Surface::composite_alpha_or_default(
+                supported,
+                vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+            ),
+            vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED
+        );
+    }
+
+    #[test]
+    fn composite_alpha_falls_back_to_opaque() {
+        let supported =
+            vk::CompositeAlphaFlagsKHR::OPAQUE | vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED;
+
+        assert_eq!(
+            Surface::composite_alpha_or_default(
+                supported,
+                vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+            ),
+            vk::CompositeAlphaFlagsKHR::OPAQUE
         );
     }
 }
