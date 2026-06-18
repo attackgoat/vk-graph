@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
 
     let secondary_queue_family = window
         .device
-        .physical_device
+        .physical
         .queue_families
         .iter()
         .enumerate()

@@ -200,7 +200,7 @@ fn check_queue_submit2_args(
     waits: &[SemaphoreSubmit2Info],
     signals: &[SemaphoreSubmit2Info],
 ) -> Result<(), DriverError> {
-    if !device.physical_device.vk_khr_synchronization2 {
+    if !device.physical.vk_khr_synchronization2 {
         return Err(DriverError::Unsupported);
     }
 
@@ -647,7 +647,7 @@ fn submit_stage_mask_legacy(stage_mask: vk::PipelineStageFlags2) -> vk::Pipeline
 }
 
 fn supports_timeline_semaphores(device: &Device) -> bool {
-    device.physical_device.features_v1_2.timeline_semaphore
+    device.physical.features_v1_2.timeline_semaphore
 }
 
 /// Builds and submits a release barrier command buffer for each release group, calling
@@ -4640,7 +4640,7 @@ impl Submission {
                 };
                 let exec_label_name = cmd_buf
                     .device
-                    .physical_device
+                    .physical
                     .instance
                     .info
                     .debug

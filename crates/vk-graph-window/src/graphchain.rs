@@ -80,7 +80,7 @@ impl Graphchain {
 
         let swapchain_info: SwapchainInfo = info.into();
         let swapchain = Swapchain::create(surface, swapchain_info)?;
-        let physical_device = &swapchain.surface.device.physical_device;
+        let physical_device = &swapchain.surface.device.physical;
         let queue_family_index = physical_device
             .queue_families
             .iter()
@@ -98,13 +98,13 @@ impl Graphchain {
         let strategy = if swapchain
             .surface
             .device
-            .physical_device
+            .physical
             .vk_khr_present_id
             .is_some()
             && swapchain
                 .surface
                 .device
-                .physical_device
+                .physical
                 .vk_khr_present_wait
                 .is_some()
         {
@@ -347,11 +347,7 @@ impl Graphchain {
                 )
             };
 
-        let supports_synchronization2 = recording
-            .cmd_buf
-            .device
-            .physical_device
-            .vk_khr_synchronization2;
+        let supports_synchronization2 = recording.cmd_buf.device.physical.vk_khr_synchronization2;
 
         let image = recording.resource(image_node);
         let image_sync_info = image.sync_info();

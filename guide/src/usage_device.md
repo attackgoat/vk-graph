@@ -25,7 +25,7 @@ production-ready code used to create a device:
 let info = DeviceInfo::default();
 let device = Device::create(info)?;
 
-assert_eq!(device.physical_device.instance.info.debug, false);
+assert_eq!(device.physical.instance.info.debug, false);
 # Ok(()) }
 ```
 

@@ -70,7 +70,7 @@ impl Egui {
         let ctx = egui::Context::default();
         let max_texture_side = Some(
             device
-                .physical_device
+                .physical
                 .properties_v1_0
                 .limits
                 .max_image_dimension2_d as usize,

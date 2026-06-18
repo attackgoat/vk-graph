@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
     let use_geometry_shader = {
         let Vulkan10Features {
             geometry_shader, ..
-        } = window.device.physical_device.features_v1_0;
+        } = window.device.physical.features_v1_0;
 
         args.geometry_shader && geometry_shader
     };
@@ -496,7 +496,7 @@ fn best_2d_optimal_format(
     flags: vk::ImageCreateFlags,
 ) -> vk::Format {
     for format in formats {
-        let format_props = device.physical_device.image_format_properties(
+        let format_props = device.physical.image_format_properties(
             *format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,

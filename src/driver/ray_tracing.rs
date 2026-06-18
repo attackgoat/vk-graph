@@ -102,7 +102,7 @@ impl RayTracingPipeline {
         S: TryInto<Shader>,
         S::Error: Into<DriverError>,
     {
-        if device.physical_device.vk_khr_ray_tracing_pipeline.is_none() {
+        if device.physical.vk_khr_ray_tracing_pipeline.is_none() {
             warn!("unsupported ray tracing pipeline creation: missing ray tracing properties");
 
             return Err(DriverError::Unsupported);
@@ -220,7 +220,7 @@ impl RayTracingPipeline {
                     .max_pipeline_ray_recursion_depth(
                         info.max_ray_recursion_depth.min(
                             device
-                                .physical_device
+                                .physical
                                 .expect_ray_tracing_pipeline_properties()
                                 .max_ray_recursion_depth,
                         ),
@@ -259,9 +259,7 @@ impl RayTracingPipeline {
             let &RayTracingPipelineProperties {
                 shader_group_handle_size,
                 ..
-            } = device
-                .physical_device
-                .expect_ray_tracing_pipeline_properties();
+            } = device.physical.expect_ray_tracing_pipeline_properties();
 
             let push_constants = merge_push_constant_ranges(&push_constants).into_boxed_slice();
 
@@ -325,7 +323,7 @@ impl RayTracingPipeline {
         } = self
             .inner
             .device
-            .physical_device
+            .physical
             .expect_ray_tracing_pipeline_properties();
         let start = idx * shader_group_handle_size as usize;
         let end = start + shader_group_handle_size as usize;

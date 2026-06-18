@@ -481,7 +481,7 @@ impl QueueSignals {
         }
 
         let device = &surface.device;
-        let all_queue_families = &device.physical_device.queue_families;
+        let all_queue_families = &device.physical.queue_families;
         let mut partial = PartialQueueSignals {
             device,
             families: Vec::with_capacity(all_queue_families.len()),
@@ -1149,7 +1149,7 @@ impl Swapchain {
         }
 
         if device
-            .physical_device
+            .physical
             .image_format_properties(
                 surface_format,
                 vk::ImageType::TYPE_2D,
@@ -1785,7 +1785,7 @@ impl SwapchainState<Live> {
 
         {
             if requested_info.image_sharing_mode == vk::SharingMode::CONCURRENT
-                && device.physical_device.queue_families.len() < 2
+                && device.physical.queue_families.len() < 2
             {
                 warn!(
                     "requested concurrent image sharing with one queue family; falling back to exclusive"
@@ -1883,7 +1883,7 @@ impl SwapchainState<Live> {
             requested_info.image_sharing_mode,
             vk::SharingMode::CONCURRENT
         )
-        .then(|| (0..device.physical_device.queue_families.len() as u32).collect::<Box<_>>());
+        .then(|| (0..device.physical.queue_families.len() as u32).collect::<Box<_>>());
 
         if let Some(queue_family_indices) = &queue_family_indices {
             swapchain_create_info =
@@ -2005,8 +2005,8 @@ impl SwapchainState<Live> {
         );
 
         let use_present_wait = {
-            surface.device.physical_device.vk_khr_present_id.is_some()
-                && surface.device.physical_device.vk_khr_present_wait.is_some()
+            surface.device.physical.vk_khr_present_id.is_some()
+                && surface.device.physical.vk_khr_present_wait.is_some()
         };
 
         Ok((

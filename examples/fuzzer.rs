@@ -200,7 +200,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
 
     let accel_struct_scratch_offset_alignment = frame
         .device
-        .physical_device
+        .physical
         .vk_khr_acceleration_structure
         .as_ref()
         .unwrap()
@@ -681,7 +681,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             framebuffer_depth_sample_counts,
             framebuffer_stencil_sample_counts,
             ..
-        } = frame.device.physical_device.properties_v1_0.limits;
+        } = frame.device.physical.properties_v1_0.limits;
         match framebuffer_color_sample_counts
             & framebuffer_depth_sample_counts
             & framebuffer_stencil_sample_counts
@@ -703,7 +703,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             vk::Format::D16_UNORM_S8_UINT,
             vk::Format::D32_SFLOAT_S8_UINT,
         ] {
-            let format_props = frame.device.physical_device.image_format_properties(
+            let format_props = frame.device.physical.image_format_properties(
                 format,
                 vk::ImageType::TYPE_2D,
                 vk::ImageTiling::OPTIMAL,
@@ -728,7 +728,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         ] {
             if frame
                 .device
-                .physical_device
+                .physical
                 .depth_stencil_resolve_properties
                 .supported_depth_resolve_modes
                 .contains(resolve_flags)

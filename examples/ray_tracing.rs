@@ -522,7 +522,7 @@ fn main() -> anyhow::Result<()> {
         ..
     } = window
         .device
-        .physical_device
+        .physical
         .vk_khr_ray_tracing_pipeline
         .as_ref()
         .unwrap()
@@ -683,7 +683,7 @@ fn main() -> anyhow::Result<()> {
     {
         let accel_struct_scratch_offset_alignment = window
             .device
-            .physical_device
+            .physical
             .vk_khr_acceleration_structure
             .as_ref()
             .unwrap()

@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // A neato smoke effect just for fun
-    let Vulkan11Properties { subgroup_size, .. } = window.device.physical_device.properties_v1_1;
+    let Vulkan11Properties { subgroup_size, .. } = window.device.physical.properties_v1_1;
     let start_time = Instant::now();
     let smoke_pipeline = ComputePipeline::create(
         &window.device,

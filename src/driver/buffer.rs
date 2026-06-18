@@ -114,7 +114,7 @@ impl Buffer {
             .sharing_mode(info.sharing_mode);
 
         let buffer_info = if info.sharing_mode == vk::SharingMode::CONCURRENT {
-            buffer_info.queue_family_indices(&device.physical_device.queue_family_indices)
+            buffer_info.queue_family_indices(&device.physical.queue_family_indices)
         } else {
             buffer_info
         };

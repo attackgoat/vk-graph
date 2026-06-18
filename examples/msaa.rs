@@ -194,7 +194,7 @@ fn main() -> anyhow::Result<()> {
 
 fn best_depth_format(device: &Device) -> vk::Format {
     for format in [vk::Format::D32_SFLOAT, vk::Format::D16_UNORM] {
-        let format_props = device.physical_device.image_format_properties(
+        let format_props = device.physical.image_format_properties(
             format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -216,7 +216,7 @@ fn max_supported_sample_count(device: &Device) -> SampleCount {
         framebuffer_color_sample_counts,
         framebuffer_depth_sample_counts,
         ..
-    } = device.physical_device.properties_v1_0.limits;
+    } = device.physical.properties_v1_0.limits;
     match framebuffer_color_sample_counts & framebuffer_depth_sample_counts {
         s if s.contains(vk::SampleCountFlags::TYPE_64) => SampleCount::Type64,
         s if s.contains(vk::SampleCountFlags::TYPE_32) => SampleCount::Type32,

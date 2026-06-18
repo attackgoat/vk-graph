@@ -290,7 +290,7 @@ impl PipelineDescriptorInfo {
             */
             let bindless_flags = vec![vk::DescriptorBindingFlags::PARTIALLY_BOUND; bindings.len()];
             let mut bindless_flags = if device
-                .physical_device
+                .physical
                 .features_v1_2
                 .descriptor_binding_partially_bound
             {

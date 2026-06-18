@@ -566,7 +566,7 @@ fn arbitrary_perspective_rh(
 /// Helper to pick a queue family for submitting device commands.
 fn device_queue_family_index(device: &Device, flags: vk::QueueFlags) -> Option<u32> {
     device
-        .physical_device
+        .physical
         .queue_families
         .iter()
         .enumerate()

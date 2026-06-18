@@ -585,7 +585,7 @@ impl GraphicsPipeline {
 
                 // Callers should check this before attempting to use the feature
                 debug_assert!(
-                    device.physical_device.features_v1_0.sample_rate_shading,
+                    device.physical.features_v1_0.sample_rate_shading,
                     "unsupported sample rate shading feature"
                 );
 

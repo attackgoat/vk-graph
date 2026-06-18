@@ -67,7 +67,7 @@ pub struct Device {
     ///
     /// _Note:_ This field is read-only.
     #[readonly]
-    pub physical_device: Box<PhysicalDevice>,
+    pub physical: Box<PhysicalDevice>,
 }
 
 impl Device {
@@ -101,7 +101,7 @@ impl Device {
         command_buffer: vk::CommandBuffer,
         label_name: impl AsRef<str>,
     ) -> Result<(), DriverError> {
-        if !this.physical_device.instance.info.debug {
+        if !this.physical.instance.info.debug {
             return Ok(());
         }
 
@@ -195,12 +195,12 @@ impl Device {
     ) {
         #[cfg(feature = "checked")]
         assert!(
-            this.physical_device.vk_khr_synchronization2,
+            this.physical.vk_khr_synchronization2,
             "missing synchronization2 feature"
         );
 
         unsafe {
-            if this.physical_device.instance.info.api_version >= ApiVersion::Vulkan13 {
+            if this.physical.instance.info.api_version >= ApiVersion::Vulkan13 {
                 this.cmd_pipeline_barrier2(command_buffer, dependency_info);
             } else {
                 let khr_synchronization2 = Device::expect_vk_khr_synchronization2(this);
@@ -298,7 +298,7 @@ impl Device {
         this: &Self,
         command_buffer: vk::CommandBuffer,
     ) -> Result<(), DriverError> {
-        if !this.physical_device.instance.info.debug {
+        if !this.physical.instance.info.debug {
             return Ok(());
         }
 
@@ -485,10 +485,10 @@ impl Device {
         fence: vk::Fence,
     ) -> Result<(), DriverError> {
         #[cfg(feature = "checked")]
-        assert!(this.physical_device.vk_khr_synchronization2);
+        assert!(this.physical.vk_khr_synchronization2);
 
         unsafe {
-            if this.physical_device.instance.info.api_version >= ApiVersion::Vulkan13 {
+            if this.physical.instance.info.api_version >= ApiVersion::Vulkan13 {
                 // Support derived from Vulkan v1.3 implementation
                 this.queue_submit2(queue, submits, fence)
             } else {
@@ -555,7 +555,7 @@ impl Device {
     where
         T: vk::Handle + Copy,
     {
-        if !this.physical_device.instance.info.debug {
+        if !this.physical.instance.info.debug {
             return Ok(());
         }
 
@@ -805,7 +805,7 @@ impl Device {
                     private_data_name_id: AtomicU64::new(0),
                     private_data_metadata: Mutex::new(Default::default()),
                 }),
-                physical_device: Box::new(physical_device),
+                physical: Box::new(physical_device),
             },
         })
     }
@@ -1045,7 +1045,7 @@ impl Debug for Device {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(Device))
             .field("handle", &self.inner.device.handle())
-            .field("physical_device", &self.physical_device)
+            .field("physical", &self.physical)
             .finish_non_exhaustive()
     }
 }
@@ -1198,7 +1198,7 @@ impl Clone for ReadOnlyDevice {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            physical_device: self.physical_device.clone(),
+            physical: self.physical.clone(),
         }
     }
 }

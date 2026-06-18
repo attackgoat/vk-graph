@@ -213,7 +213,7 @@ fn fill_mip_levels(device: &Device, image: &Arc<Image>) -> Result<(), DriverErro
 
     // This is the overly-complicated way of picking queue family 0
     let queue_family_index = device
-        .physical_device
+        .physical
         .queue_families
         .iter()
         .enumerate()

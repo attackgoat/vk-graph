@@ -123,7 +123,7 @@ fn fill_depth_image(
 
     // Sometimes required because support is not 100% common: Check min/max reduction support
     // https://vulkan.gpuinfo.org/listdevicescoverage.php?extension=VK_EXT_sampler_filter_minmax&platform=all
-    let fmt_props = device.physical_device.format_properties(format);
+    let fmt_props = device.physical.format_properties(format);
     if !fmt_props.optimal_tiling_features.contains(
         vk::FormatFeatureFlags::SAMPLED_IMAGE
             | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
@@ -139,14 +139,14 @@ fn fill_depth_image(
     // we already performed above, it's just a different way to go about finding the answer)
     assert!(
         device
-            .physical_device
+            .physical
             .sampler_filter_minmax_properties
             .single_component_formats
     );
 
     // Not required, but good practice: Check image format support
     let image_fmt_props = device
-        .physical_device
+        .physical
         .image_format_properties(format, image_type, tiling, usage, flags)?
         .ok_or(DriverError::Unsupported)?;
     if size > image_fmt_props.max_extent.width || size > image_fmt_props.max_extent.height {
@@ -157,7 +157,7 @@ fn fill_depth_image(
     }
 
     // You could check this if you needed to reduce multiple channel images:
-    // device.physical_device.sampler_filter_minmax_properties.image_component_mapping
+    // device.physical.sampler_filter_minmax_properties.image_component_mapping
 
     let depth_data = (0..size.pow(2)).map(|x| x as f32).collect::<Box<_>>();
     let depth_data = graph.bind_resource(Buffer::create_from_slice(

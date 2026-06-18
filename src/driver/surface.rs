@@ -36,10 +36,8 @@ impl Surface {
         let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
         unsafe {
-            khr_surface.get_physical_device_surface_capabilities(
-                self.device.physical_device.handle,
-                self.handle,
-            )
+            khr_surface
+                .get_physical_device_surface_capabilities(self.device.physical.handle, self.handle)
         }
         .map_err(|err| {
             warn!("unable to get surface capabilities: {err}");
@@ -74,8 +72,8 @@ impl Surface {
 
         let handle = unsafe {
             create_surface(
-                Instance::entry(&device.physical_device.instance),
-                &device.physical_device.instance,
+                Instance::entry(&device.physical.instance),
+                &device.physical.instance,
                 display_handle.as_raw(),
                 window_handle.as_raw(),
                 None,
@@ -98,10 +96,8 @@ impl Surface {
         let khr_surface = Device::expect_vk_khr_surface(&self.device);
 
         unsafe {
-            khr_surface.get_physical_device_surface_formats(
-                self.device.physical_device.handle,
-                self.handle,
-            )
+            khr_surface
+                .get_physical_device_surface_formats(self.device.physical.handle, self.handle)
         }
         .map_err(|err| {
             warn!("unable to get surface formats: {err}");
@@ -165,7 +161,7 @@ impl Surface {
         unsafe {
             khr_surface
                 .get_physical_device_surface_support(
-                    self.device.physical_device.handle,
+                    self.device.physical.handle,
                     queue_family_index,
                     self.handle,
                 )
@@ -190,10 +186,7 @@ impl Surface {
 
         unsafe {
             khr_surface
-                .get_physical_device_surface_present_modes(
-                    self.device.physical_device.handle,
-                    self.handle,
-                )
+                .get_physical_device_surface_present_modes(self.device.physical.handle, self.handle)
                 .map_err(|err| {
                     warn!("unable to get present modes: {err}");
 

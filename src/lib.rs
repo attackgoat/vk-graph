@@ -1992,10 +1992,7 @@ mod test {
                 let mut shared_accels = SharedNodes::<AccelerationStructure>::default();
                 let mut shared_accel_leases =
                     SharedNodes::<crate::pool::Lease<AccelerationStructure>>::default();
-                let accel_supported = device
-                    .physical_device
-                    .vk_khr_acceleration_structure
-                    .is_some();
+                let accel_supported = device.physical.vk_khr_acceleration_structure.is_some();
 
                 let mut resource_kinds = vec![
                     ResourceKind::OwnedBuffer,

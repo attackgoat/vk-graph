@@ -1018,7 +1018,7 @@ impl Image {
         let device = device.clone();
         let create_info: ImageCreateInfo = info.into();
         let create_info = if info.sharing_mode == vk::SharingMode::CONCURRENT {
-            create_info.queue_family_indices(&device.physical_device.queue_family_indices)
+            create_info.queue_family_indices(&device.physical.queue_family_indices)
         } else {
             create_info
         };
