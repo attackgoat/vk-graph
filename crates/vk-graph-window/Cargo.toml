@@ -1,6 +1,6 @@
 [package]
 name = "vk-graph-window"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["John Wells <john@attackgoat.com>"]
 description = "winit window and swapchain integration for vk-graph"
 documentation = "https://docs.rs/vk-graph-window"

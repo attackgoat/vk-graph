@@ -1,6 +1,6 @@
 [package]
 name = "vk-graph-fx"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["John Wells <john@attackgoat.com>"]
 documentation = "https://docs.rs/vk-graph-fx"
 homepage = "https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-fx"

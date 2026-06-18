@@ -7,6 +7,62 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-06-18
+
+### Added
+
+- `Graph` replaces the old `RenderGraph` workflow with command-first graph construction and
+  `Submission` finalization.
+- `stream` module with reusable `CommandStream` values and typed stream arguments.
+- `submission` module for prepared submission data, dependency tracking, and graph execution state.
+- `node` module with resource node types moved out of the old `graph::node` namespace.
+- `driver::graphics` and `cmd::graphics` modules replace the old singular `graphic` modules.
+- `driver::ray_tracing` and `cmd::ray_tracing` modules replace the old `ray_trace` modules.
+- `vk-graph-window` `Graphchain` API replaces the old display/swapchain presentation wrapper.
+- `Fence` driver type and additional swapchain presentation result/error types.
+- `checked` feature for runtime graph and stream validation.
+
+### Changed
+
+- This release intentionally ignores semver-checks compatibility failures against the published
+  `0.14.0+alpha` crate. It includes removed modules, renamed types, renamed fields, changed method
+  signatures, and trait changes while remaining on the `0.14` release line.
+- The old pass-oriented `graph` API was replaced by command builder APIs under `cmd` and root-level
+  `Graph` methods.
+- `Display`/`DisplayInfo` presentation APIs moved out of the main crate; use `vk-graph-window` and
+  `Graphchain` for windowed presentation.
+- `GraphicPipeline`, `GraphicPipelineInfo`, `BlendMode`, and `DepthStencilMode` were renamed to
+  `GraphicsPipeline`, `GraphicsPipelineInfo`, `BlendInfo`, and `DepthStencilInfo`.
+- `RayTracePipeline`, `RayTracePipelineInfo`, and `RayTraceShaderGroup` were renamed to
+  `RayTracingPipeline`, `RayTracingPipelineInfo`, and `RayTracingShaderGroup`.
+- `Device::physical_device` was renamed to `Device::physical`.
+- Physical-device extension support now uses actual Vulkan extension names such as
+  `vk_khr_swapchain`, `vk_khr_synchronization2`, and grouped `Option<khr::...>` support structs for
+  KHR extensions with feature/property data.
+- Ambiguous public `ty` fields were renamed to domain-specific names such as `image_type`,
+  `view_type`, `acceleration_structure_type`, and `shader_group_type`.
+- `SpecializationInfo` was renamed to `SpecializationMap`.
+- Builder conversion methods now consistently use `into_builder` instead of `to_builder`.
+- Device, resource, pipeline, swapchain, and surface APIs were tightened around explicit creation,
+  ownership, and unsafe raw-handle construction.
+- Workspace integration crates now target `vk-graph` `0.14.2` and are versioned as `0.1.1`.
+
+### Removed
+
+- Removed the old `graph`, `graph::pass_ref`, and `display` public APIs.
+- Removed the old `prelude` re-export surface from the main crate.
+- Removed `pool::alias` and `AliasPool`.
+- Removed old `Device::create_headless`, `Device::create_display`, `Device::load`,
+  `Device::format_properties`, `Device::image_format_properties`, and `Device::instance` helpers.
+- Removed old `Buffer::access`, `Image::access`, and `AccelerationStructure::access` helpers.
+- Removed `Pool::lease`; implement `Pool::resource` for custom pools instead.
+
+### Fixed
+
+- Documentation examples now compile as `no_run` doctests instead of being ignored.
+- Rustdoc tables and module docs were cleaned up across command, driver, shader, stream, and example
+  documentation.
+
 ## Planned
 
 - Support https://vulkan.gpuinfo.org/displayextensiondetail.php?extension=VK_EXT_full_screen_exclusive, possibly through extension crate
@@ -656,7 +712,8 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
   platforms and require no bare-metal graphics API knowledge
 - "Hello, world!" example using a bitmapped font
 
-[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.2...HEAD
+[0.14.2]: https://crates.io/crates/vk-graph/0.14.2
 [0.1.0]: https://crates.io/crates/screen-13/0.1.0
 [0.2.0]: https://crates.io/crates/screen-13/0.2.0
 [0.3.0]: https://crates.io/crates/screen-13/0.3.0

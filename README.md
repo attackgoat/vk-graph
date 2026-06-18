@@ -11,7 +11,7 @@ real-world use, and supports modern Vulkan commands[^modern].
 
 ```toml
 [dependencies]
-vk-graph = "0.14"
+vk-graph = "0.14.2"
 ```
 
 [*Changelog*](https://github.com/attackgoat/vk-graph/blob/main/CHANGELOG.md)
