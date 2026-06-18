@@ -37,12 +37,39 @@ fn main() -> Result<(), WindowError> {
 
 ## Usage
 
-_vk-graph_ provides a fully-generic graph structure for statically typed access to resources used
-while rendering. The `Graph` structure allows Vulkan smart pointer resources to be bound as
-"nodes" which may be used by shader pipelines. The graph supports swapchain integration and may be
-used to execute custom command streams.
+_vk-graph_ centers frame work around a `Graph`. Bind Vulkan smart-pointer resources such as
+buffers, images, acceleration structures, and swapchain images into the graph to get statically typed
+node handles. Commands then reference those nodes instead of raw Vulkan handles. When recording is
+complete, finalize the graph into a `Submission` and submit it with a pool.
 
-Features of the graph:
+The normal flow is:
+
+- Create a `Device`, resources, and pipelines.
+- Start a fresh `Graph` for the frame or workload.
+- Bind resources into typed nodes with `Graph::bind_resource` or receive nodes from a swapchain
+  integration crate.
+- Record compute, graphics, transfer, or ray tracing commands with `Graph::begin_cmd`.
+- Declare each resource access on the command so the graph can build synchronization and pass data.
+- Finalize and submit the graph.
+
+`CommandStream` is available when part of the command graph is reusable. A stream records commands
+once with typed arguments, then each frame binds those arguments to the frame's concrete graph nodes.
+This is useful for overlays, post-processing, or other repeated command sequences that still need
+per-frame resources such as the current swapchain image.
+
+Device extension support is exposed through the selected physical device:
+
+```rust
+if let Some(ray_tracing) = &device.physical.vk_khr_ray_tracing_pipeline {
+    println!("max recursion depth: {}", ray_tracing.properties.max_ray_recursion_depth);
+}
+
+if device.physical.vk_khr_synchronization2 {
+    println!("synchronization2 is available");
+}
+```
+
+## Features
 
  - Compute, graphics, and ray tracing pipelines
  - Automatic Vulkan management (render passes, subpasses, descriptors, pools, _etc._)
