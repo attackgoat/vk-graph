@@ -56,7 +56,7 @@ allocations.
 The allocation strategy provides a large section of memory which is then sub-allocated for any
 resources which use it. This may lead to fragmentation and memory exhaustion in some scenarios.
 
-Individual buffers or images may use dedicated memory allocations by setting their `dedicated`
+Individual buffers or images may use dedicated memory allocations by setting their `alloc_dedicated`
 field:
 
 ```rust
@@ -73,14 +73,14 @@ field:
 let uber_mesh_buf = Buffer::create(
     device,
     BufferInfo {
-        dedicated: true,
+        alloc_dedicated: true,
         ..buffer_info
     }
 )?;
 
-// Builder functions are also availble
-// (builder and info types are interchangable)
-let dedicated_info = image_info.into_builder().dedicated(true);
+// Builder functions are also available
+// (builder and info types are interchangeable)
+let dedicated_info = image_info.into_builder().alloc_dedicated(true);
 let important_image = Image::create(device, dedicated_info)?;
 # Ok(()) }
 ```
@@ -273,11 +273,11 @@ graph, but they may do so manually:
 #     graph: Graph,
 #     device: &Device,
 # ) -> Result<(), DriverError> {
-// NOTE: This will stall! Use the async functions to check periodically instead
-graph
+// NOTE: This will stall! Use Fence::is_signaled to check periodically instead.
+let mut fence = graph
     .finalize()
-    .queue_submit(&mut LazyPool::new(device), 0, 0)?
-    .wait_until_executed()?;
+    .queue_submit(&mut LazyPool::new(device), 0, 0)?;
+fence.wait_signaled()?;
 # Ok(()) }
 ```
 

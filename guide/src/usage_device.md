@@ -4,7 +4,7 @@ Most Vulkan operations occur within the context of a logical device, provided by
 `Device` (_a smart pointer for `ash::Device`_).
 
 API docs: [`Device::create`](https://docs.rs/vk-graph/latest/vk_graph/driver/device/struct.Device.html#method.create),
-[`Device::try_from_ash_device`](https://docs.rs/vk-graph/latest/vk_graph/driver/device/struct.Device.html#method.try_from_ash_device),
+[`Device::try_from_ash`](https://docs.rs/vk-graph/latest/vk_graph/driver/device/struct.Device.html#method.try_from_ash),
 [`Device::try_from_display`](https://docs.rs/vk-graph/latest/vk_graph/driver/device/struct.Device.html#method.try_from_display).
 
 > [!WARNING]
@@ -82,8 +82,9 @@ let physical_devices = Instance::physical_devices(&instance)?;
 
 for physical_device in physical_devices {
     // We are looking for a device with support for these features
-    if !physical_device.khr_swapchain
-    || !physical_device.ray_tracing_pipeline_features.ray_tracing_pipeline {
+    if !physical_device.supports_swapchain_feature()
+        || !physical_device.ray_tracing_pipeline_features.ray_tracing_pipeline
+    {
         continue;
     }
 
@@ -112,7 +113,7 @@ let physical_device: vk::PhysicalDevice = todo!();
 
 // vk-graph types
 let instance = Instance::try_from_entry(entry, instance)?;
-let physical_device = PhysicalDevice::try_from_ash(&instance, physical_device)?;
+let physical_device = unsafe { PhysicalDevice::try_from_ash(&instance, physical_device) }?;
 
 // Use our PhysicalDevice to create a native ash::Device (OpenXR requires this)
 let device: ash::Device = unsafe {
@@ -130,7 +131,7 @@ let device: ash::Device = unsafe {
 }.unwrap();
 
 // Create a Device from their native stuff
-let device = Device::try_from_ash(device, physical_device)?;
+let device = unsafe { Device::try_from_ash(device, physical_device) }?;
 # Ok(()) }
 ```
 

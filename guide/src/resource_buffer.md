@@ -13,9 +13,10 @@ let usage = vk::BufferUsageFlags::STORAGE_BUFFER;
 // Create buffer info multiple ways:
 let info = BufferInfo {
     alignment: 1,
-    dedicated: false,
-    host_read: false,
-    host_write: false,
+    alloc_dedicated: false,
+    host_readable: false,
+    host_writable: false,
+    sharing_mode: vk::SharingMode::EXCLUSIVE,
     size,
     usage,
 };
