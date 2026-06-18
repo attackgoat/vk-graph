@@ -209,7 +209,7 @@ impl<'a> CommandRef<'a> {
                     let end = start + info.build_data.geometries.len();
                     vk_infos.push(
                         vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                            .ty(info.build_data.ty)
+                            .ty(info.build_data.acceleration_structure_type)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
                             .dst_acceleration_structure(self.resource(info.accel_struct).handle)
@@ -290,7 +290,7 @@ impl<'a> CommandRef<'a> {
                     let end = start + info.build_data.geometries.len();
                     vk_infos.push(
                         vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                            .ty(info.build_data.ty)
+                            .ty(info.build_data.acceleration_structure_type)
                             .flags(info.build_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
                             .dst_acceleration_structure(self.resource(info.accel_struct).handle)
@@ -418,7 +418,7 @@ impl<'a> CommandRef<'a> {
                     let end = start + info.update_data.geometries.len();
                     vk_infos.push(
                         vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                            .ty(info.update_data.ty)
+                            .ty(info.update_data.acceleration_structure_type)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
                             .dst_acceleration_structure(self.resource(info.dst_accel_struct).handle)
@@ -500,7 +500,7 @@ impl<'a> CommandRef<'a> {
                     let end = start + info.update_data.geometries.len();
                     vk_infos.push(
                         vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                            .ty(info.update_data.ty)
+                            .ty(info.update_data.acceleration_structure_type)
                             .flags(info.update_data.flags)
                             .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
                             .src_acceleration_structure(self.resource(info.src_accel_struct).handle)

@@ -454,7 +454,7 @@ fn main() -> anyhow::Result<()> {
                     shadow_faces_info
                         .into_image_view()
                         .into_builder()
-                        .ty(vk::ImageViewType::CUBE),
+                        .view_type(vk::ImageViewType::CUBE),
                     AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
                 .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)

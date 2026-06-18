@@ -156,7 +156,7 @@ impl AccelerationStructure {
 
         let handle = {
             let create_info = vk::AccelerationStructureCreateInfoKHR::default()
-                .ty(info.ty)
+                .ty(info.acceleration_structure_type)
                 .buffer(buffer.handle)
                 .size(info.size);
 
@@ -332,7 +332,7 @@ impl AccelerationStructure {
             }
 
             let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                .ty(info.ty)
+                .ty(info.acceleration_structure_type)
                 .flags(info.flags)
                 .geometries(&tls.geometries);
             let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
@@ -674,7 +674,7 @@ impl From<AccelerationStructureGeometryData> for vk::AccelerationStructureGeomet
 #[derive(Clone, Debug)]
 pub struct AccelerationStructureGeometryInfo<G> {
     /// Type of acceleration structure.
-    pub ty: vk::AccelerationStructureTypeKHR,
+    pub acceleration_structure_type: vk::AccelerationStructureTypeKHR,
 
     /// Specifies additional parameters of the acceleration structure.
     pub flags: vk::BuildAccelerationStructureFlagsKHR,
@@ -689,7 +689,7 @@ impl<G> AccelerationStructureGeometryInfo<G> {
         let geometries = geometries.into();
 
         Self {
-            ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
             flags: Default::default(),
             geometries,
         }
@@ -701,7 +701,7 @@ impl<G> AccelerationStructureGeometryInfo<G> {
         let geometries = geometries.into();
 
         Self {
-            ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
             flags: Default::default(),
             geometries,
         }
@@ -726,7 +726,7 @@ impl<G> AccelerationStructureGeometryInfo<G> {
 pub struct AccelerationStructureInfo {
     /// Type of acceleration structure.
     #[builder(default = "vk::AccelerationStructureTypeKHR::GENERIC")]
-    pub ty: vk::AccelerationStructureTypeKHR,
+    pub acceleration_structure_type: vk::AccelerationStructureTypeKHR,
 
     /// The size of the backing buffer that will store the acceleration structure.
     ///
@@ -741,7 +741,7 @@ impl AccelerationStructureInfo {
     #[inline(always)]
     pub const fn blas(size: vk::DeviceSize) -> Self {
         Self {
-            ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
             size,
         }
     }
@@ -756,7 +756,7 @@ impl AccelerationStructureInfo {
     #[inline(always)]
     pub const fn tlas(size: vk::DeviceSize) -> Self {
         Self {
-            ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
             size,
         }
     }
@@ -764,7 +764,7 @@ impl AccelerationStructureInfo {
     /// Converts an `AccelerationStructureInfo` into an `AccelerationStructureInfoBuilder`.
     pub fn into_builder(self) -> AccelerationStructureInfoBuilder {
         AccelerationStructureInfoBuilder {
-            ty: Some(self.ty),
+            acceleration_structure_type: Some(self.acceleration_structure_type),
             size: Some(self.size),
         }
     }
@@ -973,7 +973,7 @@ mod test {
     pub fn accel_struct_info_builder() {
         let info = Info {
             size: 32,
-            ty: vk::AccelerationStructureTypeKHR::GENERIC,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::GENERIC,
         };
         let builder = Builder::default().size(32).build();
 
@@ -984,7 +984,7 @@ mod test {
     pub fn accel_struct_info_builder_default_size() {
         let info = Info {
             size: 0,
-            ty: vk::AccelerationStructureTypeKHR::GENERIC,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::GENERIC,
         };
 
         assert_eq!(Builder::default().build(), info);

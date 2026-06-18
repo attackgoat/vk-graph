@@ -42,7 +42,7 @@ let build_range = vk::AccelerationStructureBuildRangeInfoKHR {
 };
 let ty = vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL;
 let geom_info = AccelerationStructureGeometryInfo {
-    ty,
+    acceleration_structure_type: ty,
     flags: vk::BuildAccelerationStructureFlagsKHR::ALLOW_UPDATE,
     geometries: vec![
         (geom, build_range),
@@ -57,7 +57,7 @@ let AccelerationStructureSize {
 
 // Create acceleration structure info multiple ways:
 let info = AccelerationStructureInfo {
-    ty,
+    acceleration_structure_type: ty,
     size: build_size,
 };
 let other_info = AccelerationStructureInfo::blas(build_size);
@@ -66,7 +66,7 @@ assert_eq!(info, other_info);
 
 // Builder pattern
 let same_info = AccelerationStructureInfoBuilder::default()
-    .ty(ty)
+    .acceleration_structure_type(ty)
     .size(build_size);
 
 // Create directly from info

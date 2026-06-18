@@ -579,12 +579,12 @@ pub struct RayTracingShaderGroup {
     pub intersection_shader: Option<u32>,
 
     /// The type of hit group specified in this structure.
-    pub ty: RayTracingShaderGroupType,
+    pub shader_group_type: RayTracingShaderGroupType,
 }
 
 impl RayTracingShaderGroup {
     fn new(
-        ty: RayTracingShaderGroupType,
+        shader_group_type: RayTracingShaderGroupType,
         general_shader: impl Into<Option<u32>>,
         intersection_shader: impl Into<Option<u32>>,
         closest_hit_shader: impl Into<Option<u32>>,
@@ -600,7 +600,7 @@ impl RayTracingShaderGroup {
             closest_hit_shader,
             general_shader,
             intersection_shader,
-            ty,
+            shader_group_type,
         }
     }
 
@@ -647,7 +647,7 @@ impl RayTracingShaderGroup {
 impl From<RayTracingShaderGroup> for vk::RayTracingShaderGroupCreateInfoKHR<'static> {
     fn from(shader_group: RayTracingShaderGroup) -> Self {
         vk::RayTracingShaderGroupCreateInfoKHR::default()
-            .ty(shader_group.ty.into())
+            .ty(shader_group.shader_group_type.into())
             .any_hit_shader(shader_group.any_hit_shader.unwrap_or(vk::SHADER_UNUSED_KHR))
             .closest_hit_shader(
                 shader_group
@@ -678,8 +678,8 @@ pub enum RayTracingShaderGroupType {
 }
 
 impl From<RayTracingShaderGroupType> for vk::RayTracingShaderGroupTypeKHR {
-    fn from(ty: RayTracingShaderGroupType) -> Self {
-        match ty {
+    fn from(shader_group_type: RayTracingShaderGroupType) -> Self {
+        match shader_group_type {
             RayTracingShaderGroupType::General => vk::RayTracingShaderGroupTypeKHR::GENERAL,
             RayTracingShaderGroupType::ProceduralHitGroup => {
                 vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP

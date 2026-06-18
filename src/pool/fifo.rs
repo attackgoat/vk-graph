@@ -131,7 +131,9 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for FifoPool {
                 // Look for a compatible acceleration structure (big enough and same type)
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
-                    if item.info.size >= info.size && item.info.ty == info.ty {
+                    if item.info.size >= info.size
+                        && item.info.acceleration_structure_type == info.acceleration_structure_type
+                    {
                         let item = cache.swap_remove(idx);
 
                         return Some(Lease::new(cache_ref.clone(), item));
@@ -283,7 +285,7 @@ impl Pool<ImageInfo, Image> for FifoPool {
                         && item.info.sample_count == info.sample_count
                         && item.info.sharing_mode == info.sharing_mode
                         && item.info.tiling == info.tiling
-                        && item.info.ty == info.ty
+                        && item.info.image_type == info.image_type
                         && item.info.width == info.width
                         && item.info.flags.contains(info.flags)
                         && item.info.usage.contains(info.usage)

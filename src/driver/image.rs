@@ -1803,7 +1803,7 @@ pub struct ImageInfo {
     ///
     /// Layers in array textures do not count as a dimension for the purposes of the image type.
     #[builder(default = "vk::ImageType::TYPE_2D")]
-    pub ty: vk::ImageType,
+    pub image_type: vk::ImageType,
 
     /// A bitmask describing the intended usage of the image.
     ///
@@ -1887,7 +1887,7 @@ impl ImageInfo {
 
     #[inline(always)]
     const fn new(
-        ty: vk::ImageType,
+        image_type: vk::ImageType,
         width: u32,
         height: u32,
         depth: u32,
@@ -1897,7 +1897,7 @@ impl ImageInfo {
     ) -> Self {
         Self {
             alloc_dedicated: false,
-            ty,
+            image_type,
             width,
             height,
             depth,
@@ -1954,7 +1954,7 @@ impl ImageInfo {
 
     /// Returns `true` if this image is a cube or cube array.
     pub fn is_cube(self) -> bool {
-        self.ty == vk::ImageType::TYPE_2D
+        self.image_type == vk::ImageType::TYPE_2D
             && self.width == self.height
             && self.depth == 1
             && self.array_layer_count >= 6
@@ -1996,7 +1996,7 @@ impl ImageInfo {
             sample_count: Some(self.sample_count),
             sharing_mode: Some(self.sharing_mode),
             tiling: Some(self.tiling),
-            ty: Some(self.ty),
+            image_type: Some(self.image_type),
             usage: Some(self.usage),
             width: Some(self.width),
         }
@@ -2007,7 +2007,7 @@ impl From<ImageInfo> for vk::ImageCreateInfo<'_> {
     fn from(value: ImageInfo) -> Self {
         Self::default()
             .flags(value.flags)
-            .image_type(value.ty)
+            .image_type(value.image_type)
             .format(value.format)
             .extent(vk::Extent3D {
                 width: value.width,
@@ -2280,7 +2280,7 @@ impl ImageView {
         let info = info.into();
         let device = device.clone();
         let create_info = vk::ImageViewCreateInfo::default()
-            .view_type(info.ty)
+            .view_type(info.view_type)
             .format(info.format)
             .components(vk::ComponentMapping {
                 r: vk::ComponentSwizzle::R,
@@ -2361,17 +2361,17 @@ pub struct ImageViewInfo {
 
     /// The basic dimensionality of the view.
     #[builder(default = "vk::ImageViewType::TYPE_2D")]
-    pub ty: vk::ImageViewType,
+    pub view_type: vk::ImageViewType,
 }
 
 impl ImageViewInfo {
-    /// Specifies a default view with the given `fmt` and `ty` values.
+    /// Specifies a default view with the given `format` and `view_type` values.
     ///
     /// # Note
     ///
     /// Automatically sets [`aspect_mask`](Self::aspect_mask) to a suggested value.
     #[inline(always)]
-    pub const fn new(format: vk::Format, ty: vk::ImageViewType) -> ImageViewInfo {
+    pub const fn new(format: vk::Format, view_type: vk::ImageViewType) -> ImageViewInfo {
         Self {
             array_layer_count: vk::REMAINING_ARRAY_LAYERS,
             aspect_mask: format_aspect_mask(format),
@@ -2379,7 +2379,7 @@ impl ImageViewInfo {
             base_mip_level: 0,
             format,
             mip_level_count: vk::REMAINING_MIP_LEVELS,
-            ty,
+            view_type,
         }
     }
 
@@ -2392,7 +2392,7 @@ impl ImageViewInfo {
             base_mip_level: Some(self.base_mip_level),
             format: Some(self.format),
             mip_level_count: Some(self.mip_level_count),
-            ty: Some(self.ty),
+            view_type: Some(self.view_type),
         }
     }
 }
@@ -2413,7 +2413,7 @@ impl ImageViewInfo {
             base_mip_level: 0,
             format: info.format,
             mip_level_count: info.mip_level_count,
-            ty: match (info.ty, info.array_layer_count) {
+            view_type: match (info.image_type, info.array_layer_count) {
                 (vk::ImageType::TYPE_1D, 1) => vk::ImageViewType::TYPE_1D,
                 (vk::ImageType::TYPE_1D, _) => vk::ImageViewType::TYPE_1D_ARRAY,
                 (vk::ImageType::TYPE_2D, 1) => vk::ImageViewType::TYPE_2D,
@@ -2433,7 +2433,7 @@ impl ImageViewInfo {
                 _ => {
                     warn!(
                         "invalid image view source info: image type {:?} with {} array layers",
-                        info.ty, info.array_layer_count
+                        info.image_type, info.array_layer_count
                     );
 
                     return Err(DriverError::InvalidData);
@@ -3837,7 +3837,7 @@ mod test {
     pub fn image_info_cube_builder() {
         let info = ImageInfo::cube(42, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
         let builder = ImageInfoBuilder::default()
-            .ty(vk::ImageType::TYPE_2D)
+            .image_type(vk::ImageType::TYPE_2D)
             .format(vk::Format::R32_SFLOAT)
             .width(42)
             .height(42)
@@ -3861,7 +3861,7 @@ mod test {
     pub fn image_info_image_1d_builder() {
         let info = ImageInfo::image_1d(42, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
         let builder = ImageInfoBuilder::default()
-            .ty(vk::ImageType::TYPE_1D)
+            .image_type(vk::ImageType::TYPE_1D)
             .format(vk::Format::R32_SFLOAT)
             .width(42)
             .height(1)
@@ -3885,7 +3885,7 @@ mod test {
         let info =
             ImageInfo::image_2d(42, 84, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::empty());
         let builder = ImageInfoBuilder::default()
-            .ty(vk::ImageType::TYPE_2D)
+            .image_type(vk::ImageType::TYPE_2D)
             .format(vk::Format::R32_SFLOAT)
             .width(42)
             .height(84)
@@ -3919,7 +3919,7 @@ mod test {
             vk::ImageUsageFlags::empty(),
         );
         let builder = ImageInfoBuilder::default()
-            .ty(vk::ImageType::TYPE_2D)
+            .image_type(vk::ImageType::TYPE_2D)
             .format(vk::Format::R32_SFLOAT)
             .width(42)
             .height(84)
@@ -3954,7 +3954,7 @@ mod test {
             vk::ImageUsageFlags::empty(),
         );
         let builder = ImageInfoBuilder::default()
-            .ty(vk::ImageType::TYPE_3D)
+            .image_type(vk::ImageType::TYPE_3D)
             .format(vk::Format::R32_SFLOAT)
             .width(42)
             .height(84)
@@ -3979,7 +3979,7 @@ mod test {
             sample_count: SampleCount::Type1,
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             tiling: vk::ImageTiling::OPTIMAL,
-            ty: vk::ImageType::TYPE_2D,
+            image_type: vk::ImageType::TYPE_2D,
             usage: vk::ImageUsageFlags::empty(),
             width: 0,
         };
@@ -4488,7 +4488,7 @@ mod test {
         let info = ImageViewInfo::new(vk::Format::default(), vk::ImageViewType::TYPE_1D);
         let builder = ImageViewInfoBuilder::default()
             .format(vk::Format::default())
-            .ty(vk::ImageViewType::TYPE_1D)
+            .view_type(vk::ImageViewType::TYPE_1D)
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .build();
 

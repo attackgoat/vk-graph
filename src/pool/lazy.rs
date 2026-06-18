@@ -29,7 +29,7 @@ struct ImageKey {
     sample_count: SampleCount,
     sharing_mode: vk::SharingMode,
     tiling: vk::ImageTiling,
-    ty: vk::ImageType,
+    image_type: vk::ImageType,
     width: u32,
 }
 
@@ -44,7 +44,7 @@ impl From<ImageInfo> for ImageKey {
             sample_count: info.sample_count,
             sharing_mode: info.sharing_mode,
             tiling: info.tiling,
-            ty: info.ty,
+            image_type: info.image_type,
             width: info.width,
         }
     }
@@ -137,8 +137,11 @@ impl LazyPool {
     }
 
     /// Clears the pool of all acceleration structure resources matching the given type.
-    pub fn clear_accel_structs_by_ty(&mut self, ty: vk::AccelerationStructureTypeKHR) {
-        self.accel_struct_cache.remove(&ty);
+    pub fn clear_accel_structs_by_type(
+        &mut self,
+        accel_struct_ty: vk::AccelerationStructureTypeKHR,
+    ) {
+        self.accel_struct_cache.remove(&accel_struct_ty);
     }
 
     /// Clears the pool of buffer resources.
@@ -171,7 +174,8 @@ impl LazyPool {
     where
         F: FnMut(vk::AccelerationStructureTypeKHR) -> bool,
     {
-        self.accel_struct_cache.retain(|&ty, _| f(ty))
+        self.accel_struct_cache
+            .retain(|&accel_struct_ty, _| f(accel_struct_ty))
     }
 }
 
@@ -183,7 +187,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
     ) -> Result<Lease<AccelerationStructure>, DriverError> {
         let cache = self
             .accel_struct_cache
-            .entry(info.ty)
+            .entry(info.acceleration_structure_type)
             .or_insert_with(|| PoolConfig::explicit_cache(self.info.accel_struct_capacity));
         let cache_ref = Arc::downgrade(cache);
 

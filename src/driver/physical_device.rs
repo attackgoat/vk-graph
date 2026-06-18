@@ -429,7 +429,7 @@ impl PhysicalDevice {
     pub fn image_format_properties(
         &self,
         format: vk::Format,
-        ty: vk::ImageType,
+        image_type: vk::ImageType,
         tiling: vk::ImageTiling,
         usage: vk::ImageUsageFlags,
         flags: vk::ImageCreateFlags,
@@ -438,7 +438,7 @@ impl PhysicalDevice {
             match self.instance.get_physical_device_image_format_properties(
                 self.handle,
                 format,
-                ty,
+                image_type,
                 tiling,
                 usage,
                 flags,

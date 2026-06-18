@@ -114,7 +114,7 @@ fn fill_depth_image(
     );
     let ImageInfo {
         format,
-        ty,
+        image_type,
         tiling,
         usage,
         flags,
@@ -147,7 +147,7 @@ fn fill_depth_image(
     // Not required, but good practice: Check image format support
     let image_fmt_props = device
         .physical_device
-        .image_format_properties(format, ty, tiling, usage, flags)?
+        .image_format_properties(format, image_type, tiling, usage, flags)?
         .ok_or(DriverError::Unsupported)?;
     if size > image_fmt_props.max_extent.width || size > image_fmt_props.max_extent.height {
         // In this case you might use a smaller image

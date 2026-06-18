@@ -108,7 +108,7 @@ where
             profiling::scope!("check aliases");
 
             for (item_info, item) in &state.accel_structs {
-                if item_info.ty == info.ty
+                if item_info.acceleration_structure_type == info.acceleration_structure_type
                     && item_info.size >= info.size
                     && let Some(item) = item.upgrade()
                 {

@@ -158,7 +158,7 @@ fn compatible_image_info(item_info: &ImageInfo, requested_info: &ImageInfo) -> b
         && item_info.sample_count == requested_info.sample_count
         && item_info.sharing_mode == requested_info.sharing_mode
         && item_info.tiling == requested_info.tiling
-        && item_info.ty == requested_info.ty
+        && item_info.image_type == requested_info.image_type
         && item_info.width == requested_info.width
         && item_info.flags.contains(requested_info.flags)
         && item_info.usage.contains(requested_info.usage)
