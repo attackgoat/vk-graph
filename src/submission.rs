@@ -7610,6 +7610,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Vulkan device"]
     fn external_subpass_dependency_targets_first_subpass_consumer() -> Result<(), DriverError> {
         let device = test_device()?;
         let pipeline = test_triangle_pipeline(&device)?;
@@ -7663,6 +7664,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Vulkan device"]
     fn color_input_attachment_dependencies_use_fragment_shader_input_reads()
     -> Result<(), DriverError> {
         let device = test_device()?;
@@ -7735,6 +7737,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Vulkan device"]
     fn color_attachment_load_dependencies_avoid_invalid_stage_access_pairs()
     -> Result<(), DriverError> {
         let device = test_device()?;
@@ -7797,6 +7800,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Vulkan device"]
     fn color_attachment_read_dependencies_avoid_invalid_stage_access_pairs()
     -> Result<(), DriverError> {
         let device = test_device()?;
@@ -7859,6 +7863,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Vulkan device"]
     fn color_attachment_read_to_write_dependencies_avoid_invalid_stage_access_pairs()
     -> Result<(), DriverError> {
         let device = test_device()?;
@@ -7921,6 +7926,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Vulkan device"]
     fn depth_attachment_load_dependencies_avoid_invalid_stage_access_pairs()
     -> Result<(), DriverError> {
         let device = test_device()?;
