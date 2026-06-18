@@ -478,8 +478,6 @@ pub struct PhysicalDevice {
     ///
     /// _Note:_ This field is read-only.
     pub vk_khr_synchronization2: bool,
-
-    vk_khr_synchronization2_extension: bool,
 }
 
 impl PhysicalDevice {
@@ -520,7 +518,7 @@ impl PhysicalDevice {
             enabled_ext_names.push(ash_khr::present_wait::NAME.as_ptr());
         }
 
-        if self.vk_khr_synchronization2_extension {
+        if self.vk_khr_synchronization2 && self.instance.info.api_version < ApiVersion::Vulkan13 {
             enabled_ext_names.push(ash_khr::synchronization2::NAME.as_ptr());
         }
 
@@ -785,10 +783,9 @@ impl PhysicalDevice {
             extension_names.contains(vk_extension_name(ash_khr::ray_tracing_pipeline::NAME));
         let vk_khr_swapchain = instance.khr_surface
             && extension_names.contains(vk_extension_name(ash_khr::swapchain::NAME));
-        let vk_khr_synchronization2_extension =
-            extension_names.contains(vk_extension_name(ash_khr::synchronization2::NAME));
-        let mut vk_khr_synchronization2 =
-            vk_khr_synchronization2_extension || instance.info.api_version >= ApiVersion::Vulkan13;
+        let mut vk_khr_synchronization2 = extension_names
+            .contains(vk_extension_name(ash_khr::synchronization2::NAME))
+            || instance.info.api_version >= ApiVersion::Vulkan13;
 
         // Gather advertised features of the physical device
         let mut features_v1_1 = vk::PhysicalDeviceVulkan11Features::default();
@@ -919,7 +916,6 @@ impl PhysicalDevice {
             vk_khr_ray_tracing_pipeline,
             vk_khr_swapchain,
             vk_khr_synchronization2,
-            vk_khr_synchronization2_extension,
         })
     }
 
