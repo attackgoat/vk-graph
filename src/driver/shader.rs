@@ -1,4 +1,97 @@
-//! Shader resource types
+//! Shader reflection and pipeline-stage descriptions.
+//!
+//! This module contains the data used by compute, graphics, and ray tracing pipeline creation to
+//! describe shader stages.
+//!
+//! # Construction
+//!
+//! The stage-specific constructors are the usual entry points:
+//!
+//! - [`Shader::new_compute`] for compute pipelines.
+//! - [`Shader::new_vertex`] and [`Shader::new_fragment`] for graphics pipelines.
+//! - [`Shader::new_ray_gen`], [`Shader::new_closest_hit`], [`Shader::new_miss`], and the other
+//!   ray tracing constructors for ray tracing pipelines.
+//!
+//! These constructors return a [`ShaderBuilder`]. Use [`ShaderBuilder::build`] when invalid SPIR-V
+//! should panic during setup, or [`ShaderBuilder::try_build`] when invalid SPIR-V should become a
+//! [`DriverError`]. [`Shader::try_new_compute`] and the other `try_new_*` constructors are shortcuts
+//! for the fallible path.
+//!
+//! [`Shader::from_spirv`] is stage-neutral and is useful when the stage is selected separately. It
+//! still needs a stage before the shader can be built. SPIR-V can be supplied as bytes, words, or a
+//! value accepted by `spirq::parse::SpirvBinary`.
+//!
+//! # Entry Points
+//!
+//! The default entry point is `main`. Override it with [`ShaderBuilder::entry_name`] when a SPIR-V
+//! module contains multiple entry points or when the exported function uses another name.
+//! Reflection is performed for the selected entry point only, so descriptors, push constants,
+//! attachments, and vertex inputs from other entry points are ignored.
+//!
+//! # Reflection
+//!
+//! Shader creation reflects the selected entry point immediately. Invalid SPIR-V, a missing entry
+//! point, or unsupported reflection data makes the fallible builders return [`DriverError::InvalidData`]
+//! or [`DriverError::Unsupported`], depending on where the problem is discovered.
+//!
+//! Reflection is used internally to collect:
+//!
+//! - descriptor set and binding numbers, descriptor types, array counts, and stage flags;
+//! - push constant ranges for the stage;
+//! - input attachments and color output locations for graphics render-pass setup;
+//! - vertex input bindings, attributes, formats, offsets, strides, and input rates for vertex
+//!   shaders unless a manual vertex layout is supplied.
+//!
+//! When several shaders are combined into one pipeline, descriptor bindings with the same `(set,
+//! binding)` must describe compatible descriptor types. Compatible bindings are merged and their
+//! stage flags are ORed together. Conflicting descriptor declarations make pipeline creation fail.
+//!
+//! # Descriptor Bindings And Samplers
+//!
+//! [`Descriptor`] identifies a shader descriptor binding by set and binding number. It is a binding
+//! location, not a live descriptor-set allocation.
+//!
+//! Combined image samplers and sampler descriptors carry immutable sampler information into the
+//! generated descriptor set layout. You can provide explicit sampler state with
+//! [`ShaderBuilder::image_sampler`]. If no sampler is specified, the shader binding name is inspected
+//! for a compact sampler suffix of the form `_sampler_xyz`, where:
+//!
+//! - `x` selects texel filtering: `n` for nearest or `l` for linear;
+//! - `y` selects mip filtering: `n` for nearest or `l` for linear;
+//! - `z` selects address mode: `b` clamp-to-border, `e` clamp-to-edge, `m` mirrored-repeat, or `r`
+//!   repeat.
+//!
+//! For example, a binding whose reflected name ends with `_sampler_lle` uses linear texel filtering,
+//! linear mip filtering, and clamp-to-edge addressing. Bindings without this suffix use a linear
+//! repeat sampler by default. [`SamplerInfo`] and [`SamplerInfoBuilder`] expose the full Vulkan
+//! sampler state when the inferred defaults are not appropriate.
+//!
+//! # Specialization Constants
+//!
+//! Specialization constants are supplied with [`ShaderBuilder::specialization`] using a
+//! [`SpecializationMap`]. Reflection applies those values before descriptor information is collected,
+//! so specialization constants can affect reflected array lengths and other specialization-dependent
+//! layout data. The map stores raw bytes plus Vulkan specialization entries; use native endian byte
+//! conversion such as `to_ne_bytes()` for scalar values.
+//!
+//! # Vertex Input Reflection
+//!
+//! Vertex shaders can provide graphics vertex input state automatically. Scalar and vector input
+//! variables are mapped to Vulkan formats based on their reflected scalar type and component count.
+//! Offsets and strides are inferred from the reflected byte sizes, grouped by binding.
+//!
+//! Binding numbers and input rates can be encoded in reflected input names. Names containing
+//! `_vbindN` are assigned to vertex binding `N`; names containing `_ibindN` are assigned to instance
+//! binding `N`. Inputs without either marker use binding `0` with vertex input rate. If reflection is
+//! not expressive enough for a shader's vertex layout, provide a manual layout with
+//! [`ShaderBuilder::vertex_input`].
+//!
+//! # Pipeline Use
+//!
+//! Shaders are plain descriptions until a pipeline is created. Pipeline creation turns the SPIR-V
+//! into Vulkan shader modules, uses the reflected layout to create compatible descriptor set layouts,
+//! and then destroys the temporary shader modules after the pipeline has been created. Keep the
+//! [`Shader`] values around only as long as they are useful to construct or rebuild pipelines.
 
 use {
     super::{DescriptorSetLayout, DriverError, VertexInputState, device::Device},

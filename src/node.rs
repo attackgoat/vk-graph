@@ -2,7 +2,12 @@
 //!
 //! When you bind a resource to a [`Graph`](crate::Graph), you get back a node handle:
 //!
-//! ```ignore
+//! ```no_run
+//! # use std::sync::Arc;
+//! # use vk_graph::{Graph, driver::{buffer::Buffer, image::Image}, node::{BufferNode, ImageNode}};
+//! # let mut graph = Graph::new();
+//! # let my_buffer: Arc<Buffer> = todo!();
+//! # let my_image: Arc<Image> = todo!();
 //! let buf_node: BufferNode = graph.bind_resource(my_buffer);
 //! let img_node: ImageNode   = graph.bind_resource(my_image);
 //! ```

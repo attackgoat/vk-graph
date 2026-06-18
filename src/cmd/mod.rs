@@ -125,14 +125,11 @@ impl<'a> Command<'a> {
     /// Binds a shader pipeline to the current command, allowing for strongly typed access to the
     /// related functions.
     ///
-    /// `P`|`P::Command`
-    /// -|-
-    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_,
-    /// ComputePipeline>`]
-    /// [`GraphicsPipeline`](crate::driver::graphics::GraphicsPipeline)|[`PipelineCommand<'_,
-    /// GraphicsPipeline>`]
-    /// [`RayTracingPipeline`](crate::driver::ray_tracing::RayTracingPipeline)|[`PipelineCommand<'_,
-    /// RayTracingPipeline>`]
+    /// | `P` | `P::Command` |
+    /// | --- | --- |
+    /// | [`ComputePipeline`](crate::driver::compute::ComputePipeline) | [`PipelineCommand<'_, ComputePipeline>`] |
+    /// | [`GraphicsPipeline`](crate::driver::graphics::GraphicsPipeline) | [`PipelineCommand<'_, GraphicsPipeline>`] |
+    /// | [`RayTracingPipeline`](crate::driver::ray_tracing::RayTracingPipeline) | [`PipelineCommand<'_, RayTracingPipeline>`] |
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'a>,

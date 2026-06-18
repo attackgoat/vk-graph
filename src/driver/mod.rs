@@ -14,11 +14,11 @@
 //! Resources are logically mutable. All resource types contain useful read-only public fields, for
 //! example:
 //!
-//! [`Buffer`] Field|`->`
-//! -|-
-//! [`device`](Buffer::device)|[`Device`](device::Device)
-//! [`handle`](Buffer::handle)|[`vk::Buffer`]
-//! [`info`](Buffer::info)|[`BufferInfo`]
+//! | [`Buffer`] field | Type |
+//! | --- | --- |
+//! | [`device`](Buffer::device) | [`Device`](device::Device) |
+//! | [`handle`](Buffer::handle) | [`vk::Buffer`] |
+//! | [`info`](Buffer::info) | [`BufferInfo`] |
 //!
 //! Resources use atomic [`AccessType`](sync::AccessType) values to maintain consistency and track
 //! changes.
@@ -37,12 +37,11 @@
 //! Pipelines are immutable. All pipeline types contain useful public methods, for
 //! example:
 //!
-//! [`ComputePipeline`](compute::ComputePipeline) Method | `->`
-//! -|-
-//! [`device(&self)`](compute::ComputePipeline::device)|[`Device`](device::Device)
-//! [`handle(&self)`](compute::ComputePipeline::handle)|[`vk::Pipeline`]
-//! [`info(&self)`](compute::ComputePipeline::info)
-//! | [`ComputePipelineInfo`](compute::ComputePipelineInfo)
+//! | [`ComputePipeline`](compute::ComputePipeline) method | Type |
+//! | --- | --- |
+//! | [`device(&self)`](compute::ComputePipeline::device) | [`Device`](device::Device) |
+//! | [`handle(&self)`](compute::ComputePipeline::handle) | [`vk::Pipeline`] |
+//! | [`info(&self)`](compute::ComputePipeline::info) | [`ComputePipelineInfo`](compute::ComputePipelineInfo) |
 
 pub mod accel_struct;
 pub mod buffer;
