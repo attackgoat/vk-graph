@@ -200,7 +200,7 @@ fn check_queue_submit2_args(
     waits: &[SemaphoreSubmit2Info],
     signals: &[SemaphoreSubmit2Info],
 ) -> Result<(), DriverError> {
-    if !device.physical_device.supports_submit2_feature() {
+    if !device.physical_device.vk_khr_synchronization2 {
         return Err(DriverError::Unsupported);
     }
 

@@ -195,7 +195,7 @@ impl Device {
     ) {
         #[cfg(feature = "checked")]
         assert!(
-            this.physical_device.supports_synchronization2_feature(),
+            this.physical_device.vk_khr_synchronization2,
             "missing synchronization2 feature"
         );
 
@@ -485,7 +485,7 @@ impl Device {
         fence: vk::Fence,
     ) -> Result<(), DriverError> {
         #[cfg(feature = "checked")]
-        assert!(this.physical_device.supports_submit2_feature());
+        assert!(this.physical_device.vk_khr_synchronization2);
 
         unsafe {
             if this.physical_device.instance.info.api_version >= ApiVersion::Vulkan13 {
@@ -692,7 +692,7 @@ impl Device {
             return Err(DriverError::Unsupported);
         }
 
-        if debug && !physical_device.supports_private_data_feature() {
+        if debug && !physical_device.vk_ext_private_data {
             error!("unsupported VK_EXT_private_data");
 
             return Err(DriverError::Unsupported);
@@ -736,7 +736,7 @@ impl Device {
             &device,
         ));
         let vk_ext_private_data = physical_device
-            .supports_private_data_feature()
+            .vk_ext_private_data
             .then(|| ext::private_data::Device::new(&physical_device.instance, &device));
         let vk_ext_private_data_slot = vk_ext_private_data
             .as_ref()
@@ -755,23 +755,27 @@ impl Device {
             })
             .transpose()?;
         let vk_khr_present_wait = physical_device
-            .supports_present_wait_feature()
+            .vk_khr_present_wait
+            .is_some()
             .then(|| khr::present_wait::Device::new(&physical_device.instance, &device));
-        let vk_khr_surface = physical_device.supports_swapchain_feature().then(|| {
+        let vk_khr_surface = physical_device.vk_khr_swapchain.then(|| {
             let entry = Instance::entry(&physical_device.instance);
             khr::surface::Instance::new(entry, &physical_device.instance)
         });
         let vk_khr_swapchain = physical_device
-            .supports_swapchain_feature()
+            .vk_khr_swapchain
             .then(|| khr::swapchain::Device::new(&physical_device.instance, &device));
         let vk_khr_acceleration_structure = physical_device
-            .supports_acceleration_structure()
+            .vk_khr_acceleration_structure
+            .is_some()
             .then(|| khr::acceleration_structure::Device::new(&physical_device.instance, &device));
         let vk_khr_ray_tracing_pipeline = physical_device
-            .supports_ray_tracing_pipeline_feature()
+            .vk_khr_ray_tracing_pipeline
+            .as_ref()
+            .is_some_and(|ext| ext.features.ray_tracing_pipeline)
             .then(|| khr::ray_tracing_pipeline::Device::new(&physical_device.instance, &device));
         let vk_khr_synchronization2 = physical_device
-            .supports_synchronization2_feature()
+            .vk_khr_synchronization2
             .then(|| khr::synchronization2::Device::new(&physical_device.instance, &device));
 
         let pipeline_cache =

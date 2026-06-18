@@ -141,7 +141,12 @@ impl AccelerationStructure {
         device: &Device,
         info: impl Into<AccelerationStructureInfo>,
     ) -> Result<Self, DriverError> {
-        debug_assert!(device.physical_device.supports_acceleration_structure());
+        debug_assert!(
+            device
+                .physical_device
+                .vk_khr_acceleration_structure
+                .is_some()
+        );
 
         let info = info.into();
 

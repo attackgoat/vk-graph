@@ -5,7 +5,7 @@ use {
         DriverError,
         device::Device,
         merge_push_constant_ranges,
-        physical_device::RayTracingPipelineProperties,
+        physical_device::khr::RayTracingPipelineProperties,
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
     crate::lazy_str,
@@ -102,11 +102,7 @@ impl RayTracingPipeline {
         S: TryInto<Shader>,
         S::Error: Into<DriverError>,
     {
-        if device
-            .physical_device
-            .ray_tracing_pipeline_properties
-            .is_none()
-        {
+        if device.physical_device.vk_khr_ray_tracing_pipeline.is_none() {
             warn!("unsupported ray tracing pipeline creation: missing ray tracing properties");
 
             return Err(DriverError::Unsupported);

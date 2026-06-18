@@ -79,7 +79,7 @@ impl<'a> CommandRef<'a> {
     /// - Flags must include [`vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS`]
     /// - Size must be equal to or greater than the `build_size` value returned by
     ///   `AccelerationStructure::size_of`, aligned to `min_accel_struct_scratch_offset_alignment`
-    ///   of `PhysicalDevice::accel_struct_properties`.
+    ///   of `PhysicalDevice::vk_khr_acceleration_structure`.
     ///
     /// # Examples
     ///
@@ -370,7 +370,7 @@ impl<'a> CommandRef<'a> {
     /// - Flags must include [`vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS`]
     /// - Size must be equal to or greater than the `update_size` value returned by
     ///   `AccelerationStructure::size_of`, aligned to `min_accel_struct_scratch_offset_alignment`
-    ///   of `PhysicalDevice::accel_struct_properties`.
+    ///   of `PhysicalDevice::vk_khr_acceleration_structure`.
     pub fn update_accel_struct(&self, infos: &[UpdateAccelerationStructureInfo]) -> &Self {
         #[derive(Default)]
         struct Tls {

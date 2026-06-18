@@ -2005,11 +2005,8 @@ impl SwapchainState<Live> {
         );
 
         let use_present_wait = {
-            surface.device.physical_device.supports_present_id_feature()
-                && surface
-                    .device
-                    .physical_device
-                    .supports_present_wait_feature()
+            surface.device.physical_device.vk_khr_present_id.is_some()
+                && surface.device.physical_device.vk_khr_present_wait.is_some()
         };
 
         Ok((

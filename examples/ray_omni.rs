@@ -211,9 +211,10 @@ fn create_blas(
 
     let accel_struct_scratch_offset_alignment = device
         .physical_device
-        .accel_struct_properties
+        .vk_khr_acceleration_structure
         .as_ref()
         .unwrap()
+        .properties
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
     let scratch_buf = graph.bind_resource(Buffer::create(
@@ -408,9 +409,10 @@ fn create_tlas(
 
     let accel_struct_scratch_offset_alignment = device
         .physical_device
-        .accel_struct_properties
+        .vk_khr_acceleration_structure
         .as_ref()
         .unwrap()
+        .properties
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
     let scratch_buf = graph.bind_resource(

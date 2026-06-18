@@ -20,7 +20,7 @@ use {
             buffer::{Buffer, BufferInfo},
             device::Device,
             image::ImageInfo,
-            physical_device::RayTracingPipelineProperties,
+            physical_device::khr::RayTracingPipelineProperties,
             ray_tracing::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
             shader::Shader,
         },
@@ -515,7 +515,7 @@ fn main() -> anyhow::Result<()> {
     // Setup the ray tracing pipeline
     // ------------------------------------------------------------------------------------------ //
 
-    let &RayTracingPipelineProperties {
+    let RayTracingPipelineProperties {
         shader_group_base_alignment,
         shader_group_handle_alignment,
         shader_group_handle_size,
@@ -523,9 +523,10 @@ fn main() -> anyhow::Result<()> {
     } = window
         .device
         .physical_device
-        .ray_tracing_pipeline_properties
+        .vk_khr_ray_tracing_pipeline
         .as_ref()
-        .unwrap();
+        .unwrap()
+        .properties;
     let ray_tracing_pipeline = create_ray_tracing_pipeline(&window.device)?;
 
     // ------------------------------------------------------------------------------------------ //
@@ -683,9 +684,10 @@ fn main() -> anyhow::Result<()> {
         let accel_struct_scratch_offset_alignment = window
             .device
             .physical_device
-            .accel_struct_properties
+            .vk_khr_acceleration_structure
             .as_ref()
             .unwrap()
+            .properties
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
         let mut graph = Graph::default();

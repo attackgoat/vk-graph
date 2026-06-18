@@ -201,9 +201,10 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     let accel_struct_scratch_offset_alignment = frame
         .device
         .physical_device
-        .accel_struct_properties
+        .vk_khr_acceleration_structure
         .as_ref()
         .unwrap()
+        .properties
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
 

@@ -99,12 +99,14 @@ impl Graphchain {
             .surface
             .device
             .physical_device
-            .supports_present_id_feature()
+            .vk_khr_present_id
+            .is_some()
             && swapchain
                 .surface
                 .device
                 .physical_device
-                .supports_present_wait_feature()
+                .vk_khr_present_wait
+                .is_some()
         {
             PresentRetirementStrategy::PresentWait(PresentWait::default())
         } else {
@@ -349,7 +351,7 @@ impl Graphchain {
             .cmd_buf
             .device
             .physical_device
-            .supports_synchronization2_feature();
+            .vk_khr_synchronization2;
 
         let image = recording.resource(image_node);
         let image_sync_info = image.sync_info();

@@ -570,7 +570,7 @@ impl Instance {
                     return None;
                 }
 
-                if this.info.debug && !physical_device.supports_private_data_feature() {
+                if this.info.debug && !physical_device.vk_ext_private_data {
                     warn!(
                         "unsupported physical device #{idx} {}: missing VK_EXT_private_data",
                         physical_device.properties_v1_0.device_name
