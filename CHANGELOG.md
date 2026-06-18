@@ -7,12 +7,69 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-06-18
+
+### Added
+
+- `Graph` replaces the old `RenderGraph` workflow with command-first graph construction and
+  `Submission` finalization.
+- `stream` module with reusable `CommandStream` values and typed stream arguments.
+- `submission` module for prepared submission data, dependency tracking, and graph execution state.
+- `node` module with resource node types moved out of the old `graph::node` namespace.
+- `driver::graphics` and `cmd::graphics` modules replace the old singular `graphic` modules.
+- `driver::ray_tracing` and `cmd::ray_tracing` modules replace the old `ray_trace` modules.
+- `vk-graph-window` `Graphchain` API replaces the old display/swapchain presentation wrapper.
+- `Fence` driver type and additional swapchain presentation result/error types.
+- `checked` feature for runtime graph and stream validation.
+
+### Changed
+
+- This release intentionally ignores semver-checks compatibility failures against the published
+  `0.14.0+alpha` crate. It includes removed modules, renamed types, renamed fields, changed method
+  signatures, and trait changes while remaining on the `0.14` release line.
+- The old pass-oriented `graph` API was replaced by command builder APIs under `cmd` and root-level
+  `Graph` methods.
+- `Display`/`DisplayInfo` presentation APIs moved out of the main crate; use `vk-graph-window` and
+  `Graphchain` for windowed presentation.
+- `GraphicPipeline`, `GraphicPipelineInfo`, `BlendMode`, and `DepthStencilMode` were renamed to
+  `GraphicsPipeline`, `GraphicsPipelineInfo`, `BlendInfo`, and `DepthStencilInfo`.
+- `RayTracePipeline`, `RayTracePipelineInfo`, and `RayTraceShaderGroup` were renamed to
+  `RayTracingPipeline`, `RayTracingPipelineInfo`, and `RayTracingShaderGroup`.
+- `Device::physical_device` was renamed to `Device::physical`.
+- Physical-device extension support now uses actual Vulkan extension names such as
+  `vk_khr_swapchain`, `vk_khr_synchronization2`, and grouped `Option<khr::...>` support structs for
+  KHR extensions with feature/property data.
+- Ambiguous public `ty` fields were renamed to domain-specific names such as `image_type`,
+  `view_type`, `acceleration_structure_type`, and `shader_group_type`.
+- `SpecializationInfo` was renamed to `SpecializationMap`.
+- Builder conversion methods now consistently use `into_builder` instead of `to_builder`.
+- Device, resource, pipeline, swapchain, and surface APIs were tightened around explicit creation,
+  ownership, and unsafe raw-handle construction.
+- Workspace integration crates now target `vk-graph` `0.14.2` and are versioned as `0.1.1`.
+
+### Removed
+
+- Removed the old `graph`, `graph::pass_ref`, and `display` public APIs.
+- Removed the old `prelude` re-export surface from the main crate.
+- Removed `pool::alias` and `AliasPool`.
+- Removed old `Device::create_headless`, `Device::create_display`, `Device::load`,
+  `Device::format_properties`, `Device::image_format_properties`, and `Device::instance` helpers.
+- Removed old `Buffer::access`, `Image::access`, and `AccelerationStructure::access` helpers.
+- Removed `Pool::lease`; implement `Pool::resource` for custom pools instead.
+
+### Fixed
+
+- Documentation examples now compile as `no_run` doctests instead of being ignored.
+- Rustdoc tables and module docs were cleaned up across command, driver, shader, stream, and example
+  documentation.
+
 ## Planned
 
+- Support https://vulkan.gpuinfo.org/displayextensiondetail.php?extension=VK_EXT_full_screen_exclusive, possibly through extension crate
 - Fix a few scheduling and merging issues found with specific workloads
-- Add optional new-style Vulkan render passes when not on mobile or requested, see if that improves performance by reducing some of the inter-renderpass optimization steps - possibly a build feature
+- Add optional new-style Vulkan render passes when not on mobile, or when requested, to see if that improves performance by reducing some of the inter-renderpass optimization steps - possibly a build feature
 - Clean up graph pass API - the names of the methods are not all consistent or in line with the Vulkan-spec terminology
-- Make all Info structs have the same properties: Copy, Exact parameter values sent to Vulkan not magically interpreted and changed by Screen-13
+- Make all Info structs have the same properties: Copy, exact parameter values sent to Vulkan are not magically interpreted and changed by vk-graph
 - New crate name to reflect the stability and functionality of this crate, retire "QBasic" references, sad face
 
 ## [0.13.0] - 2025-12-14
@@ -31,8 +88,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Issue where RenderDoc clears images between renderpasses ("undefined img") due to incorrect usage
   of image layout barriers
-- Out-of-memory errors during image and buffer creation leaked vulkan resource handles
-- Build error seen on error on Android and Raspberry Pi (_See [#105](https://github.com/attackgoat/screen-13/pull/105)_)
+- Out-of-memory errors during image and buffer creation leaked Vulkan resource handles
+- Build error seen on Android and Raspberry Pi (_See [#105](https://github.com/attackgoat/screen-13/pull/105)_)
 
 ## [0.12.6] - 2025-05-10
 
@@ -52,7 +109,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Segmentation fault crash and flickering on MacOS when resizing the swapchain (_See [#99](https://github.com/attackgoat/screen-13/pull/99)_)
+- Segmentation fault crash and flickering on macOS when resizing the swapchain (_See [#99](https://github.com/attackgoat/screen-13/pull/99)_)
 
 ## [0.12.4] - 2025-03-30
 
@@ -69,7 +126,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Fix compilation issue on MacOS
+- Fix compilation issue on macOS
 - Remove incorrect debug assertion for swapchain desired image count
 
 ## [0.12.2] - 2025-03-24
@@ -82,7 +139,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Swapchain image displays nothing after Window presentaion on linux Mesa drivers
+- Swapchain image displays nothing after Window presentation on Linux Mesa drivers
 
 ## [0.12.0] - 2025-03-13
 
@@ -268,7 +325,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Improved performance during render graph resolution: `vsm_omni` example now records frames 10%
-  faster (~100 μs) and complex render graphs may be signifcantly more performant
+  faster (~100 μs) and complex render graphs may be significantly more performant
 
 ## [0.9.3] - 2024-01-30
 
@@ -439,7 +496,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Mutlisampled anti-aliasing example (MSAA)
+- Multisampled anti-aliasing example (MSAA)
 - `attach_color` and `attach_depth_stencil` functions on `PipelinePassRef` when bound to a `GraphicPipeline` for attachments which would otherwise use `VK_ATTACHMENT_LOAD_OP_DONT_CARE`
 - `node_info` function on `PassRef` and `PipelinePassRef` which may be accessed while recording passes
 
@@ -469,7 +526,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Fullscreen demostration in `vsm_omni` example using F11 and F12 keys
+- Fullscreen demonstration in `vsm_omni` example using F11 and F12 keys
 - Configurable frames-in-flight setting
 
 ## [0.6.1] - 2022-10-16
@@ -492,7 +549,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `clear_color` and `clear_depth_stencil` functions now take the image being cleared: it is now possible to clear and attach, but not store or resolve, an image
 - `record_`-* methods now also provide a `Bindings` parameter to the recording closure
 - `RayTracePipeline::group_handle` is now an associated function where previously it was a method
-- Many types have been moved betwen modules in order to document things cleary
+- Many types have been moved between modules in order to document things clearly
 
 ### Removed
 
@@ -617,7 +674,7 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
 
 ### Changed
 
-- Driver now directly based on vulkan, having removed support for the deprecated Gfx-Hal library
+- Driver now directly based on Vulkan, having removed support for the deprecated Gfx-Hal library
 - Lease/pool functionality simplified: leases are now obtained through a common interface using info
 - `Engine`/`Program` structures have been merged into a simpler EventLoop structure
 
@@ -655,7 +712,8 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
   platforms and require no bare-metal graphics API knowledge
 - "Hello, world!" example using a bitmapped font
 
-[Unreleased]: https://github.com/attackgoat/screen-13/compare/v0.12.6...HEAD
+[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.2...HEAD
+[0.14.2]: https://crates.io/crates/vk-graph/0.14.2
 [0.1.0]: https://crates.io/crates/screen-13/0.1.0
 [0.2.0]: https://crates.io/crates/screen-13/0.2.0
 [0.3.0]: https://crates.io/crates/screen-13/0.3.0

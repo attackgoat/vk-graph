@@ -38,7 +38,7 @@ use {
             buffer::{Buffer, BufferInfo},
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo, StencilMode},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo, StencilMode},
             image::{ImageInfo, SampleCount},
             physical_device::Vulkan10Limits,
             render_pass::ResolveMode,
@@ -200,10 +200,11 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
 
     let accel_struct_scratch_offset_alignment = frame
         .device
-        .physical_device
-        .accel_struct_properties
+        .physical
+        .vk_khr_acceleration_structure
         .as_ref()
         .unwrap()
+        .properties
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
 
@@ -600,7 +601,7 @@ fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
         .clear_color_image(images[3], [0f32; 4])
         .clear_color_image(images[4], [0f32; 4])
         .begin_cmd()
-        .debug_name("graphic-bindless")
+        .debug_name("graphics-bindless")
         .bind_pipeline(&pipeline)
         .shader_resource_access(
             (0, [0]),
@@ -680,7 +681,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             framebuffer_depth_sample_counts,
             framebuffer_stencil_sample_counts,
             ..
-        } = frame.device.physical_device.properties_v1_0.limits;
+        } = frame.device.physical.properties_v1_0.limits;
         match framebuffer_color_sample_counts
             & framebuffer_depth_sample_counts
             & framebuffer_stencil_sample_counts
@@ -702,7 +703,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
             vk::Format::D16_UNORM_S8_UINT,
             vk::Format::D32_SFLOAT_S8_UINT,
         ] {
-            let format_props = frame.device.physical_device.image_format_properties(
+            let format_props = frame.device.physical.image_format_properties(
                 format,
                 vk::ImageType::TYPE_2D,
                 vk::ImageTiling::OPTIMAL,
@@ -727,7 +728,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         ] {
             if frame
                 .device
-                .physical_device
+                .physical
                 .depth_stencil_resolve_properties
                 .supported_depth_resolve_modes
                 .contains(resolve_flags)
@@ -775,7 +776,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
         .as_slice(),
     );
 
-    let swapchain_format = frame.graph.resource(frame.swapchain_image).info.fmt;
+    let swapchain_format = frame.graph.resource(frame.swapchain_image).info.format;
     let msaa_color_image = frame.graph.bind_resource(
         pool.resource(
             ImageInfo::image_2d(
@@ -1523,8 +1524,8 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
     frame.graph.clear_color_image(images[0], [0f32; 4]);
     frame.graph.clear_color_image(images[1], [0f32; 4]);
 
-    // a and b should merge into one renderpass with two subpasses; however the use of images[1] in
-    // b should have a pipeline barrier (on the clear we just did) before the pass starts.
+    // a and b should merge into one render pass with two subpasses; however the use of images[1] in
+    // b should have a pipeline barrier (on the clear we just did) before the pass starts
     frame
         .graph
         .begin_cmd()

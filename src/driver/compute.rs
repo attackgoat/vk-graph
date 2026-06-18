@@ -1,4 +1,4 @@
-//! Computing pipeline types
+//! Compute pipeline types.
 
 use {
     super::{
@@ -6,22 +6,26 @@ use {
         device::Device,
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
-    ash::vk,
+    crate::lazy_str,
+    ash::vk::{self, Handle as _},
     derive_builder::Builder,
     log::{trace, warn},
     std::{
         ffi::CString,
+        fmt::{Debug, Formatter},
         hash::{Hash, Hasher},
         slice,
-        sync::{Arc, OnceLock},
+        sync::Arc,
         thread::panicking,
     },
 };
 
-/// Smart pointer handle of a pipeline object.
+/// Smart pointer handle of a compute pipeline object.
 ///
 /// Also contains information about the object.
-#[derive(Clone, Debug)]
+///
+/// See [`VkPipeline`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipeline.html).
+#[derive(Clone)]
 pub struct ComputePipeline {
     pub(crate) inner: Arc<ComputePipelineInner>,
 }
@@ -29,9 +33,11 @@ pub struct ComputePipeline {
 impl ComputePipeline {
     /// Creates a new compute pipeline on the given device.
     ///
-    /// # Panics
+    /// `shader` may be a pre-built [`Shader`] or any input that can be converted into one.
+    /// Invalid shader data is returned as [`DriverError::InvalidData`] through the `Result`
+    /// instead of panicking.
     ///
-    /// If shader code is not a multiple of four bytes.
+    /// See [`VkComputePipelineCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkComputePipelineCreateInfo.html).
     ///
     /// # Examples
     ///
@@ -142,7 +148,14 @@ impl ComputePipeline {
                     device.destroy_shader_module(shader_module, None);
 
                     DriverError::Unsupported
-                })?[0];
+                })?
+                .into_iter()
+                .find(|handle| !handle.is_null())
+                .ok_or_else(|| {
+                    warn!("missing pipeline handle");
+
+                    DriverError::Unsupported
+                })?;
 
             device.destroy_shader_module(shader_module, None);
 
@@ -154,16 +167,10 @@ impl ComputePipeline {
                     handle,
                     info,
                     layout,
-                    name: Default::default(),
                     push_constants,
                 }),
             })
         }
-    }
-
-    /// Gets the debugging name assigned to this pipeline, if one has been set.
-    pub fn debug_name(&self) -> Option<&str> {
-        self.inner.name.get().map(String::as_str)
     }
 
     /// The device which owns this compute pipeline.
@@ -182,26 +189,48 @@ impl ComputePipeline {
     }
 
     /// Sets the debugging name assigned to this pipeline.
-    ///
-    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
-    /// previously set name value.
-    pub fn set_debug_name(&mut self, name: impl Into<String>) {
-        if !self.inner.device.physical_device.instance.info.debug {
-            return;
-        }
+    pub fn set_debug_name(&self, name: impl AsRef<str>) {
+        Device::try_set_debug_utils_object_name(&self.inner.device, self.inner.handle, &name);
+        Device::try_set_private_data_object_name(
+            &self.inner.device,
+            vk::ObjectType::PIPELINE,
+            self.inner.handle,
+            &name,
+        );
 
-        // Both Ok and Err are valid conditions
-        let _ = self.inner.name.set(name.into());
+        Device::try_set_debug_utils_object_name(
+            &self.inner.device,
+            self.inner.layout,
+            lazy_str!("{} (layout)", name.as_ref()),
+        );
+
+        for (set_idx, layout) in &self.inner.descriptor_info.layouts {
+            layout.set_debug_name(lazy_str!("{} (DS{set_idx})", name.as_ref()));
+        }
     }
 
     /// Sets the debugging name assigned to this pipeline.
-    ///
-    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
-    /// previously set name value.
-    pub fn with_debug_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
         self.set_debug_name(name);
 
         self
+    }
+}
+
+impl Debug for ComputePipeline {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut res = f.debug_struct(stringify!(ComputePipeline));
+
+        if let Some(debug_name) = &Device::private_data_object_name(
+            &self.inner.device,
+            vk::ObjectType::PIPELINE,
+            self.inner.handle,
+        ) {
+            res.field("debug_name", debug_name);
+        }
+
+        res.field("handle", &self.inner.handle)
+            .finish_non_exhaustive()
     }
 }
 
@@ -220,6 +249,8 @@ impl PartialEq for ComputePipeline {
 }
 
 /// Information used to create a [`ComputePipeline`] instance.
+///
+/// See [`VkComputePipelineCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkComputePipelineCreateInfo.html).
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build"),
@@ -299,7 +330,6 @@ pub(crate) struct ComputePipelineInner {
     pub handle: vk::Pipeline,
     pub info: ComputePipelineInfo,
     pub layout: vk::PipelineLayout,
-    pub name: OnceLock<String>,
     pub push_constants: Option<vk::PushConstantRange>,
 }
 
@@ -309,6 +339,12 @@ impl Drop for ComputePipelineInner {
         if panicking() {
             return;
         }
+
+        Device::try_clear_private_data_object_name(
+            &self.device,
+            vk::ObjectType::PIPELINE,
+            self.handle,
+        );
 
         unsafe {
             self.device.destroy_pipeline(self.handle, None);

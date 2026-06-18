@@ -5,9 +5,11 @@ Resources are externally synchronized, and mutable graph-building APIs such as `
 require exclusive access to the `Graph` itself.
 
 API docs: [`Submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html),
+[`RecordedSubmission`](https://docs.rs/vk-graph/latest/vk_graph/struct.RecordedSubmission.html),
 [`Submission::queue_submit`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_submit),
-[`Submission::queue_cmds_for_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_cmds_for_resource),
-[`Submission::queue_cmds_for_resource_dependencies`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.queue_cmds_for_resource_dependencies),
+[`Submission::record_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.record_resource),
+[`Submission::record_resource_dependencies`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submission.html#method.record_resource_dependencies),
+[`RecordedSubmission::queue_submit`](https://docs.rs/vk-graph/latest/vk_graph/struct.RecordedSubmission.html#method.queue_submit),
 [`CommandBuffer::has_executed`](https://docs.rs/vk-graph/latest/vk_graph/driver/cmd_buf/struct.CommandBuffer.html#method.has_executed).
 
 More precisely, `vk-graph` stores the most recent access type of each subresource of a resource. As
@@ -17,8 +19,9 @@ updated.
 Resource state is updated during the following function calls:
 
 - `Submission::queue_submit`
-- `Submission::queue_cmds_for_resource`
-- `Submission::queue_cmds_for_resource_dependencies`
+- `Submission::record_resource`
+- `Submission::record_resource_dependencies`
+- `RecordedSubmission::queue_submit`
 
 > [!CAUTION]
 > Do not call any `Submission` recording or queue function that accesses buffers, images, or acceleration
@@ -27,12 +30,11 @@ Resource state is updated during the following function calls:
 ## Execution
 
 The provided `Submission` recording and queue functions are designed to support a typical
-swapchain-based
-workflow:
-1. Queue all commands the swapchain depends on
-1. Acquire swapchain
-1. Queue swapchain commands
-1. Present swapchain
+frame-presentation workflow:
+1. Queue all commands the presented frame depends on
+1. Acquire the presentation image, usually through `Graphchain`
+1. Queue frame commands that write the presentation image
+1. Present the frame
 1. Submit any final unrelated commands
 
 ## Safe Patterns
@@ -45,7 +47,7 @@ For example, there is no race condition or thread contention caused by using the
 two threads.[^threads] In fact, there is no runtime overhead at all from this.
 
 Additionally, it is safe to build `Graph` instances, bind resources, record command buffers, and
-call `Graph::into_submission` at *any* time on *any* thread, as long as each `Graph` instance is not
+call `Graph::finalize` at *any* time on *any* thread, as long as each `Graph` instance is not
 mutably shared across threads at the same time.
 
 These patterns are safe:
@@ -58,9 +60,9 @@ These patterns are safe:
 
 Host-mappable buffers require extra understanding to use properly.
 
-The contents of a buffer are undefined from the time of submission until that `Submission` has been
-fully executed, as indicated by `CommandBuffer::has_executed`. This means that you should not call
-`Buffer::mapped_slice` during any submission or execution accessing that memory.
+The contents of a buffer are undefined from the time of submission until the returned `Fence` is
+signaled. Use `Fence::is_signaled` or `Fence::wait_signaled` before reading or writing host-mapped
+memory touched by that submission.
 
 See:
 [_`examples/cpu_readback.rs`_](https://github.com/attackgoat/vk-graph/blob/main/examples/cpu_readback.rs)

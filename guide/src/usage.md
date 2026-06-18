@@ -7,7 +7,7 @@ API docs: [`Graph`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html),
 [`Graph::begin_cmd`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.begin_cmd),
 [`Graph::bind_resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.bind_resource),
 [`Graph::resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.resource),
-[`Graph::into_submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.into_submission).
+[`Graph::finalize`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.finalize).
 
 Typical usage contains:
 
@@ -56,7 +56,7 @@ allocations.
 The allocation strategy provides a large section of memory which is then sub-allocated for any
 resources which use it. This may lead to fragmentation and memory exhaustion in some scenarios.
 
-Individual buffers or images may use dedicated memory allocations by setting their `dedicated`
+Individual buffers or images may use dedicated memory allocations by setting their `alloc_dedicated`
 field:
 
 ```rust
@@ -73,14 +73,14 @@ field:
 let uber_mesh_buf = Buffer::create(
     device,
     BufferInfo {
-        dedicated: true,
+        alloc_dedicated: true,
         ..buffer_info
     }
 )?;
 
-// Builder functions are also availble
-// (builder and info types are interchangable)
-let dedicated_info = image_info.into_builder().dedicated(true);
+// Builder functions are also available
+// (builder and info types are interchangeable)
+let dedicated_info = image_info.into_builder().alloc_dedicated(true);
 let important_image = Image::create(device, dedicated_info)?;
 # Ok(()) }
 ```
@@ -121,6 +121,10 @@ let shared_image: &Arc<Image> = graph.resource(image);
 assert_eq!(shared_image.info.width, 320);
 # }
 ```
+
+Concrete node types return the exact stored handle type. For example, `ImageNode` returns
+`&Arc<Image>`. Erased node types such as `AnyImageNode` instead return `&Image` so they can unify
+owned, leased, and swapchain-backed resources behind one view.
 
 ## Commands
 
@@ -269,11 +273,11 @@ graph, but they may do so manually:
 #     graph: Graph,
 #     device: &Device,
 # ) -> Result<(), DriverError> {
-// NOTE: This will stall! Use the async functions to check periodically instead
-graph
-    .into_submission()
-    .queue_submit(&mut LazyPool::new(device), 0, 0)?
-    .wait_until_executed()?;
+// NOTE: This will stall! Use Fence::is_signaled to check periodically instead.
+let mut fence = graph
+    .finalize()
+    .queue_submit(&mut LazyPool::new(device), 0, 0)?;
+fence.wait_signaled()?;
 # Ok(()) }
 ```
 

@@ -12,7 +12,7 @@ use {
         driver::{
             DriverError,
             device::Device,
-            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{GraphicsPipeline, GraphicsPipelineInfo},
         },
     },
 };

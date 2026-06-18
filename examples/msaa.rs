@@ -13,7 +13,7 @@ use {
             DriverError,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{ImageInfo, SampleCount},
             physical_device::Vulkan10Limits,
         },
@@ -109,7 +109,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 &mesh_noaa_pipeline
             })
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
             .resource_access(cube_vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, scene_uniform_buf, AccessType::AnyShaderReadUniformBuffer);
 
@@ -119,7 +119,7 @@ fn main() -> anyhow::Result<()> {
                     ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        cmd.resource(frame.swapchain_image).info.fmt,
+                        cmd.resource(frame.swapchain_image).info.format,
                         vk::ImageUsageFlags::COLOR_ATTACHMENT
                             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     )
@@ -194,7 +194,7 @@ fn main() -> anyhow::Result<()> {
 
 fn best_depth_format(device: &Device) -> vk::Format {
     for format in [vk::Format::D32_SFLOAT, vk::Format::D16_UNORM] {
-        let format_props = device.physical_device.image_format_properties(
+        let format_props = device.physical.image_format_properties(
             format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -216,7 +216,7 @@ fn max_supported_sample_count(device: &Device) -> SampleCount {
         framebuffer_color_sample_counts,
         framebuffer_depth_sample_counts,
         ..
-    } = device.physical_device.properties_v1_0.limits;
+    } = device.physical.properties_v1_0.limits;
     match framebuffer_color_sample_counts & framebuffer_depth_sample_counts {
         s if s.contains(vk::SampleCountFlags::TYPE_64) => SampleCount::Type64,
         s if s.contains(vk::SampleCountFlags::TYPE_32) => SampleCount::Type32,

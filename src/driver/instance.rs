@@ -1,12 +1,16 @@
-//! Vulkan initialization types
+//! Vulkan initialization types.
 
 use {
     super::{DriverError, physical_device::PhysicalDevice},
-    ash::{ext, khr, vk, vk::Handle},
+    ash::{
+        ext, khr,
+        vk::{self, Handle},
+    },
     derive_builder::Builder,
     log::{debug, error, trace, warn},
     raw_window_handle::{HasDisplayHandle, RawDisplayHandle},
     std::{
+        collections::HashSet,
         error::Error,
         ffi::CStr,
         fmt::{Debug, Display, Formatter},
@@ -22,6 +26,7 @@ use {
     std::{
         env::var,
         ffi::c_void,
+        io::{IsTerminal, stderr},
         process::{abort, id},
         thread::{current, park},
     },
@@ -66,19 +71,6 @@ unsafe extern "system" fn debug_callback(
 
     let is_error = message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR);
 
-    // HACK: This is not production-quality
-    // TODO: This was debugged and the issue has not been found, so this may or may not be valid
-    // The validation layer reports `UNASSIGNED-Threading-MultipleThreads-Write` when two threads
-    // touch different VkQueue handles at the same time. Ignoring until the issue is found.
-    if is_error
-        && message.contains("THREADING ERROR")
-        && message.contains("VkQueue is simultaneously used")
-    {
-        info!("ignoring: {message}");
-
-        return vk::FALSE;
-    }
-
     if is_error {
         error!("{message}");
     } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
@@ -114,7 +106,12 @@ unsafe extern "system" fn debug_callback(
         .unwrap_or(false)
     {
         warn!("validation callback park skipped; execution will continue");
-        logger().flush();
+
+        return vk::FALSE;
+    }
+
+    if !stderr().is_terminal() {
+        warn!("validation callback park skipped; stderr is not an interactive terminal");
 
         return vk::FALSE;
     }
@@ -131,27 +128,23 @@ unsafe extern "system" fn debug_callback(
     vk::FALSE
 }
 
-#[cfg(any(not(target_os = "macos"), feature = "loaded"))]
 fn debug_extension_names() -> &'static [&'static CStr] {
-    &[ext::debug_utils::NAME]
+    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+    return &[ext::debug_utils::NAME];
+
+    #[cfg(all(target_os = "macos", not(feature = "loaded")))]
+    return &[];
 }
 
-#[cfg(all(target_os = "macos", not(feature = "loaded")))]
-fn debug_extension_names() -> &'static [&'static CStr] {
-    &[]
-}
-
-#[cfg(any(not(target_os = "macos"), feature = "loaded"))]
 fn debug_layer_names() -> &'static [&'static CStr] {
-    &[c"VK_LAYER_KHRONOS_validation"]
+    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+    return &[c"VK_LAYER_KHRONOS_validation"];
+
+    #[cfg(all(target_os = "macos", not(feature = "loaded")))]
+    return &[];
 }
 
-#[cfg(all(target_os = "macos", not(feature = "loaded")))]
-fn debug_layer_names() -> &'static [&'static CStr] {
-    &[]
-}
-
-// Copied from ash_window::enumerate_required_extensions to change the signature.
+// Copied from ash_window::enumerate_required_extensions to change the signature
 fn display_extension_names(
     display_handle: RawDisplayHandle,
 ) -> Result<&'static [&'static CStr], DriverError> {
@@ -174,10 +167,12 @@ fn display_extension_names(
     Ok(extensions)
 }
 
-// Estimates surface extension support.
-//
-// Imported instances do not expose their enabled extension list, so we infer support by
-// checking that the VK_KHR_surface entry points resolve for this instance handle.
+/*
+Estimates surface extension support.
+
+Imported instances do not expose their enabled extension list, so we infer support by checking that
+the VK_KHR_surface entry points resolve for this instance handle.
+*/
 fn has_vk_khr_surface(entry: &ash::Entry, instance: vk::Instance) -> bool {
     [
         c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
@@ -195,13 +190,17 @@ fn has_vk_khr_surface(entry: &ash::Entry, instance: vk::Instance) -> bool {
 }
 
 /// Vulkan API version.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+///
+/// See [`VkApplicationInfo::apiVersion`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkApplicationInfo.html).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum ApiVersion {
     /// Version `1.2`.
-    #[default]
     Vulkan12,
 
     /// Version `1.3`.
+    ///
+    /// This is the default value.
+    #[default]
     Vulkan13,
 }
 
@@ -226,7 +225,7 @@ impl ApiVersion {
         }
     }
 
-    /// Vulkan API minor version number component. Ex: `v0.0.X-0`.
+    /// Vulkan API patch version number component. Ex: `v0.0.X-0`.
     ///
     /// Always zero.
     pub fn patch(self) -> u32 {
@@ -277,11 +276,13 @@ impl TryFrom<u32> for ApiVersion {
     }
 }
 
-/// There is no global state in Vulkan and all per-application state is stored in a VkInstance
+/// There is no global state in Vulkan and all per-application state is stored in a `VkInstance`
 /// object.
 ///
-/// Creating an Instance initializes the Vulkan library and allows the application to pass
+/// Creating an `Instance` initializes the Vulkan library and allows the application to pass
 /// information about itself to the implementation.
+///
+/// See [`VkInstance`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkInstance.html).
 #[read_only::embed]
 #[allow(private_interfaces)]
 pub struct Instance {
@@ -314,14 +315,16 @@ impl Clone for Instance {
 }
 
 impl Instance {
-    /// The most recent supported version of Vulkan.
-    pub const LATEST_API_VERSION: ApiVersion = ApiVersion::Vulkan13;
+    /// Default Vulkan API version requested when creating an instance.
+    pub const DEFAULT_API_VERSION: ApiVersion = ApiVersion::Vulkan13;
 
     /// Creates a new Vulkan instance.
     ///
     /// This constructor is intended for headless or manually managed setups. It does not infer or
     /// enable display platform surface extensions. Use [`Self::try_from_display`] when the
     /// resulting instance must be capable of later surface creation.
+    ///
+    /// See [`vkCreateInstance`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCreateInstance.html).
     #[profiling::function]
     pub fn create(info: impl Into<InstanceInfo>) -> Result<Self, DriverError> {
         Self::create_with_extension_names(info.into(), &[])
@@ -331,13 +334,19 @@ impl Instance {
         info: InstanceInfo,
         extra_extension_names: &[&CStr],
     ) -> Result<Self, DriverError> {
+        if info.debug && debug_extension_names().is_empty() {
+            error!("debug mode requires VK_EXT_debug_utils support");
+
+            return Err(DriverError::Unsupported);
+        }
+
         // Required to enable non-uniform descriptor indexing (bindless)
         #[cfg(target_os = "macos")]
         unsafe {
             set_var("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "1");
         }
 
-        // Link the Vulkan loader dynamically (default feature).
+        // Link the Vulkan loader dynamically (default feature)
         #[cfg(feature = "loaded")]
         let entry = unsafe {
             ash::Entry::load().map_err(|err| {
@@ -353,7 +362,7 @@ impl Instance {
             #[cfg(not(target_os = "macos"))]
             let entry = ash::Entry::linked();
 
-            // On MacOS, by default link molten-vk statically using ash-molten.
+            // On macOS, by default link molten-vk statically using ash-molten
             #[cfg(target_os = "macos")]
             let entry = ash_molten::load();
         };
@@ -363,15 +372,17 @@ impl Instance {
             .iter()
             .chain(extra_extension_names)
             .copied()
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
 
         if info.debug {
             extension_names.extend(debug_extension_names());
         }
 
-        // If linking dynamically on MacOS, we require a few additional extensions.
-        // Based on "Encountered VK_ERROR_INCOMPATIBLE_DRIVER" section in:
-        // https://vulkan.lunarg.com/doc/view/latest/mac/getting_started.html
+        /*
+        If linking dynamically on macOS, we require a few additional extensions. Based on
+        "Encountered VK_ERROR_INCOMPATIBLE_DRIVER" section in:
+        https://vulkan.lunarg.com/doc/view/latest/mac/getting_started.html
+        */
         #[cfg(all(target_os = "macos", feature = "loaded"))]
         {
             extension_names.extend(&[
@@ -407,8 +418,10 @@ impl Instance {
             .enabled_layer_names(&layer_name_ptrs)
             .enabled_extension_names(&extension_name_ptrs);
 
-        // Molten-vk doesn't support the full Vulkan feature set, hence the portability flag needs
-        // to be set.
+        /*
+        MoltenVK doesn't support the full Vulkan feature set, hence the portability flag needs to be
+        set.
+        */
         #[cfg(all(target_os = "macos", feature = "loaded"))]
         let instance_desc = instance_desc.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
 
@@ -499,12 +512,18 @@ impl Instance {
         })
     }
 
-    /// The ash entrypoint used to load Vulkan instance functions.
+    /// The ash entry point used to load Vulkan instance functions.
     pub fn entry(this: &Self) -> &ash::Entry {
         &this.inner.entry
     }
 
+    pub(crate) fn supports_debug_utils(this: &Self) -> bool {
+        this.inner.debug_utils.is_some()
+    }
+
     /// Returns the available physical devices of this instance.
+    ///
+    /// See [`vkEnumeratePhysicalDevices`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkEnumeratePhysicalDevices.html).
     #[profiling::function]
     pub fn physical_devices(
         this: &Self,
@@ -530,29 +549,44 @@ impl Instance {
             .into_iter()
             .enumerate()
             .filter_map(|(idx, physical_device)| {
-                let res = PhysicalDevice::try_from_ash(this, physical_device);
+                let physical_device = unsafe {
+                    PhysicalDevice::try_from_ash(this, physical_device)
+                        .inspect_err(|err| warn!("unsupported physical device #{idx}: {err}"))
+                        .ok()?
+                };
 
-                if let Err(err) = &res {
-                    warn!("unsupported physical device #{idx}: {err}");
+                let api_version = ApiVersion::try_parse_vk_api_version(
+                    physical_device.properties_v1_0.api_version,
+                )
+                .inspect_err(|err| {
+                    warn!(
+                        "unsupported physical device #{idx} {}: {err}",
+                        physical_device.properties_v1_0.device_name
+                    );
+                })
+                .ok()?;
+
+                if api_version < this.info.api_version {
+                    return None;
                 }
 
-                res.ok().filter(|physical_device| {
-                    ApiVersion::try_parse_vk_api_version(
-                        physical_device.properties_v1_0.api_version,
-                    )
-                    .inspect_err(|err| {
-                        debug!(
-                            "unsupported physical device `{}`: {err}",
-                            physical_device.properties_v1_0.device_name
-                        );
-                    })
-                    .is_ok()
-                })
+                if this.info.debug && !physical_device.vk_ext_private_data {
+                    warn!(
+                        "unsupported physical device #{idx} {}: missing VK_EXT_private_data",
+                        physical_device.properties_v1_0.device_name
+                    );
+
+                    return None;
+                }
+
+                Some(physical_device)
             }))
     }
 
     /// Creates a new Vulkan instance with the platform surface extensions required by the provided
     /// display handle.
+    ///
+    /// See [`VK_KHR_surface`](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_surface.html).
     #[profiling::function]
     pub fn try_from_display(
         display: impl HasDisplayHandle,
@@ -577,6 +611,8 @@ impl Instance {
     ///
     /// This is useful when you want to use a Vulkan instance created by some other library, such
     /// as OpenXR.
+    ///
+    /// See [`VkInstance`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkInstance.html).
     #[profiling::function]
     pub fn try_from_entry(entry: ash::Entry, instance: vk::Instance) -> Result<Self, DriverError> {
         if instance == vk::Instance::null() {
@@ -596,8 +632,10 @@ impl Instance {
                 }
             })?
             .unwrap_or_else(|| {
-                // The implementation *should* provide a version. If it does not we just send it.
-                Self::LATEST_API_VERSION.to_vk_api_version()
+                /*
+                The implementation *should* provide a version. If it does not, use the default.
+                */
+                Self::DEFAULT_API_VERSION.to_vk_api_version()
             })
             .try_into()
             .map_err(|err| {
@@ -629,7 +667,12 @@ impl Instance {
 
 impl Debug for Instance {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Instance")
+        f.debug_struct(stringify!(Instance))
+            .field("handle", &self.inner.instance.handle())
+            .field("info", &self.info)
+            .field("khr_surface", &self.khr_surface)
+            .field("debug_utils", &self.inner.debug_utils.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -642,25 +685,30 @@ impl Debug for Instance {
 )]
 pub struct InstanceInfo {
     /// The Vulkan API version to target.
-    #[builder(default = "ApiVersion::Vulkan13")]
+    ///
+    /// Defaults to [`Instance::DEFAULT_API_VERSION`].
+    #[builder(default = "Instance::DEFAULT_API_VERSION")]
     pub api_version: ApiVersion,
 
     /// Enables Vulkan validation layers.
     ///
-    /// This requires a Vulkan SDK installation and will cause validation errors to introduce
-    /// panics as they happen.
+    /// This requires a Vulkan SDK installation and will panic when validation errors happen.
+    /// Additionally, the device must support VK_EXT_private_data.
     ///
-    /// Set `VK_GRAPH_SKIP_VALIDATION_PARK=1` to keep logging validation errors without parking the
+    /// When `stderr` is attached to an interactive terminal, validation errors will park the
     /// callback thread for debugger attach.
     ///
+    /// Set `VK_GRAPH_SKIP_VALIDATION_PARK=1` to keep logging validation errors without parking.
+    ///
     /// _NOTE:_ Consider turning OFF debug if you discover an unknown issue. Often the validation
-    /// layers will throw an error before other layers can provide additional context such as the
+    /// layers will report an error before other layers can provide additional context such as the
     /// API dump info or other messages. You might find the "actual" issue is detailed in those
     /// subsequent details.
     ///
     /// ## Platform-specific
     ///
     /// **macOS:** Has no effect unless the `loaded` feature is enabled.
+    ///
     #[builder(default)]
     pub debug: bool,
 
@@ -798,5 +846,28 @@ mod test {
             ApiVersion::try_parse_vk_api_version(vk::API_VERSION_1_3).unwrap(),
             ApiVersion::Vulkan13
         );
+    }
+
+    #[test]
+    pub fn default_api_version_matches_instance_info_default() {
+        assert_eq!(
+            Instance::DEFAULT_API_VERSION,
+            InstanceInfo::default().api_version
+        );
+    }
+
+    #[test]
+    pub fn default_api_version_matches_api_version_default() {
+        assert_eq!(Instance::DEFAULT_API_VERSION, ApiVersion::default());
+    }
+
+    #[test]
+    pub fn invalid_api_versions_are_rejected() {
+        assert!(ApiVersion::try_parse_vk_api_version(vk::API_VERSION_1_1).is_err());
+        assert!(ApiVersion::try_parse_vk_api_version(vk::make_api_version(0, 2, 0, 0)).is_err());
+        assert!(ApiVersion::try_parse_vk_api_version(vk::make_api_version(1, 1, 9, 0)).is_err());
+        assert!(ApiVersion::try_parse_vk_api_version(vk::make_api_version(1, 4, 2, 0)).is_err());
+        assert!(ApiVersion::try_parse_vk_api_version(vk::make_api_version(1, 2, 0, 1)).is_err());
+        assert!(ApiVersion::try_parse_vk_api_version(vk::make_api_version(1, 3, 0, 1)).is_err());
     }
 }

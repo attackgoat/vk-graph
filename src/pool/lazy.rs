@@ -1,7 +1,9 @@
-//! Pool which requests by looking for compatibile information before creating new resources.
+//! Pool which requests by looking for compatible information before creating new resources.
 
 use {
-    super::{Cache, Lease, Pool, PoolConfig, lease_command_buffer},
+    super::{
+        BufferHostMappingCompatibility, Cache, Lease, Pool, PoolConfig, compatible_buffer_info,
+    },
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -25,8 +27,9 @@ struct ImageKey {
     height: u32,
     mip_level_count: u32,
     sample_count: SampleCount,
+    sharing_mode: vk::SharingMode,
     tiling: vk::ImageTiling,
-    ty: vk::ImageType,
+    image_type: vk::ImageType,
     width: u32,
 }
 
@@ -35,12 +38,13 @@ impl From<ImageInfo> for ImageKey {
         Self {
             array_layer_count: info.array_layer_count,
             depth: info.depth,
-            fmt: info.fmt,
+            fmt: info.format,
             height: info.height,
             mip_level_count: info.mip_level_count,
             sample_count: info.sample_count,
+            sharing_mode: info.sharing_mode,
             tiling: info.tiling,
-            ty: info.ty,
+            image_type: info.image_type,
             width: info.width,
         }
     }
@@ -70,13 +74,13 @@ impl From<ImageInfo> for ImageKey {
 ///
 /// # Memory Management
 ///
-/// If requests for varying resources is common [`LazyPool::clear_images_by_info`] and other memory
-/// management functions are nessecery in order to avoid using all available device memory.
+/// If requests for varying resources are common [`LazyPool::clear_images_by_info`] and other
+/// memory management functions are necessary in order to avoid using all available device memory.
 #[derive(Debug)]
 #[read_only::cast]
 pub struct LazyPool {
     accel_struct_cache: HashMap<vk::AccelerationStructureTypeKHR, Cache<AccelerationStructure>>,
-    buffer_cache: HashMap<(bool, vk::DeviceSize), Cache<Buffer>>,
+    buffer_cache: HashMap<(bool, vk::DeviceSize, vk::SharingMode), Cache<Buffer>>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: Cache<DescriptorPool>,
 
@@ -133,8 +137,11 @@ impl LazyPool {
     }
 
     /// Clears the pool of all acceleration structure resources matching the given type.
-    pub fn clear_accel_structs_by_ty(&mut self, ty: vk::AccelerationStructureTypeKHR) {
-        self.accel_struct_cache.remove(&ty);
+    pub fn clear_accel_structs_by_type(
+        &mut self,
+        accel_struct_ty: vk::AccelerationStructureTypeKHR,
+    ) {
+        self.accel_struct_cache.remove(&accel_struct_ty);
     }
 
     /// Clears the pool of buffer resources.
@@ -167,7 +174,8 @@ impl LazyPool {
     where
         F: FnMut(vk::AccelerationStructureTypeKHR) -> bool,
     {
-        self.accel_struct_cache.retain(|&ty, _| f(ty))
+        self.accel_struct_cache
+            .retain(|&accel_struct_ty, _| f(accel_struct_ty))
     }
 }
 
@@ -179,7 +187,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
     ) -> Result<Lease<AccelerationStructure>, DriverError> {
         let cache = self
             .accel_struct_cache
-            .entry(info.ty)
+            .entry(info.acceleration_structure_type)
             .or_insert_with(|| PoolConfig::explicit_cache(self.info.accel_struct_capacity));
         let cache_ref = Arc::downgrade(cache);
 
@@ -216,7 +224,11 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
     fn resource(&mut self, info: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
         let cache = self
             .buffer_cache
-            .entry((info.host_read | info.host_write, info.alignment))
+            .entry((
+                info.host_readable | info.host_writable,
+                info.alignment,
+                info.sharing_mode,
+            ))
             .or_insert_with(|| PoolConfig::explicit_cache(self.info.buffer_capacity));
         let cache_ref = Arc::downgrade(cache);
 
@@ -232,13 +244,11 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
             // Look for a compatible buffer (big enough and superset of usage flags)
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
-                if (item.info.dedicated & info.dedicated) == info.dedicated
-                    && (item.info.host_read & info.host_read) == info.host_read
-                    && (item.info.host_write & info.host_write) == info.host_write
-                    && item.info.alignment >= info.alignment
-                    && item.info.size >= info.size
-                    && item.info.usage.contains(info.usage)
-                {
+                if compatible_buffer_info(
+                    &item.info,
+                    &info,
+                    BufferHostMappingCompatibility::Superset,
+                ) {
                     let item = cache.swap_remove(idx);
 
                     return Ok(Lease::new(cache_ref, item));
@@ -268,7 +278,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for LazyPool {
             #[cfg(not(feature = "parking_lot"))]
             let mut cache = cache.expect("poisoned cache lock");
 
-            lease_command_buffer(&mut cache)
+            cache.pop()
         }
         .map(Ok)
         .unwrap_or_else(|| {

@@ -36,29 +36,33 @@ fn main() -> Result<(), DriverError> {
         &[0, 0, 0, 0],
     )?);
 
-    // We are using the GPU to copy data, but the same thing works if you're executing a pipeline
-    // such as a ComputePipeline to run some shader code which writes to a buffer or image. It is
-    // important to note that dst_buf does not contain the new data until we submit this render
-    // graph and wait on the result
+    /*
+    We are using the GPU to copy data, but the same thing works if you're executing a pipeline such
+    as a ComputePipeline to run some shader code which writes to a buffer or image. It is important
+    to note that dst_buf does not contain the new data until we submit this render graph and wait on
+    the result.
+    */
     graph.copy_buffer(src_buf, dst_buf);
 
     // This line is optional - just bind a borrow of Arc<Buffer> or a leased buffer so you retain
     // the actual buffer for later use and you could then remove this line
     let dst_buf = graph.resource(dst_buf).clone();
 
-    // Resolve and wait (or you can check has_executed without blocking) - alternatively you might
-    // use device.queue_wait_idle(0) or device.device_wait_idle() - but those block on larger scopes
-    let mut cmd = graph
-        .into_submission()
+    /*
+    Resolve and wait. You can check Fence::is_signaled without blocking, or use
+    device.queue_wait_idle(0) or device.device_wait_idle(), but those block on larger scopes.
+    */
+    let mut fence = graph
+        .finalize()
         .queue_submit(&mut HashPool::new(&device), 0, 0)?;
 
-    println!("Has executed? {}", cmd.has_executed()?);
+    println!("Has executed? {}", fence.is_signaled()?);
     let started = Instant::now();
 
-    cmd.wait_until_executed()?;
+    fence.wait_signaled()?;
 
     assert!(
-        cmd.has_executed()?,
+        fence.is_signaled()?,
         "We checked above - so this will always be true"
     );
     println!("Waited {}μs", (Instant::now() - started).as_micros());

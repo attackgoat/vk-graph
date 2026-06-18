@@ -1,8 +1,12 @@
 # Debugging
 
-Debug mode (setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`) is supported only
-when a compatible [_Vulkan SDK_](https://vulkan.lunarg.com/sdk/home)
-<i class="fa-solid fa-arrow-up-right-from-square"></i> is installed.
+Debug mode is enabled by setting the `debug` field of `DeviceInfo` or `InstanceInfo` to `true`.
+It requires `VK_EXT_debug_utils` and `VK_EXT_private_data` support. Construction fails in debug mode
+when those requirements are unavailable.
+
+A compatible [_Vulkan SDK_](https://vulkan.lunarg.com/sdk/home)
+<i class="fa-solid fa-arrow-up-right-from-square"></i> is required for validation layers and
+debugging tools.
 
 > [!IMPORTANT]
 > The installed Vulkan SDK version must be at least v{{ vulkan_sdk.version }}.
@@ -10,6 +14,29 @@ when a compatible [_Vulkan SDK_](https://vulkan.lunarg.com/sdk/home)
 While in debug mode `vk-graph` watches for errors, warnings, and certain performance warnings
 emitted from any currently enabled Vulkan debug application layers. Emitted events will cause the
 active thread to be parked and log a message indicating how to attach a debugger.
+
+## RenderDoc Labels
+
+When debug mode is active, `vk-graph` emits Vulkan debug-utils object names and command label regions
+for RenderDoc and similar tools.
+
+Resources and pipelines expose a setter and builder-style helper:
+
+```rust
+# use vk_graph::driver::{DriverError, ash::vk, buffer::{Buffer, BufferInfo}, device::Device};
+# fn test(device: &Device) -> Result<(), DriverError> {
+let buffer = Buffer::create(
+    device,
+    BufferInfo::device_mem(1024, vk::BufferUsageFlags::STORAGE_BUFFER),
+)?.with_debug_name("work buffer");
+
+buffer.set_debug_name("renamed work buffer");
+# Ok(()) }
+```
+
+Pipeline debug names are propagated to internal Vulkan objects such as pipeline layouts and
+descriptor set layouts. Command names become debug label regions during submission recording.
+Swapchain images are also named by index.
 
 ## Logging
 
@@ -73,9 +100,13 @@ misuse patterns that the VVL cannot catch:
 - Missing `resource_access` / `shader_resource_access` declarations before using a resource
 - [`update_buffer`] and [`copy_buffer_region`](crate::Graph::copy_buffer_region) buffer bounds
 - Valid image aspect masks and subresource ranges
+- Cross-graph node ownership checks
 
 The `checked` feature is **enabled by default** — it activates in both debug and release builds.
 Disable it for zero-overhead release builds that have been validated:
+
+With `checked` disabled, `vk-graph` no longer fail-fast validates that a node handle belongs to the
+graph it is used with. That remains invalid usage; the caller is responsible for avoiding it.
 
 ```bash
 cargo run --no-default-features --features loaded,parking_lot --release

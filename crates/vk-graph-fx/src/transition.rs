@@ -1,6 +1,6 @@
 // Adapted from https://github.com/gl-transitions/gl-transitions
 // NOTE: Some are rough or broken and need a bit of care - others should be optimized for production
-// use.
+// use
 
 use {
     log::trace,
@@ -143,8 +143,8 @@ pub enum Transition {
     },
     Fade,
     FadeGrayscale {
-        /// if 0.0, the image directly turn grayscale, if 0.9, the grayscale transition phase is
-        /// very important
+        /// If `0.0`, the image turns grayscale directly; if `0.9`, the grayscale transition phase
+        /// is very important.
         intensity: f32,
     },
     FilmBurn {
@@ -183,13 +183,13 @@ pub enum Transition {
         luma_map: AnyImageNode,
     },
     LuminanceMelt {
-        /// Direction of movement :  0 : up, 1, down
+        /// Direction of movement: `false` for up, `true` for down.
         direction: bool,
 
-        /// Luminance threshold
+        /// Luminance threshold.
         threshold: f32,
 
-        /// Does the movement takes effect above or below luminance threshold ?
+        /// Whether movement takes effect above or below the luminance threshold.
         above: bool,
     },
     Morph {
@@ -400,7 +400,6 @@ impl Transition {
 /// Cache and lazily create transition compute pipelines on demand.
 pub struct TransitionPipeline {
     cache: HashPool,
-    device: Device, // TODO REMOVE
     pipelines: HashMap<TransitionType, ComputePipeline>,
 }
 
@@ -408,14 +407,9 @@ impl TransitionPipeline {
     /// Creates an empty transition pipeline cache for the given device.
     pub fn new(device: &Device) -> Self {
         let cache = HashPool::new(device);
-        let device = device.clone();
         let pipelines = Default::default();
 
-        Self {
-            cache,
-            device,
-            pipelines,
-        }
+        Self { cache, pipelines }
     }
 
     /// Applies a transition between two images and returns a pooled destination image.
@@ -479,7 +473,6 @@ impl TransitionPipeline {
 
         extend_push_constants(transition, &mut push_consts);
 
-        // TODO: Handle displacement and luma in an if case, below
         graph
             .begin_cmd()
             .debug_name(format!("transition {transition_ty:?}"))
@@ -498,7 +491,7 @@ impl TransitionPipeline {
             trace!("creating {transition_ty:?}");
 
             ComputePipeline::create(
-                &self.device,
+                &self.cache.device,
                 ComputePipelineInfo::default(),
                 Shader::new_compute(match transition_ty {
                     TransitionType::Angular => {

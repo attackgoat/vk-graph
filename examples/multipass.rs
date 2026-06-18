@@ -13,7 +13,7 @@ use {
             DriverError,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
         },
@@ -105,7 +105,7 @@ fn main() -> anyhow::Result<()> {
         let light_buf = bind_light_buf(frame.graph, &mut pool);
         let push_const_data = write_push_consts(obj_pos, material);
 
-        let mut write = DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL;
+        let mut write = DepthStencilInfo::DEPTH_WRITE_LESS;
 
         // Depth Prepass
         frame
@@ -202,7 +202,7 @@ fn best_depth_stencil_format(device: &Device) -> vk::Format {
         vk::Format::D16_UNORM_S8_UINT,
         vk::Format::D32_SFLOAT_S8_UINT,
     ] {
-        let format_props = device.physical_device.image_format_properties(
+        let format_props = device.physical.image_format_properties(
             format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -326,7 +326,7 @@ fn create_funky_shape(device: &Device, pool: &mut LazyPool) -> Result<Shape, Dri
         .copy_buffer(vertex_buf_host, vertex_buf_gpu);
 
     // Submit the graph, which runs the operations on the GPU
-    graph.into_submission().queue_submit(pool, 0, 0)?;
+    graph.finalize().queue_submit(pool, 0, 0)?;
 
     // (We drop the graph here; it's okay the cache keeps things alive until they're done)
 

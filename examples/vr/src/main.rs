@@ -28,7 +28,7 @@ use {
             ash::vk::{self},
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipelineInfo},
+            graphics::{DepthStencilInfo, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             sync::AccessType,
         },
@@ -214,9 +214,11 @@ fn main() -> anyhow::Result<()> {
     'main_loop: loop {
         if !running.load(Ordering::Relaxed) {
             println!("requesting exit");
-            // The OpenXR runtime may want to perform a smooth transition between scenes, so we
-            // can't necessarily exit instantly. Instead, we must notify the runtime of our
-            // intent and wait for it to tell us when we're actually done.
+            /*
+            The OpenXR runtime may want to perform a smooth transition between scenes, so we can't
+            necessarily exit instantly. Instead, we must notify the runtime of our intent and wait
+            for it to tell us when we're actually done.
+            */
             match session.request_exit() {
                 Ok(()) => {}
                 Err(xr::sys::Result::ERROR_SESSION_NOT_RUNNING) => break,
@@ -362,7 +364,7 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Left hand")
                 .bind_pipeline(&hands_pipeline)
-                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
                 .multiview(VIEW_MASK, VIEW_MASK)
                 .resource_access(index_buf, AccessType::IndexBuffer)
                 .resource_access(vertex_buf, AccessType::VertexBuffer)
@@ -410,7 +412,7 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Right hand")
                 .bind_pipeline(&hands_pipeline)
-                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
                 .multiview(VIEW_MASK, VIEW_MASK)
                 .resource_access(index_buf, AccessType::IndexBuffer)
                 .resource_access(vertex_buf, AccessType::VertexBuffer)
@@ -472,7 +474,7 @@ fn main() -> anyhow::Result<()> {
                 )
                 .multiview(VIEW_MASK, VIEW_MASK)
                 .color_attachment_image(0, swapchain_image, LoadOp::DontCare, StoreOp::Store)
-                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
                 .depth_stencil_attachment_image(
                     depth_image,
                     LoadOp::CLEAR_ZERO_STENCIL_ZERO,
@@ -488,10 +490,10 @@ fn main() -> anyhow::Result<()> {
 
         // Wait on the acquired swapchain image to be ready, submit rendering commands, and release
         // the image - afterwards we keep the submitted command buffer around (including all
-        // in-flight resources) so that nothing is dropped until that image is actually done.
+        // in-flight resources) so that nothing is dropped until that image is actually done
         swapchain.wait_image(xr::Duration::INFINITE).unwrap();
         let swapchain_queue = graph
-            .into_submission()
+            .finalize()
             .queue_submit(&mut pool, queue_family_index as _, 0)
             .unwrap();
         swapchain.release_image().unwrap();
@@ -564,7 +566,7 @@ fn arbitrary_perspective_rh(
 /// Helper to pick a queue family for submitting device commands.
 fn device_queue_family_index(device: &Device, flags: vk::QueueFlags) -> Option<u32> {
     device
-        .physical_device
+        .physical
         .queue_families
         .iter()
         .enumerate()
@@ -791,10 +793,11 @@ fn load_texture(
     graph.copy_buffer_to_image(staging_buf, texture_image);
 
     let queue_family_index = device_queue_family_index(device, vk::QueueFlags::TRANSFER).unwrap();
-    graph
-        .into_submission()
-        .queue_submit(&mut LazyPool::new(device), queue_family_index as _, 0)?
-        .wait_until_executed()?;
+    let mut fence =
+        graph
+            .finalize()
+            .queue_submit(&mut LazyPool::new(device), queue_family_index as _, 0)?;
+    fence.wait_signaled()?;
 
     Ok(texture)
 }

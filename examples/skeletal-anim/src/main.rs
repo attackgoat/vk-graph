@@ -24,7 +24,7 @@ use {
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfoBuilder},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfoBuilder},
             image::{Image, ImageInfo},
             shader::Shader,
             sync::AccessType,
@@ -137,7 +137,7 @@ fn main() -> Result<(), WindowError> {
             .begin_cmd()
             .debug_name("🦴")
             .bind_pipeline(&pipeline)
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
             .resource_access(index_buf, AccessType::IndexBuffer)
             .resource_access(vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, camera_buf, AccessType::VertexShaderReadUniformBuffer)
@@ -214,7 +214,7 @@ fn load_texture(device: &Device, pak: &mut PakBuf, key: &str) -> Result<Arc<Imag
         let buffer = graph.bind_resource(&buffer);
         graph.copy_buffer_to_image(buffer, image);
         graph
-            .into_submission()
+            .finalize()
             .queue_submit(&mut HashPool::new(device), 0, 0)?;
     }
 
@@ -467,7 +467,7 @@ impl Model {
                 .copy_buffer(index_staging_buf, index_buf)
                 .copy_buffer(vertex_staging_buf, vertex_buf);
             graph
-                .into_submission()
+                .finalize()
                 .queue_submit(&mut HashPool::new(device), 0, 0)?;
         }
 

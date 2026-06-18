@@ -4,7 +4,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("supports") => {
-            // Supports all renderers.
+            // Supports all renderers
             return;
         }
         Some(arg) => {

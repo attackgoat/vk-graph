@@ -12,7 +12,7 @@ use {
             DriverError,
             buffer::Buffer,
             device::Device,
-            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             shader::{Shader, ShaderBuilder},
         },
     },
@@ -208,11 +208,13 @@ fn create_vertex_shader(is_double: bool) -> ShaderBuilder {
     //
     // To support a vec3 64-bit case this means color_in needs to be on location 2
 
-    // This shader is compiled with a macro because we want to be able to switch the vec2 type to a
-    // dvec2 when using 64-bit positions; and for the purposes of this example we don't want to
-    // duplicate this shader code. You probably don't want to do this, or you may have different
-    // facilities for generating SPIR-V code - either way ignore the macro unless you're interested
-    // in the include_glsl! wizardry it contains which is unrelated to this example.
+    /*
+    This shader is compiled with a macro because we want to be able to switch the vec2 type to a
+    dvec2 when using 64-bit positions; and for the purposes of this example we don't want to
+    duplicate this shader code. You probably don't want to do this, or you may have different
+    facilities for generating SPIR-V code - either way ignore the macro unless you're interested in
+    the include_glsl! wizardry it contains which is unrelated to this example.
+    */
     macro_rules! compile_vert {
         ($vec2_ty:literal) => {
             glsl!(
@@ -276,7 +278,7 @@ fn create_pipeline(
 
 fn supports_vertex_buffer(device: &Device, format: vk::Format) -> bool {
     device
-        .physical_device
+        .physical
         .format_properties(format)
         .buffer_features
         .contains(vk::FormatFeatureFlags::VERTEX_BUFFER)

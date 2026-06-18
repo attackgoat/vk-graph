@@ -60,10 +60,12 @@ impl Swapchain {
                         resolution.height,
                         2,
                         vk::Format::R8G8B8A8_SRGB,
-                        vk::ImageUsageFlags::SAMPLED,
+                        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
                     );
 
-                    Arc::new(Image::from_raw(device, image, info))
+                    // SAFETY: OpenXR returned this Vulkan image for the swapchain created from
+                    // `device`, and OpenXR retains ownership of the image lifetime
+                    Arc::new(unsafe { Image::from_raw(device, image, info) })
                 })
                 .collect(),
             resolution,

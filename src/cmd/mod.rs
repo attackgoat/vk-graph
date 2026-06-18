@@ -10,7 +10,7 @@
 //! 3. With a pipeline, declare shader bindings with [`PipelineCommand::shader_resource_access`].
 //! 4. Record work with [`record_cmd`](Command::record_cmd) — available on both
 //!    [`Command`] and [`PipelineCommand`].
-//! 5. The command auto-closes when dropped or when [`Graph::into_submission`] is called.
+//! 5. The command auto-closes when dropped or when [`Graph::finalize`] is called.
 //!
 //! A single command can call `record_cmd` multiple times — each call creates a separate
 //! "execution" within that command. Executions within a command stay in the specified
@@ -19,31 +19,38 @@
 
 mod cmd_ref;
 mod compute;
-mod graphic;
+mod graphics;
 mod pipeline;
-mod ray_trace;
+mod ray_tracing;
 
-pub use self::{
-    cmd_ref::{
-        BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
-        UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
+pub use {
+    self::{
+        cmd_ref::{
+            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
+            UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
+        },
+        compute::ComputeCommandRef,
+        graphics::{ClearColorValue, GraphicsCommandRef},
+        pipeline::{Pipeline, PipelineCommand},
+        ray_tracing::RayTracingCommandRef,
     },
-    compute::ComputeCommandRef,
-    graphic::{ClearColorValue, GraphicsCommandRef, LoadOp, StoreOp},
-    pipeline::{Pipeline, PipelineCommand},
-    ray_trace::RayTracingCommandRef,
+    super::{LoadOp, StoreOp},
 };
 
 use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
         AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode, BufferNode, CommandData,
-        Execution, ExecutionFunction, Graph, ImageLeaseNode, ImageNode, Node, Resource,
+        CommandFunction, Execution, Graph, ImageLeaseNode, ImageNode, Node, Resource,
         SwapchainImageNode,
     },
-    crate::driver::{buffer::BufferSubresourceRange, image::ImageViewInfo},
+    crate::{
+        NodeIndex,
+        driver::{buffer::BufferSubresourceRange, image::ImageViewInfo},
+        stream::{AccelerationStructureArg, BufferArg, ImageArg},
+    },
     ash::vk,
-    std::ops::Range,
+    std::{ops::Range, sync::Arc},
     vk_sync::AccessType,
 };
 
@@ -78,14 +85,15 @@ pub struct Command<'a> {
     pub(super) graph: &'a mut Graph,
 }
 
+#[allow(private_bounds)]
 impl<'a> Command<'a> {
     pub(super) fn new(graph: &'a mut Graph) -> Self {
         let cmd_idx = graph.cmds.len();
         graph.cmds.push(CommandData {
             execs: vec![Default::default()], // We start off with a default execution!
-
             #[cfg(debug_assertions)]
             name: None,
+            stream_scope_id: None,
         });
 
         Self {
@@ -117,14 +125,11 @@ impl<'a> Command<'a> {
     /// Binds a shader pipeline to the current command, allowing for strongly typed access to the
     /// related functions.
     ///
-    /// `P`|`P::Command`
-    /// -|-
-    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_,
-    /// ComputePipeline>`]
-    /// [`GraphicsPipeline`](crate::driver::graphic::GraphicsPipeline)|[`PipelineCommand<'_,
-    /// GraphicsPipeline>`]
-    /// [`RayTracingPipeline`](crate::driver::ray_trace::RayTracingPipeline)|[`PipelineCommand<'_,
-    /// RayTracingPipeline>`]
+    /// | `P` | `P::Command` |
+    /// | --- | --- |
+    /// | [`ComputePipeline`](crate::driver::compute::ComputePipeline) | [`PipelineCommand<'_, ComputePipeline>`] |
+    /// | [`GraphicsPipeline`](crate::driver::graphics::GraphicsPipeline) | [`PipelineCommand<'_, GraphicsPipeline>`] |
+    /// | [`RayTracingPipeline`](crate::driver::ray_tracing::RayTracingPipeline) | [`PipelineCommand<'_, RayTracingPipeline>`] |
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'a>,
@@ -132,7 +137,7 @@ impl<'a> Command<'a> {
         pipeline.bind_cmd(self)
     }
 
-    /// Sets a debugging name, but only in debug builds
+    /// Sets a debugging name, but only in debug builds.
     pub fn debug_name(mut self, name: impl Into<String>) -> Self {
         self.set_debug_name(name);
         self
@@ -141,7 +146,7 @@ impl<'a> Command<'a> {
     /// Finalize the recording of this command and return to the `Graph` where you may record
     /// additional commands.
     pub fn end_cmd(self) -> &'a mut Graph {
-        // If nothing was done in this pass we can just ignore it
+        // If nothing was done in this command we can just ignore it.
         if self.exec_idx == 0 {
             self.graph.cmds.pop();
         }
@@ -153,7 +158,26 @@ impl<'a> Command<'a> {
         let cmd = self.cmd_mut();
         let exec = {
             let last_exec = cmd.expect_last_exec_mut();
-            last_exec.func = Some(ExecutionFunction(Box::new(func)));
+            last_exec.func = Some(CommandFunction::Once(Box::new(func)));
+
+            Execution {
+                pipeline: last_exec.pipeline.clone(),
+                ..Default::default()
+            }
+        };
+
+        cmd.execs.push(exec);
+        self.exec_idx += 1;
+    }
+
+    pub(crate) fn push_reusable_exec(
+        &mut self,
+        func: impl for<'r> Fn(CommandRef<'r>) + Send + Sync + 'static,
+    ) {
+        let cmd = self.cmd_mut();
+        let exec = {
+            let last_exec = cmd.expect_last_exec_mut();
+            last_exec.func = Some(CommandFunction::Reusable(Arc::new(func)));
 
             Execution {
                 pipeline: last_exec.pipeline.clone(),
@@ -175,21 +199,27 @@ impl<'a> Command<'a> {
 
         let node_idx = resource_node.index();
 
-        debug_assert!(self.graph.resources.get(node_idx).is_some());
-
-        let access = SubresourceAccess {
-            access,
-            subresource,
-        };
-        self.cmd_mut()
-            .expect_last_exec_mut()
-            .accesses
-            .entry(node_idx)
-            .and_modify(|accesses| accesses.push(access))
-            .or_insert(vec![access]);
+        self.push_subresource_access_index(node_idx, subresource, access);
     }
 
-    /// Begin recording a general-purpose command buffer.
+    pub(crate) fn push_subresource_access_index(
+        &mut self,
+        node_idx: NodeIndex,
+        subresource: SubresourceRange,
+        access: AccessType,
+    ) {
+        debug_assert!(self.graph.resources.get(node_idx).is_some());
+
+        self.cmd_mut().expect_last_exec_mut().accesses.push(
+            node_idx,
+            SubresourceAccess {
+                access,
+                subresource,
+            },
+        );
+    }
+
+    /// Begin recording general-purpose work for this graph command.
     ///
     /// This is the entry point for building and updating an
     /// [`AccelerationStructure`](crate::driver::accel_struct::AccelerationStructure) instance.
@@ -201,17 +231,26 @@ impl<'a> Command<'a> {
         self
     }
 
-    /// Begin recording a general-purpose command buffer.
-    ///
-    /// This is the entry point for building and updating an
-    /// [`AccelerationStructure`](crate::driver::accel_struct::AccelerationStructure) instance.
-    ///
-    /// The provided closure allows you to run any Vulkan code, or interoperate with other Vulkan
-    /// code and interfaces.
+    /// Mutable-borrow form of [`Self::record_cmd`].
     pub fn record_cmd_mut(&mut self, func: impl FnOnce(CommandRef<'_>) + Send + 'static) {
         self.push_exec(move |cmd| {
             func(cmd);
         });
+    }
+
+    pub(crate) fn record_stream(
+        mut self,
+        func: impl for<'r> Fn(CommandRef<'r>) + Send + Sync + 'static,
+    ) -> Self {
+        self.record_stream_mut(func);
+        self
+    }
+
+    pub(crate) fn record_stream_mut(
+        &mut self,
+        func: impl for<'r> Fn(CommandRef<'r>) + Send + Sync + 'static,
+    ) {
+        self.push_reusable_exec(func);
     }
 
     /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
@@ -223,11 +262,11 @@ impl<'a> Command<'a> {
         self.graph.resource(resource_node)
     }
 
-    /// Informs the command that the next recorded command buffer will read or write `resource_node`
+    /// Informs the command that recorded work will read or write `resource_node`
     /// using `access`.
     ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a recording
+    /// function.
     pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
     where
         N: Node + Subresource,
@@ -237,21 +276,22 @@ impl<'a> Command<'a> {
         self
     }
 
-    /// Sets a debugging name, but only in debug builds.
-    pub fn set_debug_name(&mut self, _name: impl Into<String>) -> &mut Self {
+    /// Mutable-borrow form of [`Self::debug_name`].
+    pub fn set_debug_name(&mut self, name: impl Into<String>) -> &mut Self {
         #[cfg(debug_assertions)]
         {
-            self.cmd_mut().name = Some(_name.into());
+            self.cmd_mut().name = Some(name.into());
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = name;
         }
 
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write `resource_node`
-    /// using `access`.
-    ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// Mutable-borrow form of [`Self::resource_access`].
     pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType)
     where
         N: Node + Subresource,
@@ -263,11 +303,11 @@ impl<'a> Command<'a> {
         self.push_subresource_access(resource_node, subresource, access);
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the
-    /// `subresource` of `resource_node` using `access`.
-    ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    pub(crate) fn set_stream_scope_id(&mut self, stream_scope_id: u64) {
+        self.cmd_mut().stream_scope_id = Some(stream_scope_id);
+    }
+
+    /// Mutable-borrow form of [`Self::subresource_access`].
     pub fn set_subresource_access<N>(
         &mut self,
         resource_node: N,
@@ -283,11 +323,11 @@ impl<'a> Command<'a> {
         self.push_subresource_access(resource_node, subresource, access);
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the
-    /// `subresource` of `resource` using `access`.
+    /// Informs the command that recorded work will read or write the `subresource` of
+    /// `resource_node` using `access`.
     ///
-    /// An access function must be called for `resource` before it is used within a
-    /// `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a recording
+    /// function.
     pub fn subresource_access<N>(
         mut self,
         resource_node: N,
@@ -386,96 +426,96 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Binding {
 }
 
 /// Allows for a resource to be reinterpreted as differently formatted data.
-pub trait Subresource {
+#[allow(private_bounds)]
+pub trait Subresource: private::SubresourceSealed {
     /// The information about the subresource when bound directly to shader descriptors.
     type Info;
 
     /// The information about the subresource when used indirectly by any part of a graph.
     type Range;
-
-    #[doc(hidden)]
-    fn info(&self, _: &[AnyResource]) -> Self::Info
-    where
-        Self: Node;
-
-    #[doc(hidden)]
-    fn range(&self, _: &[AnyResource]) -> Self::Range
-    where
-        Self: Node;
 }
 
 macro_rules! view_accel_struct {
-    ($name:ident) => {
+    ($name:ty) => {
         impl Subresource for $name {
             type Info = Self::Range;
             type Range = ();
+        }
 
-            fn info(&self, _: &[AnyResource]) -> Self::Info
+        impl private::SubresourceSealed for $name {
+            fn info(&self, _: &[AnyResource]) -> <Self as Subresource>::Info
             where
-                Self: Node,
+                Self: Node + Subresource,
             {
             }
 
-            fn range(&self, _: &[AnyResource]) -> Self::Range
+            fn range(&self, resources: &[AnyResource]) -> <Self as Subresource>::Range
             where
-                Self: Node,
+                Self: Node + Subresource,
             {
+                resources[self.index()].expect_accel_struct_info();
             }
         }
     };
 }
 
 view_accel_struct!(AnyAccelerationStructureNode);
+view_accel_struct!(AccelerationStructureArg);
 view_accel_struct!(AccelerationStructureLeaseNode);
 view_accel_struct!(AccelerationStructureNode);
 
 macro_rules! view_buffer {
-    ($name:ident) => {
+    ($name:ty) => {
         impl Subresource for $name {
             type Info = Self::Range;
             type Range = BufferSubresourceRange;
+        }
 
-            fn info(&self, resources: &[AnyResource]) -> Self::Info
+        impl private::SubresourceSealed for $name {
+            fn info(&self, resources: &[AnyResource]) -> <Self as Subresource>::Info
             where
-                Self: Node,
+                Self: Node + Subresource,
             {
                 self.range(resources)
             }
 
-            fn range(&self, resources: &[AnyResource]) -> Self::Range
+            fn range(&self, resources: &[AnyResource]) -> <Self as Subresource>::Range
             where
-                Self: Node,
+                Self: Node + Subresource,
             {
                 let idx = self.index();
 
-                resources[idx].expect_buffer().info.into()
+                resources[idx].expect_buffer_info().into()
             }
         }
     };
 }
 
 view_buffer!(AnyBufferNode);
+view_buffer!(BufferArg);
 view_buffer!(BufferLeaseNode);
 view_buffer!(BufferNode);
 
 macro_rules! view_image {
-    ($name:ident) => {
+    ($name:ty) => {
         impl Subresource for $name {
             type Info = ImageViewInfo;
             type Range = vk::ImageSubresourceRange;
+        }
 
-            fn info(&self, resources: &[AnyResource]) -> Self::Info
+        impl private::SubresourceSealed for $name {
+            fn info(&self, resources: &[AnyResource]) -> <Self as Subresource>::Info
             where
-                Self: Node,
+                Self: Node + Subresource,
             {
                 let idx = self.index();
 
-                resources[idx].expect_image().info.into()
+                resources[idx].expect_image_info().into()
             }
 
-            fn range(&self, resources: &[AnyResource]) -> Self::Range
+            fn range(&self, resources: &[AnyResource]) -> <Self as Subresource>::Range
             where
-                Self: Node,
+                Self: Node + Subresource,
             {
                 self.info(resources).into()
             }
@@ -484,13 +524,13 @@ macro_rules! view_image {
 }
 
 view_image!(AnyImageNode);
+view_image!(ImageArg);
 view_image!(ImageLeaseNode);
 view_image!(ImageNode);
 view_image!(SwapchainImageNode);
 
 #[derive(Clone, Copy, Debug)]
-#[doc(hidden)]
-pub enum SubresourceRange {
+pub(crate) enum SubresourceRange {
     /// Acceleration structures are bound whole.
     AccelerationStructure,
 
@@ -547,8 +587,7 @@ pub(super) struct SubresourceAccess {
 
 /// Describes the interpretation of a resource.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[doc(hidden)]
-pub enum ViewInfo {
+pub(crate) enum ViewInfo {
     /// Acceleration structures are always whole resources.
     AccelerationStructure,
 
@@ -607,5 +646,19 @@ impl From<Range<vk::DeviceSize>> for ViewInfo {
             start: range.start,
             end: range.end,
         })
+    }
+}
+
+mod private {
+    use crate::{AnyResource, Node};
+
+    pub(crate) trait SubresourceSealed: Sized {
+        fn info(&self, resources: &[AnyResource]) -> <Self as super::Subresource>::Info
+        where
+            Self: Node + super::Subresource;
+
+        fn range(&self, resources: &[AnyResource]) -> <Self as super::Subresource>::Range
+        where
+            Self: Node + super::Subresource;
     }
 }

@@ -235,8 +235,8 @@ impl XrInstance {
             this.instance.create_session::<xr::Vulkan>(
                 this.system,
                 &xr::vulkan::SessionCreateInfo {
-                    instance: this.device.physical_device.instance.handle().as_raw() as _,
-                    physical_device: this.device.physical_device.handle.as_raw() as _,
+                    instance: this.device.physical.instance.handle().as_raw() as _,
+                    physical_device: this.device.physical.handle.as_raw() as _,
                     device: this.device.handle().as_raw() as _,
                     queue_family_index,
                     queue_index,

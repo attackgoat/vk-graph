@@ -11,7 +11,7 @@ real-world use, and supports modern Vulkan commands[^modern].
 
 ```toml
 [dependencies]
-vk-graph = "0.14"
+vk-graph = "0.14.2"
 ```
 
 [*Changelog*](https://github.com/attackgoat/vk-graph/blob/main/CHANGELOG.md)
@@ -37,12 +37,39 @@ fn main() -> Result<(), WindowError> {
 
 ## Usage
 
-_vk-graph_ provides a fully-generic graph structure for statically typed access to resources used
-while rendering. The `Graph` structure allows Vulkan smart pointer resources to be bound as
-"nodes" which may be used by shader pipelines. The graph supports swapchain integration and may be
-used to execute custom command streams.
+_vk-graph_ centers frame work around a `Graph`. Bind Vulkan smart-pointer resources such as
+buffers, images, acceleration structures, and swapchain images into the graph to get statically typed
+node handles. Commands then reference those nodes instead of raw Vulkan handles. When recording is
+complete, finalize the graph into a `Submission` and submit it with a pool.
 
-Features of the graph:
+The normal flow is:
+
+- Create a `Device`, resources, and pipelines.
+- Start a fresh `Graph` for the frame or workload.
+- Bind resources into typed nodes with `Graph::bind_resource` or receive nodes from a swapchain
+  integration crate.
+- Record compute, graphics, transfer, or ray tracing commands with `Graph::begin_cmd`.
+- Declare each resource access on the command so the graph can build synchronization and pass data.
+- Finalize and submit the graph.
+
+`CommandStream` is available when part of the command graph is reusable. A stream records commands
+once with typed arguments, then each frame binds those arguments to the frame's concrete graph nodes.
+This is useful for overlays, post-processing, or other repeated command sequences that still need
+per-frame resources such as the current swapchain image.
+
+Device extension support is exposed through the selected physical device:
+
+```rust
+if let Some(ray_tracing) = &device.physical.vk_khr_ray_tracing_pipeline {
+    println!("max recursion depth: {}", ray_tracing.properties.max_ray_recursion_depth);
+}
+
+if device.physical.vk_khr_synchronization2 {
+    println!("synchronization2 is available");
+}
+```
+
+## Features
 
  - Compute, graphics, and ray tracing pipelines
  - Automatic Vulkan management (render passes, subpasses, descriptors, pools, _etc._)
@@ -64,7 +91,7 @@ graph
     .depth_stencil_attachment_image(depth_image, LoadOp::Load, StoreOp::DontCare)
     .record_cmd(move |cmd| {
         cmd
-            .push_constants(some_u8_slice)
+            .push_constants(0, some_u8_slice)
             .draw(6, 1, 0, 0);
     });
 ```
@@ -79,9 +106,12 @@ available.
 
 - **`checked`** *(enabled by default)* — Runtime validation of common misuse patterns
   (missing access declarations, buffer bounds, image aspects) that the Vulkan Validation Layer
-  cannot catch. Disable for zero-overhead in validated releases.
+  cannot catch, including cross-graph node ownership checks. Disable for zero-overhead in
+  validated releases.
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
+- **`ash-molten`** — Enable `ash-molten` support for MoltenVK-based platforms.
+- **`parking_lot`** *(enabled by default)* — Use `parking_lot` synchronization primitives.
 - **`profile-with-*`** — Use the specified profiling backend:
   `profile-with-puffin`, `profile-with-optick`, `profile-with-superluminal`, or
   `profile-with-tracy`
@@ -101,7 +131,7 @@ To enable logging, set the `RUST_LOG` environment variable to `trace`, `debug`, 
 _You may also filter messages, for example:_
 
 ```bash
-RUST_LOG=vk_graph::driver=trace,vk_graph=warn cargo run --example ray_trace
+RUST_LOG=vk_graph::driver=trace,vk_graph=warn cargo run --example ray_tracing
 ```
 
 ```
@@ -140,10 +170,10 @@ Included are some examples you might find helpful:
 - [`hello_world.rs`](crates/vk-graph-window/examples/hello_world.rs) — Displays a window on the
   screen. Please start here.
 - [`triangle.rs`](examples/triangle.rs) — Shaders and full setup of index/vertex buffers; < 100 LOC.
-- [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass shader toy using the original
+- [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass Shadertoy using the original
   shader code.
 
-See the [example code](examples/README.md), 
+See the [example code](examples/README.md),
 [documentation](https://docs.rs/vk-graph/latest/vk_graph/), or helpful
 [guide book](https://attackgoat.github.io/vk-graph) for more information.
 

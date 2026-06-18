@@ -10,7 +10,7 @@ use vk_graph::{
         ash::vk,
         buffer::BufferInfo,
         device::Device,
-        graphic::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
+        graphics::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
         image::{Image, ImageInfo},
         shader::Shader,
         sync::AccessType,
@@ -70,7 +70,7 @@ impl Egui {
         let ctx = egui::Context::default();
         let max_texture_side = Some(
             device
-                .physical_device
+                .physical
                 .properties_v1_0
                 .limits
                 .max_image_dimension2_d as usize,
@@ -171,12 +171,12 @@ impl Egui {
             })
             .collect::<HashMap<_, _>>();
 
-        // Bind the rest of the textures.
+        // Bind the rest of the textures
         for (id, image) in self.textures.drain() {
             bound_tex.insert(id, AnyImageNode::from(graph.bind_resource(image)));
         }
 
-        // Add user textures.
+        // Add user textures
         for (id, node) in self.user_textures.drain() {
             bound_tex.insert(id, node);
         }
@@ -192,14 +192,14 @@ impl Egui {
     ) {
         // Unbind textures
         for (id, tex) in bound_tex.iter() {
-            if let AnyImageNode::ImageLease(tex) = tex
+            if let AnyImageNode::Pooled(tex) = tex
                 && let egui::TextureId::Managed(_) = *id
             {
                 self.textures.insert(*id, graph.resource(*tex).clone());
             }
         }
 
-        // Free textures.
+        // Free textures
         for id in deltas.free.iter() {
             self.textures.remove(id);
         }
@@ -304,7 +304,7 @@ impl Egui {
                                 .draw_indexed(num_indices, 1, 0, 0, 0);
                         });
                 }
-                _ => panic!("Primitiv callback not yet supported."),
+                _ => panic!("Primitive callback not yet supported."),
             }
         }
     }
@@ -318,7 +318,7 @@ impl Egui {
         graph: &mut Graph,
         ui_fn: impl FnMut(&mut egui::Ui),
     ) {
-        // Update events and generate shapes and texture deltas.
+        // Update events and generate shapes and texture deltas
         for event in events {
             if let Event::WindowEvent { event, .. } = event {
                 #[allow(unused_must_use)]

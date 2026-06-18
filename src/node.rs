@@ -2,7 +2,12 @@
 //!
 //! When you bind a resource to a [`Graph`](crate::Graph), you get back a node handle:
 //!
-//! ```ignore
+//! ```no_run
+//! # use std::sync::Arc;
+//! # use vk_graph::{Graph, driver::{buffer::Buffer, image::Image}, node::{BufferNode, ImageNode}};
+//! # let mut graph = Graph::new();
+//! # let my_buffer: Arc<Buffer> = todo!();
+//! # let my_image: Arc<Image> = todo!();
 //! let buf_node: BufferNode = graph.bind_resource(my_buffer);
 //! let img_node: ImageNode   = graph.bind_resource(my_image);
 //! ```
@@ -24,63 +29,91 @@
 //!
 //! For most users, [`BufferNode`] and [`ImageNode`] are all you need. The `Lease` and
 //! `Any*` variants exist for advanced pooling and dynamic dispatch scenarios.
+//!
+//! When borrowing resources back out of a graph with [`Graph::resource`](crate::Graph::resource),
+//! concrete node types return the exact stored handle type, while `Any*` node types return a
+//! borrow of the underlying resource. For example, `BufferNode` yields `&Arc<Buffer>`, but
+//! `AnyBufferNode` yields `&Buffer`.
 
 use std::sync::Arc;
 
 use crate::{
-    GraphId, Node,
+    Node,
     driver::{
-        accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
+        accel_struct::{AccelerationStructure, AccelerationStructureSyncInfo},
+        buffer::{Buffer, BufferSyncInfo},
+        image::{Image, ImageSyncInfo},
         swapchain::SwapchainImage,
     },
     pool::Lease,
     private,
+    stream::{AccelerationStructureArg, BufferArg, ImageArg},
 };
+
+#[cfg(feature = "checked")]
+use crate::GraphId;
 
 use super::{AnyResource, NodeIndex};
 
 /// Specifies either an owned acceleration structure or one obtained from a pool.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyAccelerationStructureNode {
+    /// An acceleration structure supplied as a command stream argument.
+    Arg(AccelerationStructureArg),
+
     /// An owned acceleration structure.
-    AccelerationStructure(AccelerationStructureNode),
+    Owned(AccelerationStructureNode),
 
     /// An acceleration structure obtained from a pool.
-    AccelerationStructureLease(AccelerationStructureLeaseNode),
+    Pooled(AccelerationStructureLeaseNode),
 }
 
 impl From<AccelerationStructureNode> for AnyAccelerationStructureNode {
     fn from(node: AccelerationStructureNode) -> Self {
-        Self::AccelerationStructure(node)
+        Self::Owned(node)
+    }
+}
+
+impl From<AccelerationStructureArg> for AnyAccelerationStructureNode {
+    fn from(node: AccelerationStructureArg) -> Self {
+        Self::Arg(node)
     }
 }
 
 impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
     fn from(node: AccelerationStructureLeaseNode) -> Self {
-        Self::AccelerationStructureLease(node)
+        Self::Pooled(node)
     }
 }
 
-impl private::Sealed for AnyAccelerationStructureNode {}
-
-impl Node for AnyAccelerationStructureNode {
-    type Resource = AccelerationStructure;
-
-    fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
+impl private::NodeSealed for AnyAccelerationStructureNode {
+    fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
         resources[self.index()].expect_accel_struct()
     }
 
-    fn index(&self) -> NodeIndex {
-        match self {
-            Self::AccelerationStructure(node) => node.index(),
-            Self::AccelerationStructureLease(node) => node.index(),
-        }
+    fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
+        resources[index].expect_accel_struct()
     }
 
+    #[cfg(feature = "checked")]
     fn assert_owner(&self, graph_id: GraphId) {
         match self {
-            Self::AccelerationStructure(node) => node.assert_owner(graph_id),
-            Self::AccelerationStructureLease(node) => node.assert_owner(graph_id),
+            Self::Arg(node) => node.assert_owner(graph_id),
+            Self::Owned(node) => node.assert_owner(graph_id),
+            Self::Pooled(node) => node.assert_owner(graph_id),
+        }
+    }
+}
+
+impl Node for AnyAccelerationStructureNode {
+    type Resource = AccelerationStructure;
+    type SyncInfo = AccelerationStructureSyncInfo;
+
+    fn index(&self) -> usize {
+        match self {
+            Self::Arg(node) => node.index(),
+            Self::Owned(node) => node.index(),
+            Self::Pooled(node) => node.index(),
         }
     }
 }
@@ -88,45 +121,62 @@ impl Node for AnyAccelerationStructureNode {
 /// Specifies either an owned buffer or one obtained from a pool.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyBufferNode {
+    /// A buffer supplied as a command stream argument.
+    Arg(BufferArg),
+
     /// An owned buffer.
-    Buffer(BufferNode),
+    Owned(BufferNode),
 
     /// A buffer obtained from a pool.
-    BufferLease(BufferLeaseNode),
+    Pooled(BufferLeaseNode),
 }
 
 impl From<BufferNode> for AnyBufferNode {
     fn from(node: BufferNode) -> Self {
-        Self::Buffer(node)
+        Self::Owned(node)
+    }
+}
+
+impl From<BufferArg> for AnyBufferNode {
+    fn from(node: BufferArg) -> Self {
+        Self::Arg(node)
     }
 }
 
 impl From<BufferLeaseNode> for AnyBufferNode {
     fn from(node: BufferLeaseNode) -> Self {
-        Self::BufferLease(node)
+        Self::Pooled(node)
     }
 }
 
-impl private::Sealed for AnyBufferNode {}
-
-impl Node for AnyBufferNode {
-    type Resource = Buffer;
-
-    fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
+impl private::NodeSealed for AnyBufferNode {
+    fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
         resources[self.index()].expect_buffer()
     }
 
-    fn index(&self) -> NodeIndex {
-        match self {
-            Self::Buffer(node) => node.index(),
-            Self::BufferLease(node) => node.index(),
-        }
+    fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
+        resources[index].expect_buffer()
     }
 
+    #[cfg(feature = "checked")]
     fn assert_owner(&self, graph_id: GraphId) {
         match self {
-            Self::Buffer(node) => node.assert_owner(graph_id),
-            Self::BufferLease(node) => node.assert_owner(graph_id),
+            Self::Arg(node) => node.assert_owner(graph_id),
+            Self::Owned(node) => node.assert_owner(graph_id),
+            Self::Pooled(node) => node.assert_owner(graph_id),
+        }
+    }
+}
+
+impl Node for AnyBufferNode {
+    type Resource = Buffer;
+    type SyncInfo = BufferSyncInfo;
+
+    fn index(&self) -> usize {
+        match self {
+            Self::Arg(node) => node.index(),
+            Self::Owned(node) => node.index(),
+            Self::Pooled(node) => node.index(),
         }
     }
 }
@@ -136,62 +186,114 @@ impl Node for AnyBufferNode {
 /// The image may also be a special swapchain type of image.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyImageNode {
+    /// An image supplied as a command stream argument.
+    Arg(ImageArg),
+
     /// An owned image.
-    Image(ImageNode),
+    Owned(ImageNode),
 
     /// An image obtained from a pool.
-    ImageLease(ImageLeaseNode),
+    Pooled(ImageLeaseNode),
 
     /// A special swapchain image.
-    SwapchainImage(SwapchainImageNode),
+    Swapchain(SwapchainImageNode),
 }
 
 impl From<ImageNode> for AnyImageNode {
     fn from(node: ImageNode) -> Self {
-        Self::Image(node)
+        Self::Owned(node)
+    }
+}
+
+impl From<ImageArg> for AnyImageNode {
+    fn from(node: ImageArg) -> Self {
+        Self::Arg(node)
     }
 }
 
 impl From<ImageLeaseNode> for AnyImageNode {
     fn from(node: ImageLeaseNode) -> Self {
-        Self::ImageLease(node)
+        Self::Pooled(node)
     }
 }
 
 impl From<SwapchainImageNode> for AnyImageNode {
     fn from(node: SwapchainImageNode) -> Self {
-        Self::SwapchainImage(node)
+        Self::Swapchain(node)
     }
 }
 
-impl private::Sealed for AnyImageNode {}
-
-impl Node for AnyImageNode {
-    type Resource = Image;
-
-    fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
+impl private::NodeSealed for AnyImageNode {
+    fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
         resources[self.index()].expect_image()
     }
 
-    fn index(&self) -> NodeIndex {
-        match self {
-            Self::Image(node) => node.index(),
-            Self::ImageLease(node) => node.index(),
-            Self::SwapchainImage(node) => node.index(),
-        }
+    fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
+        resources[index].expect_image()
     }
 
+    #[cfg(feature = "checked")]
     fn assert_owner(&self, graph_id: GraphId) {
         match self {
-            Self::Image(node) => node.assert_owner(graph_id),
-            Self::ImageLease(node) => node.assert_owner(graph_id),
-            Self::SwapchainImage(node) => node.assert_owner(graph_id),
+            Self::Arg(node) => node.assert_owner(graph_id),
+            Self::Owned(node) => node.assert_owner(graph_id),
+            Self::Pooled(node) => node.assert_owner(graph_id),
+            Self::Swapchain(node) => node.assert_owner(graph_id),
         }
     }
 }
 
+impl Node for AnyImageNode {
+    type Resource = Image;
+    type SyncInfo = ImageSyncInfo;
+
+    fn index(&self) -> usize {
+        match self {
+            Self::Arg(node) => node.index(),
+            Self::Owned(node) => node.index(),
+            Self::Pooled(node) => node.index(),
+            Self::Swapchain(node) => node.index(),
+        }
+    }
+}
+
+/// A type-erased graph node for any buffer, image, or acceleration structure.
+#[derive(Clone, Copy, Debug)]
+pub enum AnyNode {
+    /// An acceleration-structure node.
+    AccelerationStructure(AnyAccelerationStructureNode),
+
+    /// A buffer node.
+    Buffer(AnyBufferNode),
+
+    /// An image node, including swapchain image nodes.
+    Image(AnyImageNode),
+}
+
+macro_rules! any_node_from {
+    ($node:ty => $variant:ident) => {
+        impl From<$node> for AnyNode {
+            fn from(node: $node) -> Self {
+                Self::$variant(node.into())
+            }
+        }
+    };
+}
+
+any_node_from!(AnyAccelerationStructureNode => AccelerationStructure);
+any_node_from!(AnyBufferNode => Buffer);
+any_node_from!(AnyImageNode => Image);
+
+any_node_from!(AccelerationStructureNode => AccelerationStructure);
+any_node_from!(AccelerationStructureLeaseNode => AccelerationStructure);
+any_node_from!(BufferNode => Buffer);
+any_node_from!(BufferLeaseNode => Buffer);
+any_node_from!(ImageNode => Image);
+any_node_from!(ImageLeaseNode => Image);
+any_node_from!(SwapchainImageNode => Image);
+
 macro_rules! node {
-    ($name:ident, $resource:ty, $fn_name:ident) => {
+    ($name:ident, $resource:ty, $sync_info:ty, $fn_name:ident) => {
         paste::paste! {
             /// A graph-local handle for a bound resource.
             ///
@@ -199,6 +301,9 @@ macro_rules! node {
             ///
             /// When the `checked` feature is enabled, using a node with a different graph will
             /// panic immediately.
+            ///
+            /// When `checked` is disabled, this ownership check is skipped for zero-overhead
+            /// builds, so cross-graph node misuse is invalid and may resolve to the wrong resource.
             #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
             pub struct [<$name Node>] {
                 index: NodeIndex,
@@ -221,12 +326,8 @@ macro_rules! node {
                 }
             }
 
-            impl private::Sealed for [<$name Node>] {}
-
-            impl Node for [<$name Node>] {
-                type Resource = $resource;
-
-                fn borrow(self, resources: &[AnyResource]) -> &Self::Resource {
+            impl private::NodeSealed for [<$name Node>] {
+                fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
                     let AnyResource::$name(res) = &resources[self.index] else {
                         panic!("invalid resource node handle");
                     };
@@ -234,13 +335,31 @@ macro_rules! node {
                     res
                 }
 
-                fn index(&self) -> NodeIndex {
-                    self.index
+                fn borrow_at(
+                    self,
+                    resources: &[AnyResource],
+                    index: usize,
+                ) -> &<Self as Node>::Resource {
+                    let AnyResource::$name(res) = &resources[index] else {
+                        panic!("invalid resource node handle");
+                    };
+
+                    res
                 }
 
+                #[cfg(feature = "checked")]
                 fn assert_owner(&self, _graph_id: GraphId) {
                     #[cfg(feature = "checked")]
                     assert!(self.graph_id == _graph_id, "node belongs to a different graph");
+                }
+            }
+
+            impl Node for [<$name Node>] {
+                type Resource = $resource;
+                type SyncInfo = $sync_info;
+
+                fn index(&self) -> usize {
+                    self.index
                 }
             }
         }
@@ -250,15 +369,22 @@ macro_rules! node {
 node!(
     AccelerationStructure,
     Arc<AccelerationStructure>,
+    AccelerationStructureSyncInfo,
     as_accel_struct
 );
 node!(
     AccelerationStructureLease,
     Arc<Lease<AccelerationStructure>>,
+    AccelerationStructureSyncInfo,
     as_accel_struct
 );
-node!(Buffer, Arc<Buffer>, as_buffer);
-node!(BufferLease, Arc<Lease<Buffer>>, as_buffer);
-node!(Image, Arc<Image>, as_image);
-node!(ImageLease, Arc<Lease<Image>>, as_image);
-node!(SwapchainImage, SwapchainImage, as_swapchain_image);
+node!(Buffer, Arc<Buffer>, BufferSyncInfo, as_buffer);
+node!(BufferLease, Arc<Lease<Buffer>>, BufferSyncInfo, as_buffer);
+node!(Image, Arc<Image>, ImageSyncInfo, as_image);
+node!(ImageLease, Arc<Lease<Image>>, ImageSyncInfo, as_image);
+node!(
+    SwapchainImage,
+    SwapchainImage,
+    ImageSyncInfo,
+    as_swapchain_image
+);

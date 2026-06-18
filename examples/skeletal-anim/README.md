@@ -1,4 +1,4 @@
-<image alt="Preview" src="../../.github/img/skeletal-anim.png">
+<img alt="Preview" src="../../.github/img/skeletal-anim.png">
 
 # Animation Example
 

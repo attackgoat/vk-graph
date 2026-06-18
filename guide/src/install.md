@@ -15,8 +15,12 @@ _vk-graph_ puts a lot of functionality behind optional features in order to opti
 compile time for the most common use cases. The following features are
 available.
 
+- **`checked`** *(enabled by default)* — Enable runtime validation for common misuse patterns that
+  Vulkan validation layers cannot always catch.
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
+- **`parking_lot`** *(enabled by default)* — Use `parking_lot` synchronization primitives internally.
+- **`ash-molten`** — Enable MoltenVK loading support on macOS.
 - **`profile-with-*`** — Use the specified profiling backend:
   `profile-with-puffin`, `profile-with-optick`, `profile-with-superluminal`, or
   `profile-with-tracy`

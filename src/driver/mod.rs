@@ -14,11 +14,11 @@
 //! Resources are logically mutable. All resource types contain useful read-only public fields, for
 //! example:
 //!
-//! [`Buffer`] Field|`->`
-//! -|-
-//! [`device`](Buffer::device)|[`Device`](device::Device)
-//! [`handle`](Buffer::handle)|[`vk::Buffer`]
-//! [`info`](Buffer::info)|[`BufferInfo`]
+//! | [`Buffer`] field | Type |
+//! | --- | --- |
+//! | [`device`](Buffer::device) | [`Device`](device::Device) |
+//! | [`handle`](Buffer::handle) | [`vk::Buffer`] |
+//! | [`info`](Buffer::info) | [`BufferInfo`] |
 //!
 //! Resources use atomic [`AccessType`](sync::AccessType) values to maintain consistency and track
 //! changes.
@@ -31,39 +31,35 @@
 //! The following pipelines are available:
 //!
 //! - [`ComputePipeline`](compute::ComputePipeline)
-//! - [`GraphicsPipeline`](graphic::GraphicsPipeline)
-//! - [`RayTracingPipeline`](ray_trace::RayTracingPipeline)
+//! - [`GraphicsPipeline`](graphics::GraphicsPipeline)
+//! - [`RayTracingPipeline`](ray_tracing::RayTracingPipeline)
 //!
 //! Pipelines are immutable. All pipeline types contain useful public methods, for
 //! example:
 //!
-//! [`ComputePipeline`](compute::ComputePipeline) Method | `->`
-//! -|-
-//! [`device(&self)`](compute::ComputePipeline::device)|[`Device`](device::Device)
-//! [`handle(&self)`](compute::ComputePipeline::handle)|[`vk::Pipeline`]
-//! [`info(&self)`](compute::ComputePipeline::info)
-//! | [`ComputePipelineInfo`](compute::ComputePipelineInfo)
+//! | [`ComputePipeline`](compute::ComputePipeline) method | Type |
+//! | --- | --- |
+//! | [`device(&self)`](compute::ComputePipeline::device) | [`Device`](device::Device) |
+//! | [`handle(&self)`](compute::ComputePipeline::handle) | [`vk::Pipeline`] |
+//! | [`info(&self)`](compute::ComputePipeline::info) | [`ComputePipelineInfo`](compute::ComputePipelineInfo) |
 
 pub mod accel_struct;
 pub mod buffer;
 pub mod cmd_buf;
 pub mod compute;
 pub mod device;
-pub mod graphic;
+pub mod fence;
+pub mod graphics;
 pub mod image;
 pub mod instance;
 pub mod physical_device;
-pub mod ray_trace;
+pub mod ray_tracing;
 pub mod render_pass;
 pub mod shader;
 pub mod surface;
 pub mod swapchain;
 
-/// Descriptor pool allocation helpers used by pipeline execution.
-///
-/// Part of the advanced driver API for callers that need direct control over descriptor
-/// allocation. Most users should use the higher-level graph system instead.
-pub mod descriptor_set;
+pub(crate) mod descriptor_set;
 
 mod descriptor_set_layout;
 
@@ -106,7 +102,7 @@ pub(crate) use self::{
 use {
     self::{
         buffer::{Buffer, BufferInfo},
-        graphic::VertexInputState,
+        graphics::VertexInputState,
     },
     ash::vk,
     gpu_allocator::AllocationError,
@@ -481,8 +477,10 @@ pub const fn format_texel_block_size(fmt: vk::Format) -> u32 {
         vk::Format::G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16
         | vk::Format::G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16
         | vk::Format::G16_B16R16_2PLANE_444_UNORM => 6,
-        // Vulkan is extensible — new formats can appear at any time. The caller is expected to
-        // know the format is valid; no runtime assertion needed per the project's philosophy.
+        /*
+        Vulkan is extensible; new formats can appear at any time. The caller is expected to know the
+        format is valid; no runtime assertion needed per the project's philosophy.
+        */
         _ => 0,
     }
 }
@@ -743,8 +741,10 @@ pub const fn format_texel_block_extent(vk_format: vk::Format) -> (u32, u32) {
         | vk::Format::PVRTC1_4BPP_SRGB_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_UNORM_BLOCK_IMG
         | vk::Format::PVRTC2_4BPP_SRGB_BLOCK_IMG => (4, 4),
-        // Vulkan is extensible — new formats can appear at any time. The caller is expected to
-        // know the format is valid; no runtime assertion needed per the project's philosophy.
+        /*
+        Vulkan is extensible; new formats can appear at any time. The caller is expected to know the
+        format is valid; no runtime assertion needed per the project's philosophy.
+        */
         _ => (1, 1),
     }
 }
@@ -847,80 +847,6 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | ColorAttachmentReadWrite
         | General
         | ComputeShaderReadWrite => true,
-    }
-}
-
-pub(super) const fn is_write_access(ty: self::sync::AccessType) -> bool {
-    use self::sync::AccessType::*;
-    match ty {
-        Nothing
-        | CommandBufferReadNVX
-        | IndirectBuffer
-        | IndexBuffer
-        | VertexBuffer
-        | VertexShaderReadUniformBuffer
-        | VertexShaderReadSampledImageOrUniformTexelBuffer
-        | VertexShaderReadOther
-        | TessellationControlShaderReadUniformBuffer
-        | TessellationControlShaderReadSampledImageOrUniformTexelBuffer
-        | TessellationControlShaderReadOther
-        | TessellationEvaluationShaderReadUniformBuffer
-        | TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer
-        | TessellationEvaluationShaderReadOther
-        | GeometryShaderReadUniformBuffer
-        | GeometryShaderReadSampledImageOrUniformTexelBuffer
-        | GeometryShaderReadOther
-        | FragmentShaderReadUniformBuffer
-        | FragmentShaderReadSampledImageOrUniformTexelBuffer
-        | FragmentShaderReadColorInputAttachment
-        | FragmentShaderReadDepthStencilInputAttachment
-        | FragmentShaderReadOther
-        | ColorAttachmentRead
-        | DepthStencilAttachmentRead
-        | ComputeShaderReadUniformBuffer
-        | ComputeShaderReadSampledImageOrUniformTexelBuffer
-        | ComputeShaderReadOther
-        | AnyShaderReadUniformBuffer
-        | AnyShaderReadUniformBufferOrVertexBuffer
-        | AnyShaderReadSampledImageOrUniformTexelBuffer
-        | AnyShaderReadOther
-        | TransferRead
-        | HostRead
-        | Present
-        | RayTracingShaderReadSampledImageOrUniformTexelBuffer
-        | RayTracingShaderReadColorInputAttachment
-        | RayTracingShaderReadDepthStencilInputAttachment
-        | RayTracingShaderReadAccelerationStructure
-        | RayTracingShaderReadOther
-        | AccelerationStructureBuildRead
-        | MeshShaderReadUniformBuffer
-        | MeshShaderReadSampledImageOrUniformTexelBuffer
-        | MeshShaderReadOther
-        | TaskShaderReadUniformBuffer
-        | TaskShaderReadSampledImageOrUniformTexelBuffer
-        | TaskShaderReadOther => false,
-        CommandBufferWriteNVX
-        | VertexShaderWrite
-        | TessellationControlShaderWrite
-        | TessellationEvaluationShaderWrite
-        | GeometryShaderWrite
-        | FragmentShaderWrite
-        | ColorAttachmentWrite
-        | DepthStencilAttachmentWrite
-        | DepthStencilAttachmentReadWrite
-        | DepthAttachmentWriteStencilReadOnly
-        | StencilAttachmentWriteDepthReadOnly
-        | ComputeShaderWrite
-        | AnyShaderWrite
-        | TransferWrite
-        | HostWrite
-        | ColorAttachmentReadWrite
-        | General
-        | AccelerationStructureBuildWrite
-        | AccelerationStructureBufferWrite
-        | ComputeShaderReadWrite
-        | MeshShaderWrite
-        | TaskShaderWrite => true,
     }
 }
 
@@ -1229,12 +1155,12 @@ pub(super) const fn pipeline_stage_access_flags(
 /// Describes the general category of all graphics driver failure cases.
 ///
 /// In the event of a failure you should follow the _vk-graph_ code to the responsible Vulkan API
-/// and then to the `Ash` stub call; it will generally contain a link to the appropriate
+/// and then to the `ash` function call; it will generally contain a link to the appropriate
 /// specification. The specifications provide a table of possible error conditions which can be a
 /// good starting point to debug the issue.
 ///
-/// Feel free to open an issue on GitHub, [here](https://github.com/attackgoat/vk-graph/issues) for
-/// help debugging the issue.
+/// Feel free to open an [issue on GitHub](https://github.com/attackgoat/vk-graph/issues) for help
+/// debugging the issue.
 #[derive(Clone, Copy, Debug)]
 pub enum DriverError {
     /// The input data, or referenced data, is not valid for the current state.
@@ -1278,6 +1204,35 @@ impl Display for DriverError {
 }
 
 impl Error for DriverError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SharingMode {
+    Concurrent,
+    Exclusive(Option<(u32, u32)>),
+}
+
+impl SharingMode {
+    const MODE_CONCURRENT: u64 = u64::MAX;
+    const MODE_UNKNOWN: u64 = u64::MAX - 1;
+
+    pub(super) const fn decode(val: u64) -> Self {
+        if val == Self::MODE_CONCURRENT {
+            Self::Concurrent
+        } else if val == Self::MODE_UNKNOWN {
+            Self::Exclusive(None)
+        } else {
+            Self::Exclusive(Some(((val >> 32) as u32, val as u32)))
+        }
+    }
+
+    pub(super) const fn encode(self) -> u64 {
+        match self {
+            SharingMode::Concurrent => Self::MODE_CONCURRENT,
+            SharingMode::Exclusive(None) => Self::MODE_UNKNOWN,
+            SharingMode::Exclusive(Some((family, index))) => (family as u64) << 32 | index as u64,
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {

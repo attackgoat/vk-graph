@@ -8,7 +8,7 @@
 //! ```
 //!
 //! For more information see:
-//! https://github.com/attackgoat/vk-graph/blob/master/examples/getting-started.md
+//! https://github.com/attackgoat/vk-graph/blob/main/examples/README.md
 
 #[cfg(feature = "profile-with-puffin")]
 use {

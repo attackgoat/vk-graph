@@ -4,14 +4,14 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 mod compute;
-mod graphic;
-mod ray_trace;
+mod graphics;
+mod ray_tracing;
 mod shader;
 
 pub use self::{
     compute::HotComputePipeline,
-    graphic::HotGraphicsPipeline,
-    ray_trace::HotRayTracingPipeline,
+    graphics::HotGraphicsPipeline,
+    ray_tracing::HotRayTracingPipeline,
     shader::{HotShader, HotShaderBuilder},
 };
 
@@ -270,11 +270,6 @@ macro_rules! pipeline {
             }
 
             impl [<Hot $pipeline>] {
-                /// Gets the debugging name assigned to this pipeline, if one has been set.
-                pub fn debug_name(&self) -> Option<String> {
-                    self.cache().pipeline.debug_name().map(ToOwned::to_owned)
-                }
-
                 /// The device which owns this pipeline.
                 pub fn device(&self) -> &Device {
                     &self.device
@@ -289,15 +284,15 @@ macro_rules! pipeline {
                 ///
                 /// _Note:_ The pipeline name may only be assigned once.
                 /// Subsequent calls will not update the previously set name value.
-                pub fn set_debug_name(&mut self, name: impl Into<String>) {
-                    self.cache_mut().pipeline.set_debug_name(name);
+                pub fn set_debug_name(&self, name: impl AsRef<str>) {
+                    self.cache().pipeline.set_debug_name(name);
                 }
 
                 /// Sets the debugging name assigned to this pipeline.
                 ///
                 /// _Note:_ The pipeline name may only be assigned once.
                 /// Subsequent calls will not update the previously set name value.
-                pub fn with_debug_name(mut self, name: impl Into<String>) -> Self {
+                pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
                     self.set_debug_name(name);
 
                     self

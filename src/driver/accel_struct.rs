@@ -1,23 +1,72 @@
 //! Acceleration structure resource types
 
 use {
-    super::{Buffer, BufferInfo, DriverError, device::Device},
+    super::{Buffer, BufferInfo, DriverError, device::Device, pipeline_stage_access_flags},
     ash::vk,
     derive_builder::Builder,
     log::warn,
     std::{
         ffi::c_void,
-        mem::{replace, size_of_val},
+        fmt::{Debug, Formatter},
+        mem::size_of_val,
         thread::panicking,
     },
     vk_sync::AccessType,
 };
 
 #[cfg(feature = "parking_lot")]
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
 #[cfg(not(feature = "parking_lot"))]
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
+
+fn accel_struct_sync_flags_for_access(
+    access: AccessType,
+) -> (vk::PipelineStageFlags, vk::AccessFlags) {
+    match access {
+        AccessType::VertexShaderReadOther => (
+            vk::PipelineStageFlags::VERTEX_SHADER,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::TessellationControlShaderReadOther => (
+            vk::PipelineStageFlags::TESSELLATION_CONTROL_SHADER,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::TessellationEvaluationShaderReadOther => (
+            vk::PipelineStageFlags::TESSELLATION_EVALUATION_SHADER,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::GeometryShaderReadOther => (
+            vk::PipelineStageFlags::GEOMETRY_SHADER,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::FragmentShaderReadOther => (
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::ComputeShaderReadOther => (
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::AnyShaderReadOther => (
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::RayTracingShaderReadOther => (
+            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::MeshShaderReadOther => (
+            vk::PipelineStageFlags::MESH_SHADER_EXT,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        AccessType::TaskShaderReadOther => (
+            vk::PipelineStageFlags::TASK_SHADER_EXT,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
+        _ => pipeline_stage_access_flags(access),
+    }
+}
 
 /// Smart pointer handle to an [acceleration structure] object.
 ///
@@ -40,10 +89,10 @@ use std::sync::Mutex;
 /// ```
 ///
 /// See [`VkAccelerationStructureKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureKHR.html).
-#[derive(Debug)]
 #[read_only::cast]
 pub struct AccelerationStructure {
-    access: Mutex<AccessType>,
+    // TODO: Replace with single atomicu8
+    accesses: Mutex<Vec<AccessType>>,
 
     /// The native Vulkan resource handle of the buffer which supports this acceleration structure.
     ///
@@ -62,9 +111,6 @@ pub struct AccelerationStructure {
     /// _Note:_ This field is read-only.
     #[readonly]
     pub info: AccelerationStructureInfo,
-
-    /// A name for debugging purposes.
-    pub name: Option<String>,
 }
 
 impl AccelerationStructure {
@@ -95,7 +141,7 @@ impl AccelerationStructure {
         device: &Device,
         info: impl Into<AccelerationStructureInfo>,
     ) -> Result<Self, DriverError> {
-        debug_assert!(device.physical_device.accel_struct_properties.is_some());
+        debug_assert!(device.physical.vk_khr_acceleration_structure.is_some());
 
         let info = info.into();
 
@@ -110,7 +156,7 @@ impl AccelerationStructure {
 
         let handle = {
             let create_info = vk::AccelerationStructureCreateInfoKHR::default()
-                .ty(info.ty)
+                .ty(info.acceleration_structure_type)
                 .buffer(buffer.handle)
                 .size(info.size);
 
@@ -140,69 +186,11 @@ impl AccelerationStructure {
         };
 
         Ok(Self {
-            access: Mutex::new(AccessType::Nothing),
+            accesses: Mutex::new(vec![AccessType::Nothing]),
             buffer,
             handle,
             info,
-            name: None,
         })
-    }
-
-    /// Keeps track of some `next_access` which affects this object.
-    ///
-    /// Returns the previous access for which a pipeline barrier should be used to prevent data
-    /// corruption.
-    ///
-    /// # Note
-    ///
-    /// Used to maintain object state when passing a _vk-graph_-created
-    /// `vk::AccelerationStructureKHR` handle to external code such as [_Ash_] or [_Erupt_]
-    /// bindings.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```no_run
-    /// # use std::sync::Arc;
-    /// # use ash::vk;
-    /// # use vk_sync::AccessType;
-    /// # use vk_graph::driver::DriverError;
-    /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::accel_struct::{AccelerationStructure, AccelerationStructureInfo};
-    /// # fn main() -> Result<(), DriverError> {
-    /// # let device = Device::create(DeviceInfo::default())?;
-    /// # const SIZE: vk::DeviceSize = 1024;
-    /// # let info = AccelerationStructureInfo::blas(SIZE);
-    /// # let my_accel_struct = AccelerationStructure::create(&device, info)?;
-    /// // Initially we want to "Build Write"
-    /// let next = AccessType::AccelerationStructureBuildWrite;
-    /// let prev = AccelerationStructure::access(&my_accel_struct, next);
-    /// assert_eq!(prev, AccessType::Nothing);
-    ///
-    /// // External code may now "Build Write"; no barrier required
-    ///
-    /// // Subsequently we want to "Build Read"
-    /// let next = AccessType::AccelerationStructureBuildRead;
-    /// let prev = AccelerationStructure::access(&my_accel_struct, next);
-    /// assert_eq!(prev, AccessType::AccelerationStructureBuildWrite);
-    ///
-    /// // A barrier on "Build Write" before "Build Read" is required!
-    /// # Ok(()) }
-    /// ```
-    ///
-    /// [_Ash_]: https://crates.io/crates/ash
-    /// [_Erupt_]: https://crates.io/crates/erupt
-    #[profiling::function]
-    pub fn access(&self, next_access: AccessType) -> AccessType {
-        self.with_access(|prev_access| replace(prev_access, next_access))
-    }
-
-    /// Sets the debugging name assigned to this acceleration structure.
-    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-
-        self
     }
 
     /// Returns the device address of this object.
@@ -246,6 +234,26 @@ impl AccelerationStructure {
         use std::slice::from_raw_parts;
 
         unsafe { from_raw_parts(instances.as_ptr() as *const _, size_of_val(instances)) }
+    }
+
+    fn lock_accesses(&self) -> MutexGuard<'_, Vec<AccessType>> {
+        let accesses = self.accesses.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let accesses = accesses.expect("poisoned acceleration structure access lock");
+
+        accesses
+    }
+
+    /// Sets the debugging name assigned to this acceleration structure.
+    pub fn set_debug_name(&self, name: impl AsRef<str>) {
+        Device::try_set_debug_utils_object_name(&self.buffer.device, self.handle, &name);
+        Device::try_set_private_data_object_name(
+            &self.buffer.device,
+            vk::ObjectType::ACCELERATION_STRUCTURE_KHR,
+            self.handle,
+            &name,
+        );
     }
 
     /// Returns the size of some geometry info which is then used to create a new
@@ -324,7 +332,7 @@ impl AccelerationStructure {
             }
 
             let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                .ty(info.ty)
+                .ty(info.acceleration_structure_type)
                 .flags(info.flags)
                 .geometries(&tls.geometries);
             let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
@@ -347,15 +355,51 @@ impl AccelerationStructure {
         })
     }
 
-    fn with_access<R>(&self, f: impl FnOnce(&mut AccessType) -> R) -> R {
-        let access = self.access.lock();
+    /// Keeps track of a `next_access` which affects this object.
+    ///
+    /// Returns previous accesses for which a pipeline barrier should be used to prevent data
+    /// corruption.
+    #[profiling::function]
+    pub(crate) fn swap_access(
+        &self,
+        next_access: AccessType,
+    ) -> impl Iterator<Item = AccessType> + '_ {
+        AccessIter::one(self.lock_accesses(), next_access)
+    }
 
-        #[cfg(not(feature = "parking_lot"))]
-        let access = access.expect("poisoned acceleration structure access lock");
+    pub(crate) fn swap_accesses(
+        &self,
+        next_accesses: &[AccessType],
+    ) -> impl Iterator<Item = AccessType> + '_ {
+        AccessIter::new(self.lock_accesses(), next_accesses)
+    }
 
-        let mut access = access;
+    /// Returns synchronization information for the acceleration structure's current accesses.
+    pub fn sync_info(&self) -> AccelerationStructureSyncInfo {
+        AccelerationStructureSyncInfo::from_accesses(self.lock_accesses().iter().copied())
+    }
 
-        f(&mut access)
+    /// Sets the debugging name assigned to this acceleration structure.
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
+        self.set_debug_name(name);
+
+        self
+    }
+}
+
+impl Debug for AccelerationStructure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut res = f.debug_struct(stringify!(AccelerationStructure));
+
+        if let Some(debug_name) = &Device::private_data_object_name(
+            &self.buffer.device,
+            vk::ObjectType::ACCELERATION_STRUCTURE_KHR,
+            self.handle,
+        ) {
+            res.field("debug_name", debug_name);
+        }
+
+        res.field("handle", &self.handle).finish_non_exhaustive()
     }
 }
 
@@ -365,6 +409,12 @@ impl Drop for AccelerationStructure {
         if panicking() {
             return;
         }
+
+        Device::try_clear_private_data_object_name(
+            &self.buffer.device,
+            vk::ObjectType::ACCELERATION_STRUCTURE_KHR,
+            self.handle,
+        );
 
         let khr_acceleration_structure =
             Device::expect_vk_khr_acceleration_structure(&self.buffer.device);
@@ -452,7 +502,6 @@ impl From<AccelerationStructureGeometry> for vk::AccelerationStructureGeometryKH
 pub enum AccelerationStructureGeometryData {
     /// Axis-aligned bounding box geometry in a bottom-level acceleration structure.
     ///
-    /// See
     /// See [`VkAccelerationStructureGeometryAabbsDataKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureGeometryAabbsDataKHR.html).
     AABBs {
         /// A device or host address to memory containing [vk::AabbPositionsKHR] structures
@@ -469,14 +518,13 @@ pub enum AccelerationStructureGeometryData {
     ///
     /// See [`VkAccelerationStructureGeometryInstancesDataKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureGeometryInstancesDataKHR.html).
     Instances {
-        /// Either the address of an array of device referencing individual
-        /// VkAccelerationStructureInstanceKHR structures or packed motion instance information as
-        /// described in
-        /// See [`VkAccelerationStructureInstanceKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureInstanceKHR.html).
-        /// if `array_of_pointers` is `true`, or the address of an array of
-        /// VkAccelerationStructureInstanceKHR structures.
+        /// Either the address of an array of device addresses referencing individual
+        /// [`VkAccelerationStructureInstanceKHR`] values if `array_of_pointers` is `true`, or the
+        /// address of an array of [`VkAccelerationStructureInstanceKHR`] values.
         ///
-        /// Addresses and VkAccelerationStructureInstanceKHR structures are tightly packed.
+        /// Addresses and `VkAccelerationStructureInstanceKHR` values are tightly packed.
+        ///
+        /// [`VkAccelerationStructureInstanceKHR`]: https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureInstanceKHR.html
         addr: DeviceOrHostAddress,
 
         /// Specifies whether data is used as an array of addresses or just an array.
@@ -490,9 +538,9 @@ pub enum AccelerationStructureGeometryData {
         /// A device or host address to memory containing index data for this geometry.
         index_addr: DeviceOrHostAddress,
 
-        /// The
-        /// See [`VkIndexType`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkIndexType.html).
-        /// of each index element.
+        /// The [`VkIndexType`] of each index element.
+        ///
+        /// [`VkIndexType`]: https://registry.khronos.org/vulkan/specs/latest/man/html/VkIndexType.html
         index_type: vk::IndexType,
 
         /// The highest index of a vertex that will be addressed by a build command using this
@@ -500,17 +548,19 @@ pub enum AccelerationStructureGeometryData {
         max_vertex: u32,
 
         /// A device or host address to memory containing an optional reference to a
-        /// See [`VkTransformMatrixKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkTransformMatrixKHR.html).
-        /// structure describing a transformation from the space in which the vertices in this
-        /// geometry are described to the space in which the acceleration structure is defined.
+        /// [`VkTransformMatrixKHR`] structure describing a transformation from the space in which
+        /// the vertices in this geometry are described to the space in which the acceleration
+        /// structure is defined.
+        ///
+        /// [`VkTransformMatrixKHR`]: https://registry.khronos.org/vulkan/specs/latest/man/html/VkTransformMatrixKHR.html
         transform_addr: Option<DeviceOrHostAddress>,
 
         /// A device or host address to memory containing vertex data for this geometry.
         vertex_addr: DeviceOrHostAddress,
 
-        /// The
-        /// See [`VkFormat`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkFormat.html).
-        /// of each vertex element.
+        /// The [`VkFormat`] of each vertex element.
+        ///
+        /// [`VkFormat`]: https://registry.khronos.org/vulkan/specs/latest/man/html/VkFormat.html
         vertex_format: vk::Format,
 
         /// The stride in bytes between each vertex.
@@ -624,7 +674,7 @@ impl From<AccelerationStructureGeometryData> for vk::AccelerationStructureGeomet
 #[derive(Clone, Debug)]
 pub struct AccelerationStructureGeometryInfo<G> {
     /// Type of acceleration structure.
-    pub ty: vk::AccelerationStructureTypeKHR,
+    pub acceleration_structure_type: vk::AccelerationStructureTypeKHR,
 
     /// Specifies additional parameters of the acceleration structure.
     pub flags: vk::BuildAccelerationStructureFlagsKHR,
@@ -639,7 +689,7 @@ impl<G> AccelerationStructureGeometryInfo<G> {
         let geometries = geometries.into();
 
         Self {
-            ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
             flags: Default::default(),
             geometries,
         }
@@ -651,7 +701,7 @@ impl<G> AccelerationStructureGeometryInfo<G> {
         let geometries = geometries.into();
 
         Self {
-            ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
             flags: Default::default(),
             geometries,
         }
@@ -665,6 +715,8 @@ impl<G> AccelerationStructureGeometryInfo<G> {
 }
 
 /// Information used to create an [`AccelerationStructure`] instance.
+///
+/// See [`VkAccelerationStructureCreateInfoKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureCreateInfoKHR.html).
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build"),
@@ -674,7 +726,7 @@ impl<G> AccelerationStructureGeometryInfo<G> {
 pub struct AccelerationStructureInfo {
     /// Type of acceleration structure.
     #[builder(default = "vk::AccelerationStructureTypeKHR::GENERIC")]
-    pub ty: vk::AccelerationStructureTypeKHR,
+    pub acceleration_structure_type: vk::AccelerationStructureTypeKHR,
 
     /// The size of the backing buffer that will store the acceleration structure.
     ///
@@ -689,7 +741,7 @@ impl AccelerationStructureInfo {
     #[inline(always)]
     pub const fn blas(size: vk::DeviceSize) -> Self {
         Self {
-            ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
             size,
         }
     }
@@ -704,7 +756,7 @@ impl AccelerationStructureInfo {
     #[inline(always)]
     pub const fn tlas(size: vk::DeviceSize) -> Self {
         Self {
-            ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
             size,
         }
     }
@@ -712,7 +764,7 @@ impl AccelerationStructureInfo {
     /// Converts an `AccelerationStructureInfo` into an `AccelerationStructureInfoBuilder`.
     pub fn into_builder(self) -> AccelerationStructureInfoBuilder {
         AccelerationStructureInfoBuilder {
-            ty: Some(self.ty),
+            acceleration_structure_type: Some(self.acceleration_structure_type),
             size: Some(self.size),
         }
     }
@@ -739,17 +791,121 @@ impl AccelerationStructureInfoBuilder {
 /// Holds the results of the [`AccelerationStructure::size_of`] function.
 #[derive(Clone, Copy, Debug)]
 pub struct AccelerationStructureSize {
-    /// The size of the scratch buffer required when building an acceleration structure using the
-    /// `Acceleration::build_structure` function.
+    /// The size of the scratch buffer required when building an acceleration structure using
+    /// [`CommandRef::build_accel_struct`](crate::cmd::CommandRef::build_accel_struct).
     pub build_size: vk::DeviceSize,
 
     /// The value of `size` parameter needed by [`AccelerationStructureInfo`] for use with the
     /// [`AccelerationStructure::create`] function.
     pub create_size: vk::DeviceSize,
 
-    /// The size of the scratch buffer required when updating an acceleration structure using the
-    /// `Acceleration::update_structure` function.
+    /// The size of the scratch buffer required when updating an acceleration structure using
+    /// [`CommandRef::update_accel_struct`](crate::cmd::CommandRef::update_accel_struct).
     pub update_size: vk::DeviceSize,
+}
+
+/// Synchronization information for an acceleration structure.
+#[derive(Clone, Copy, Debug)]
+pub struct AccelerationStructureSyncInfo {
+    /// Pipeline stages that access the acceleration structure.
+    pub stage_mask: vk::PipelineStageFlags,
+
+    /// Access types performed by those stages.
+    pub access_mask: vk::AccessFlags,
+
+    /// Current exclusive queue-family ownership, when relevant.
+    pub queue_family_index: Option<u32>,
+}
+
+impl AccelerationStructureSyncInfo {
+    fn from_accesses(accesses: impl IntoIterator<Item = AccessType>) -> Self {
+        let mut stage_mask = vk::PipelineStageFlags::empty();
+        let mut access_mask = vk::AccessFlags::empty();
+
+        for access in accesses {
+            let (stages, mask) = accel_struct_sync_flags_for_access(access);
+            stage_mask |= stages;
+            access_mask |= mask;
+        }
+
+        Self {
+            stage_mask,
+            access_mask,
+            queue_family_index: None,
+        }
+    }
+}
+
+struct AccessIter<'a> {
+    accesses: MutexGuard<'a, Vec<AccessType>>,
+    idx: usize,
+    previous_len: usize,
+}
+
+impl<'a> AccessIter<'a> {
+    fn one(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_access: AccessType) -> Self {
+        let previous_len = accesses.len();
+        accesses.push(next_access);
+
+        Self {
+            accesses,
+            idx: 0,
+            previous_len,
+        }
+    }
+
+    fn new(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_accesses: &[AccessType]) -> Self {
+        let previous_len = accesses.len();
+
+        if next_accesses.is_empty() {
+            accesses.push(AccessType::Nothing);
+        } else {
+            for &next_access in next_accesses {
+                if !accesses[previous_len..].contains(&next_access) {
+                    accesses.push(next_access);
+                }
+            }
+        }
+
+        Self {
+            accesses,
+            idx: 0,
+            previous_len,
+        }
+    }
+}
+
+impl Iterator for AccessIter<'_> {
+    type Item = AccessType;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx == self.previous_len {
+            return None;
+        }
+
+        let access = self.accesses[self.idx];
+        self.idx += 1;
+
+        Some(access)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for AccessIter<'_> {
+    fn len(&self) -> usize {
+        self.previous_len - self.idx
+    }
+}
+
+impl Drop for AccessIter<'_> {
+    fn drop(&mut self) {
+        self.accesses.drain(..self.previous_len);
+    }
 }
 
 /// Specifies a constant device or host address.
@@ -817,7 +973,7 @@ mod test {
     pub fn accel_struct_info_builder() {
         let info = Info {
             size: 32,
-            ty: vk::AccelerationStructureTypeKHR::GENERIC,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::GENERIC,
         };
         let builder = Builder::default().size(32).build();
 
@@ -828,7 +984,7 @@ mod test {
     pub fn accel_struct_info_builder_default_size() {
         let info = Info {
             size: 0,
-            ty: vk::AccelerationStructureTypeKHR::GENERIC,
+            acceleration_structure_type: vk::AccelerationStructureTypeKHR::GENERIC,
         };
 
         assert_eq!(Builder::default().build(), info);

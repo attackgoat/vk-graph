@@ -2,14 +2,14 @@
 
 ## Getting Started
 
-Hot-reloading shader pipelines are drop-in replacements for regular shader pipelines. Reference the
-below code to get started.
+Hot-reloading shader pipelines are drop-in replacements for regular shader pipelines. Use the code
+below to get started.
 
 See the [README](../README.md) for more information.
 
 ## Example Code
 
-Example | Instructions | Preview
- --- | --- | :---:
-[glsl.rs](glsl.rs) | <pre>cargo run --example glsl</pre> | <image alt="Preview" src="../.github/img/plasma.png" height=149 width=176>
-[hlsl.rs](hlsl.rs) | <pre>cargo run --example hlsl</pre> | <image alt="Preview" src="../.github/img/plasma.png" height=149 width=176>
+| Example | Instructions | Preview |
+| --- | --- | :---: |
+| [glsl.rs](glsl.rs) | <pre>cargo run --example glsl</pre> | <img alt="Preview" src="../.github/img/plasma.png" height=149 width=176> |
+| [hlsl.rs](hlsl.rs) | <pre>cargo run --example hlsl</pre> | <img alt="Preview" src="../.github/img/plasma.png" height=149 width=176> |

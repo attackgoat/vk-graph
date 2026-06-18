@@ -28,7 +28,7 @@ use {
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             shader::Shader,
             sync::AccessType,
@@ -96,8 +96,10 @@ impl ImGui {
         }
     }
 
-    // TODO: This produces an image which is RGBA8 UNORM and has STORAGE set. *We* don't need
-    // storage here and should instead ask the user what settings to give the output image.....
+    /*
+    TODO: This produces an image which is RGBA8 UNORM and has STORAGE set. *We* don't need storage
+    here and should instead ask the user what settings to give the output image.
+    */
     /// Builds a frame, records the necessary draw commands, and returns the rendered image.
     pub fn draw<P>(
         &mut self,
@@ -139,24 +141,21 @@ impl ImGui {
         self.platform.prepare_render(ui, window);
         let draw_data = self.context.render();
 
-        let image = graph.bind_resource({
-            let mut image = pool
-                .resource(ImageInfo::image_2d(
-                    window.inner_size().width,
-                    window.inner_size().height,
-                    vk::Format::R8G8B8A8_UNORM,
-                    vk::ImageUsageFlags::COLOR_ATTACHMENT
-                        | vk::ImageUsageFlags::SAMPLED
-                        | vk::ImageUsageFlags::STORAGE
-                        | vk::ImageUsageFlags::TRANSFER_DST
-                        | vk::ImageUsageFlags::TRANSFER_SRC, /* TODO: Make TRANSFER_SRC an
-                                                              * "extra flags" */
-                ))
-                .expect("missing imgui output image");
-            image.name = Some("ImGui Output".to_string());
-
-            image
-        });
+        let image = graph.bind_resource(
+            pool.resource(ImageInfo::image_2d(
+                window.inner_size().width,
+                window.inner_size().height,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::STORAGE
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::TRANSFER_SRC, /* TODO: Make TRANSFER_SRC an
+                                                          * "extra flags" */
+            ))
+            .expect("missing imgui output image")
+            .with_debug_name("ImGui Output"),
+        );
         let font_atlas_image = graph.bind_resource(
             self.font_atlas_image
                 .as_ref()
@@ -317,8 +316,8 @@ impl ImGui {
         }
 
         let temp_buf = graph.bind_resource(temp_buf);
-        let image = graph.bind_resource(
-            pool.resource(ImageInfo::image_2d(
+        let image = pool
+            .resource(ImageInfo::image_2d(
                 texture.width,
                 texture.height,
                 vk::Format::R8G8B8A8_UNORM,
@@ -327,8 +326,9 @@ impl ImGui {
                     | vk::ImageUsageFlags::TRANSFER_DST,
             ))
             .expect("missing imgui font atlas image")
-            .debug_name("ImGui Font Atlas"),
-        );
+            .with_debug_name("ImGui Font Atlas");
+
+        let image = graph.bind_resource(image);
 
         graph.copy_buffer_to_image(temp_buf, image);
 

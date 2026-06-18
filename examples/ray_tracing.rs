@@ -20,8 +20,8 @@ use {
             buffer::{Buffer, BufferInfo},
             device::Device,
             image::ImageInfo,
-            physical_device::RayTracingPipelineProperties,
-            ray_trace::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
+            physical_device::khr::RayTracingPipelineProperties,
+            ray_tracing::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
             shader::Shader,
         },
         pool::{Pool as _, hash::HashPool},
@@ -515,17 +515,18 @@ fn main() -> anyhow::Result<()> {
     // Setup the ray tracing pipeline
     // ------------------------------------------------------------------------------------------ //
 
-    let &RayTracingPipelineProperties {
+    let RayTracingPipelineProperties {
         shader_group_base_alignment,
         shader_group_handle_alignment,
         shader_group_handle_size,
         ..
     } = window
         .device
-        .physical_device
-        .ray_tracing_pipeline_properties
+        .physical
+        .vk_khr_ray_tracing_pipeline
         .as_ref()
-        .unwrap();
+        .unwrap()
+        .properties;
     let ray_tracing_pipeline = create_ray_tracing_pipeline(&window.device)?;
 
     // ------------------------------------------------------------------------------------------ //
@@ -597,7 +598,7 @@ fn main() -> anyhow::Result<()> {
         load_scene_buffers(&window.device)?;
 
     // ------------------------------------------------------------------------------------------ //
-    // Create the bottom level acceleration structure
+    // Create the bottom-level acceleration structure
     // ------------------------------------------------------------------------------------------ //
 
     let blas_geometry_info = AccelerationStructureGeometryInfo::blas([(
@@ -659,7 +660,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     // ------------------------------------------------------------------------------------------ //
-    // Create the top level acceleration structure
+    // Create the top-level acceleration structure
     // ------------------------------------------------------------------------------------------ //
 
     let tlas_geometry_info = AccelerationStructureGeometryInfo::tlas([(
@@ -682,10 +683,11 @@ fn main() -> anyhow::Result<()> {
     {
         let accel_struct_scratch_offset_alignment = window
             .device
-            .physical_device
-            .accel_struct_properties
+            .physical
+            .vk_khr_acceleration_structure
             .as_ref()
             .unwrap()
+            .properties
             .min_accel_struct_scratch_offset_alignment
             as vk::DeviceSize;
         let mut graph = Graph::default();
@@ -753,7 +755,7 @@ fn main() -> anyhow::Result<()> {
                 });
         }
 
-        graph.into_submission().queue_submit(&mut cache, 0, 0)?;
+        graph.finalize().queue_submit(&mut cache, 0, 0)?;
     }
 
     // ------------------------------------------------------------------------------------------ //
@@ -781,7 +783,7 @@ fn main() -> anyhow::Result<()> {
                     .resource(ImageInfo::image_2d(
                         frame.width,
                         frame.height,
-                        frame.graph.resource(frame.swapchain_image).info.fmt,
+                        frame.graph.resource(frame.swapchain_image).info.format,
                         vk::ImageUsageFlags::STORAGE
                             | vk::ImageUsageFlags::TRANSFER_DST
                             | vk::ImageUsageFlags::TRANSFER_SRC,

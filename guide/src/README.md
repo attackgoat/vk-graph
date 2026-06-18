@@ -54,7 +54,7 @@ The driver is based off the popular `ash` crate and `vk-sync`; reasoned as follo
 - 2022 --- v0.2 released with an earlier graph API based on
 [_`Kajiya`_](https://github.com/EmbarkStudios/kajiya)
 <i class="fa-solid fa-arrow-up-right-from-square"></i>
-- 2026 --- Project renamed `vk-graph` (v0.14)
+- 2026 --- Project renamed `vk-graph` (v0.14) and the graph API was redesigned (v0.14.2)
 
 [^modern]: Modern Vulkan usage means no pixel queries. Anything else unsupported is due to there
 being better options, no current need, or no interest. Please open an issue.

@@ -22,7 +22,7 @@ use {
             buffer::{Buffer, BufferInfo},
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             physical_device::Vulkan10Features,
             shader::{Shader, SpecializationMap},
@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
     let use_geometry_shader = {
         let Vulkan10Features {
             geometry_shader, ..
-        } = window.device.physical_device.features_v1_0;
+        } = window.device.physical.features_v1_0;
 
         args.geometry_shader && geometry_shader
     };
@@ -262,7 +262,7 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("DEBUG")
                 .bind_pipeline(&debug_pipeline)
-                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
                 .shader_resource_access(
                     0,
                     camera_uniform_buf,
@@ -306,7 +306,7 @@ fn main() -> anyhow::Result<()> {
                     .begin_cmd()
                     .debug_name("Shadow (Using geometry shader)")
                     .bind_pipeline(&shadow_pipeline)
-                    .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                    .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
                     .shader_resource_access(
                         0,
                         light_uniform_buf,
@@ -362,7 +362,7 @@ fn main() -> anyhow::Result<()> {
                         .begin_cmd()
                         .debug_name("Shadow")
                         .bind_pipeline(&shadow_pipeline)
-                        .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                        .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
                         .shader_resource_access(
                             0,
                             light_uniform_buf,
@@ -437,7 +437,7 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Mesh objects")
                 .bind_pipeline(&mesh_pipeline)
-                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+                .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
                 .shader_resource_access(
                     0,
                     camera_uniform_buf,
@@ -453,7 +453,8 @@ fn main() -> anyhow::Result<()> {
                     shadow_faces_node,
                     shadow_faces_info
                         .into_image_view()
-                        .with_type(vk::ImageViewType::CUBE),
+                        .into_builder()
+                        .view_type(vk::ImageViewType::CUBE),
                     AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
                 )
                 .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
@@ -495,7 +496,7 @@ fn best_2d_optimal_format(
     flags: vk::ImageCreateFlags,
 ) -> vk::Format {
     for format in formats {
-        let format_props = device.physical_device.image_format_properties(
+        let format_props = device.physical.image_format_properties(
             *format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,

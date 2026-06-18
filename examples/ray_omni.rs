@@ -28,7 +28,7 @@ use {
             },
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
         },
@@ -122,12 +122,8 @@ fn main() -> anyhow::Result<()> {
             .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
             .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
             .shader_resource_access(0, camera_buf, AccessType::AnyShaderReadUniformBuffer)
-            .shader_resource_access(
-                1,
-                scene_tlas,
-                AccessType::RayTracingShaderReadAccelerationStructure,
-            )
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS_IGNORE_STENCIL)
+            .shader_resource_access(1, scene_tlas, AccessType::FragmentShaderReadOther)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
             .depth_stencil_attachment_image(
                 depth_image,
                 LoadOp::CLEAR_ONE_STENCIL_ZERO,
@@ -160,7 +156,7 @@ fn best_2d_optimal_format(
     flags: vk::ImageCreateFlags,
 ) -> vk::Format {
     for format in formats {
-        let format_props = device.physical_device.image_format_properties(
+        let format_props = device.physical.image_format_properties(
             *format,
             vk::ImageType::TYPE_2D,
             vk::ImageTiling::OPTIMAL,
@@ -214,10 +210,11 @@ fn create_blas(
     )?);
 
     let accel_struct_scratch_offset_alignment = device
-        .physical_device
-        .accel_struct_properties
+        .physical
+        .vk_khr_acceleration_structure
         .as_ref()
         .unwrap()
+        .properties
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
     let scratch_buf = graph.bind_resource(Buffer::create(
@@ -254,7 +251,7 @@ fn create_blas(
     let blas = graph.resource(blas).clone();
 
     graph
-        .into_submission()
+        .finalize()
         .queue_submit(&mut LazyPool::new(device), 0, 0)?;
 
     Ok(blas)
@@ -335,7 +332,7 @@ fn create_pipeline(device: &Device) -> Result<GraphicsPipeline, DriverError> {
                 1000.0
             );
 
-            // Traverse the acceleration structure and store the first intersection, if any.
+            // Traverse the acceleration structure and store the first intersection, if any
             rayQueryProceedEXT(rayQuery);
 
             // If the intersection has hit a triangle, the fragment is shadowed
@@ -411,10 +408,11 @@ fn create_tlas(
         graph.bind_resource(pool.resource(AccelerationStructureInfo::tlas(size.create_size))?);
 
     let accel_struct_scratch_offset_alignment = device
-        .physical_device
-        .accel_struct_properties
+        .physical
+        .vk_khr_acceleration_structure
         .as_ref()
         .unwrap()
+        .properties
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
     let scratch_buf = graph.bind_resource(

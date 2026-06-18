@@ -49,7 +49,7 @@ fn main() -> Result<(), DriverError> {
         subgroup_size,
         subgroup_supported_operations,
         ..
-    } = device.physical_device.properties_v1_1;
+    } = device.physical.properties_v1_1;
 
     assert!(subgroup_supported_operations.contains(vk::SubgroupFeatureFlags::ARITHMETIC));
     assert!(subgroup_supported_operations.contains(vk::SubgroupFeatureFlags::BALLOT));
@@ -95,8 +95,7 @@ fn exclusive_sum(
         ),
     )?));
 
-    let workgroup_count =
-        input_data.len() as u32 / device.physical_device.properties_v1_1.subgroup_size;
+    let workgroup_count = input_data.len() as u32 / device.physical.properties_v1_1.subgroup_size;
     let reduce_count = workgroup_count - 1;
     let workgroup_buf = graph.bind_resource(Buffer::create(
         device,
@@ -130,12 +129,12 @@ fn exclusive_sum(
         });
 
     let output_buf = graph.resource(output_buf).clone();
-    let mut cmd = graph
-        .into_submission()
+    let mut fence = graph
+        .finalize()
         .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();
-    cmd.wait_until_executed()?;
+    fence.wait_signaled()?;
 
     println!(
         "Waited {}μs (len={})",
@@ -200,14 +199,8 @@ fn create_reduce_pipeline(device: &Device) -> Result<ComputePipeline, DriverErro
             .as_slice(),
         )
         .specialization(
-            SpecializationMap::new(
-                device
-                    .physical_device
-                    .properties_v1_1
-                    .subgroup_size
-                    .to_ne_bytes(),
-            )
-            .constant(0, 0, 4),
+            SpecializationMap::new(device.physical.properties_v1_1.subgroup_size.to_ne_bytes())
+                .constant(0, 0, 4),
         ),
     )
 }
@@ -263,7 +256,7 @@ fn create_exclusive_sum_pipeline(device: &Device) -> Result<ComputePipeline, Dri
         .specialization(
             SpecializationMap::new(
                 device
-                    .physical_device
+                    .physical
                     .properties_v1_1
                     .subgroup_size
                     .to_ne_bytes(),

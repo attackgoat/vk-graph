@@ -4,12 +4,12 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 mod frame;
-pub mod swapchain;
+pub mod graphchain;
 
 pub use {self::frame::FrameContext, winit};
 
 use {
-    self::swapchain::{Swapchain, SwapchainError, SwapchainInfo},
+    self::graphchain::{Graphchain, GraphchainError, GraphchainInfo},
     log::{error, info, trace, warn},
     std::{error, fmt, ops::Deref},
     vk_graph::{
@@ -35,6 +35,63 @@ use {
 
 /// A closure type for picking surface formats.
 pub type SurfaceFormatFn = dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR;
+
+fn create_graphchain(
+    device: &Device,
+    data: &WindowData,
+    window: &winit::window::Window,
+) -> Result<Graphchain, DriverError> {
+    let surface = Surface::create(device, window, window)?;
+    let surface_formats = Surface::formats(&surface)?;
+    let surface_format = data
+        .surface_format_fn
+        .as_ref()
+        .map(|f| f(&surface_formats))
+        .unwrap_or_else(|| Surface::linear_or_default(&surface_formats));
+    let window_size = window.inner_size();
+
+    let mut graphchain_info =
+        GraphchainInfo::new(window_size.width, window_size.height, surface_format)
+            .into_builder()
+            .frame_capacity(data.cmd_buf_count);
+
+    if let Some(min_image_count) = data.min_image_count {
+        graphchain_info = graphchain_info.min_image_count(min_image_count);
+    }
+
+    let v_sync = data.v_sync.unwrap_or_default();
+    let present_modes = Surface::present_modes(&surface)?;
+    if !present_modes.is_empty() {
+        let best_modes = if v_sync {
+            [vk::PresentModeKHR::FIFO_RELAXED, vk::PresentModeKHR::FIFO].as_slice()
+        } else {
+            [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE].as_slice()
+        };
+
+        graphchain_info = graphchain_info.present_mode(
+            best_modes
+                .iter()
+                .copied()
+                .find(|best| present_modes.contains(best))
+                .or_else(|| {
+                    warn!("requested present modes unsupported: {best_modes:?}");
+
+                    present_modes.first().copied()
+                })
+                .ok_or_else(|| {
+                    error!("display does not support presentation");
+
+                    DriverError::Unsupported
+                })?,
+        );
+    }
+
+    let graphchain = Graphchain::new(surface, graphchain_info)?;
+
+    trace!("created graphchain");
+
+    Ok(graphchain)
+}
 
 /// Describes a screen mode for display.
 #[derive(Clone, Copy, Debug)]
@@ -95,61 +152,11 @@ impl Window {
         }
 
         impl<F> Application<F> {
-            fn create_swapchain(
+            fn create_graphchain(
                 &mut self,
                 window: &winit::window::Window,
-            ) -> Result<Swapchain, DriverError> {
-                let surface = Surface::create(&self.device, window, window)?;
-                let surface_formats = Surface::formats(&surface)?;
-                let surface_format = self
-                    .data
-                    .surface_format_fn
-                    .as_ref()
-                    .map(|f| f(&surface_formats))
-                    .unwrap_or_else(|| Surface::linear_or_default(&surface_formats));
-                let window_size = window.inner_size();
-
-                let mut swapchain_info =
-                    SwapchainInfo::new(window_size.width, window_size.height, surface_format)
-                        .into_builder()
-                        .command_buffer_count(self.data.cmd_buf_count);
-
-                if let Some(min_image_count) = self.data.min_image_count {
-                    swapchain_info = swapchain_info.min_image_count(min_image_count);
-                }
-
-                let v_sync = self.data.v_sync.unwrap_or_default();
-                let present_modes = Surface::present_modes(&surface)?;
-                if !present_modes.is_empty() {
-                    let best_modes = if v_sync {
-                        [vk::PresentModeKHR::FIFO_RELAXED, vk::PresentModeKHR::FIFO].as_slice()
-                    } else {
-                        [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE].as_slice()
-                    };
-
-                    swapchain_info = swapchain_info.present_mode(
-                        best_modes
-                            .iter()
-                            .copied()
-                            .find(|best| present_modes.contains(best))
-                            .or_else(|| {
-                                warn!("requested present modes unsupported: {best_modes:?}");
-
-                                present_modes.first().copied()
-                            })
-                            .ok_or_else(|| {
-                                error!("display does not support presentation");
-
-                                DriverError::Unsupported
-                            })?,
-                    );
-                }
-
-                let swapchain = Swapchain::new(surface, swapchain_info)?;
-
-                trace!("created swapchain");
-
-                Ok(swapchain)
+            ) -> Result<Graphchain, DriverError> {
+                create_graphchain(&self.device, &self.data, window)
             }
 
             fn window_mode_attributes(
@@ -178,9 +185,10 @@ impl Window {
                                             monitor.video_modes().find(|mode| {
                                                 let mode_size = mode.size();
 
-                                                // Don't pick a mode with greater resolution
-                                                // than the monitor.
-                                                // It can panic on x11 in winit.
+                                                /*
+                                                Don't pick a mode with greater resolution than the
+                                                monitor; it can panic on X11 in winit.
+                                                */
                                                 mode_size.height <= monitor_size.height
                                                     && mode_size.width <= monitor_size.width
                                             })
@@ -265,9 +273,9 @@ impl Window {
                     }
                     Ok(res) => res,
                 };
-                let swapchain = match self.create_swapchain(&window) {
+                let graphchain = match self.create_graphchain(&window) {
                     Err(err) => {
-                        warn!("unable to create swapchain: {err}");
+                        warn!("unable to create graphchain: {err}");
 
                         self.error = Some(err.into());
                         event_loop.exit();
@@ -279,7 +287,7 @@ impl Window {
                 let swapchain_pool = HashPool::new(&self.device);
 
                 self.active_window = Some(ActiveWindow {
-                    swapchain,
+                    graphchain: Some(graphchain),
                     swapchain_pool,
                     swapchain_resize: None,
                     events: vec![],
@@ -287,7 +295,11 @@ impl Window {
                 });
             }
 
-            fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ()) {
+            fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ()) {
+                info!("signal received, exiting event loop");
+
+                event_loop.exit();
+
                 if let Some(ActiveWindow { events, .. }) = self.active_window.as_mut() {
                     events.push(Event::UserEvent(event));
                 }
@@ -299,50 +311,72 @@ impl Window {
                 window_id: WindowId,
                 event: WindowEvent,
             ) {
-                if let Some(active_window) = self.active_window.as_mut() {
+                if let Some(mut active_window) = self.active_window.take() {
                     match &event {
                         WindowEvent::CloseRequested => {
                             if event_loop.exiting() {
+                                self.active_window = Some(active_window);
+
                                 return;
                             }
 
                             info!("close requested");
 
                             event_loop.exit();
+                            self.active_window = Some(active_window);
                         }
                         WindowEvent::RedrawRequested => {
                             if event_loop.exiting() {
+                                self.active_window = Some(active_window);
+
                                 return;
                             }
 
-                            match active_window.draw(&self.device, &mut self.draw_fn) {
-                                Ok(true) => {}
-                                res => {
-                                    if let Err(err) = res {
-                                        self.error = Some(WindowError::Swapchain(err));
-                                    }
+                            // Surface loss is recoverable here; other graphchain errors are fatal.
+                            match active_window.draw(&self.device, &self.data, &mut self.draw_fn) {
+                                Err(GraphchainError::SurfaceLost) => {
+                                    warn!("surface lost; abandoning current frame");
 
+                                    let _ = active_window.graphchain.take();
+
+                                    active_window.window.request_redraw();
+                                    self.active_window = Some(active_window);
+
+                                    profiling::finish_frame!();
+
+                                    return;
+                                }
+                                Err(err) => {
+                                    self.error = Some(WindowError::Graphchain(err));
                                     event_loop.exit();
                                 }
+                                Ok(false) => {
+                                    event_loop.exit();
+                                }
+                                Ok(true) => {}
                             }
 
                             profiling::finish_frame!();
+                            self.active_window = Some(active_window);
                         }
-                        WindowEvent::Resized(size) => {
+                        WindowEvent::Resized(size) if size.width * size.height > 0 => {
                             active_window.swapchain_resize = Some((size.width, size.height));
+                            self.active_window = Some(active_window);
                         }
-                        _ => (),
+                        _ => self.active_window = Some(active_window),
                     }
 
-                    active_window
-                        .events
-                        .push(Event::WindowEvent { window_id, event });
+                    if let Some(active_window) = self.active_window.as_mut() {
+                        active_window
+                            .events
+                            .push(Event::WindowEvent { window_id, event });
+                    }
                 }
             }
         }
 
         struct ActiveWindow {
-            swapchain: Swapchain,
+            graphchain: Option<Graphchain>,
             swapchain_pool: HashPool,
             swapchain_resize: Option<(u32, u32)>,
             events: Vec<Event<()>>,
@@ -353,19 +387,33 @@ impl Window {
             fn draw(
                 &mut self,
                 device: &Device,
+                data: &WindowData,
                 mut f: impl FnMut(FrameContext),
-            ) -> Result<bool, SwapchainError> {
-                if let Some((width, height)) = self.swapchain_resize.take() {
-                    let mut swapchain_info = self.swapchain.info;
-                    swapchain_info.width = width;
-                    swapchain_info.height = height;
-                    self.swapchain.set_info(swapchain_info);
+            ) -> Result<bool, GraphchainError> {
+                if self.graphchain.is_none() {
+                    self.graphchain = Some(create_graphchain(device, data, &self.window)?);
                 }
 
-                if let Some(swapchain_image) = self.swapchain.acquire_next_image()? {
+                let graphchain = self.graphchain.as_mut().expect("missing graphchain");
+
+                if let Some((width, height)) = self.swapchain_resize.take() {
+                    if width == 0 || height == 0 {
+                        self.swapchain_resize = Some((width, height));
+                        self.events.clear();
+
+                        return Ok(true);
+                    }
+
+                    let mut graphchain_info = graphchain.info;
+                    graphchain_info.width = width;
+                    graphchain_info.height = height;
+                    graphchain.set_info(graphchain_info);
+                }
+
+                if let Some(swapchain_image) = graphchain.acquire_next_image()? {
                     let mut graph = Graph::default();
                     let swapchain_image = graph.bind_resource(swapchain_image);
-                    let swapchain_info = self.swapchain.info;
+                    let graphchain_info = graphchain.info;
 
                     let mut will_exit = false;
 
@@ -374,10 +422,10 @@ impl Window {
                     f(FrameContext {
                         device,
                         events: &self.events,
-                        height: swapchain_info.height,
+                        height: graphchain_info.height,
                         graph: &mut graph,
                         swapchain_image,
-                        width: swapchain_info.width,
+                        width: graphchain_info.width,
                         will_exit: &mut will_exit,
                         window: &self.window,
                     });
@@ -391,13 +439,13 @@ impl Window {
                     }
 
                     self.window.pre_present_notify();
-                    self.swapchain
+                    graphchain
                         .present_image(&mut self.swapchain_pool, graph, swapchain_image, 0)
                         .inspect_err(|err| {
-                            warn!("unable to present swapchain image: {err}");
+                            warn!("unable to present graphchain image: {err}");
                         })?;
                 } else {
-                    warn!("unable to acquire swapchain image");
+                    warn!("unable to acquire graphchain image");
                 }
 
                 self.window.request_redraw();
@@ -415,13 +463,22 @@ impl Window {
             primary_monitor: None,
         };
 
+        let proxy = self.read_only.event_loop.create_proxy();
+        if let Err(e) = ctrlc::set_handler(move || {
+            trace!("received SIGINT/SIGTERM");
+
+            let _ = proxy.send_event(());
+        }) {
+            warn!("failed to set Ctrl-C handler: {e}");
+        }
+
         self.read_only.event_loop.run_app(&mut app)?;
 
         if let Some(ActiveWindow {
-            swapchain, window, ..
+            graphchain, window, ..
         }) = app.active_window.take()
         {
-            drop(swapchain);
+            drop(graphchain);
             drop(window);
         }
 
@@ -486,9 +543,8 @@ impl WindowBuilder {
 
     /// Enables Vulkan graphics debugging layers.
     ///
-    /// _NOTE:_ Any validation warnings or errors will cause the current thread to park itself after
-    /// describing the error using the `log` crate. This makes it easy to attach a debugger and see
-    /// what is causing the issue directly.
+    /// _NOTE:_ Validation errors will only park the current thread for debugger attach when the
+    /// process is attached to an interactive terminal. Otherwise they continue after logging.
     ///
     /// ## Platform-specific
     ///
@@ -531,12 +587,11 @@ impl WindowBuilder {
         self
     }
 
-    /// When `true` specifies that the presentation engine does not wait for a vertical blanking
-    /// period to update the current image, meaning this mode may result in visible tearing.
+    /// When `true`, requests presentation synchronized to the display refresh.
     ///
     /// # Note
     ///
-    /// Applies only to exlcusive fullscreen mode.
+    /// Applies only to exclusive fullscreen mode.
     pub fn v_sync(mut self, enabled: bool) -> Self {
         self.v_sync = Some(enabled);
         self
@@ -610,8 +665,8 @@ pub enum WindowError {
     Driver(DriverError),
     /// `winit` failed to create or run the event loop.
     EventLoop(EventLoopError),
-    /// An window system integration or swapchain presentation error occurred.
-    Swapchain(SwapchainError),
+    /// A window system integration or swapchain presentation error occurred.
+    Graphchain(GraphchainError),
 }
 
 impl error::Error for WindowError {
@@ -619,7 +674,7 @@ impl error::Error for WindowError {
         Some(match self {
             Self::Driver(err) => err,
             Self::EventLoop(err) => err,
-            Self::Swapchain(err) => err,
+            Self::Graphchain(err) => err,
         })
     }
 }
@@ -629,7 +684,7 @@ impl fmt::Display for WindowError {
         match self {
             Self::Driver(err) => err.fmt(f),
             Self::EventLoop(err) => err.fmt(f),
-            Self::Swapchain(err) => err.fmt(f),
+            Self::Graphchain(err) => err.fmt(f),
         }
     }
 }

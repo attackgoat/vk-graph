@@ -75,7 +75,7 @@ fn main() -> Result<(), DriverError> {
     let image_info = ImageInfo::image_2d(
         image_info.width,
         image_info.height,
-        image_info.fmt,
+        image_info.format,
         vk::ImageUsageFlags::TRANSFER_DST,
     );
 
@@ -83,7 +83,7 @@ fn main() -> Result<(), DriverError> {
     let image3_node = graph.bind_resource(cache.tag(CacheTag::Shadow).resource(image_info)?);
     assert_eq!(image1_node, image3_node);
 
-    // Using a different tag for the same request produces an entirely different image.
+    // Using a different tag for the same request produces an entirely different image
     let image4_node = graph.bind_resource(cache.tag(CacheTag::Ui).resource(image_info)?);
     assert_ne!(image1_node, image4_node);
 

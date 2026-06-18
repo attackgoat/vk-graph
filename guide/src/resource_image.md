@@ -15,15 +15,18 @@ let fmt = vk::Format::R8G8B8A8_UNORM;
 // Create image info multiple ways
 let info = ImageInfo {
     array_layer_count: 1,
-    dedicated: false,
+    alloc_dedicated: false,
     depth: 1,
     flags: vk::ImageCreateFlags::empty(),
-    fmt,
+    format: fmt,
     height,
+    host_readable: false,
+    host_writable: false,
     mip_level_count: 1,
     sample_count: SampleCount::Type1,
+    sharing_mode: vk::SharingMode::EXCLUSIVE,
     tiling: vk::ImageTiling::OPTIMAL,
-    ty: vk::ImageType::TYPE_2D,
+    image_type: vk::ImageType::TYPE_2D,
     usage,
     width,
 };
@@ -38,9 +41,9 @@ let same_info = ImageInfoBuilder::default()
     .width(width)
     .height(height)
     .depth(1)
-    .fmt(fmt)
+    .format(fmt)
     .usage(usage)
-    .ty(vk::ImageType::TYPE_2D);
+    .image_type(vk::ImageType::TYPE_2D);
 
 // Info built from other info
 let array_info = cube_info
@@ -52,7 +55,7 @@ let array_info = cube_info
 let image = Image::create(device, info)?;
 
 // For interop this may be handy:
-let image = Image::from_raw(device, vk::Image::null(), info);
+let image = unsafe { Image::from_raw(device, vk::Image::null(), info) };
 
 // The provided fields are helpful:
 assert_eq!(image.device, *device);
@@ -74,9 +77,9 @@ let image_view = ImageViewInfo {
     aspect_mask: vk::ImageAspectFlags::COLOR,
     base_array_layer: 0,
     base_mip_level: 0,
-    fmt,
+    format: fmt,
     mip_level_count: 1,
-    ty: vk::ImageViewType::TYPE_2D,
+    view_type: vk::ImageViewType::TYPE_2D,
 };
 
 // Image views have the same builder functionality:

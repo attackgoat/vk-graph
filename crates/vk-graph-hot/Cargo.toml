@@ -1,8 +1,8 @@
 [package]
 name = "vk-graph-hot"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["John Wells <john@attackgoat.com>"]
-homepage = "https://github.com/attackgoat/vk-graph/crates/vk-graph-hot"
+homepage = "https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-hot"
 documentation = "https://docs.rs/vk-graph-hot"
 keywords = ["gamedev", "vulkan"]
 categories = ["game-development", "multimedia::images", "rendering::engine"]

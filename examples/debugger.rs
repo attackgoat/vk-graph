@@ -12,8 +12,8 @@ use vk_sync::AccessType;
 
     I hope you enjoy this choose-your-own-debugger adventure!
 
-    First you will want to read this:
-    https://github.com/attackgoat/vk-graph/blob/master/examples/getting-started.md
+    First you may want to read the example overview:
+    https://github.com/attackgoat/vk-graph/blob/main/examples/README.md
 
     Enter your "name" to begin:
         cargo run --example debugger
@@ -29,7 +29,7 @@ use vk_sync::AccessType;
         All programs must be tested with Vulkan validation layers enabled and look for
         validity and synchronization errors.
 
-    To continue, uncomment line 30.
+    To continue, uncomment the logger initialization below.
 */
 fn main() -> Result<(), vk_graph_window::WindowError> {
     use {log::debug, vk_graph_window::Window};
@@ -41,7 +41,8 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
         The code ahead is filled with a dangerous `panic` if you did not install the Vulkan SDK!
 
         You must now choose:
-            - If you did not install the SDK, you must goto line 8, above.
+            - If you did not install the SDK, install it before running this example with debug
+              validation enabled.
             - If you have a recent SDK installed, you may advance the function pointer.
     */
     Window::builder().debug(true).build()?.run(|frame| {
@@ -52,7 +53,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             Note:
                 This callback runs each time the operating system requests a new window image and it
                 expects you to render something to `frame.swapchain_image` using
-                `frame.graph`. Note that this scope is infalliable. You may create additional
+                `frame.graph`. Note that this scope is infallible. You may create additional
                 images and graphs if you choose. You can resolve multiple render graphs per frame -
                 but you only need to do that if you have a hot-section that is part of a VERY large
                 graph.
@@ -92,8 +93,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             - Enter the PID
             - In the call stack pane, select the first thread; pause it
             - You are now parked on a syscall
-            - Walk up about 12 stack frames by scrolling down and selecting:
-                `{closure#0} debugger.rs 110:21`
+            - Walk up about 12 stack frames by scrolling down and selecting this callback.
             - It's 🕓 to de-🐛!
         */
 
@@ -102,10 +102,10 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
                 This will cause a validation error now (because this image is created here).
 
             You have followed the above directions and now have an active debug session looking at
-            line 115. You try to step forward in vain. Comment out the second `image` binding to
-            continue.
+            the failing image creation. You try to step forward in vain. Comment out the second
+            `image` binding to continue.
 
-            It is left as an excerise to the reader to determine *what* might have gone wrong here.
+            It is left as an exercise to the reader to determine *what* might have gone wrong here.
         */
         #[allow(unused_variables)]
         let image = frame.graph.bind_resource(
@@ -164,12 +164,12 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
                 thread 'main' panicked at 'uninitialized swapchain image ...'
 
             This will cause a static assertion after this closure completes, but before it is
-            called again. It happens in display.rs.
+            called again. It happens while the window frame is finalized.
 
             Because this error does not cause validation layer messages, it does not hit the debug
-            "breakpoint" we setup on line 39. You have two choices:
-              - Read how pass_ref.rs lays out data which resolver.rs submits; debug it (you die)
-              - Goto line 180 and fix the bug
+            "breakpoint" set up by validation. You have two choices:
+              - Read how the graph records and submits work; debug it the long way
+              - Fix the swapchain image access below
 
             This is a valid thing to panic over because we expect that all frames will render
             something to the swapchain image. The operating system is nicely asking that we repaint
@@ -180,7 +180,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
             compute, copy, render, store, transfer or any number of other things and that will
             signal it's OK to proceed without panicking.
 
-            Here is a fixed line 180:
+            Here is the fixed access declaration:
                 .shader_resource_access(42, frame.swapchain_image, AccessType::ComputeShaderWrite)
         */
         frame
@@ -193,7 +193,7 @@ fn main() -> Result<(), vk_graph_window::WindowError> {
                 cmd.dispatch(1024, 1024, 1);
             });
 
-        // Growing tired of your advenutes, you signal that it is time to close the window and exit
+        // Growing tired of your adventures, you signal that it is time to close the window and exit
         *frame.will_exit = true;
     })?;
 

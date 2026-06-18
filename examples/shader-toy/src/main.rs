@@ -1,9 +1,9 @@
 pub mod data {
     use super::PakBuf;
 
-    // The ".pak" file is a data transport type with compression and other useful features
-    // It is used to hold the images used by this example, because they *could* be really
-    // big - anyways we generated some bindings to make accessing those less error-prone:
+    // The ".pak" file is a data transport type with compression and other useful features.
+    // It is used to hold the images used by this example because they *could* be really
+    // big, so we generate some bindings to make accessing those less error-prone:
     include!(concat!(env!("OUT_DIR"), "/pak_bindings.rs"));
 
     // This happens if you want the .pak bytes inside the executable itself
@@ -43,7 +43,7 @@ use {
         cmd::{LoadOp, StoreOp},
         driver::{
             ash::vk,
-            graphic::{GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
             sync::AccessType,
@@ -101,7 +101,7 @@ fn main() -> anyhow::Result<()> {
             .context("Unable to decode noise bitmap")?
     });
 
-    // The shader toy example used two graphics pipelines with defaults:
+    // The Shadertoy example used two graphics pipelines with defaults:
     // no depth/stencil
     // 1x sample count
     // one-sided
@@ -173,7 +173,7 @@ fn main() -> anyhow::Result<()> {
     let mut blank_image_binding = Some(graph.resource(blank_image).clone());
     let mut temp_image_binding = Some(graph.resource(temp_image).clone());
 
-    graph.into_submission().queue_submit(&mut cache, 0, 0)?;
+    graph.finalize().queue_submit(&mut cache, 0, 0)?;
 
     let started_at = Instant::now();
     let mut prev_frame_at = started_at;
@@ -187,7 +187,7 @@ fn main() -> anyhow::Result<()> {
         .run(|frame| {
             let now = Instant::now();
 
-            // Update the stuff any shader toy shader would want to know each frame
+            // Update the stuff any Shadertoy shader would want to know each frame
             let dt = now - prev_frame_at;
             prev_frame_at = now;
 
@@ -212,7 +212,7 @@ fn main() -> anyhow::Result<()> {
                 .graph
                 .bind_resource(temp_image_binding.take().unwrap());
 
-            // We need to push a shader-toy defined set of constants to each pipeline - any copy
+            // We need to push a Shadertoy-defined set of constants to each pipeline - any copy
             // type will do but we are getting fancy here by defining a struct to be super precise
             // about what we're doing - but you may want to just send a bunch of f32's
             #[repr(C)]

@@ -6,7 +6,7 @@ use {
     crate::{
         ExecutionPipeline,
         driver::{
-            compute::ComputePipeline, graphic::GraphicsPipeline, ray_trace::RayTracingPipeline,
+            compute::ComputePipeline, graphics::GraphicsPipeline, ray_tracing::RayTracingPipeline,
         },
     },
     std::marker::PhantomData,
@@ -91,8 +91,13 @@ macro_rules! pipeline {
 
 // Pipelines you can bind to a command ref
 pipeline!(Compute, ComputePipeline, is_compute, unwrap_compute);
-pipeline!(Graphic, GraphicsPipeline, is_graphic, unwrap_graphic);
-pipeline!(RayTrace, RayTracingPipeline, is_ray_trace, unwrap_ray_trace);
+pipeline!(Graphics, GraphicsPipeline, is_graphics, unwrap_graphics);
+pipeline!(
+    RayTracing,
+    RayTracingPipeline,
+    is_ray_tracing,
+    unwrap_ray_tracing
+);
 
 /// A [`Command`] which has been bound to a particular compute, graphics, or ray tracing pipeline.
 pub struct PipelineCommand<'c, T> {
@@ -100,19 +105,10 @@ pub struct PipelineCommand<'c, T> {
     pub(super) cmd: Command<'c>,
 }
 
-// NOTE: There are specific implementations of T in the compute, graphics, and ray tracing modules.
+// NOTE: There are specific implementations of T in the compute, graphics, and ray tracing modules
+#[allow(private_bounds)]
 impl<'c, T> PipelineCommand<'c, T> {
-    /// Binds a shader pipeline to the current command, allowing for strongly typed access to the
-    /// related functions.
-    ///
-    /// `P`|`P::Command`
-    /// -|-
-    /// [`ComputePipeline`](crate::driver::compute::ComputePipeline)|[`PipelineCommand<'_,
-    /// ComputePipeline>`]
-    /// [`GraphicsPipeline`](crate::driver::graphic::GraphicsPipeline)|[`PipelineCommand<'_,
-    /// GraphicsPipeline>`]
-    /// [`RayTracingPipeline`](crate::driver::ray_trace::RayTracingPipeline)|[`PipelineCommand<'_,
-    /// RayTracingPipeline>`]
+    /// Equivalent to [`Command::bind_pipeline`] for a command that already has a bound pipeline.
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
         P: Pipeline<'c>,
@@ -120,10 +116,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         pipeline.bind_cmd(self.cmd)
     }
 
-    /// Binds a Vulkan buffer, image, or acceleration structure resource to the graph associated
-    /// with this command.
-    ///
-    /// Bound nodes may be used in passes for pipeline and shader operations.
+    /// Equivalent to [`Command::bind_resource`] for a command that already has a bound pipeline.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
         R: Resource,
@@ -131,13 +124,12 @@ impl<'c, T> PipelineCommand<'c, T> {
         self.cmd.bind_resource(resource)
     }
 
-    /// Finalizes a command and returns the graph so that additional commands may be added.
+    /// Equivalent to [`Command::end_cmd`] for a command that already has a bound pipeline.
     pub fn end_cmd(self) -> &'c mut Graph {
         self.cmd.end_cmd()
     }
 
-    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given bound resource node represents.
+    /// Equivalent to [`Command::resource`] for a command that already has a bound pipeline.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
         N: Node,
@@ -145,11 +137,10 @@ impl<'c, T> PipelineCommand<'c, T> {
         self.cmd.resource(resource_node)
     }
 
-    /// Informs the command that the next recorded command buffer will read or write `resource_node`
-    /// using `access`.
+    /// Informs the command that recorded work will read or write `resource_node` using `access`.
     ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a recording
+    /// function.
     pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
     where
         N: Node + Subresource,
@@ -159,11 +150,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write `resource_node`
-    /// using `access`.
-    ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// Mutable-borrow form of [`Self::resource_access`].
     pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType) -> &mut Self
     where
         N: Node + Subresource,
@@ -173,11 +160,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the
-    /// `resource_node` at the specified shader `binding` using `access`.
-    ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// Mutable-borrow form of [`Self::shader_resource_access`].
     pub fn set_shader_resource_access<N>(
         &mut self,
         binding: impl Into<Binding>,
@@ -195,15 +178,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         self.set_shader_subresource_access(binding, resource_node, subresource, access)
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the
-    /// `resource_node` at the specified shader `binding` using `access`. The resource will be
-    /// interpreted using `view_info`.
-    ///
-    /// If the same `binding` slot is used more than once, the last call wins and the
-    /// previous binding is silently overwritten.
-    ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// Mutable-borrow form of [`Self::shader_subresource_access`].
     pub fn set_shader_subresource_access<N>(
         &mut self,
         binding: impl Into<Binding>,
@@ -247,11 +222,7 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the
-    /// `subresource` of `resource_node` using `access`.
-    ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// Mutable-borrow form of [`Self::subresource_access`].
     pub fn set_subresource_access<N>(
         &mut self,
         resource_node: N,
@@ -267,14 +238,14 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the
-    /// `resource_node` at the specified shader `binding` using `access`.
+    /// Informs the command that recorded work will read or write the `resource_node` at the
+    /// specified shader `binding` using `access`.
     ///
-    /// If the same `binding` slot is used more than once, the last call wins and the
-    /// previous binding is silently overwritten.
+    /// If the same `binding` slot is used more than once, the last call wins and the previous
+    /// binding is silently overwritten.
     ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a recording
+    /// function.
     pub fn shader_resource_access<N>(
         mut self,
         binding: impl Into<Binding>,
@@ -291,12 +262,15 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the
-    /// `resource_node` at the specified shader `binding` using `access`. The resource will be
-    /// interpreted using `view_info`.
+    /// Informs the command that recorded work will read or write the `resource_node` at the
+    /// specified shader `binding` using `access`. The resource will be interpreted using
+    /// `view_info`.
     ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// If the same `binding` slot is used more than once, the last call wins and the previous
+    /// binding is silently overwritten.
+    ///
+    /// An access function must be called for `resource_node` before it is used within a recording
+    /// function.
     pub fn shader_subresource_access<N>(
         mut self,
         binding: impl Into<Binding>,
@@ -314,11 +288,11 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Informs the command that the next recorded command buffer will read or write the
-    /// `subresource` of `resource_node` using `access`.
+    /// Informs the command that recorded work will read or write the `subresource` of
+    /// `resource_node` using `access`.
     ///
-    /// An access function must be called for `resource_node` before it is used within a
-    /// `record_`-function.
+    /// An access function must be called for `resource_node` before it is used within a recording
+    /// function.
     pub fn subresource_access<N>(
         mut self,
         resource_node: N,

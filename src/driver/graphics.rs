@@ -8,6 +8,7 @@ use {
         merge_push_constant_ranges,
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader, SpecializationMap},
     },
+    crate::lazy_str,
     ash::vk,
     derive_builder::Builder,
     log::{Level::Trace, log_enabled, trace, warn},
@@ -15,8 +16,9 @@ use {
     std::{
         collections::HashSet,
         ffi::CString,
+        fmt::{Debug, Formatter},
         hash::{Hash, Hasher},
-        sync::{Arc, OnceLock},
+        sync::Arc,
         thread::panicking,
     },
 };
@@ -72,13 +74,25 @@ pub struct BlendInfo {
     #[builder(default = "vk::BlendOp::ADD")]
     pub alpha_blend_op: vk::BlendOp,
 
-    /// A bitmask of specifying which of the R, G, B, and/or A components are enabled for writing,
+    /// A bitmask specifying which of the R, G, B, and/or A components are enabled for writing,
     /// as described for [`VkPipelineColorBlendAttachmentState`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineColorBlendAttachmentState.html).
     #[builder(default = "RGBA_COLOR_COMPONENTS")]
     pub color_write_mask: vk::ColorComponentFlags,
 }
 
 impl BlendInfo {
+    /// A commonly used blend mode for additive blending.
+    pub const ADDITIVE: Self = Self {
+        blend_enable: true,
+        src_color_blend_factor: vk::BlendFactor::ONE,
+        dst_color_blend_factor: vk::BlendFactor::ONE,
+        color_blend_op: vk::BlendOp::ADD,
+        src_alpha_blend_factor: vk::BlendFactor::ONE,
+        dst_alpha_blend_factor: vk::BlendFactor::ONE,
+        alpha_blend_op: vk::BlendOp::ADD,
+        color_write_mask: RGBA_COLOR_COMPONENTS,
+    };
+
     /// A commonly used blend mode for replacing color attachment values with new ones.
     pub const REPLACE: Self = Self {
         blend_enable: false,
@@ -101,6 +115,21 @@ impl BlendInfo {
         dst_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
         alpha_blend_op: vk::BlendOp::ADD,
         color_write_mask: RGBA_COLOR_COMPONENTS,
+    };
+
+    /// A color attachment state that disables all color component writes.
+    ///
+    /// This is useful for passes that bind a color attachment only to satisfy pipeline or render
+    /// target layout requirements, while writing depth or stencil data without modifying color.
+    pub const COLOR_WRITE_DISABLED: Self = Self {
+        blend_enable: false,
+        src_color_blend_factor: vk::BlendFactor::SRC_COLOR,
+        dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_DST_COLOR,
+        color_blend_op: vk::BlendOp::ADD,
+        src_alpha_blend_factor: vk::BlendFactor::ZERO,
+        dst_alpha_blend_factor: vk::BlendFactor::ZERO,
+        alpha_blend_op: vk::BlendOp::ADD,
+        color_write_mask: vk::ColorComponentFlags::empty(),
     };
 
     /// A commonly used blend mode for blending color attachment values based on the alpha channel,
@@ -159,17 +188,16 @@ impl From<BlendInfo> for vk::PipelineColorBlendAttachmentState {
 }
 
 impl BlendInfoBuilder {
-    /// Builds a new `BlendMode`.
+    /// Builds a new `BlendInfo`.
     pub fn build(self) -> BlendInfo {
         self.fallible_build().expect("invalid blend info")
     }
 }
 
-// TODO: This could be simplified (bounds_test controsl min/max etc)
 /// Specifies the [depth bounds tests], [stencil test], and [depth test] pipeline state.
 ///
 /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
-#[derive(Builder, Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build"),
     derive(Clone, Copy, Debug),
@@ -177,12 +205,15 @@ impl BlendInfoBuilder {
 )]
 pub struct DepthStencilInfo {
     /// Control parameters of the stencil test.
+    ///
+    /// Defaults to [`StencilMode::IGNORE`].
     #[builder(default)]
     pub back: StencilMode,
 
     /// Controls whether [depth bounds testing] is enabled.
     ///
-    /// See [`VkPipelineMultisampleStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineMultisampleStateCreateInfo.html).
+    /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
+    ///
     #[builder(default)]
     pub bounds_test: bool,
 
@@ -190,12 +221,15 @@ pub struct DepthStencilInfo {
     /// [depth test].
     ///
     /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
+    ///
+    /// Defaults to [`vk::CompareOp::NEVER`].
     #[builder(default)]
     pub compare_op: vk::CompareOp,
 
     /// Controls whether [depth testing] is enabled.
     ///
     /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
+    ///
     #[builder(default)]
     pub depth_test: bool,
 
@@ -204,10 +238,13 @@ pub struct DepthStencilInfo {
     /// Depth writes are always disabled when `depth_test` is `false`.
     ///
     /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
+    ///
     #[builder(default)]
     pub depth_write: bool,
 
     /// Control parameters of the stencil test.
+    ///
+    /// Defaults to [`StencilMode::IGNORE`].
     #[builder(default)]
     pub front: StencilMode,
 
@@ -215,6 +252,7 @@ pub struct DepthStencilInfo {
     /// Minimum depth bound used in the [depth bounds test].
     ///
     /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
+    ///
     #[builder(default, setter(into))]
     pub min: OrderedFloat<f32>,
 
@@ -222,30 +260,19 @@ pub struct DepthStencilInfo {
     /// Maximum depth bound used in the [depth bounds test].
     ///
     /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
+    ///
     #[builder(default, setter(into))]
     pub max: OrderedFloat<f32>,
 
     /// Controls whether [stencil testing] is enabled.
     ///
     /// See [`VkPipelineDepthStencilStateCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipelineDepthStencilStateCreateInfo.html).
+    ///
     #[builder(default)]
     pub stencil_test: bool,
 }
 
 impl DepthStencilInfo {
-    /// A commonly used depth/stencil mode
-    pub const DEPTH_WRITE_LESS_IGNORE_STENCIL: Self = Self {
-        back: StencilMode::IGNORE,
-        bounds_test: true,
-        compare_op: vk::CompareOp::LESS,
-        depth_test: true,
-        depth_write: true,
-        front: StencilMode::IGNORE,
-        min: OrderedFloat(0.0),
-        max: OrderedFloat(1.0),
-        stencil_test: false,
-    };
-
     /// Specifies a no-depth/no-stencil mode.
     ///
     /// This is the default state.
@@ -260,6 +287,50 @@ impl DepthStencilInfo {
         max: OrderedFloat(0.0),
         stencil_test: false,
     };
+
+    /// Creates a depth-read mode with stencil ignored.
+    pub const fn depth_read(compare_op: vk::CompareOp) -> Self {
+        Self {
+            depth_test: true,
+            compare_op,
+            min: OrderedFloat(0.0),
+            max: OrderedFloat(1.0),
+            ..Self::IGNORE
+        }
+    }
+
+    /// Creates a depth-write mode with stencil ignored.
+    pub const fn depth_write(compare_op: vk::CompareOp) -> Self {
+        Self {
+            depth_test: true,
+            depth_write: true,
+            compare_op,
+            min: OrderedFloat(0.0),
+            max: OrderedFloat(1.0),
+            ..Self::IGNORE
+        }
+    }
+
+    /// Creates a depth-read/write mode with stencil ignored.
+    pub const fn depth_read_write(compare_op: vk::CompareOp) -> Self {
+        Self::depth_write(compare_op)
+    }
+
+    /// Common depth-write mode for normal-Z depth buffers.
+    pub const DEPTH_WRITE_LESS: Self = Self::depth_write(vk::CompareOp::LESS);
+
+    /// Common depth-write mode for normal-Z depth buffers when equal depth passes are accepted.
+    pub const DEPTH_WRITE_LESS_OR_EQUAL: Self = Self::depth_write(vk::CompareOp::LESS_OR_EQUAL);
+
+    /// Common depth-write mode for reversed-Z depth buffers.
+    pub const DEPTH_WRITE_GREATER: Self = Self::depth_write(vk::CompareOp::GREATER);
+
+    /// Common depth-write mode for reversed-Z depth buffers when equal depth passes are accepted.
+    pub const DEPTH_WRITE_GREATER_OR_EQUAL: Self =
+        Self::depth_write(vk::CompareOp::GREATER_OR_EQUAL);
+
+    /// A commonly used normal-Z depth-write mode with stencil ignored.
+    pub const DEPTH_WRITE_LESS_IGNORE_STENCIL: Self = Self::DEPTH_WRITE_LESS;
 
     /// Creates a default `DepthStencilInfoBuilder`.
     pub fn builder() -> DepthStencilInfoBuilder {
@@ -279,6 +350,12 @@ impl DepthStencilInfo {
             min: Some(self.min),
             stencil_test: Some(self.stencil_test),
         }
+    }
+}
+
+impl Default for DepthStencilInfo {
+    fn default() -> Self {
+        Self::IGNORE
     }
 }
 
@@ -308,8 +385,8 @@ impl DepthStencilInfoBuilder {
 ///
 /// Also contains information about the object.
 ///
-/// [pipeline]: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipeline.html
-#[derive(Clone, Debug)]
+/// See [`VkPipeline`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipeline.html).
+#[derive(Clone)]
 #[read_only::cast]
 pub struct GraphicsPipeline {
     pub(crate) inner: Arc<GraphicsPipelineInner>,
@@ -318,12 +395,14 @@ pub struct GraphicsPipeline {
 impl GraphicsPipeline {
     /// Creates a new graphics pipeline on the given device.
     ///
-    /// The correct pipeline stages will be enabled based on the provided shaders. See [Shader] for
-    /// details on all available stages.
+    /// The correct pipeline stages will be enabled based on the provided shaders. See [`Shader`]
+    /// for details on all available stages.
     ///
-    /// # Panics
+    /// See [`VkGraphicsPipelineCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkGraphicsPipelineCreateInfo.html).
     ///
-    /// If shader code is not a multiple of four bytes.
+    /// `shaders` may contain pre-built [`Shader`] values or any inputs that can be converted into
+    /// them. Invalid shader data is returned as [`DriverError::InvalidData`] through the `Result`
+    /// instead of panicking.
     ///
     /// # Examples
     ///
@@ -334,7 +413,7 @@ impl GraphicsPipeline {
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::graphic::{GraphicsPipeline, GraphicsPipelineInfo};
+    /// # use vk_graph::driver::graphics::{GraphicsPipeline, GraphicsPipelineInfo};
     /// # use vk_graph::driver::shader::Shader;
     /// # fn main() -> Result<(), DriverError> {
     /// # let device = Device::create(DeviceInfo::default())?;
@@ -374,11 +453,11 @@ impl GraphicsPipeline {
             .ok_or(DriverError::InvalidData)?
             .try_vertex_input()?;
 
-        // Check for proper stages because vulkan may not complain but this is bad
+        // Check for proper stages because Vulkan may not complain but this is invalid.
         let has_fragment_stage = shaders
             .iter()
             .any(|shader| shader.stage.contains(vk::ShaderStageFlags::FRAGMENT));
-        let has_tesselation_stage = shaders.iter().any(|shader| {
+        let has_tessellation_stage = shaders.iter().any(|shader| {
             shader
                 .stage
                 .contains(vk::ShaderStageFlags::TESSELLATION_CONTROL)
@@ -392,7 +471,7 @@ impl GraphicsPipeline {
             .any(|shader| shader.stage.contains(vk::ShaderStageFlags::GEOMETRY));
 
         debug_assert!(
-            has_fragment_stage || has_tesselation_stage || has_geometry_stage,
+            has_fragment_stage || has_tessellation_stage || has_geometry_stage,
             "invalid shader stage combination"
         );
 
@@ -496,15 +575,17 @@ impl GraphicsPipeline {
             if let Some(OrderedFloat(min_sample_shading)) = info.min_sample_shading {
                 #[cfg(debug_assertions)]
                 if info.samples.is_single() {
-                    // This combination of a single-sampled pipeline and minimum sample shading
-                    // does not make sense and should not be requested. In the future maybe this is
-                    // part of the MSAA value so it can't be specified.
+                    /*
+                    This combination of a single-sampled pipeline and minimum sample shading does
+                    not make sense and should not be requested. In the future maybe this is part of
+                    the MSAA value so it can't be specified.
+                    */
                     warn!("unsupported sample rate shading of single-sample pipeline");
                 }
 
                 // Callers should check this before attempting to use the feature
                 debug_assert!(
-                    device.physical_device.features_v1_0.sample_rate_shading,
+                    device.physical.features_v1_0.sample_rate_shading,
                     "unsupported sample rate shading feature"
                 );
 
@@ -523,18 +604,12 @@ impl GraphicsPipeline {
                     input_attachments,
                     layout,
                     multisample,
-                    name: Default::default(),
                     push_constants,
                     shader_stages,
                     vertex_input,
                 }),
             })
         }
-    }
-
-    /// Gets the debugging name assigned to this pipeline, if one has been set.
-    pub fn debug_name(&self) -> Option<&str> {
-        self.inner.name.get().map(String::as_str)
     }
 
     /// The device which owns this graphics pipeline.
@@ -549,25 +624,80 @@ impl GraphicsPipeline {
 
     /// Sets the debugging name assigned to this pipeline.
     ///
-    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
-    /// previously set name value.
-    pub fn set_debug_name(&mut self, name: impl Into<String>) {
-        if !self.inner.device.physical_device.instance.info.debug {
-            return;
-        }
+    /// _Note:_ The name of the underlying Vulkan pipeline is lazily updated as submissions are
+    /// recorded.
+    pub fn set_debug_name(&self, name: impl AsRef<str>) {
+        Device::try_set_debug_utils_object_name(
+            &self.inner.device,
+            self.inner.layout,
+            lazy_str!("{} (layout)", name.as_ref()),
+        );
+        Device::try_set_private_data_object_name(
+            &self.inner.device,
+            vk::ObjectType::PIPELINE_LAYOUT,
+            self.inner.layout,
+            lazy_str!("{}", name.as_ref()),
+        );
 
-        // Both Ok and Err are valid conditions
-        let _ = self.inner.name.set(name.into());
+        for (set_idx, layout) in &self.inner.descriptor_info.layouts {
+            layout.set_debug_name(lazy_str!("{} (DS{set_idx})", name.as_ref()));
+        }
+    }
+
+    pub(crate) fn set_variant_debug_name(
+        &self,
+        pipeline_handle: vk::Pipeline,
+        render_pass: vk::RenderPass,
+        subpass_idx: u32,
+        name: impl AsRef<str>,
+    ) {
+        Device::try_set_debug_utils_object_name(
+            &self.inner.device,
+            pipeline_handle,
+            lazy_str!(
+                "{} (render pass {:?}, subpass {subpass_idx})",
+                name.as_ref(),
+                render_pass
+            ),
+        );
+        Device::try_set_private_data_object_name(
+            &self.inner.device,
+            vk::ObjectType::PIPELINE,
+            pipeline_handle,
+            name,
+        );
     }
 
     /// Sets the debugging name assigned to this pipeline.
-    ///
-    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
-    /// previously set name value.
-    pub fn with_debug_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
         self.set_debug_name(name);
 
         self
+    }
+}
+
+impl Debug for GraphicsPipeline {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut res = f.debug_struct(stringify!(GraphicsPipeline));
+        let shader_stages = self
+            .inner
+            .shader_stages
+            .iter()
+            .map(|stage| stage.flags)
+            .collect::<Box<_>>();
+
+        if let Some(debug_name) = &Device::private_data_object_name(
+            &self.inner.device,
+            vk::ObjectType::PIPELINE_LAYOUT,
+            self.inner.layout,
+        ) {
+            res.field("debug_name", debug_name);
+        }
+
+        res.field("layout", &self.inner.layout)
+            .field("shader_stages", &shader_stages)
+            .field("input_attachments", &self.inner.input_attachments)
+            .finish_non_exhaustive()
     }
 }
 
@@ -586,6 +716,8 @@ impl PartialEq for GraphicsPipeline {
 }
 
 /// Information used to create a [`GraphicsPipeline`] instance.
+///
+/// See [`VkGraphicsPipelineCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkGraphicsPipelineCreateInfo.html).
 #[derive(Builder, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[builder(
     build_fn(private, name = "fallible_build"),
@@ -641,17 +773,17 @@ pub struct GraphicsPipelineInfo {
     #[builder(default = "vk::CullModeFlags::BACK")]
     pub cull_mode: vk::CullModeFlags,
 
-    /// Interpret polygon front-facing orientation.
+    /// Interprets polygon front-facing orientation.
     ///
     /// The default value is `vk::FrontFace::COUNTER_CLOCKWISE`.
     #[builder(default = "vk::FrontFace::COUNTER_CLOCKWISE")]
     pub front_face: vk::FrontFace,
 
-    /// Specify a fraction of the minimum number of unique samples to process for each fragment.
+    /// Specifies a fraction of the minimum number of unique samples to process for each fragment.
     #[builder(default, setter(into, strip_option))]
     pub min_sample_shading: Option<OrderedFloat<f32>>,
 
-    /// Control polygon rasterization mode.
+    /// Controls polygon rasterization mode.
     ///
     /// The default value is `vk::PolygonMode::FILL`.
     #[builder(default = "vk::PolygonMode::FILL")]
@@ -736,7 +868,6 @@ pub(crate) struct GraphicsPipelineInner {
     pub input_attachments: Box<[u32]>,
     pub layout: vk::PipelineLayout,
     pub multisample: MultisampleState,
-    pub name: OnceLock<String>,
     pub push_constants: Box<[vk::PushConstantRange]>,
     pub shader_stages: Box<[ShaderStage]>,
     pub vertex_input: VertexInputState,
@@ -748,6 +879,12 @@ impl Drop for GraphicsPipelineInner {
         if panicking() {
             return;
         }
+
+        Device::try_clear_private_data_object_name(
+            &self.device,
+            vk::ObjectType::PIPELINE_LAYOUT,
+            self.layout,
+        );
 
         unsafe {
             self.device.destroy_pipeline_layout(self.layout, None);
@@ -810,7 +947,7 @@ pub struct StencilMode {
 }
 
 impl StencilMode {
-    /// Specifes a stencil mode which is has no effect.
+    /// Specifies a stencil mode which has no effect.
     pub const IGNORE: Self = Self {
         fail_op: vk::StencilOp::KEEP,
         pass_op: vk::StencilOp::KEEP,

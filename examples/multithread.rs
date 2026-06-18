@@ -5,7 +5,7 @@ use {
     bmfont::{BMFont, OrdinateOrientation},
     clap::Parser,
     image::ImageReader,
-    log::info,
+    log::{info, warn},
     std::{
         collections::VecDeque,
         io::Cursor,
@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
 
     let secondary_queue_family = window
         .device
-        .physical_device
+        .physical
         .queue_families
         .iter()
         .enumerate()
@@ -108,17 +108,30 @@ fn main() -> anyhow::Result<()> {
 
                 // Clear a new image to a cycling color
                 let mut graph = Graph::default();
-                let image = graph.bind_resource(
-                    pool.resource(ImageInfo::image_2d(
+                let image = match pool.resource(
+                    ImageInfo::image_2d(
                         10,
                         10,
                         vk::Format::R8G8B8A8_UNORM,
                         vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
-                    ))
-                    .unwrap(),
-                );
+                    )
+                    .into_builder()
+                    .sharing_mode(if args.concurrent {
+                        vk::SharingMode::CONCURRENT
+                    } else {
+                        vk::SharingMode::EXCLUSIVE
+                    }),
+                ) {
+                    Ok(image) => Arc::new(image),
+                    Err(err) => {
+                        warn!("unable to allocate worker image: {err}");
+
+                        break;
+                    }
+                };
+                let image_node = graph.bind_resource(&image);
                 graph.clear_color_image(
-                    image,
+                    image_node,
                     [
                         (t.sin() * 127.0 + 128.0) as u8,
                         ((t + 2.0).sin() * 127.0 + 128.0) as u8,
@@ -127,16 +140,31 @@ fn main() -> anyhow::Result<()> {
                     ],
                 );
 
-                let image = graph.resource(image).clone();
-
                 // Submit on a queue we are reserving for only this thread to use
-                graph
-                    .into_submission()
-                    .queue_submit(&mut pool, secondary_queue_family_index, queue_index)
-                    .unwrap();
+                let mut fence = match graph.finalize().queue_submit(
+                    &mut pool,
+                    secondary_queue_family_index,
+                    queue_index,
+                ) {
+                    Ok(fence) => fence,
+                    Err(err) => {
+                        warn!("unable to submit worker graph: {err}");
 
-                // After submit() is called we can safely use this image on another thread!
-                tx.send(image).unwrap();
+                        break;
+                    }
+                };
+
+                if let Err(err) = fence.wait_signaled() {
+                    warn!("unable to wait for worker fence: {err}");
+
+                    break;
+                }
+
+                // After the fence signals, GPU work using this image has completed and the image
+                // can be used on another thread
+                if tx.send(image).is_err() {
+                    break;
+                }
             }
         }));
     }
@@ -145,7 +173,7 @@ fn main() -> anyhow::Result<()> {
     let mut images = VecDeque::new();
 
     let mut previous_frame = Instant::now();
-    window.run(|frame| {
+    let result = window.run(|frame| {
         let current_frame = Instant::now();
         let elapsed = current_frame - previous_frame;
         previous_frame = current_frame;
@@ -209,7 +237,7 @@ fn main() -> anyhow::Result<()> {
             message,
             4.0,
         );
-    })?;
+    });
 
     info!("Stopping threads");
 
@@ -217,6 +245,8 @@ fn main() -> anyhow::Result<()> {
     for thread in threads.drain(..) {
         thread.join().unwrap();
     }
+
+    result?;
 
     Ok(())
 }
@@ -264,7 +294,7 @@ fn load_font(device: &Device) -> anyhow::Result<BitmapFont> {
 
     // This copy happens in queue index 0!
     graph
-        .into_submission()
+        .finalize()
         .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     BitmapFont::new(device, font, [page_0])
@@ -275,4 +305,9 @@ struct Args {
     /// Enable Vulkan SDK validation layers
     #[arg(long)]
     debug: bool,
+
+    /// Use concurrent sharing mode (Vulkan implementation automatically transfers ownership)
+    /// instead of the default exclusive (vk-graph automatically tracks and transfers ownership)
+    #[arg(long)]
+    concurrent: bool,
 }

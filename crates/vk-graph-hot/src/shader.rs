@@ -102,127 +102,71 @@ impl HotShader {
     }
 
     /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_any_hit(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::ANY_HIT_KHR, path)
     }
 
     /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_callable(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::CALLABLE_KHR, path)
     }
 
     /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_closest_hit(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::CLOSEST_HIT_KHR, path)
     }
 
     /// Creates a new compute shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_compute(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::COMPUTE, path)
     }
 
     /// Creates a new fragment shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_fragment(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::FRAGMENT, path)
     }
 
     /// Creates a new geometry shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_geometry(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::GEOMETRY, path)
     }
 
     /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_intersection(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::INTERSECTION_KHR, path)
     }
 
     /// Creates a new mesh shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_mesh(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::MESH_EXT, path)
     }
 
     /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_miss(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::MISS_KHR, path)
     }
 
     /// Creates a new ray tracing shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_ray_gen(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::RAYGEN_KHR, path)
     }
 
     /// Creates a new mesh task shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_task(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::TASK_EXT, path)
     }
 
     /// Creates a new tessellation control shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_tessellation_ctrl(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_CONTROL, path)
     }
 
     /// Creates a new tessellation evaluation shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_tessellation_eval(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::TESSELLATION_EVALUATION, path)
     }
 
     /// Creates a new vertex shader.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn new_vertex(path: impl AsRef<Path>) -> HotShaderBuilder {
         Self::new(vk::ShaderStageFlags::VERTEX, path)
     }
@@ -324,10 +268,6 @@ impl HotShader {
     }
 
     /// Creates a shader using a shader kind inferred from the source code.
-    ///
-    /// # Panics
-    ///
-    /// If the shader code is invalid.
     pub fn from_path(path: impl AsRef<Path>) -> HotShaderBuilder {
         HotShaderBuilder::default().path(path)
     }

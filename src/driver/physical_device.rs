@@ -1,9 +1,12 @@
-//! Physical device types
+//! Physical device types.
 
 use {
-    super::{DriverError, instance::Instance},
+    super::{
+        DriverError,
+        instance::{ApiVersion, Instance},
+    },
     crate::driver::device::Device,
-    ash::{ext, khr, vk},
+    ash::{ext, khr as ash_khr, vk},
     log::{debug, error, warn},
     std::{
         collections::HashSet,
@@ -13,61 +16,295 @@ use {
     },
 };
 
-// TODO: There is a bunch of unsafe cstr handling here - does not check for null-termination
+const UNKNOWN_C_STRING: &str = "unknown";
+const MAX_C_STRING_UTF8_BYTES: usize = 128;
 
-fn vk_cstr_to_string_lossy(cstr: &[c_char]) -> String {
-    unsafe { CStr::from_ptr(cstr.as_ptr()) }
-        .to_string_lossy()
-        .to_string()
+fn vk_cstr_to_utf8_string(cstr: &[c_char]) -> String {
+    let scan_len = cstr.len().min(MAX_C_STRING_UTF8_BYTES + 1);
+    let mut bytes = Vec::with_capacity(scan_len.min(MAX_C_STRING_UTF8_BYTES));
+
+    for (idx, &ch) in cstr.iter().take(scan_len).enumerate() {
+        let byte = ch as u8;
+
+        if byte == 0 {
+            let Ok(res) = String::from_utf8(bytes) else {
+                break;
+            };
+
+            return res;
+        }
+
+        if idx == MAX_C_STRING_UTF8_BYTES {
+            break;
+        }
+
+        bytes.push(byte);
+    }
+
+    UNKNOWN_C_STRING.to_owned()
 }
 
-/// Properties of the physical device for acceleration structures.
-///
-/// See [`VkPhysicalDeviceAccelerationStructurePropertiesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceAccelerationStructurePropertiesKHR.html).
-#[derive(Clone, Copy, Debug)]
-pub struct AccelerationStructureProperties {
-    /// The maximum number of geometries in a bottom level acceleration structure.
-    pub max_geometry_count: u64,
-
-    /// The maximum number of instances in a top level acceleration structure.
-    pub max_instance_count: u64,
-
-    /// The maximum number of triangles or AABBs in all geometries in a bottom level acceleration
-    /// structure.
-    pub max_primitive_count: u64,
-
-    /// The maximum number of acceleration structure bindings that can be accessible to a single
-    /// shader stage in a pipeline layout.
-    ///
-    /// Descriptor bindings with a descriptor type of
-    /// `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` count against this limit.
-    pub max_per_stage_descriptor_accel_structs: u32,
-
-    /// The maximum number of acceleration structure descriptors that can be included in descriptor
-    /// bindings in a pipeline layout across all pipeline shader stages and descriptor set numbers.
-    ///
-    /// Descriptor bindings with a descriptor type of
-    /// `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` count against this limit.
-    pub max_descriptor_set_accel_structs: u32,
-
-    /// The minimum required alignment, in bytes, for scratch data passed in to an acceleration
-    /// structure build command.
-    pub min_accel_struct_scratch_offset_alignment: u32,
+fn vk_extension_name(extension_name: &'static CStr) -> &'static str {
+    extension_name
+        .to_str()
+        .expect("Vulkan extension name should be UTF-8")
 }
 
-impl From<vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'_>>
-    for AccelerationStructureProperties
-{
-    fn from(props: vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'_>) -> Self {
-        Self {
-            max_geometry_count: props.max_geometry_count,
-            max_instance_count: props.max_instance_count,
-            max_primitive_count: props.max_primitive_count,
-            max_per_stage_descriptor_accel_structs: props
-                .max_per_stage_descriptor_acceleration_structures,
-            max_descriptor_set_accel_structs: props.max_descriptor_set_acceleration_structures,
-            min_accel_struct_scratch_offset_alignment: props
-                .min_acceleration_structure_scratch_offset_alignment,
+/// Physical-device support types for `VK_KHR_*` extensions.
+pub mod khr {
+    use ash::vk;
+
+    /// Properties of the physical device for acceleration structures.
+    ///
+    /// See [`VkPhysicalDeviceAccelerationStructurePropertiesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceAccelerationStructurePropertiesKHR.html).
+    #[derive(Clone, Copy, Debug)]
+    pub struct AccelerationStructureProperties {
+        /// The maximum number of geometries in a bottom-level acceleration structure.
+        pub max_geometry_count: u64,
+
+        /// The maximum number of instances in a top-level acceleration structure.
+        pub max_instance_count: u64,
+
+        /// The maximum number of triangles or AABBs in all geometries in a bottom-level acceleration
+        /// structure.
+        pub max_primitive_count: u64,
+
+        /// The maximum number of acceleration structure bindings that can be accessible to a single
+        /// shader stage in a pipeline layout.
+        ///
+        /// Descriptor bindings with a descriptor type of
+        /// `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` count against this limit.
+        pub max_per_stage_descriptor_accel_structs: u32,
+
+        /// The maximum number of acceleration structure descriptors that can be included in descriptor
+        /// bindings in a pipeline layout across all pipeline shader stages and descriptor set numbers.
+        ///
+        /// Descriptor bindings with a descriptor type of
+        /// `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` count against this limit.
+        pub max_descriptor_set_accel_structs: u32,
+
+        /// The minimum required alignment, in bytes, for scratch data passed in to an acceleration
+        /// structure build command.
+        pub min_accel_struct_scratch_offset_alignment: u32,
+    }
+
+    impl From<vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'_>>
+        for AccelerationStructureProperties
+    {
+        fn from(props: vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'_>) -> Self {
+            Self {
+                max_geometry_count: props.max_geometry_count,
+                max_instance_count: props.max_instance_count,
+                max_primitive_count: props.max_primitive_count,
+                max_per_stage_descriptor_accel_structs: props
+                    .max_per_stage_descriptor_acceleration_structures,
+                max_descriptor_set_accel_structs: props.max_descriptor_set_acceleration_structures,
+                min_accel_struct_scratch_offset_alignment: props
+                    .min_acceleration_structure_scratch_offset_alignment,
+            }
+        }
+    }
+
+    /// Features of the physical device for acceleration structures.
+    #[derive(Clone, Copy, Debug)]
+    pub struct AccelerationStructureFeatures {
+        /// Indicates whether the implementation supports acceleration structure functionality.
+        pub acceleration_structure: bool,
+
+        /// Indicates whether acceleration structure capture and replay is supported.
+        pub acceleration_structure_capture_replay: bool,
+
+        /// Indicates whether indirect acceleration structure build commands are supported.
+        pub acceleration_structure_indirect_build: bool,
+
+        /// Indicates whether acceleration structures can be built on the host.
+        pub acceleration_structure_host_commands: bool,
+
+        /// Indicates whether acceleration structure descriptors can be updated after bind.
+        pub descriptor_binding_acceleration_structure_update_after_bind: bool,
+    }
+
+    impl From<vk::PhysicalDeviceAccelerationStructureFeaturesKHR<'_>>
+        for AccelerationStructureFeatures
+    {
+        fn from(features: vk::PhysicalDeviceAccelerationStructureFeaturesKHR<'_>) -> Self {
+            Self {
+                acceleration_structure: features.acceleration_structure == vk::TRUE,
+                acceleration_structure_capture_replay: features
+                    .acceleration_structure_capture_replay
+                    == vk::TRUE,
+                acceleration_structure_indirect_build: features
+                    .acceleration_structure_indirect_build
+                    == vk::TRUE,
+                acceleration_structure_host_commands: features.acceleration_structure_host_commands
+                    == vk::TRUE,
+                descriptor_binding_acceleration_structure_update_after_bind: features
+                    .descriptor_binding_acceleration_structure_update_after_bind
+                    == vk::TRUE,
+            }
+        }
+    }
+
+    /// Features and properties advertised by `VK_KHR_acceleration_structure`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct AccelerationStructure {
+        /// Features advertised by `VK_KHR_acceleration_structure`.
+        pub features: AccelerationStructureFeatures,
+
+        /// Properties advertised by `VK_KHR_acceleration_structure`.
+        pub properties: AccelerationStructureProperties,
+    }
+
+    /// Features of the physical device for ray tracing.
+    ///
+    /// See [`VkPhysicalDeviceRayTracingPipelineFeaturesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayTracingPipelineFeaturesKHR.html).
+    #[derive(Clone, Copy, Debug)]
+    pub struct RayTracingPipelineFeatures {
+        /// Indicates whether the implementation supports the ray tracing pipeline functionality.
+        ///
+        /// See the [ray tracing pipeline chapter](https://docs.vulkan.org/spec/latest/chapters/raytracing.html).
+        ///
+        pub ray_tracing_pipeline: bool,
+
+        /// Indicates whether the implementation supports saving and reusing shader group handles, e.g.
+        /// for trace capture and replay.
+        pub ray_tracing_pipeline_shader_group_handle_capture_replay: bool,
+
+        /// Indicates whether the implementation supports reuse of shader group handles being
+        /// arbitrarily mixed with creation of non-reused shader group handles.
+        ///
+        /// If this is `false`, all reused shader group handles must be specified before any non-reused
+        /// handles may be created.
+        pub ray_tracing_pipeline_shader_group_handle_capture_replay_mixed: bool,
+
+        /// Indicates whether the implementation supports indirect ray tracing commands, e.g.
+        /// `vkCmdTraceRaysIndirectKHR`.
+        pub ray_tracing_pipeline_trace_rays_indirect: bool,
+
+        /// Indicates whether the implementation supports primitive culling during ray traversal.
+        pub ray_traversal_primitive_culling: bool,
+    }
+
+    impl From<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>> for RayTracingPipelineFeatures {
+        fn from(features: vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>) -> Self {
+            Self {
+                ray_tracing_pipeline: features.ray_tracing_pipeline == vk::TRUE,
+                ray_tracing_pipeline_shader_group_handle_capture_replay: features
+                    .ray_tracing_pipeline_shader_group_handle_capture_replay
+                    == vk::TRUE,
+                ray_tracing_pipeline_shader_group_handle_capture_replay_mixed: features
+                    .ray_tracing_pipeline_shader_group_handle_capture_replay_mixed
+                    == vk::TRUE,
+                ray_tracing_pipeline_trace_rays_indirect: features
+                    .ray_tracing_pipeline_trace_rays_indirect
+                    == vk::TRUE,
+                ray_traversal_primitive_culling: features.ray_traversal_primitive_culling
+                    == vk::TRUE,
+            }
+        }
+    }
+
+    /// Properties of the physical device for ray tracing.
+    ///
+    /// See [`VkPhysicalDeviceRayTracingPipelinePropertiesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayTracingPipelinePropertiesKHR.html).
+    #[derive(Clone, Copy, Debug)]
+    pub struct RayTracingPipelineProperties {
+        /// The size in bytes of the shader header.
+        pub shader_group_handle_size: u32,
+
+        /// The maximum number of levels of ray recursion allowed in a trace command.
+        pub max_ray_recursion_depth: u32,
+
+        /// The maximum stride in bytes allowed between shader groups in the shader binding table.
+        pub max_shader_group_stride: u32,
+
+        /// The required alignment in bytes for the base of the shader binding table.
+        pub shader_group_base_alignment: u32,
+
+        /// The number of bytes for the information required to do capture and replay for shader group
+        /// handles.
+        pub shader_group_handle_capture_replay_size: u32,
+
+        /// The maximum number of ray generation shader invocations which may be produced by a single
+        /// `vkCmdTraceRaysIndirectKHR` or `vkCmdTraceRaysKHR` command.
+        pub max_ray_dispatch_invocation_count: u32,
+
+        /// The required alignment in bytes for each shader binding table entry.
+        ///
+        /// The value must be a power of two.
+        pub shader_group_handle_alignment: u32,
+
+        /// The maximum size in bytes for a ray attribute structure.
+        pub max_ray_hit_attribute_size: u32,
+    }
+
+    impl From<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>> for RayTracingPipelineProperties {
+        fn from(props: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>) -> Self {
+            Self {
+                shader_group_handle_size: props.shader_group_handle_size,
+                max_ray_recursion_depth: props.max_ray_recursion_depth,
+                max_shader_group_stride: props.max_shader_group_stride,
+                shader_group_base_alignment: props.shader_group_base_alignment,
+                shader_group_handle_capture_replay_size: props
+                    .shader_group_handle_capture_replay_size,
+                max_ray_dispatch_invocation_count: props.max_ray_dispatch_invocation_count,
+                shader_group_handle_alignment: props.shader_group_handle_alignment,
+                max_ray_hit_attribute_size: props.max_ray_hit_attribute_size,
+            }
+        }
+    }
+
+    /// Features and properties advertised by `VK_KHR_ray_tracing_pipeline`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct RayTracingPipeline {
+        /// Features advertised by `VK_KHR_ray_tracing_pipeline`.
+        pub features: RayTracingPipelineFeatures,
+
+        /// Properties advertised by `VK_KHR_ray_tracing_pipeline`.
+        pub properties: RayTracingPipelineProperties,
+    }
+
+    /// Features advertised by `VK_KHR_present_id`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct PresentId {
+        /// Features advertised by `VK_KHR_present_id`.
+        pub features: PresentIdFeatures,
+    }
+
+    /// Features of the physical device for present IDs.
+    #[derive(Clone, Copy, Debug)]
+    pub struct PresentIdFeatures {
+        /// Indicates whether present IDs are supported.
+        pub present_id: bool,
+    }
+
+    impl From<vk::PhysicalDevicePresentIdFeaturesKHR<'_>> for PresentIdFeatures {
+        fn from(features: vk::PhysicalDevicePresentIdFeaturesKHR<'_>) -> Self {
+            Self {
+                present_id: features.present_id == vk::TRUE,
+            }
+        }
+    }
+
+    /// Features advertised by `VK_KHR_present_wait`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct PresentWait {
+        /// Features advertised by `VK_KHR_present_wait`.
+        pub features: PresentWaitFeatures,
+    }
+
+    /// Features of the physical device for present wait.
+    #[derive(Clone, Copy, Debug)]
+    pub struct PresentWaitFeatures {
+        /// Indicates whether present wait is supported.
+        pub present_wait: bool,
+    }
+
+    impl From<vk::PhysicalDevicePresentWaitFeaturesKHR<'_>> for PresentWaitFeatures {
+        fn from(features: vk::PhysicalDevicePresentWaitFeaturesKHR<'_>) -> Self {
+            Self {
+                present_wait: features.present_wait == vk::TRUE,
+            }
         }
     }
 }
@@ -84,7 +321,7 @@ pub struct DepthStencilResolveProperties {
     /// support additional modes.
     pub supported_depth_resolve_modes: vk::ResolveModeFlags,
 
-    /// A bitmask of indicating the set of supported stencil resolve modes.
+    /// A bitmask indicating the set of supported stencil resolve modes.
     ///
     /// `VK_RESOLVE_MODE_SAMPLE_ZERO_BIT` must be included in the set but implementations may
     /// support additional modes. `VK_RESOLVE_MODE_AVERAGE_BIT` must not be included in the set.
@@ -115,34 +352,20 @@ impl From<vk::PhysicalDeviceDepthStencilResolveProperties<'_>> for DepthStencilR
     }
 }
 
-/// Features of the physical device for vertex indexing.
+/// Structure which holds data about a physical device.
 ///
-/// See [`VkPhysicalDeviceIndexTypeUint8FeaturesEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceIndexTypeUint8FeaturesEXT.html).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct IndexTypeUint8Features {
-    /// Indicates that VK_INDEX_TYPE_UINT8_EXT can be used with vkCmdBindIndexBuffer2KHR and
-    /// vkCmdBindIndexBuffer.
-    pub index_type_uint8: bool,
-}
-
-impl From<vk::PhysicalDeviceIndexTypeUint8FeaturesEXT<'_>> for IndexTypeUint8Features {
-    fn from(features: vk::PhysicalDeviceIndexTypeUint8FeaturesEXT<'_>) -> Self {
-        Self {
-            index_type_uint8: features.index_type_uint8 == vk::TRUE,
-        }
-    }
-}
-
-/// Structure which holds data about the physical hardware selected by the current device.
+/// Extension support is exposed through fields named after Vulkan extension names. Extensions that
+/// only need a support check are booleans, such as [`Self::vk_ext_private_data`] and
+/// [`Self::vk_khr_swapchain`]. Extensions with feature or property data are `Option` fields, such
+/// as [`Self::vk_khr_acceleration_structure`] and [`Self::vk_khr_ray_tracing_pipeline`].
+///
+/// Use [`Device::physical`](super::device::Device::physical) for the selected physical device of a
+/// logical device.
+///
+/// See [`VkPhysicalDevice`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDevice.html).
 #[derive(Clone)]
 #[read_only::cast]
 pub struct PhysicalDevice {
-    /// Describes the properties of the device which relate to acceleration structures, if
-    /// available.
-    ///
-    /// _Note:_ This field is read-only.
-    pub accel_struct_properties: Option<AccelerationStructureProperties>,
-
     /// Describes the properties of the device which relate to depth/stencil resolve operations.
     ///
     /// _Note:_ This field is read-only.
@@ -166,15 +389,10 @@ pub struct PhysicalDevice {
     /// _Note:_ This field is read-only.
     pub features_v1_2: Vulkan12Features,
 
-    /// The native Vulkan resource handle of this buffer.
+    /// The native Vulkan resource handle of this physical device.
     ///
     /// _Note:_ This field is read-only.
     pub handle: vk::PhysicalDevice,
-
-    /// Describes the features of the physical device which relate to vertex indexing.
-    ///
-    /// _Note:_ This field is read-only.
-    pub index_type_uint8_features: IndexTypeUint8Features,
 
     /// The Vulkan instance which owns this device.
     ///
@@ -186,19 +404,19 @@ pub struct PhysicalDevice {
     /// _Note:_ This field is read-only.
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
 
-    /// Device properties of the physical device which are part of the Vulkan 1.0 base feature set.
+    /// Device properties of the physical device which are part of the Vulkan 1.0 base property set.
     ///
     /// _Note:_ This field is read-only.
     pub properties_v1_0: Vulkan10Properties,
 
     /// Describes the properties of the physical device which are part of the Vulkan 1.1 base
-    /// feature set.
+    /// property set.
     ///
     /// _Note:_ This field is read-only.
     pub properties_v1_1: Vulkan11Properties,
 
     /// Describes the properties of the physical device which are part of the Vulkan 1.2 base
-    /// feature set.
+    /// property set.
     ///
     /// _Note:_ This field is read-only.
     pub properties_v1_2: Vulkan12Properties,
@@ -210,37 +428,63 @@ pub struct PhysicalDevice {
 
     pub(crate) queue_family_indices: Box<[u32]>,
 
-    /// Describes the features of the device which relate to ray query, if available.
+    /// `VK_KHR_ray_tracing_pipeline` features and properties, when supported.
     ///
     /// _Note:_ This field is read-only.
-    pub ray_query_features: RayQueryFeatures,
-
-    /// Describes the features of the device which relate to ray tracing, if available.
-    ///
-    /// _Note:_ This field is read-only.
-    pub ray_tracing_pipeline_features: RayTracingPipelineFeatures,
-
-    /// Describes the properties of the device which relate to ray tracing, if available.
-    ///
-    /// _Note:_ This field is read-only.
-    pub ray_tracing_pipeline_properties: Option<RayTracingPipelineProperties>,
+    pub vk_khr_ray_tracing_pipeline: Option<khr::RayTracingPipeline>,
 
     /// Describes the properties of the device which relate to min/max sampler filtering.
     ///
     /// _Note:_ This field is read-only.
     pub sampler_filter_minmax_properties: SamplerFilterMinmaxProperties,
 
-    /// True if the device supports swapchain use.
+    /// Whether `VK_EXT_index_type_uint8` support is available.
     ///
     /// _Note:_ This field is read-only.
-    pub khr_swapchain: bool,
+    pub vk_ext_index_type_uint8: bool,
+
+    /// Whether `VK_EXT_private_data` support is available.
+    ///
+    /// _Note:_ This field is read-only.
+    pub vk_ext_private_data: bool,
+
+    /// `VK_KHR_acceleration_structure` features and properties, when supported.
+    ///
+    /// _Note:_ This field is read-only.
+    pub vk_khr_acceleration_structure: Option<khr::AccelerationStructure>,
+
+    /// `VK_KHR_present_id` features, when supported.
+    ///
+    /// _Note:_ This field is read-only.
+    pub vk_khr_present_id: Option<khr::PresentId>,
+
+    /// `VK_KHR_present_wait` features, when supported.
+    ///
+    /// _Note:_ This field is read-only.
+    pub vk_khr_present_wait: Option<khr::PresentWait>,
+
+    /// Whether `VK_KHR_ray_query` support is available.
+    ///
+    /// _Note:_ This field is read-only.
+    pub vk_khr_ray_query: bool,
+
+    /// Whether `VK_KHR_swapchain` support is available.
+    ///
+    /// _Note:_ This field is read-only.
+    pub vk_khr_swapchain: bool,
+
+    /// Whether synchronization2 support is available through Vulkan 1.3 core or
+    /// `VK_KHR_synchronization2`.
+    ///
+    /// _Note:_ This field is read-only.
+    pub vk_khr_synchronization2: bool,
 }
 
 impl PhysicalDevice {
     /// Prepares device creation information and calls the provided callback to allow an application
     /// to control the device creation process.
     ///
-    /// _Note:_  This is only useful for interoperating with other libraries as device creation is
+    /// _Note:_ This is only useful for interoperating with other libraries as device creation is
     /// normally handled by the [`Device::try_from_display`] and [`Device::create`]
     /// functions.
     ///
@@ -248,41 +492,65 @@ impl PhysicalDevice {
     ///
     /// This comes with all the caveats of using `ash` builder types, which are inherently
     /// dangerous. Use with extreme caution.
+    ///
+    /// See [`VkDeviceCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDeviceCreateInfo.html).
     #[profiling::function]
     pub unsafe fn create_ash_device<F>(&self, create_fn: F) -> ash::prelude::VkResult<ash::Device>
     where
         F: FnOnce(vk::DeviceCreateInfo) -> ash::prelude::VkResult<ash::Device>,
     {
-        let mut enabled_ext_names = Vec::with_capacity(6);
+        let mut enabled_ext_names = Vec::with_capacity(11);
 
-        // The swapchain extension is required for presentation support, so we enable it whenever
-        // the physical device reports support. Imported instances may already carry the required
-        // instance extensions even though vk-graph did not create them.
-        if self.khr_swapchain {
-            enabled_ext_names.push(khr::swapchain::NAME.as_ptr());
+        if self.vk_khr_acceleration_structure.is_some() {
+            enabled_ext_names.push(ash_khr::acceleration_structure::NAME.as_ptr());
+            enabled_ext_names.push(ash_khr::deferred_host_operations::NAME.as_ptr());
         }
 
-        if self.accel_struct_properties.is_some() {
-            enabled_ext_names.push(khr::acceleration_structure::NAME.as_ptr());
-            enabled_ext_names.push(khr::deferred_host_operations::NAME.as_ptr());
-        }
-
-        if self.ray_query_features.ray_query {
-            enabled_ext_names.push(khr::ray_query::NAME.as_ptr());
-        }
-
-        if self.ray_tracing_pipeline_features.ray_tracing_pipeline {
-            enabled_ext_names.push(khr::ray_tracing_pipeline::NAME.as_ptr());
-        }
-
-        if self.index_type_uint8_features.index_type_uint8 {
+        if self.vk_ext_index_type_uint8 {
             enabled_ext_names.push(ext::index_type_uint8::NAME.as_ptr());
         }
 
-        // Molten-vk doesn't support the full Vulkan feature set, hence the portability subset
-        // extension must be enabled.
+        if self.vk_khr_present_id.is_some() {
+            enabled_ext_names.push(ash_khr::present_id::NAME.as_ptr());
+        }
+
+        if self.vk_khr_present_wait.is_some() {
+            enabled_ext_names.push(ash_khr::present_wait::NAME.as_ptr());
+        }
+
+        if self.vk_khr_synchronization2 && self.instance.info.api_version < ApiVersion::Vulkan13 {
+            enabled_ext_names.push(ash_khr::synchronization2::NAME.as_ptr());
+        }
+
+        if self.vk_ext_private_data {
+            enabled_ext_names.push(ext::private_data::NAME.as_ptr());
+        }
+
+        if self.vk_khr_ray_query {
+            enabled_ext_names.push(ash_khr::ray_query::NAME.as_ptr());
+        }
+
+        if self
+            .vk_khr_ray_tracing_pipeline
+            .as_ref()
+            .is_some_and(|ext| ext.features.ray_tracing_pipeline)
+        {
+            enabled_ext_names.push(ash_khr::ray_tracing_pipeline::NAME.as_ptr());
+        }
+
+        /*
+        The swapchain extension is required for presentation support, so we enable it whenever the
+        physical device reports support. Imported instances may already carry the required instance
+        extensions even though vk-graph did not create them.
+        */
+        if self.vk_khr_swapchain {
+            enabled_ext_names.push(ash_khr::swapchain::NAME.as_ptr());
+        }
+
+        // MoltenVK doesn't support the full Vulkan feature set, hence the portability subset
+        // extension must be enabled
         #[cfg(all(target_os = "macos", feature = "loaded"))]
-        enabled_ext_names.push(khr::portability_subset::NAME.as_ptr());
+        enabled_ext_names.push(ash_khr::portability_subset::NAME.as_ptr());
 
         let priorities = repeat_n(
             1.0,
@@ -317,27 +585,51 @@ impl PhysicalDevice {
         let mut acceleration_structure_features =
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut index_type_uint8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
+        let mut present_id_features = vk::PhysicalDevicePresentIdFeaturesKHR::default();
+        let mut present_wait_features = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
         let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
         let mut ray_tracing_pipeline_features =
             vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+        let mut synchronization2_features = vk::PhysicalDeviceSynchronization2Features::default();
+        let mut private_data_features = vk::PhysicalDevicePrivateDataFeaturesEXT::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut features_v1_1)
             .push_next(&mut features_v1_2);
 
-        if self.accel_struct_properties.is_some() {
+        if self.vk_khr_acceleration_structure.is_some() {
             features = features.push_next(&mut acceleration_structure_features);
         }
 
-        if self.ray_query_features.ray_query {
+        if self.vk_ext_index_type_uint8 {
+            features = features.push_next(&mut index_type_uint8_features);
+        }
+
+        if self.vk_khr_present_id.is_some() {
+            features = features.push_next(&mut present_id_features);
+        }
+
+        if self.vk_khr_present_wait.is_some() {
+            features = features.push_next(&mut present_wait_features);
+        }
+
+        if self.vk_khr_ray_query {
             features = features.push_next(&mut ray_query_features);
         }
 
-        if self.ray_tracing_pipeline_features.ray_tracing_pipeline {
+        if self
+            .vk_khr_ray_tracing_pipeline
+            .as_ref()
+            .is_some_and(|ext| ext.features.ray_tracing_pipeline)
+        {
             features = features.push_next(&mut ray_tracing_pipeline_features);
         }
 
-        if self.index_type_uint8_features.index_type_uint8 {
-            features = features.push_next(&mut index_type_uint8_features);
+        if self.vk_khr_synchronization2 {
+            features = features.push_next(&mut synchronization2_features);
+        }
+
+        if self.vk_ext_private_data {
+            features = features.push_next(&mut private_data_features);
         }
 
         unsafe { get_physical_device_features2(self.handle, &mut features) };
@@ -355,14 +647,19 @@ impl PhysicalDevice {
     ///
     /// # Panics
     ///
-    /// Panics if [Self.physical_device.ray_tracing_pipeline_properties] is `None`.
-    pub(crate) fn expect_ray_tracing_pipeline_properties(&self) -> &RayTracingPipelineProperties {
-        self.ray_tracing_pipeline_properties
+    /// Panics if [`Self::vk_khr_ray_tracing_pipeline`] is `None`.
+    pub(crate) fn expect_ray_tracing_pipeline_properties(
+        &self,
+    ) -> &khr::RayTracingPipelineProperties {
+        self.vk_khr_ray_tracing_pipeline
             .as_ref()
+            .map(|ext| &ext.properties)
             .expect("missing VK_KHR_ray_tracing_pipeline")
     }
 
     /// Lists the capabilities of a given format.
+    ///
+    /// See [`vkGetPhysicalDeviceFormatProperties`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetPhysicalDeviceFormatProperties.html).
     #[profiling::function]
     pub fn format_properties(&self, format: vk::Format) -> vk::FormatProperties {
         unsafe {
@@ -374,11 +671,13 @@ impl PhysicalDevice {
     /// Lists the physical device's image format capabilities.
     ///
     /// A result of `None` indicates the format is not supported.
+    ///
+    /// See [`vkGetPhysicalDeviceImageFormatProperties`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetPhysicalDeviceImageFormatProperties.html).
     #[profiling::function]
     pub fn image_format_properties(
         &self,
         format: vk::Format,
-        ty: vk::ImageType,
+        image_type: vk::ImageType,
         tiling: vk::ImageTiling,
         usage: vk::ImageUsageFlags,
         flags: vk::ImageCreateFlags,
@@ -387,7 +686,7 @@ impl PhysicalDevice {
             match self.instance.get_physical_device_image_format_properties(
                 self.handle,
                 format,
-                ty,
+                image_type,
                 tiling,
                 usage,
                 flags,
@@ -396,7 +695,7 @@ impl PhysicalDevice {
                 Err(err) if err == vk::Result::ERROR_FORMAT_NOT_SUPPORTED => {
                     // We don't log this condition because it is normal for unsupported
                     // formats to be checked - we use the result to inform callers they
-                    // cannot use those formats.
+                    // cannot use those formats
 
                     Ok(None)
                 }
@@ -410,7 +709,12 @@ impl PhysicalDevice {
     }
 
     /// Creates a physical device wrapper which reports features and properties.
-    pub fn try_from_ash(
+    ///
+    /// # Safety
+    ///
+    /// `physical_device` must be a valid handle enumerated from `instance`, and it must remain
+    /// valid for the lifetime of the returned wrapper.
+    pub unsafe fn try_from_ash(
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
     ) -> Result<Self, DriverError> {
@@ -441,30 +745,111 @@ impl PhysicalDevice {
             ..
         } = instance.fp_v1_1();
 
-        // Gather required features of the physical device
+        let extension_properties = unsafe {
+            instance
+                .enumerate_device_extension_properties(physical_device)
+                .map_err(|err| {
+                    error!("unable to enumerate device extensions: {err}");
+
+                    DriverError::Unsupported
+                })?
+        };
+
+        // Check for supported extensions
+        let extension_names = extension_properties
+            .iter()
+            .map(|prop| {
+                let extension_name = vk_cstr_to_utf8_string(&prop.extension_name);
+
+                debug!("extension {:?} v{}", extension_name, prop.spec_version);
+
+                extension_name
+            })
+            .collect::<HashSet<_>>();
+        let vk_khr_acceleration_structure = extension_names
+            .contains(vk_extension_name(ash_khr::acceleration_structure::NAME))
+            && extension_names.contains(vk_extension_name(ash_khr::deferred_host_operations::NAME));
+        let mut vk_ext_index_type_uint8 =
+            extension_names.contains(vk_extension_name(ext::index_type_uint8::NAME));
+        let mut vk_ext_private_data =
+            extension_names.contains(vk_extension_name(ext::private_data::NAME));
+        let mut vk_khr_present_id =
+            extension_names.contains(vk_extension_name(ash_khr::present_id::NAME));
+        let mut vk_khr_present_wait =
+            extension_names.contains(vk_extension_name(ash_khr::present_wait::NAME));
+        let mut vk_khr_ray_query =
+            extension_names.contains(vk_extension_name(ash_khr::ray_query::NAME));
+        let vk_khr_ray_tracing_pipeline =
+            extension_names.contains(vk_extension_name(ash_khr::ray_tracing_pipeline::NAME));
+        let vk_khr_swapchain = instance.khr_surface
+            && extension_names.contains(vk_extension_name(ash_khr::swapchain::NAME));
+        let mut vk_khr_synchronization2 = extension_names
+            .contains(vk_extension_name(ash_khr::synchronization2::NAME))
+            || instance.info.api_version >= ApiVersion::Vulkan13;
+
+        // Gather advertised features of the physical device
         let mut features_v1_1 = vk::PhysicalDeviceVulkan11Features::default();
         let mut features_v1_2 = vk::PhysicalDeviceVulkan12Features::default();
         let mut acceleration_structure_features =
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut index_type_u8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
+        let mut present_id_features = vk::PhysicalDevicePresentIdFeaturesKHR::default();
+        let mut present_wait_features = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
         let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
         let mut ray_tracing_pipeline_features =
             vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+        let mut synchronization2_features = vk::PhysicalDeviceSynchronization2Features::default();
+        let mut private_data_features = vk::PhysicalDevicePrivateDataFeaturesEXT::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut features_v1_1)
-            .push_next(&mut features_v1_2)
-            .push_next(&mut acceleration_structure_features)
-            .push_next(&mut index_type_u8_features)
-            .push_next(&mut ray_query_features)
-            .push_next(&mut ray_tracing_pipeline_features);
+            .push_next(&mut features_v1_2);
+
+        if vk_khr_acceleration_structure {
+            features = features.push_next(&mut acceleration_structure_features);
+        }
+
+        if vk_ext_index_type_uint8 {
+            features = features.push_next(&mut index_type_u8_features);
+        }
+
+        if vk_ext_private_data {
+            features = features.push_next(&mut private_data_features);
+        }
+
+        if vk_khr_present_id {
+            features = features.push_next(&mut present_id_features);
+        }
+
+        if vk_khr_present_wait {
+            features = features.push_next(&mut present_wait_features);
+        }
+
+        if vk_khr_ray_query {
+            features = features.push_next(&mut ray_query_features);
+        }
+
+        if vk_khr_ray_tracing_pipeline {
+            features = features.push_next(&mut ray_tracing_pipeline_features);
+        }
+
+        if vk_khr_synchronization2 {
+            features = features.push_next(&mut synchronization2_features);
+        }
+
         unsafe {
             get_physical_device_features2(physical_device, &mut features);
         }
         let features_v1_0 = features.features.into();
         let features_v1_1 = features_v1_1.into();
         let features_v1_2 = features_v1_2.into();
+        vk_ext_index_type_uint8 &= index_type_u8_features.index_type_uint8 == vk::TRUE;
+        vk_khr_present_id &= present_id_features.present_id == vk::TRUE;
+        vk_khr_present_wait &= present_wait_features.present_wait == vk::TRUE && vk_khr_present_id;
+        vk_khr_ray_query &= ray_query_features.ray_query == vk::TRUE;
+        vk_khr_synchronization2 &= synchronization2_features.synchronization2 == vk::TRUE;
+        vk_ext_private_data &= private_data_features.private_data == vk::TRUE;
 
-        // Gather required properties of the physical device
+        // Gather advertised properties of the physical device
         let mut properties_v1_1 = vk::PhysicalDeviceVulkan11Properties::default();
         let mut properties_v1_2 = vk::PhysicalDeviceVulkan12Properties::default();
         let mut accel_struct_properties =
@@ -491,86 +876,46 @@ impl PhysicalDevice {
         let depth_stencil_resolve_properties = depth_stencil_resolve_properties.into();
         let sampler_filter_minmax_properties = sampler_filter_minmax_properties.into();
 
-        let extension_properties = unsafe {
-            instance
-                .enumerate_device_extension_properties(physical_device)
-                .map_err(|err| {
-                    error!("unable to enumerate device extensions: {err}");
-
-                    DriverError::Unsupported
-                })?
-        };
-
-        debug!("physical device: {}", &properties_v1_0.device_name);
-
-        for prop in &extension_properties {
-            let extension_name = prop.extension_name.as_ptr();
-
-            if extension_name.is_null() {
-                warn!("invalid device extension name pointer: null");
-
-                return Err(DriverError::InvalidData);
-            }
-
-            let extension_name = unsafe { CStr::from_ptr(extension_name) };
-
-            debug!("extension {:?} v{}", extension_name, prop.spec_version);
-        }
-
-        // Check for supported extensions
-        let extension_names = extension_properties
-            .iter()
-            .map(|prop| prop.extension_name.as_ptr())
-            .filter(|extension_name| !extension_name.is_null())
-            .map(|extension_name| unsafe { CStr::from_ptr(extension_name) })
-            .collect::<HashSet<_>>();
-        let accel_struct = extension_names.contains(khr::acceleration_structure::NAME)
-            && extension_names.contains(khr::deferred_host_operations::NAME);
-        let index_type_uint8 = extension_names.contains(ext::index_type_uint8::NAME);
-        let ray_query = extension_names.contains(khr::ray_query::NAME);
-        let ray_tracing_pipeline = extension_names.contains(khr::ray_tracing_pipeline::NAME);
-        let khr_swapchain = instance.khr_surface && extension_names.contains(khr::swapchain::NAME);
-
-        // Gather optional features and properties of the physical device
-        let index_type_uint8_features = if index_type_uint8 {
-            index_type_u8_features.into()
-        } else {
-            Default::default()
-        };
-        let ray_query_features = if ray_query {
-            ray_query_features.into()
-        } else {
-            Default::default()
-        };
-        let ray_tracing_pipeline_features = if ray_tracing_pipeline {
-            ray_tracing_pipeline_features.into()
-        } else {
-            Default::default()
-        };
-        let accel_struct_properties = accel_struct.then(|| accel_struct_properties.into());
-        let ray_tracing_properties =
-            ray_tracing_pipeline.then(|| ray_tracing_pipeline_properties.into());
+        let vk_khr_acceleration_structure =
+            vk_khr_acceleration_structure.then(|| khr::AccelerationStructure {
+                features: acceleration_structure_features.into(),
+                properties: accel_struct_properties.into(),
+            });
+        let vk_khr_present_id = vk_khr_present_id.then(|| khr::PresentId {
+            features: present_id_features.into(),
+        });
+        let vk_khr_present_wait = vk_khr_present_wait.then(|| khr::PresentWait {
+            features: present_wait_features.into(),
+        });
+        let vk_khr_ray_tracing_pipeline =
+            vk_khr_ray_tracing_pipeline.then(|| khr::RayTracingPipeline {
+                features: ray_tracing_pipeline_features.into(),
+                properties: ray_tracing_pipeline_properties.into(),
+            });
 
         Ok(Self {
-            accel_struct_properties,
             depth_stencil_resolve_properties,
             features_v1_0,
             features_v1_1,
             features_v1_2,
             handle: physical_device,
-            index_type_uint8_features,
             instance: instance.clone(),
-            khr_swapchain,
             memory_properties,
             properties_v1_0,
             properties_v1_1,
             properties_v1_2,
             queue_families,
             queue_family_indices,
-            ray_query_features,
-            ray_tracing_pipeline_features,
-            ray_tracing_pipeline_properties: ray_tracing_properties,
             sampler_filter_minmax_properties,
+            vk_ext_index_type_uint8,
+            vk_ext_private_data,
+            vk_khr_acceleration_structure,
+            vk_khr_present_id,
+            vk_khr_present_wait,
+            vk_khr_ray_query,
+            vk_khr_ray_tracing_pipeline,
+            vk_khr_swapchain,
+            vk_khr_synchronization2,
         })
     }
 
@@ -590,124 +935,9 @@ impl Debug for PhysicalDevice {
     }
 }
 
-/// Features of the physical device for ray query.
-///
-/// See [`VkPhysicalDeviceRayQueryFeaturesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayQueryFeaturesKHR.html).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RayQueryFeatures {
-    /// Indicates whether the implementation supports ray query (`OpRayQueryProceedKHR`)
-    /// functionality.
-    pub ray_query: bool,
-}
-
-impl From<vk::PhysicalDeviceRayQueryFeaturesKHR<'_>> for RayQueryFeatures {
-    fn from(features: vk::PhysicalDeviceRayQueryFeaturesKHR<'_>) -> Self {
-        Self {
-            ray_query: features.ray_query == vk::TRUE,
-        }
-    }
-}
-
-/// Features of the physical device for ray tracing.
-///
-/// See [`VkPhysicalDeviceRayTracingPipelineFeaturesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayTracingPipelineFeaturesKHR.html).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RayTracingPipelineFeatures {
-    /// Indicates whether the implementation supports the ray tracing pipeline functionality.
-    ///
-    /// See
-    /// See the [ray tracing pipeline chapter](https://docs.vulkan.org/spec/latest/chapters/raytracing.html).
-    pub ray_tracing_pipeline: bool,
-
-    /// Indicates whether the implementation supports saving and reusing shader group handles, e.g.
-    /// for trace capture and replay.
-    pub ray_tracing_pipeline_shader_group_handle_capture_replay: bool,
-
-    /// Indicates whether the implementation supports reuse of shader group handles being
-    /// arbitrarily mixed with creation of non-reused shader group handles.
-    ///
-    /// If this is `false`, all reused shader group handles must be specified before any non-reused
-    /// handles may be created.
-    pub ray_tracing_pipeline_shader_group_handle_capture_replay_mixed: bool,
-
-    /// Indicates whether the implementation supports indirect ray tracing commands, e.g.
-    /// `vkCmdTraceRaysIndirectKHR`.
-    pub ray_tracing_pipeline_trace_rays_indirect: bool,
-
-    /// Indicates whether the implementation supports primitive culling during ray traversal.
-    pub ray_traversal_primitive_culling: bool,
-}
-
-impl From<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>> for RayTracingPipelineFeatures {
-    fn from(features: vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>) -> Self {
-        Self {
-            ray_tracing_pipeline: features.ray_tracing_pipeline == vk::TRUE,
-            ray_tracing_pipeline_shader_group_handle_capture_replay: features
-                .ray_tracing_pipeline_shader_group_handle_capture_replay
-                == vk::TRUE,
-            ray_tracing_pipeline_shader_group_handle_capture_replay_mixed: features
-                .ray_tracing_pipeline_shader_group_handle_capture_replay_mixed
-                == vk::TRUE,
-            ray_tracing_pipeline_trace_rays_indirect: features
-                .ray_tracing_pipeline_trace_rays_indirect
-                == vk::TRUE,
-            ray_traversal_primitive_culling: features.ray_traversal_primitive_culling == vk::TRUE,
-        }
-    }
-}
-
-/// Properties of the physical device for ray tracing.
-///
-/// See [`VkPhysicalDeviceRayTracingPipelinePropertiesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceRayTracingPipelinePropertiesKHR.html).
-#[derive(Clone, Copy, Debug)]
-pub struct RayTracingPipelineProperties {
-    /// The size in bytes of the shader header.
-    pub shader_group_handle_size: u32,
-
-    /// The maximum number of levels of ray recursion allowed in a trace command.
-    pub max_ray_recursion_depth: u32,
-
-    /// The maximum stride in bytes allowed between shader groups in the shader binding table.
-    pub max_shader_group_stride: u32,
-
-    /// The required alignment in bytes for the base of the shader binding table.
-    pub shader_group_base_alignment: u32,
-
-    /// The number of bytes for the information required to do capture and replay for shader group
-    /// handles.
-    pub shader_group_handle_capture_replay_size: u32,
-
-    /// The maximum number of ray generation shader invocations which may be produced by a single
-    /// vkCmdTraceRaysIndirectKHR or vkCmdTraceRaysKHR command.
-    pub max_ray_dispatch_invocation_count: u32,
-
-    /// The required alignment in bytes for each shader binding table entry.
-    ///
-    /// The value must be a power of two.
-    pub shader_group_handle_alignment: u32,
-
-    /// The maximum size in bytes for a ray attribute structure.
-    pub max_ray_hit_attribute_size: u32,
-}
-
-impl From<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>> for RayTracingPipelineProperties {
-    fn from(props: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_>) -> Self {
-        Self {
-            shader_group_handle_size: props.shader_group_handle_size,
-            max_ray_recursion_depth: props.max_ray_recursion_depth,
-            max_shader_group_stride: props.max_shader_group_stride,
-            shader_group_base_alignment: props.shader_group_base_alignment,
-            shader_group_handle_capture_replay_size: props.shader_group_handle_capture_replay_size,
-            max_ray_dispatch_invocation_count: props.max_ray_dispatch_invocation_count,
-            shader_group_handle_alignment: props.shader_group_handle_alignment,
-            max_ray_hit_attribute_size: props.max_ray_hit_attribute_size,
-        }
-    }
-}
-
 /// Properties of the physical device for min/max sampler filtering.
 ///
-/// See [`VkPhysicalDeviceLimits`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceLimits.html).
+/// See [`VkPhysicalDeviceSamplerFilterMinmaxProperties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceSamplerFilterMinmaxProperties.html).
 #[derive(Clone, Copy, Debug)]
 pub struct SamplerFilterMinmaxProperties {
     /// When `false` the component mapping of the image view used with min/max filtering must have
@@ -749,9 +979,9 @@ impl From<vk::PhysicalDeviceSamplerFilterMinmaxProperties<'_>> for SamplerFilter
     }
 }
 
-/// Description of Vulkan features.
+/// Description of Vulkan 1.0 features.
 ///
-/// See [`VkPhysicalDeviceProperties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceProperties.html).
+/// See [`VkPhysicalDeviceFeatures`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceFeatures.html).
 #[derive(Clone, Copy, Debug)]
 pub struct Vulkan10Features {
     /// Specifies that accesses to buffers are bounds-checked against the range of the buffer
@@ -762,11 +992,11 @@ pub struct Vulkan10Features {
     /// `VkIndexType` of `VK_INDEX_TYPE_UINT32`.
     ///
     /// `maxDrawIndexedIndexValue` is the maximum index value that may be used (aside from the
-    /// primitive restart index, which is always 2^32 - 1 when the VkIndexType is
+    /// primitive restart index, which is always 2^32 - 1 when the `VkIndexType` is
     /// `VK_INDEX_TYPE_UINT32`).
     ///
     /// If this feature is supported, `maxDrawIndexedIndexValue` must be 2^32 - 1; otherwise it
-    /// must be no smaller than 2^24 - 1. See maxDrawIndexedIndexValue.
+    /// must be no smaller than 2^24 - 1.
     pub full_draw_index_uint32: bool,
 
     /// Specifies whether image views with a `VkImageViewType` of `VK_IMAGE_VIEW_TYPE_CUBE_ARRAY`
@@ -896,8 +1126,7 @@ pub struct Vulkan10Features {
     pub large_points: bool,
 
     /// Specifies whether the implementation is able to replace the alpha value of the fragment
-    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
-    /// fragment operation.
+    /// shader output in the multisample fragment operation.
     ///
     /// If this feature is not enabled, then the `alphaToOneEnable` member of the
     /// `VkPipelineMultisampleStateCreateInfo` structure must be set to `VK_FALSE`. Otherwise
@@ -1082,17 +1311,16 @@ pub struct Vulkan10Features {
     /// - VK_FORMAT_R16_UINT
     /// - VK_FORMAT_R8_UINT
     ///
-    /// _Note:_ `shaderStorageImageExtendedFormats` feature only adds a guarantee of format
+    /// _Note:_ The `shaderStorageImageExtendedFormats` feature only adds a guarantee of format
     /// support, which is specified for the whole physical device. Therefore enabling or
-    /// disabling the feature via vkCreateDevice has no practical effect.
+    /// disabling the feature via `vkCreateDevice` has no practical effect.
     ///
     /// To query for additional properties, or if the feature is not supported,
     /// `vkGetPhysicalDeviceFormatProperties` and `vkGetPhysicalDeviceImageFormatProperties` can be
     /// used to check for supported properties of individual formats, as usual rules allow.
     ///
-    /// `VK_FORMAT_R32G32_UINT`, `VK_FORMAT_R32G32_SINT`, and `VK_FORMAT_R32G32_SFLOAT` from
-    /// `StorageImageExtendedFormats` SPIR-V capability, are already covered by core Vulkan
-    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
+    /// `VK_FORMAT_R32G32_UINT`, `VK_FORMAT_R32G32_SINT`, and `VK_FORMAT_R32G32_SFLOAT` from the
+    /// `StorageImageExtendedFormats` SPIR-V capability are already covered by core Vulkan.
     pub shader_storage_image_extended_formats: bool,
 
     /// Specifies whether multisampled storage images are supported.
@@ -1107,17 +1335,15 @@ pub struct Vulkan10Features {
     /// Specifies whether storage images and storage texel buffers require a format qualifier to be
     /// specified when reading.
     ///
-    /// `shaderStorageImageReadWithoutFormat` applies only to formats listed in the
-    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
-    /// list.
+    /// `shaderStorageImageReadWithoutFormat` applies only to formats listed in the features
+    /// chapter's storage image read without format list.
     pub shader_storage_image_read_without_format: bool,
 
     /// Specifies whether storage images and storage texel buffers require a format qualifier to be
     /// specified when writing.
     ///
-    /// `shaderStorageImageWriteWithoutFormat` applies only to formats listed in the
-    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
-    /// list.
+    /// `shaderStorageImageWriteWithoutFormat` applies only to formats listed in the features
+    /// chapter's storage image write without format list.
     pub shader_storage_image_write_without_format: bool,
 
     /// Specifies whether arrays of uniform buffers can be indexed by dynamically uniform integer
@@ -1315,9 +1541,9 @@ impl From<vk::PhysicalDeviceFeatures> for Vulkan10Features {
     }
 }
 
-/// Description of Vulkan limitations.
+/// Description of Vulkan 1.0 limits.
 ///
-/// See [`VkPhysicalDeviceVulkan11Features`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan11Features.html).
+/// See [`VkPhysicalDeviceLimits`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceLimits.html).
 #[derive(Clone, Copy, Debug)]
 pub struct Vulkan10Limits {
     /// The largest dimension (width) that is guaranteed to be supported for all images created
@@ -1795,27 +2021,22 @@ impl From<vk::PhysicalDeviceLimits> for Vulkan10Limits {
 
 /// Description of Vulkan 1.0 properties.
 ///
-/// See [`VkPhysicalDeviceVulkan11Properties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan11Properties.html).
+/// See [`VkPhysicalDeviceProperties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceProperties.html).
 #[derive(Clone, Debug)]
 pub struct Vulkan10Properties {
-    /// The version of Vulkan supported by the device, encoded as described
-    /// See the [limits chapter](https://docs.vulkan.org/spec/latest/chapters/limits.html).
+    /// The version of Vulkan supported by the device.
     pub api_version: u32,
 
     /// The vendor-specified version of the driver.
     pub driver_version: u32,
 
-    /// A unique identifier for the vendor (see
-    /// See the [limits chapter](https://docs.vulkan.org/spec/latest/chapters/limits.html).
-    /// of the physical device.
+    /// A unique identifier for the vendor of the physical device.
     pub vendor_id: u32,
 
     /// A unique identifier for the physical device among devices available from the vendor.
     pub device_id: u32,
 
-    /// a
-    /// See the [limits chapter](https://docs.vulkan.org/spec/latest/chapters/limits.html).
-    /// specifying the type of device.
+    /// The type of physical device.
     pub device_type: vk::PhysicalDeviceType,
 
     /// A UTF-8 string which is the name of the device.
@@ -1826,8 +2047,8 @@ pub struct Vulkan10Properties {
     pub pipeline_cache_uuid: [u8; vk::UUID_SIZE],
 
     /// The [`Vulkan10Limits`] structure specifying device-specific limits of the physical device.
-    /// See
-    /// [Limits](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#limits)
+    ///
+    /// See the [limits chapter](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#limits)
     /// for details.
     pub limits: Vulkan10Limits,
     // Unsupported (sparse residency):
@@ -1842,7 +2063,7 @@ impl From<vk::PhysicalDeviceProperties> for Vulkan10Properties {
             vendor_id: properties.vendor_id,
             device_id: properties.device_id,
             device_type: properties.device_type,
-            device_name: vk_cstr_to_string_lossy(&properties.device_name),
+            device_name: vk_cstr_to_utf8_string(&properties.device_name),
             pipeline_cache_uuid: properties.pipeline_cache_uuid,
             limits: properties.limits.into(),
         }
@@ -1851,7 +2072,7 @@ impl From<vk::PhysicalDeviceProperties> for Vulkan10Properties {
 
 /// Description of Vulkan 1.1 features.
 ///
-/// See [`VkPhysicalDeviceVulkan12Features`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan12Features.html).
+/// See [`VkPhysicalDeviceVulkan11Features`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan11Features.html).
 #[derive(Clone, Copy, Debug)]
 pub struct Vulkan11Features {
     /// Specifies whether objects in the StorageBuffer, ShaderRecordBufferKHR, or
@@ -1958,7 +2179,7 @@ impl From<vk::PhysicalDeviceVulkan11Features<'_>> for Vulkan11Features {
 
 /// Description of Vulkan 1.1 properties.
 ///
-/// See [`VkPhysicalDeviceVulkan12Properties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan12Properties.html).
+/// See [`VkPhysicalDeviceVulkan11Properties`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceVulkan11Properties.html).
 #[derive(Clone, Copy, Debug)]
 pub struct Vulkan11Properties {
     /// An array of `VK_UUID_SIZE` `u8` values representing a universally unique identifier for
@@ -2023,8 +2244,8 @@ pub struct Vulkan11Properties {
     ///
     /// If this limit is `false`, applications must not perform these operations.
     ///
-    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
-    /// for more information.
+    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html) for
+    /// more information.
     pub protected_no_fault: bool,
 
     /// A maximum number of descriptors (summed over all descriptor types) in a single descriptor
@@ -2075,8 +2296,8 @@ pub struct Vulkan12Features {
     /// address mode must not be used.
     pub sampler_mirror_clamp_to_edge: bool,
 
-    /// Indicates whether the implementation supports the vkCmdDrawIndirectCount and
-    /// vkCmdDrawIndexedIndirectCount functions.
+    /// Indicates whether the implementation supports the `vkCmdDrawIndirectCount` and
+    /// `vkCmdDrawIndexedIndirectCount` functions.
     ///
     /// If this feature is not enabled, these functions must not be used.
     pub draw_indirect_count: bool,
@@ -2134,8 +2355,8 @@ pub struct Vulkan12Features {
     pub shader_int8: bool,
 
     /// Indicates whether the implementation supports the minimum set of descriptor indexing
-    /// features as described in the [Feature Requirements] section. Enabling the
-    /// descriptorIndexing member when vkCreateDevice is called does not imply the other
+    /// features as described in the Vulkan feature requirements. Enabling the
+    /// `descriptorIndexing` member when `vkCreateDevice` is called does not imply the other
     /// minimum descriptor indexing features are also enabled. Those other descriptor indexing
     /// features must be enabled individually as needed by the application.
     ///
@@ -2146,7 +2367,7 @@ pub struct Vulkan12Features {
     /// expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT must be indexed only by constant integral expressions
+    /// `VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT` must be indexed only by constant integral expressions
     /// when aggregated into arrays in shader code. This also indicates whether shader modules can
     /// declare the InputAttachmentArrayDynamicIndexing capability.
     pub shader_input_attachment_array_dynamic_indexing: bool,
@@ -2155,7 +2376,7 @@ pub struct Vulkan12Features {
     /// integer expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER must be indexed only by constant integral
+    /// `VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER` must be indexed only by constant integral
     /// expressions when aggregated into arrays in shader code. This also indicates whether shader
     /// modules can declare the UniformTexelBufferArrayDynamicIndexing capability.
     pub shader_uniform_texel_buffer_array_dynamic_indexing: bool,
@@ -2164,7 +2385,7 @@ pub struct Vulkan12Features {
     /// integer expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER must be indexed only by constant integral
+    /// `VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER` must be indexed only by constant integral
     /// expressions when aggregated into arrays in shader code. This also indicates whether shader
     /// modules can declare the StorageTexelBufferArrayDynamicIndexing capability.
     pub shader_storage_texel_buffer_array_dynamic_indexing: bool,
@@ -2173,7 +2394,7 @@ pub struct Vulkan12Features {
     /// expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER or VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC must not be
+    /// `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER` or `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC` must not be
     /// indexed by non-uniform integer expressions when aggregated into arrays in shader code. This
     /// also indicates whether shader modules can declare the UniformBufferArrayNonUniformIndexing
     /// capability.
@@ -2183,8 +2404,8 @@ pub struct Vulkan12Features {
     /// integer expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, or
-    /// VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE must not be indexed by non-uniform integer expressions
+    /// `VK_DESCRIPTOR_TYPE_SAMPLER`, `VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`, or
+    /// `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE` must not be indexed by non-uniform integer expressions
     /// when aggregated into arrays in shader code. This also indicates whether shader modules
     /// can declare the SampledImageArrayNonUniformIndexing capability.
     pub shader_sampled_image_array_non_uniform_indexing: bool,
@@ -2193,7 +2414,7 @@ pub struct Vulkan12Features {
     /// expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_STORAGE_BUFFER or VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC must not be
+    /// `VK_DESCRIPTOR_TYPE_STORAGE_BUFFER` or `VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC` must not be
     /// indexed by non-uniform integer expressions when aggregated into arrays in shader code. This
     /// also indicates whether shader modules can declare the StorageBufferArrayNonUniformIndexing
     /// capability.
@@ -2203,7 +2424,7 @@ pub struct Vulkan12Features {
     /// expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_STORAGE_IMAGE must not be indexed by non-uniform integer expressions
+    /// `VK_DESCRIPTOR_TYPE_STORAGE_IMAGE` must not be indexed by non-uniform integer expressions
     /// when aggregated into arrays in shader code. This also indicates whether shader modules
     /// can declare the StorageImageArrayNonUniformIndexing capability.
     pub shader_storage_image_array_non_uniform_indexing: bool,
@@ -2212,7 +2433,7 @@ pub struct Vulkan12Features {
     /// expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT must not be indexed by non-uniform integer expressions
+    /// `VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT` must not be indexed by non-uniform integer expressions
     /// when aggregated into arrays in shader code. This also indicates whether shader modules can
     /// declare the InputAttachmentArrayNonUniformIndexing capability.
     pub shader_input_attachment_array_non_uniform_indexing: bool,
@@ -2221,7 +2442,7 @@ pub struct Vulkan12Features {
     /// expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER must not be indexed by non-uniform integer
+    /// `VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER` must not be indexed by non-uniform integer
     /// expressions when aggregated into arrays in shader code. This also indicates whether shader
     /// modules can declare the UniformTexelBufferArrayNonUniformIndexing capability.
     pub shader_uniform_texel_buffer_array_non_uniform_indexing: bool,
@@ -2230,7 +2451,7 @@ pub struct Vulkan12Features {
     /// expressions in shader code.
     ///
     /// If this feature is not enabled, resources with a descriptor type of
-    /// VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER must not be indexed by non-uniform integer
+    /// `VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER` must not be indexed by non-uniform integer
     /// expressions when aggregated into arrays in shader code. This also indicates whether shader
     /// modules can declare the StorageTexelBufferArrayNonUniformIndexing capability.
     pub shader_storage_texel_buffer_array_non_uniform_indexing: bool,
@@ -2303,8 +2524,8 @@ pub struct Vulkan12Features {
     /// min/max filtering as defined by the filterMinmaxSingleComponentFormats property minimum
     /// requirements.
     ///
-    /// If this feature is not enabled, then VkSamplerReductionModeCreateInfo must only use
-    /// VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE.
+    /// If this feature is not enabled, then `VkSamplerReductionModeCreateInfo` must only use
+    /// `VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE`.
     pub sampler_filter_minmax: bool,
 
     /// Indicates that the implementation supports the layout of resource blocks in shaders using
@@ -2312,15 +2533,13 @@ pub struct Vulkan12Features {
     pub scalar_block_layout: bool,
 
     /// Indicates that the implementation supports specifying the image view for attachments at
-    /// render pass begin time via VkRenderPassAttachmentBeginInfo.
+    /// render pass begin time via `VkRenderPassAttachmentBeginInfo`.
     pub imageless_framebuffer: bool,
 
     /// Indicates that the implementation supports the same layouts for uniform buffers as for
     /// storage and other kinds of buffers.
     ///
-    /// See [Standard Buffer Layout].
-    ///
-    /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
+    /// See [standard buffer layout](https://docs.vulkan.org/spec/latest/chapters/interfaces.html#interfaces-resources-standard-layout).
     pub uniform_buffer_standard_layout: bool,
 
     /// A boolean specifying whether subgroup operations can use 8-bit integer, 16-bit integer,
@@ -2328,23 +2547,23 @@ pub struct Vulkan12Features {
     /// subgroup scope, if the implementation supports the types.
     pub shader_subgroup_extended_types: bool,
 
-    /// Indicates whether the implementation supports a VkImageMemoryBarrier for a depth/stencil
-    /// image with only one of VK_IMAGE_ASPECT_DEPTH_BIT or VK_IMAGE_ASPECT_STENCIL_BIT set, and
-    /// whether VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
-    /// VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL, or VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL
-    /// can be used.
+    /// Indicates whether the implementation supports a `VkImageMemoryBarrier` for a depth/stencil
+    /// image with only one of `VK_IMAGE_ASPECT_DEPTH_BIT` or `VK_IMAGE_ASPECT_STENCIL_BIT` set, and
+    /// whether `VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL`,
+    /// `VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL`, `VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL`, or
+    /// `VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL` can be used.
     pub separate_depth_stencil_layouts: bool,
 
     /// Indicates that the implementation supports resetting queries from the host with
-    /// vkResetQueryPool.
+    /// `vkResetQueryPool`.
     pub host_query_reset: bool,
 
-    /// Indicates whether semaphores created with a VkSemaphoreType of VK_SEMAPHORE_TYPE_TIMELINE
-    /// are supported.
+    /// Indicates whether semaphores created with a `VkSemaphoreType` of
+    /// `VK_SEMAPHORE_TYPE_TIMELINE` are supported.
     pub timeline_semaphore: bool,
 
     /// Indicates that the implementation supports accessing buffer memory in shaders as storage
-    /// buffers via an address queried from vkGetBufferDeviceAddress.
+    /// buffers via an address queried from `vkGetBufferDeviceAddress`.
     pub buffer_device_address: bool,
 
     /// Indicates that the implementation supports saving and reusing buffer and device addresses,
@@ -2360,23 +2579,29 @@ pub struct Vulkan12Features {
 
     /// Indicates whether the [Vulkan Memory Model] is supported.
     ///
-    /// This also indicates whether shader modules can declare the VulkanMemoryModel capability.
+    /// This also indicates whether shader modules can declare the `VulkanMemoryModel` capability.
     ///
     /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
+    ///
+    /// [Vulkan Memory Model]: https://docs.vulkan.org/spec/latest/chapters/memory.html#memory-model
     pub vulkan_memory_model: bool,
 
     /// Indicates whether the [Vulkan Memory Model] can use Device scope synchronization.
     ///
-    /// This also indicates whether shader modules can declare the VulkanMemoryModelDeviceScope
+    /// This also indicates whether shader modules can declare the `VulkanMemoryModelDeviceScope`
     /// capability.
     ///
     /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
+    ///
+    /// [Vulkan Memory Model]: https://docs.vulkan.org/spec/latest/chapters/memory.html#memory-model
     pub vulkan_memory_model_device_scope: bool,
 
     /// Indicates whether the [Vulkan Memory Model] can use availability and visibility chains with
     /// more than one element.
     ///
     /// See the [features chapter](https://docs.vulkan.org/spec/latest/chapters/features.html).
+    ///
+    /// [Vulkan Memory Model]: https://docs.vulkan.org/spec/latest/chapters/memory.html#memory-model
     pub vulkan_memory_model_availability_visibility_chains: bool,
 
     /// Indicates whether the implementation supports the ShaderViewportIndex SPIR-V capability
@@ -2515,8 +2740,7 @@ pub struct Vulkan12Properties {
     /// additional information about the driver.
     pub driver_info: String,
 
-    /// The version of the Vulkan conformance test this driver is conformant against (see
-    /// See the [limits chapter](https://docs.vulkan.org/spec/latest/chapters/limits.html).
+    /// The version of the Vulkan conformance test suite this driver is conformant against.
     pub conformance_version: vk::ConformanceVersion,
 
     /// A `vk::ShaderFloatControlsIndependence` value indicating whether, and how, denorm behavior
@@ -2527,21 +2751,21 @@ pub struct Vulkan12Properties {
     /// can be set independently for different bit widths.
     pub rounding_mode_independence: vk::ShaderFloatControlsIndependence,
 
-    /// A `bool` value indicating whether sign of a zero, Nans and ±∞ can be preserved in 16-bit
+    /// A `bool` value indicating whether sign of a zero, NaNs and ±∞ can be preserved in 16-bit
     /// floating-point computations.
     ///
     /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for
     /// 16-bit floating-point types.
     pub shader_signed_zero_inf_nan_preserve_float16: bool,
 
-    /// A `bool` value indicating whether sign of a zero, Nans and ±∞ can be preserved in 32-bit
+    /// A `bool` value indicating whether sign of a zero, NaNs and ±∞ can be preserved in 32-bit
     /// floating-point computations.
     ///
     /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for
     /// 32-bit floating-point types.
     pub shader_signed_zero_inf_nan_preserve_float32: bool,
 
-    /// A `bool` value indicating whether sign of a zero, Nans and ±∞ can be preserved in 64-bit
+    /// A `bool` value indicating whether sign of a zero, NaNs and ±∞ can be preserved in 64-bit
     /// floating-point computations.
     ///
     /// It also indicates whether the SignedZeroInfNanPreserve execution mode can be used for
@@ -2828,8 +3052,8 @@ impl From<vk::PhysicalDeviceVulkan12Properties<'_>> for Vulkan12Properties {
     fn from(properties: vk::PhysicalDeviceVulkan12Properties<'_>) -> Self {
         Self {
             driver_id: properties.driver_id,
-            driver_name: vk_cstr_to_string_lossy(&properties.driver_name),
-            driver_info: vk_cstr_to_string_lossy(&properties.driver_info),
+            driver_name: vk_cstr_to_utf8_string(&properties.driver_name),
+            driver_info: vk_cstr_to_utf8_string(&properties.driver_info),
             conformance_version: properties.conformance_version,
             denorm_behavior_independence: properties.denorm_behavior_independence,
             rounding_mode_independence: properties.rounding_mode_independence,
@@ -2928,5 +3152,63 @@ impl From<vk::PhysicalDeviceVulkan12Properties<'_>> for Vulkan12Properties {
             framebuffer_integer_color_sample_counts: properties
                 .framebuffer_integer_color_sample_counts,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn c_chars(bytes: &[u8]) -> Vec<c_char> {
+        bytes.iter().map(|&byte| byte as c_char).collect()
+    }
+
+    #[test]
+    fn vk_cstr_to_utf8_string_reads_until_nul() {
+        let value = c_chars(b"hello\0ignored");
+
+        assert_eq!(vk_cstr_to_utf8_string(&value), "hello");
+    }
+
+    #[test]
+    fn vk_cstr_to_utf8_string_accepts_non_ascii_utf8() {
+        let value = c_chars("Møøse\0".as_bytes());
+
+        assert_eq!(vk_cstr_to_utf8_string(&value), "Møøse");
+    }
+
+    #[test]
+    fn vk_cstr_to_utf8_string_accepts_128_bytes_before_nul() {
+        let mut value = vec![b'a'; MAX_C_STRING_UTF8_BYTES];
+        value.push(0);
+        let value = c_chars(&value);
+
+        assert_eq!(
+            vk_cstr_to_utf8_string(&value),
+            "a".repeat(MAX_C_STRING_UTF8_BYTES)
+        );
+    }
+
+    #[test]
+    fn vk_cstr_to_utf8_string_rejects_missing_nul() {
+        let value = c_chars(b"unterminated");
+
+        assert_eq!(vk_cstr_to_utf8_string(&value), UNKNOWN_C_STRING);
+    }
+
+    #[test]
+    fn vk_cstr_to_utf8_string_rejects_nul_after_max_len() {
+        let mut value = vec![b'a'; MAX_C_STRING_UTF8_BYTES + 1];
+        value.push(0);
+        let value = c_chars(&value);
+
+        assert_eq!(vk_cstr_to_utf8_string(&value), UNKNOWN_C_STRING);
+    }
+
+    #[test]
+    fn vk_cstr_to_utf8_string_rejects_invalid_utf8() {
+        let value = c_chars(&[b'o', 0xff, 0]);
+
+        assert_eq!(vk_cstr_to_utf8_string(&value), UNKNOWN_C_STRING);
     }
 }

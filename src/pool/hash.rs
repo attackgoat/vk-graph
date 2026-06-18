@@ -1,7 +1,7 @@
 //! Pool which requests by exactly matching the information before creating new resources.
 
 use {
-    super::{Cache, Lease, Pool, PoolConfig, lease_command_buffer},
+    super::{Cache, Lease, Pool, PoolConfig},
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -36,8 +36,8 @@ use std::sync::Mutex;
 ///
 /// # Memory Management
 ///
-/// If requests for varying resources is common [`HashPool::clear_images_by_info`] and other memory
-/// management functions are nessecery in order to avoid using all available device memory.
+/// If requests for varying resources are common [`HashPool::clear_images_by_info`] and other
+/// memory management functions are necessary in order to avoid using all available device memory.
 #[derive(Debug)]
 #[read_only::cast]
 pub struct HashPool {
@@ -155,7 +155,7 @@ impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
             #[cfg(not(feature = "parking_lot"))]
             let mut cache = cache.expect("poisoned cache lock");
 
-            lease_command_buffer(&mut cache)
+            cache.pop()
         }
         .map(Ok)
         .unwrap_or_else(|| {

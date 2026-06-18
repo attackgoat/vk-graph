@@ -6,13 +6,13 @@ use {
 };
 
 impl PipelineCommand<'_, ComputePipeline> {
-    /// Begin recording a compute pipeline command buffer.
+    /// Begin recording compute pipeline work for this graph command.
     pub fn record_cmd(mut self, func: impl FnOnce(ComputeCommandRef<'_>) + Send + 'static) -> Self {
         self.record_cmd_mut(func);
         self
     }
 
-    /// Begin recording a compute pipeline command buffer.
+    /// Mutable-borrow form of [`Self::record_cmd`].
     pub fn record_cmd_mut(&mut self, func: impl FnOnce(ComputeCommandRef<'_>) + Send + 'static) {
         let pipeline = self
             .cmd
@@ -25,9 +25,28 @@ impl PipelineCommand<'_, ComputePipeline> {
             func(ComputeCommandRef { cmd, pipeline });
         });
     }
+
+    pub(crate) fn record_stream_mut(
+        &mut self,
+        func: impl for<'r> Fn(ComputeCommandRef<'r>) + Send + Sync + 'static,
+    ) {
+        let pipeline = self
+            .cmd
+            .cmd()
+            .expect_last_pipeline()
+            .expect_compute()
+            .clone();
+
+        self.cmd.push_reusable_exec(move |cmd| {
+            func(ComputeCommandRef {
+                cmd,
+                pipeline: pipeline.clone(),
+            });
+        });
+    }
 }
 
-/// Recording interface for computing commands.
+/// Recording interface for compute commands.
 ///
 /// This structure provides a strongly-typed set of methods which allow compute shader code to be
 /// executed. An instance is provided to the closure argument of
@@ -80,12 +99,12 @@ impl ComputeCommandRef<'_> {
     /// #version 450
     /// #pragma shader_stage(compute)
     ///
-    /// layout(set = 0, binding = 0, std430) restrict writeonly buffer MyBufer {
+    /// layout(set = 0, binding = 0, std430) restrict writeonly buffer MyBuffer {
     ///     uint my_buf[];
     /// };
     ///
     /// void main() {
-    ///     // TODO
+    ///     my_buf[0] = 1;
     /// }
     /// # "#);
     /// ```
@@ -246,7 +265,7 @@ impl ComputeCommandRef<'_> {
 
     /// Updates push constants.
     ///
-    /// Push constants represent a high speed path to modify constant data in pipelines that is
+    /// Push constants represent a high-speed path to modify constant data in pipelines that is
     /// expected to outperform memory-backed resource updates.
     ///
     /// Push constant values can be updated incrementally, causing shader stages to read the new
@@ -255,9 +274,8 @@ impl ComputeCommandRef<'_> {
     ///
     /// # Device limitations
     ///
-    /// See
-    /// [`device.physical_device.props.limits.max_push_constants_size`](vk::PhysicalDeviceLimits)
-    /// for the limits of the current device. You may also check [gpuinfo.org] for a listing of
+    /// See [`VkPhysicalDeviceLimits::maxPushConstantsSize`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceLimits.html)
+    /// for the limit of the current device. You may also check [gpuinfo.org] for a listing of
     /// reported limits on other devices.
     ///
     /// # Examples
@@ -275,7 +293,7 @@ impl ComputeCommandRef<'_> {
     ///
     /// void main()
     /// {
-    ///     // TODO: Add bindings to read/write things!
+    ///     uint value = push_constants.the_answer;
     /// }
     /// # "#);
     /// ```

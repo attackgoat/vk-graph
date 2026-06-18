@@ -5,24 +5,28 @@ use {
         DriverError,
         device::Device,
         merge_push_constant_ranges,
-        physical_device::RayTracingPipelineProperties,
+        physical_device::khr::RayTracingPipelineProperties,
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
-    ash::vk,
+    crate::lazy_str,
+    ash::vk::{self, Handle},
     derive_builder::Builder,
     log::warn,
     std::{
         ffi::CString,
+        fmt::{Debug, Formatter},
         hash::{Hash, Hasher},
-        sync::{Arc, OnceLock},
+        sync::Arc,
         thread::panicking,
     },
 };
 
-/// Smart pointer handle of a pipeline object.
+/// Smart pointer handle of a ray tracing pipeline object.
 ///
 /// Also contains information about the object.
-#[derive(Clone, Debug)]
+///
+/// See [`VkPipeline`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPipeline.html).
+#[derive(Clone)]
 #[read_only::cast]
 pub struct RayTracingPipeline {
     pub(crate) inner: Arc<RayTracingPipelineInner>,
@@ -31,15 +35,17 @@ pub struct RayTracingPipeline {
 impl RayTracingPipeline {
     /// Creates a new ray tracing pipeline on the given device.
     ///
-    /// The correct pipeline stages will be enabled based on the provided shaders. See [Shader] for
-    /// details on all available stages.
+    /// The correct pipeline stages will be enabled based on the provided shaders. See [`Shader`]
+    /// for details on all available stages.
+    ///
+    /// See [`VkRayTracingPipelineCreateInfoKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRayTracingPipelineCreateInfoKHR.html).
     ///
     /// The number and composition of the `shader_groups` parameter must match the actual shaders
     /// provided.
     ///
-    /// # Panics
-    ///
-    /// If shader code is not a multiple of four bytes.
+    /// `shaders` may contain pre-built [`Shader`] values or any inputs that can be converted into
+    /// them. Invalid shader data is returned as [`DriverError::InvalidData`] through the `Result`
+    /// instead of panicking.
     ///
     /// # Examples
     ///
@@ -50,7 +56,7 @@ impl RayTracingPipeline {
     /// # use ash::vk;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
-    /// # use vk_graph::driver::ray_trace::{
+    /// # use vk_graph::driver::ray_tracing::{
     /// #     RayTracingPipeline,
     /// #     RayTracingPipelineInfo,
     /// #     RayTracingShaderGroup,
@@ -96,11 +102,7 @@ impl RayTracingPipeline {
         S: TryInto<Shader>,
         S::Error: Into<DriverError>,
     {
-        if device
-            .physical_device
-            .ray_tracing_pipeline_properties
-            .is_none()
-        {
+        if device.physical.vk_khr_ray_tracing_pipeline.is_none() {
             warn!("unsupported ray tracing pipeline creation: missing ray tracing properties");
 
             return Err(DriverError::Unsupported);
@@ -218,7 +220,7 @@ impl RayTracingPipeline {
                     .max_pipeline_ray_recursion_depth(
                         info.max_ray_recursion_depth.min(
                             device
-                                .physical_device
+                                .physical
                                 .expect_ray_tracing_pipeline_properties()
                                 .max_ray_recursion_depth,
                         ),
@@ -235,36 +237,43 @@ impl RayTracingPipeline {
                 device.destroy_shader_module(shader_module, None);
             }
 
-            let handle = handle.map_err(|(pipelines, err)| {
-                warn!("unable to create ray tracing pipeline: {err}");
+            let handle = handle
+                .map_err(|(pipelines, err)| {
+                    warn!("unable to create ray tracing pipeline: {err}");
 
-                for pipeline in pipelines {
-                    device.destroy_pipeline(pipeline, None);
-                }
+                    for pipeline in pipelines {
+                        device.destroy_pipeline(pipeline, None);
+                    }
 
-                device.destroy_pipeline_layout(layout, None);
+                    device.destroy_pipeline_layout(layout, None);
 
-                DriverError::Unsupported
-            })?[0];
+                    DriverError::Unsupported
+                })?
+                .into_iter()
+                .find(|handle| !handle.is_null())
+                .ok_or_else(|| {
+                    warn!("missing pipeline handle");
+
+                    DriverError::Unsupported
+                })?;
             let &RayTracingPipelineProperties {
                 shader_group_handle_size,
                 ..
-            } = device
-                .physical_device
-                .expect_ray_tracing_pipeline_properties();
+            } = device.physical.expect_ray_tracing_pipeline_properties();
 
             let push_constants = merge_push_constant_ranges(&push_constants).into_boxed_slice();
 
-            // SAFETY:
-            // See [`vkGetRayTracingShaderGroupHandlesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetRayTracingShaderGroupHandlesKHR.html).
-            // Valid usage of this function requires:
-            // 1. pipeline must be raytracing pipeline.
-            // 2. first_group must be less than the number of shader groups in the pipeline.
-            // 3. the sum of first group and group_count must be less or equal to the number of
-            //    shader modules in the pipeline.
-            // 4. data_size must be at least shader_group_handle_size * group_count.
-            // 5. pipeline must not have been created with VK_PIPELINE_CREATE_LIBRARY_BIT_KHR.
-            //
+            /*
+            SAFETY:
+            See [`vkGetRayTracingShaderGroupHandlesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetRayTracingShaderGroupHandlesKHR.html)
+            Valid usage of this function requires:
+            1. pipeline must be a ray tracing pipeline
+            2. first_group must be less than the number of shader groups in the pipeline
+            3. the sum of first_group and group_count must be less than or equal to the number of
+               shader groups in the pipeline
+            4. data_size must be at least shader_group_handle_size * group_count
+            5. pipeline must not have been created with VK_PIPELINE_CREATE_LIBRARY_BIT_KHR
+            */
             let shader_group_handles = {
                 khr_ray_tracing_pipeline.get_ray_tracing_shader_group_handles(
                     handle,
@@ -284,7 +293,6 @@ impl RayTracingPipeline {
                     handle,
                     info,
                     layout,
-                    name: Default::default(),
                     push_constants,
                     shader_group_handles,
                 }),
@@ -292,24 +300,22 @@ impl RayTracingPipeline {
         }
     }
 
-    /// Gets the debugging name assigned to this pipeline, if one has been set.
-    pub fn debug_name(&self) -> Option<&str> {
-        self.inner.name.get().map(String::as_str)
-    }
-
     /// The device which owns this ray tracing pipeline.
     pub fn device(&self) -> &Device {
         &self.inner.device
     }
 
-    /// Function returning a handle to a shader group of this pipeline.
-    /// This can be used to construct a sbt.
+    /// Returns a handle to a shader group of this pipeline.
+    ///
+    /// This can be used to construct a shader binding table.
     ///
     /// # Examples
     ///
     /// See
-    /// [ray_trace.rs](https://github.com/attackgoat/vk-graph/blob/master/examples/ray_trace.rs)
-    /// for a detail example which constructs a shader binding table buffer using this function.
+    /// [`ray_tracing.rs`](https://github.com/attackgoat/vk-graph/blob/master/examples/ray_tracing.rs)
+    /// for a detailed example that constructs a shader binding table buffer using this function.
+    ///
+    /// See [`vkGetRayTracingShaderGroupHandlesKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetRayTracingShaderGroupHandlesKHR.html).
     pub fn group_handle(&self, idx: usize) -> &[u8] {
         let &RayTracingPipelineProperties {
             shader_group_handle_size,
@@ -317,7 +323,7 @@ impl RayTracingPipeline {
         } = self
             .inner
             .device
-            .physical_device
+            .physical
             .expect_ray_tracing_pipeline_properties();
         let start = idx * shader_group_handle_size as usize;
         let end = start + shader_group_handle_size as usize;
@@ -325,18 +331,21 @@ impl RayTracingPipeline {
         &self.inner.shader_group_handles[start..end]
     }
 
-    /// Query ray tracing pipeline shader group shader stack size.
+    /// Queries ray tracing pipeline shader group shader stack size.
     ///
     /// The return value is the ray tracing pipeline stack size in bytes for the specified shader as
     /// called from the specified shader group.
+    ///
+    /// See [`vkGetRayTracingShaderGroupStackSizeKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetRayTracingShaderGroupStackSizeKHR.html).
     #[profiling::function]
     pub fn group_stack_size(
         &self,
         group: u32,
         group_shader: vk::ShaderGroupShaderKHR,
     ) -> vk::DeviceSize {
-        // Safely use unchecked because the ray tracing extension is checked during pipeline
-        // creation.
+        /*
+        Safely use unchecked because the ray tracing extension is checked during pipeline creation
+        */
         let khr_ray_tracing_pipeline =
             Device::expect_vk_khr_ray_tracing_pipeline(&self.inner.device);
 
@@ -359,32 +368,48 @@ impl RayTracingPipeline {
         self.inner.info
     }
 
-    /// Gets the debugging name assigned to this pipeline, if one has been set.
-    pub fn name(&self) -> Option<&str> {
-        self.inner.name.get().map(String::as_str)
-    }
-
     /// Sets the debugging name assigned to this pipeline.
-    ///
-    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
-    /// previously set name value.
-    pub fn set_debug_name(&mut self, name: impl Into<String>) {
-        if !self.inner.device.physical_device.instance.info.debug {
-            return;
+    pub fn set_debug_name(&self, name: impl AsRef<str>) {
+        Device::try_set_debug_utils_object_name(&self.inner.device, self.inner.handle, &name);
+        Device::try_set_private_data_object_name(
+            &self.inner.device,
+            vk::ObjectType::PIPELINE,
+            self.inner.handle,
+            &name,
+        );
+        Device::try_set_debug_utils_object_name(
+            &self.inner.device,
+            self.inner.layout,
+            lazy_str!("{} (layout)", name.as_ref()),
+        );
+
+        for (set_idx, layout) in &self.inner.descriptor_info.layouts {
+            layout.set_debug_name(lazy_str!("{} (DS{set_idx})", name.as_ref()));
         }
-
-        // Both Ok and Err are valid conditions
-        let _ = self.inner.name.set(name.into());
     }
 
     /// Sets the debugging name assigned to this pipeline.
-    ///
-    /// _Note:_ The pipeline name may only be assigned once. Subsequent calls will not update the
-    /// previously set name value.
-    pub fn with_debug_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
         self.set_debug_name(name);
 
         self
+    }
+}
+
+impl Debug for RayTracingPipeline {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut res = f.debug_struct(stringify!(RayTracingPipeline));
+
+        if let Some(debug_name) = &Device::private_data_object_name(
+            &self.inner.device,
+            vk::ObjectType::PIPELINE,
+            self.inner.handle,
+        ) {
+            res.field("debug_name", debug_name);
+        }
+
+        res.field("handle", &self.inner.handle)
+            .finish_non_exhaustive()
     }
 }
 
@@ -437,7 +462,7 @@ pub struct RayTracingPipelineInfo {
 
     /// Allow [setting the stack size dynamically] for a ray tracing pipeline.
     ///
-    /// When set, you must manually set the stack size during ray tracing passes using
+    /// When set, you must manually set the stack size during ray tracing commands using
     /// [`RayTracingCommandRef::set_stack_size`](crate::cmd::RayTracingCommandRef::set_stack_size).
     ///
     /// See [`vkCmdSetRayTracingPipelineStackSizeKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetRayTracingPipelineStackSizeKHR.html).
@@ -502,7 +527,6 @@ pub(crate) struct RayTracingPipelineInner {
     pub handle: vk::Pipeline,
     pub info: RayTracingPipelineInfo,
     pub layout: vk::PipelineLayout,
-    pub name: OnceLock<String>,
     pub push_constants: Box<[vk::PushConstantRange]>,
     pub shader_group_handles: Box<[u8]>,
 }
@@ -513,6 +537,9 @@ impl Drop for RayTracingPipelineInner {
         if panicking() {
             return;
         }
+
+        Device::clear_private_data_object_name(&self.device, vk::ObjectType::PIPELINE, self.handle)
+            .unwrap_or_else(|err| warn!("unable to clear private data object name: {err}"));
 
         unsafe {
             self.device.destroy_pipeline(self.handle, None);
@@ -546,12 +573,12 @@ pub struct RayTracingShaderGroup {
     pub intersection_shader: Option<u32>,
 
     /// The type of hit group specified in this structure.
-    pub ty: RayTracingShaderGroupType,
+    pub shader_group_type: RayTracingShaderGroupType,
 }
 
 impl RayTracingShaderGroup {
     fn new(
-        ty: RayTracingShaderGroupType,
+        shader_group_type: RayTracingShaderGroupType,
         general_shader: impl Into<Option<u32>>,
         intersection_shader: impl Into<Option<u32>>,
         closest_hit_shader: impl Into<Option<u32>>,
@@ -567,7 +594,7 @@ impl RayTracingShaderGroup {
             closest_hit_shader,
             general_shader,
             intersection_shader,
-            ty,
+            shader_group_type,
         }
     }
 
@@ -614,7 +641,7 @@ impl RayTracingShaderGroup {
 impl From<RayTracingShaderGroup> for vk::RayTracingShaderGroupCreateInfoKHR<'static> {
     fn from(shader_group: RayTracingShaderGroup) -> Self {
         vk::RayTracingShaderGroupCreateInfoKHR::default()
-            .ty(shader_group.ty.into())
+            .ty(shader_group.shader_group_type.into())
             .any_hit_shader(shader_group.any_hit_shader.unwrap_or(vk::SHADER_UNUSED_KHR))
             .closest_hit_shader(
                 shader_group
@@ -645,8 +672,8 @@ pub enum RayTracingShaderGroupType {
 }
 
 impl From<RayTracingShaderGroupType> for vk::RayTracingShaderGroupTypeKHR {
-    fn from(ty: RayTracingShaderGroupType) -> Self {
-        match ty {
+    fn from(shader_group_type: RayTracingShaderGroupType) -> Self {
+        match shader_group_type {
             RayTracingShaderGroupType::General => vk::RayTracingShaderGroupTypeKHR::GENERAL,
             RayTracingShaderGroupType::ProceduralHitGroup => {
                 vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP

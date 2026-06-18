@@ -24,17 +24,17 @@ readme = "README.md"
 log = "0.4"
 profiling = "1.0"
 read-only = "0.1"
-vk-graph = { path = "", version = "0.14.1" }
-vk-graph-egui = { path = "crates/vk-graph-egui", version = "0.1.0" }
-vk-graph-fx = { path = "crates/vk-graph-fx", version = "0.1.0" }
-vk-graph-hot = { path = "crates/vk-graph-hot", version = "0.1.0" }
-vk-graph-imgui = { path = "crates/vk-graph-imgui", version = "0.1.0" }
-vk-graph-window = { path = "crates/vk-graph-window", version = "0.1.0" }
+vk-graph = { path = "", version = "0.14.2" }
+vk-graph-egui = { path = "crates/vk-graph-egui", version = "0.1.1" }
+vk-graph-fx = { path = "crates/vk-graph-fx", version = "0.1.1" }
+vk-graph-hot = { path = "crates/vk-graph-hot", version = "0.1.1" }
+vk-graph-imgui = { path = "crates/vk-graph-imgui", version = "0.1.1" }
+vk-graph-window = { path = "crates/vk-graph-window", version = "0.1.1" }
 winit = "0.30"
 
 [package]
 name = "vk-graph"
-version = "0.14.1+beta"
+version = "0.14.2"
 authors = ["John Wells <john@attackgoat.com>"]
 edition.workspace = true
 license.workspace = true
@@ -62,6 +62,7 @@ profile-with-tracy = ["profiling/profile-with-tracy"]
 ash = { version = "0.38.0", default-features = false, features = ["debug", "std"] }
 ash-window = "0.13"
 derive_builder = "0.20"
+fixedbitset = "0.5"
 gpu-allocator = "0.28"
 log.workspace = true
 ordered-float = "5.1"
@@ -70,6 +71,7 @@ paste = "1.0"
 profiling.workspace = true
 raw-window-handle = "0.6"
 read-only.workspace = true
+smallvec = "1.15"
 spirq = "1.2"
 vk-sync = { version = "0.5", package = "vk-sync-fork" } # // SEE: https://github.com/gwihlidal/vk-sync-rs/pull/4 -> https://github.com/expenses/vk-sync-rs
 
@@ -81,6 +83,7 @@ anyhow = "1.0"
 bmfont = { version = "0.3", default-features = false }
 bytemuck = "1.25"
 clap = { version = "4.5", features = ["derive"] }
+criterion = "0.5"
 glam = { version = "0.32", features = ["bytemuck"] }
 half = { version = "2.4", features = ["bytemuck"] }
 hassle-rs = "0.11"
@@ -89,15 +92,23 @@ log = "0.4"
 meshopt = "0.2"
 polyhedron-ops = ">=0.2, <=0.2.4"
 pretty_env_logger = "0.5"
-puffin = "0.19"
-puffin_http = "0.16"
+puffin = "0.20"
+puffin_http = "0.17"
 rand = "0.9"
 reqwest = { version = "0.12", features = ["blocking"] }
-vk-graph-fx.workspace = true
-vk-graph-imgui.workspace = true
-vk-graph-egui.workspace = true
-vk-graph-window.workspace = true
+vk-graph-fx = { path = "crates/vk-graph-fx" }
+vk-graph-imgui = { path = "crates/vk-graph-imgui" }
+vk-graph-egui = { path = "crates/vk-graph-egui" }
+vk-graph-window = { path = "crates/vk-graph-window" }
 vk-shader-macros = "0.2"
 tobj = "4.0"
 winit.workspace = true
 winit_input_helper = "0.17"
+
+[[bench]]
+name = "submission_reorder"
+harness = false
+
+[[bench]]
+name = "image_swap_access"
+harness = false

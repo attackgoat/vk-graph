@@ -95,8 +95,9 @@ use {
             AccelerationStructure, AccelerationStructureInfo, AccelerationStructureInfoBuilder,
         },
         buffer::{Buffer, BufferInfo, BufferInfoBuilder},
-        cmd_buf::CommandBuffer,
+        descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         image::{Image, ImageInfo, ImageInfoBuilder},
+        render_pass::{RenderPass, RenderPassInfo},
     },
     derive_builder::{Builder, UninitializedFieldError},
     std::{
@@ -108,6 +109,61 @@ use {
     },
 };
 
+#[derive(Clone, Copy)]
+enum BufferHostMappingCompatibility {
+    Exact,
+    Superset,
+}
+
+fn compatible_buffer_info(
+    item_info: &BufferInfo,
+    requested_info: &BufferInfo,
+    host_mapping: BufferHostMappingCompatibility,
+) -> bool {
+    (item_info.alloc_dedicated & requested_info.alloc_dedicated) == requested_info.alloc_dedicated
+        && compatible_buffer_host_mapping(item_info, requested_info, host_mapping)
+        && item_info.alignment >= requested_info.alignment
+        && item_info.sharing_mode == requested_info.sharing_mode
+        && item_info.size >= requested_info.size
+        && item_info.usage.contains(requested_info.usage)
+}
+
+fn compatible_buffer_host_mapping(
+    item_info: &BufferInfo,
+    requested_info: &BufferInfo,
+    compatibility: BufferHostMappingCompatibility,
+) -> bool {
+    match compatibility {
+        BufferHostMappingCompatibility::Exact => {
+            item_info.host_readable == requested_info.host_readable
+                && item_info.host_writable == requested_info.host_writable
+        }
+        BufferHostMappingCompatibility::Superset => {
+            (item_info.host_readable & requested_info.host_readable) == requested_info.host_readable
+                && (item_info.host_writable & requested_info.host_writable)
+                    == requested_info.host_writable
+        }
+    }
+}
+
+fn compatible_image_info(item_info: &ImageInfo, requested_info: &ImageInfo) -> bool {
+    item_info.array_layer_count == requested_info.array_layer_count
+        && item_info.alloc_dedicated == requested_info.alloc_dedicated
+        && item_info.depth == requested_info.depth
+        && item_info.format == requested_info.format
+        && item_info.height == requested_info.height
+        && item_info.host_readable == requested_info.host_readable
+        && item_info.host_writable == requested_info.host_writable
+        && item_info.mip_level_count == requested_info.mip_level_count
+        && item_info.sample_count == requested_info.sample_count
+        && item_info.sharing_mode == requested_info.sharing_mode
+        && item_info.tiling == requested_info.tiling
+        && item_info.image_type == requested_info.image_type
+        && item_info.width == requested_info.width
+        && item_info.flags.contains(requested_info.flags)
+        && item_info.usage.contains(requested_info.usage)
+}
+
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
 
@@ -116,22 +172,6 @@ use std::sync::Mutex;
 
 type Cache<T> = Arc<Mutex<Vec<T>>>;
 type CacheRef<T> = Weak<Mutex<Vec<T>>>;
-
-fn lease_command_buffer(cache: &mut Vec<CommandBuffer>) -> Option<CommandBuffer> {
-    for idx in 0..cache.len() {
-        if unsafe {
-            let cmd = cache.get_unchecked(idx);
-
-            // Don't lease this command buffer if it is unsignalled; we'll create a new one
-            // and wait for this, and those behind it, to signal.
-            cmd.device.get_fence_status(cmd.fence).unwrap_or_default()
-        } {
-            return Some(cache.swap_remove(idx));
-        }
-    }
-
-    None
-}
 
 fn with_cache<T, R>(cache: &Cache<T>, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
     let cache = cache.lock();
@@ -155,13 +195,15 @@ pub struct Lease<T> {
     item: ManuallyDrop<T>,
 }
 
-// The following debug_name functions take a self of Lease<T> and return Self.
-// This allows pooled resources to have the same `.debug_name("bugs")` chaining
+/*
+The following debug_name functions take a self of Lease<T> and return Self.
+This allows pooled resources to have the same `.debug_name("bugs")` chaining.
+*/
 
 impl Lease<AccelerationStructure> {
     /// Sets the debugging name assigned to this acceleration structure.
-    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
+        self.set_debug_name(name);
 
         self
     }
@@ -169,8 +211,8 @@ impl Lease<AccelerationStructure> {
 
 impl Lease<Buffer> {
     /// Sets the debugging name assigned to this buffer.
-    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
+        self.set_debug_name(name);
 
         self
     }
@@ -178,8 +220,8 @@ impl Lease<Buffer> {
 
 impl Lease<Image> {
     /// Sets the debugging name assigned to this image.
-    pub fn debug_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
+        self.set_debug_name(name);
 
         self
     }
@@ -191,6 +233,12 @@ impl<T> Lease<T> {
             cache_ref,
             item: ManuallyDrop::new(item),
         }
+    }
+}
+
+impl<T> AsRef<T> for Lease<T> {
+    fn as_ref(&self) -> &T {
+        self
     }
 }
 
@@ -216,7 +264,7 @@ impl<T> Drop for Lease<T> {
         }
 
         // If the pool cache has been dropped we must manually drop the item, otherwise it goes back
-        // into the pool.
+        // into the pool
         if let Some(cache) = self.cache_ref.upgrade() {
             with_cache(&cache, |cache| {
                 if cache.len() >= cache.capacity() {
@@ -237,6 +285,44 @@ impl<T> Drop for Lease<T> {
 pub trait Pool<I, T> {
     /// Request a resource.
     fn resource(&mut self, info: I) -> Result<Lease<T>, DriverError>;
+}
+
+/// Pool capability required by graph submission scheduling.
+///
+/// This sealed trait is implemented by the built-in pools. It covers internal descriptor-pool and
+/// render-pass leases without exposing their cache-key types in public API bounds.
+#[allow(private_bounds)]
+pub trait SubmissionPool: submission_pool_private::SubmissionPoolSealed {}
+
+impl<T> SubmissionPool for T where T: submission_pool_private::SubmissionPoolSealed {}
+
+pub(crate) mod submission_pool_private {
+    use super::*;
+
+    pub(crate) trait SubmissionPoolSealed {
+        fn descriptor_pool(
+            &mut self,
+            info: DescriptorPoolInfo,
+        ) -> Result<Lease<DescriptorPool>, DriverError>;
+
+        fn render_pass(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError>;
+    }
+
+    impl<T> SubmissionPoolSealed for T
+    where
+        T: Pool<DescriptorPoolInfo, DescriptorPool> + Pool<RenderPassInfo, RenderPass>,
+    {
+        fn descriptor_pool(
+            &mut self,
+            info: DescriptorPoolInfo,
+        ) -> Result<Lease<DescriptorPool>, DriverError> {
+            self.resource(info)
+        }
+
+        fn render_pass(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
+            self.resource(info)
+        }
+    }
 }
 
 // Enable requesting items using their info builder type for convenience
@@ -385,6 +471,7 @@ impl PoolConfigBuilder {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::driver::ash::vk;
 
     type Info = PoolConfig;
     type Builder = PoolConfigBuilder;
@@ -411,5 +498,41 @@ mod test {
             .build();
 
         assert_eq!(info, builder);
+    }
+
+    #[test]
+    fn buffer_info_compatibility_rejects_different_sharing_mode() {
+        let exclusive = BufferInfo::device_mem(64, vk::BufferUsageFlags::STORAGE_BUFFER);
+        let concurrent = BufferInfo {
+            sharing_mode: vk::SharingMode::CONCURRENT,
+            ..exclusive
+        };
+
+        assert!(!compatible_buffer_info(
+            &exclusive,
+            &concurrent,
+            BufferHostMappingCompatibility::Exact,
+        ));
+        assert!(!compatible_buffer_info(
+            &exclusive,
+            &concurrent,
+            BufferHostMappingCompatibility::Superset,
+        ));
+    }
+
+    #[test]
+    fn image_info_compatibility_rejects_different_sharing_mode() {
+        let exclusive = ImageInfo::image_2d(
+            16,
+            16,
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ImageUsageFlags::STORAGE,
+        );
+        let concurrent = ImageInfo {
+            sharing_mode: vk::SharingMode::CONCURRENT,
+            ..exclusive
+        };
+
+        assert!(!compatible_image_info(&exclusive, &concurrent));
     }
 }

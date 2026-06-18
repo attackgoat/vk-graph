@@ -65,3 +65,15 @@ over any `Pool`.
 
 Cached resources let complex graphs reuse compatible resources while keeping the pooling strategy
 separate from the reuse policy.
+
+## Queue Sharing
+
+`BufferInfo` and `ImageInfo` both expose `sharing_mode`.
+
+- `vk::SharingMode::EXCLUSIVE` is the default and lets `vk-graph` track queue-family ownership.
+- `vk::SharingMode::CONCURRENT` makes the resource usable by multiple queue families without
+  exclusive ownership transfer tracking.
+
+Exclusive buffer and image ownership is range-aware. Transfer planning only considers ranges touched
+by submitted commands, and barrier emission intersects ownership transfers with the resource ranges
+actually accessed by those commands.

@@ -11,7 +11,7 @@ use {
             ash::vk,
             buffer::{Buffer, BufferInfo},
             device::Device,
-            graphic::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
+            graphics::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::Image,
             shader::{Shader, SpecializationMap},
             sync::AccessType,
@@ -56,8 +56,8 @@ impl BitmapFont {
             device,
             GraphicsPipelineInfo::builder().blend(BlendInfo::ALPHA),
             [
-                Shader::new_vertex(include_glsl!("res/shader/graphic/font.vert").as_slice()),
-                Shader::new_fragment(include_glsl!("res/shader/graphic/font.frag").as_slice())
+                Shader::new_vertex(include_glsl!("res/shader/graphics/font.vert").as_slice()),
+                Shader::new_fragment(include_glsl!("res/shader/graphics/font.frag").as_slice())
                     .specialization(
                         SpecializationMap::new(num_pages.to_ne_bytes()).constant(0, 0, 4),
                     ),
@@ -264,18 +264,18 @@ pub enum BitmapGlyphColor {
 }
 
 impl BitmapGlyphColor {
-    const TRANSARENT: Color = [0, 0, 0, u8::MAX];
+    const TRANSPARENT: Color = [0, 0, 0, u8::MAX];
 
     fn outline(&self) -> Color {
         match self {
             Self::Outline(color) => *color,
-            _ => Self::TRANSARENT,
+            _ => Self::TRANSPARENT,
         }
     }
 
     fn solid(&self) -> Color {
         match self {
-            Self::Outline(_) => Self::TRANSARENT,
+            Self::Outline(_) => Self::TRANSPARENT,
             Self::Solid(color) => *color,
             Self::SolidOutline(color, _) => *color,
         }
