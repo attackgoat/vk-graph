@@ -1288,7 +1288,7 @@ impl Image {
         }
     }
 
-    /// TODO
+    /// Returns compact synchronization information for the image's current subresource accesses.
     pub fn sync_info(&self) -> ImageSyncInfo {
         ImageSyncInfo {
             subresources: ImageSyncInfo::compact_subresources(

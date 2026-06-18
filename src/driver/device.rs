@@ -63,7 +63,12 @@ pub struct Device {
     #[readonly]
     pub(self) inner: Arc<DeviceInner>,
 
-    /// The physical device, which contains useful data about features, properties, and limits.
+    /// The selected physical device.
+    ///
+    /// This contains the physical device's advertised features, properties, limits, memory
+    /// properties, queue families, and Vulkan extension support. Extension support is exposed with
+    /// fields named after the Vulkan extension, for example
+    /// `device.physical.vk_khr_acceleration_structure.is_some()`.
     ///
     /// _Note:_ This field is read-only.
     #[readonly]

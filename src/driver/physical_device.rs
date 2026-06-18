@@ -352,7 +352,15 @@ impl From<vk::PhysicalDeviceDepthStencilResolveProperties<'_>> for DepthStencilR
     }
 }
 
-/// Structure which holds data about the physical hardware selected by the current device.
+/// Structure which holds data about a physical device.
+///
+/// Extension support is exposed through fields named after Vulkan extension names. Extensions that
+/// only need a support check are booleans, such as [`Self::vk_ext_private_data`] and
+/// [`Self::vk_khr_swapchain`]. Extensions with feature or property data are `Option` fields, such
+/// as [`Self::vk_khr_acceleration_structure`] and [`Self::vk_khr_ray_tracing_pipeline`].
+///
+/// Use [`Device::physical`](super::device::Device::physical) for the selected physical device of a
+/// logical device.
 ///
 /// See [`VkPhysicalDevice`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDevice.html).
 #[derive(Clone)]
@@ -420,7 +428,7 @@ pub struct PhysicalDevice {
 
     pub(crate) queue_family_indices: Box<[u32]>,
 
-    /// Describes the `VK_KHR_ray_tracing_pipeline` support available on the physical device.
+    /// `VK_KHR_ray_tracing_pipeline` features and properties, when supported.
     ///
     /// _Note:_ This field is read-only.
     pub vk_khr_ray_tracing_pipeline: Option<khr::RayTracingPipeline>,
@@ -440,22 +448,22 @@ pub struct PhysicalDevice {
     /// _Note:_ This field is read-only.
     pub vk_ext_private_data: bool,
 
-    /// Describes the `VK_KHR_acceleration_structure` support available on the physical device.
+    /// `VK_KHR_acceleration_structure` features and properties, when supported.
     ///
     /// _Note:_ This field is read-only.
     pub vk_khr_acceleration_structure: Option<khr::AccelerationStructure>,
 
-    /// Describes the `VK_KHR_present_id` support available on the physical device.
+    /// `VK_KHR_present_id` features, when supported.
     ///
     /// _Note:_ This field is read-only.
     pub vk_khr_present_id: Option<khr::PresentId>,
 
-    /// Describes the `VK_KHR_present_wait` support available on the physical device.
+    /// `VK_KHR_present_wait` features, when supported.
     ///
     /// _Note:_ This field is read-only.
     pub vk_khr_present_wait: Option<khr::PresentWait>,
 
-    /// Describes the `VK_KHR_ray_query` support available on the physical device.
+    /// Whether `VK_KHR_ray_query` support is available.
     ///
     /// _Note:_ This field is read-only.
     pub vk_khr_ray_query: bool,
@@ -465,7 +473,8 @@ pub struct PhysicalDevice {
     /// _Note:_ This field is read-only.
     pub vk_khr_swapchain: bool,
 
-    /// Describes the `VK_KHR_synchronization2` support available on the physical device.
+    /// Whether synchronization2 support is available through Vulkan 1.3 core or
+    /// `VK_KHR_synchronization2`.
     ///
     /// _Note:_ This field is read-only.
     pub vk_khr_synchronization2: bool,

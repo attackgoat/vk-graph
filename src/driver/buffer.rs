@@ -545,7 +545,7 @@ impl Buffer {
         Iter::new(access_runs, accesses, self.info.size)
     }
 
-    /// TODO
+    /// Returns compact synchronization information for the buffer's current access ranges.
     pub fn sync_info(&self) -> BufferSyncInfo {
         let ranges = self
             .sync_info_with_sharing()

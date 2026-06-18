@@ -400,7 +400,6 @@ impl Transition {
 /// Cache and lazily create transition compute pipelines on demand.
 pub struct TransitionPipeline {
     cache: HashPool,
-    device: Device, // TODO REMOVE
     pipelines: HashMap<TransitionType, ComputePipeline>,
 }
 
@@ -408,14 +407,9 @@ impl TransitionPipeline {
     /// Creates an empty transition pipeline cache for the given device.
     pub fn new(device: &Device) -> Self {
         let cache = HashPool::new(device);
-        let device = device.clone();
         let pipelines = Default::default();
 
-        Self {
-            cache,
-            device,
-            pipelines,
-        }
+        Self { cache, pipelines }
     }
 
     /// Applies a transition between two images and returns a pooled destination image.
@@ -479,7 +473,6 @@ impl TransitionPipeline {
 
         extend_push_constants(transition, &mut push_consts);
 
-        // TODO: Handle displacement and luma in an if case, below
         graph
             .begin_cmd()
             .debug_name(format!("transition {transition_ty:?}"))
@@ -498,7 +491,7 @@ impl TransitionPipeline {
             trace!("creating {transition_ty:?}");
 
             ComputePipeline::create(
-                &self.device,
+                &self.cache.device,
                 ComputePipelineInfo::default(),
                 Shader::new_compute(match transition_ty {
                     TransitionType::Angular => {

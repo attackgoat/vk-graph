@@ -710,7 +710,7 @@ pub struct Swapchain {
     live: SwapchainState<Live>,
     queue_signals: QueueSignals,
 
-    /// TODO
+    /// Whether swapchain recreation has been requested but not completed yet.
     pub recreate_pending: bool,
 
     requested_info: SwapchainInfo,
@@ -1076,7 +1076,7 @@ impl Swapchain {
         Ok(PresentBatch::new(present_results))
     }
 
-    /// TODO
+    /// Recreates the swapchain using the currently requested configuration.
     #[profiling::function]
     pub fn recreate(&mut self) -> Result<(), SwapchainError> {
         self.queue_signals

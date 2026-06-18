@@ -374,7 +374,7 @@ impl AccelerationStructure {
         AccessIter::new(self.lock_accesses(), next_accesses)
     }
 
-    /// TODO
+    /// Returns synchronization information for the acceleration structure's current accesses.
     pub fn sync_info(&self) -> AccelerationStructureSyncInfo {
         AccelerationStructureSyncInfo::from_accesses(self.lock_accesses().iter().copied())
     }
