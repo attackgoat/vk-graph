@@ -281,12 +281,20 @@ impl RenderPass {
         };
 
         let key = entry.key();
-        let layers = key
-            .attachments
+        let is_multiview = self
+            .info
+            .subpasses
             .iter()
-            .map(|attachment| attachment.layer_count)
-            .max()
-            .unwrap_or(1);
+            .any(|subpass| subpass.view_mask != 0);
+        let layers = if is_multiview {
+            1
+        } else {
+            key.attachments
+                .iter()
+                .map(|attachment| attachment.layer_count)
+                .max()
+                .unwrap_or(1)
+        };
         let attachments = key
             .attachments
             .iter()
