@@ -49,20 +49,20 @@ fn main() -> Result<(), DriverError> {
     let dst_buf = graph.resource(dst_buf).clone();
 
     /*
-    Resolve and wait. You can check Fence::is_signaled without blocking, or use
+    Resolve and wait. You can check Fence::status without blocking, or use
     device.queue_wait_idle(0) or device.device_wait_idle(), but those block on larger scopes.
     */
     let mut fence = graph
         .finalize()
         .queue_submit(&mut HashPool::new(&device), 0, 0)?;
 
-    println!("Has executed? {}", fence.is_signaled()?);
+    println!("Has executed? {}", fence.status()?);
     let started = Instant::now();
 
-    fence.wait_signaled()?;
+    fence.wait()?;
 
     assert!(
-        fence.is_signaled()?,
+        fence.status()?,
         "We checked above - so this will always be true"
     );
     println!("Waited {}μs", (Instant::now() - started).as_micros());

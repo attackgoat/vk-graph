@@ -154,7 +154,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 };
 
-                if let Err(err) = fence.wait_signaled() {
+                if let Err(err) = fence.wait() {
                     warn!("unable to wait for worker fence: {err}");
 
                     break;

@@ -62,7 +62,7 @@ fn main() -> Result<(), WindowError> {
             frame.window,
             &mut pool,
             frame.graph,
-            |ui, _, _| {
+            |_, ui, _, _| {
                 ui.window("Hello world")
                     .position([10.0, 10.0], Condition::FirstUseEver)
                     .size([340.0, 250.0], Condition::FirstUseEver)

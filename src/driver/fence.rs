@@ -56,11 +56,17 @@ impl Fence {
         self.droppables.clear();
     }
 
+    #[deprecated = "use status function"]
+    #[doc(hidden)]
+    pub fn is_signaled(&self) -> Result<bool, DriverError> {
+        self.status()
+    }
+
     /// Returns `true` if this fence is signaled.
     ///
     /// See [`vkGetFenceStatus`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetFenceStatus.html).
     #[profiling::function]
-    pub fn is_signaled(&self) -> Result<bool, DriverError> {
+    pub fn status(&self) -> Result<bool, DriverError> {
         let res = unsafe { self.device.get_fence_status(self.handle) };
 
         match res {
@@ -103,11 +109,17 @@ impl Fence {
         Ok(self)
     }
 
+    #[deprecated = "use status function"]
+    #[doc(hidden)]
+    pub fn wait_signaled(&mut self) -> Result<&mut Self, DriverError> {
+        self.wait()
+    }
+
     /// Waits for this fence to signal, then drops any deferred payloads.
     ///
     /// See [`vkWaitForFences`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkWaitForFences.html).
     #[profiling::function]
-    pub fn wait_signaled(&mut self) -> Result<&mut Self, DriverError> {
+    pub fn wait(&mut self) -> Result<&mut Self, DriverError> {
         #[cfg(feature = "checked")]
         if !self.queued {
             return Ok(self);
@@ -127,7 +139,7 @@ impl Drop for Fence {
             return;
         }
 
-        if self.queued && self.wait_signaled().is_err() {
+        if self.queued && self.wait().is_err() {
             return;
         }
 

@@ -677,7 +677,7 @@ where
 
             #[cfg(feature = "checked")]
             {
-                release_fence.wait_signaled()?;
+                release_fence.wait()?;
                 release_fence.reset()?;
             }
 
@@ -1444,7 +1444,7 @@ where
     ) -> Result<(), DriverError> {
         #[cfg(feature = "checked")]
         if fence.queued {
-            fence.wait_signaled()?;
+            fence.wait()?;
             fence.reset()?;
         }
 
@@ -7604,7 +7604,7 @@ mod tests {
         let mut recorded = recorded.finish()?;
 
         recorded.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
-        fence.wait_signaled()?;
+        fence.wait()?;
 
         Ok(())
     }

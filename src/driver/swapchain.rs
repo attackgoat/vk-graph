@@ -610,7 +610,7 @@ impl QueueSignals {
         if queue_signal.fence.is_queued() {
             queue_signal
                 .fence
-                .wait_signaled()
+                .wait()
                 .map_err(|_| SwapchainError::DeviceLost)?
                 .reset()
                 .map_err(|_| SwapchainError::DeviceLost)?;

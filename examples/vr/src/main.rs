@@ -797,7 +797,7 @@ fn load_texture(
         graph
             .finalize()
             .queue_submit(&mut LazyPool::new(device), queue_family_index as _, 0)?;
-    fence.wait_signaled()?;
+    fence.wait()?;
 
     Ok(texture)
 }

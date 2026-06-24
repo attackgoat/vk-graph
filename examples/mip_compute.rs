@@ -163,7 +163,7 @@ fn main() -> Result<(), DriverError> {
     let mut fence = graph
         .finalize()
         .queue_submit(&mut HashPool::new(&device), 0, 0)?;
-    fence.wait_signaled()?;
+    fence.wait()?;
 
     let depth_pixel = f32::from_ne_bytes(Buffer::mapped_slice(&depth_pixel).try_into().unwrap());
 
