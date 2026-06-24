@@ -66,17 +66,159 @@ use {
         ops::Range,
         ops::{Deref, DerefMut},
         slice::Iter,
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicU8, Ordering},
+        },
     },
     vk_sync::AccessType,
 };
 
 #[cfg(feature = "checked")]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 type CommandFn = Arc<dyn for<'a> Fn(CommandRef<'a>) + Send + Sync>;
 type CommandFnOnce = Box<dyn FnOnce(CommandRef) + Send>;
 type NodeIndex = usize;
+
+#[derive(Debug)]
+struct AtomicCommandExecution(AtomicU8);
+
+impl AtomicCommandExecution {
+    const PENDING: u8 = 0xf0;
+    const EXECUTED: u8 = 0xf1;
+    const ABANDONED: u8 = 0xf2;
+
+    fn new_pending() -> Arc<Self> {
+        Arc::new(Self(AtomicU8::new(Self::PENDING)))
+    }
+
+    fn compare_pending_exchange_abandoned(&self) {
+        let _ = self.0.compare_exchange(
+            Self::PENDING,
+            Self::ABANDONED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn compare_pending_exchange_executed(&self) {
+        let _ = self.0.compare_exchange(
+            Self::PENDING,
+            Self::EXECUTED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn load(&self) -> u8 {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for AtomicCommandExecution {
+    fn drop(&mut self) {
+        self.compare_pending_exchange_abandoned();
+    }
+}
+
+/// Tracks whether a graph command has completed device execution.
+#[derive(Clone, Debug)]
+pub struct CommandExecution(Arc<AtomicCommandExecution>);
+
+impl CommandExecution {
+    /// Returns `true` when the tracked command has completed device execution.
+    ///
+    /// Returns [`CommandExecutionAbandoned`] if the graph command can no longer execute, such as
+    /// when the graph, submission, or queued work was dropped before successful completion.
+    pub fn has_executed(&self) -> Result<bool, CommandExecutionAbandoned> {
+        match self.0.load() {
+            AtomicCommandExecution::PENDING => Ok(false),
+            AtomicCommandExecution::EXECUTED => Ok(true),
+            _ => Err(CommandExecutionAbandoned),
+        }
+    }
+}
+
+/// Error returned when a tracked command execution can no longer complete.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommandExecutionAbandoned;
+
+impl From<CommandExecutionAbandoned> for crate::driver::DriverError {
+    fn from(_: CommandExecutionAbandoned) -> Self {
+        Self::InvalidData
+    }
+}
+
+#[derive(Debug, Default)]
+enum CommandExecutions {
+    #[default]
+    None,
+    One(Arc<AtomicCommandExecution>),
+    Many(Arc<[Arc<AtomicCommandExecution>]>),
+}
+
+impl Clone for CommandExecutions {
+    fn clone(&self) -> Self {
+        Self::None
+    }
+}
+
+impl CommandExecutions {
+    fn signal_abandoned(&self) {
+        self.for_each(AtomicCommandExecution::compare_pending_exchange_abandoned);
+    }
+
+    fn signal_executed(&self) {
+        self.for_each(AtomicCommandExecution::compare_pending_exchange_executed);
+    }
+
+    fn extend(&mut self, other: Self) {
+        match (mem::take(self), other) {
+            (Self::None, rhs) => *self = rhs,
+            (lhs, Self::None) => *self = lhs,
+            (Self::One(lhs), Self::One(rhs)) => *self = Self::Many(Arc::from([lhs, rhs])),
+            (Self::One(lhs), Self::Many(rhs)) => {
+                let mut states = Vec::with_capacity(rhs.len() + 1);
+                states.push(lhs);
+                states.extend(rhs.iter().cloned());
+                *self = Self::Many(Arc::from(states));
+            }
+            (Self::Many(lhs), Self::One(rhs)) => {
+                let mut states = Vec::with_capacity(lhs.len() + 1);
+                states.extend(lhs.iter().cloned());
+                states.push(rhs);
+                *self = Self::Many(Arc::from(states));
+            }
+            (Self::Many(lhs), Self::Many(rhs)) => {
+                let mut states = Vec::with_capacity(lhs.len() + rhs.len());
+                states.extend(lhs.iter().cloned());
+                states.extend(rhs.iter().cloned());
+                *self = Self::Many(Arc::from(states));
+            }
+        }
+    }
+
+    fn for_each(&self, mut f: impl FnMut(&AtomicCommandExecution)) {
+        match self {
+            Self::None => {}
+            Self::One(state) => f(state),
+            Self::Many(states) => {
+                for state in states.iter() {
+                    f(state);
+                }
+            }
+        }
+    }
+
+    fn track(&mut self) -> CommandExecution {
+        let tracker = AtomicCommandExecution::new_pending();
+        let cmd_exec = CommandExecution(tracker.clone());
+        self.extend(Self::One(tracker));
+
+        cmd_exec
+    }
+}
 
 #[cfg(feature = "checked")]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -410,6 +552,7 @@ struct CommandData {
     name: Option<String>,
 
     stream_scope_id: Option<u64>,
+    tracking: CommandExecutions,
 }
 
 impl CommandData {
@@ -471,6 +614,12 @@ impl CommandData {
         for exec in &mut self.execs {
             exec.remap_nodes(node_map);
         }
+    }
+}
+
+impl Drop for CommandData {
+    fn drop(&mut self) {
+        self.tracking.signal_abandoned();
     }
 }
 
@@ -1835,7 +1984,9 @@ mod test {
 
     use ash::vk;
 
-    use super::{AnyResource, Graph, Node, ResourceMap};
+    use super::{
+        AnyResource, CommandExecutionAbandoned, CommandExecutions, Graph, Node, ResourceMap,
+    };
     use crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -1845,6 +1996,74 @@ mod test {
         swapchain::SwapchainImage,
     };
     use crate::pool::{Pool, hash::HashPool};
+
+    #[test]
+    fn command_execution_starts_pending() {
+        let mut graph = Graph::new();
+        let mut cmd = graph.begin_cmd();
+        let execution = cmd.track_execution();
+
+        assert_eq!(execution.has_executed(), Ok(false));
+    }
+
+    #[test]
+    fn command_execution_is_abandoned_when_graph_drops() {
+        let execution = {
+            let mut graph = Graph::new();
+            let mut cmd = graph.begin_cmd();
+
+            cmd.track_execution()
+        };
+
+        assert_eq!(execution.has_executed(), Err(CommandExecutionAbandoned));
+    }
+
+    #[test]
+    fn command_executions_track_multiple_handles() {
+        let mut executions = CommandExecutions::default();
+        let first = executions.track();
+        let second = executions.track();
+
+        executions.signal_executed();
+
+        assert_eq!(first.has_executed(), Ok(true));
+        assert_eq!(second.has_executed(), Ok(true));
+    }
+
+    #[test]
+    fn command_executions_extend_preserves_both_sides() {
+        let mut lhs = CommandExecutions::default();
+        let first = lhs.track();
+        let mut rhs = CommandExecutions::default();
+        let second = rhs.track();
+
+        lhs.extend(rhs);
+        lhs.signal_executed();
+
+        assert_eq!(first.has_executed(), Ok(true));
+        assert_eq!(second.has_executed(), Ok(true));
+    }
+
+    #[test]
+    fn command_execution_stays_executed_after_tracker_drops() {
+        let execution = {
+            let mut executions = CommandExecutions::default();
+            let execution = executions.track();
+
+            executions.signal_executed();
+
+            execution
+        };
+
+        assert_eq!(execution.has_executed(), Ok(true));
+    }
+
+    #[test]
+    fn command_execution_abandoned_converts_to_driver_error() {
+        let error = DriverError::from(CommandExecutionAbandoned);
+
+        assert!(matches!(error, DriverError::InvalidData));
+    }
 
     mod integration {
         use super::*;

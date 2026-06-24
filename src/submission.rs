@@ -34,7 +34,7 @@ use {
             cmd_buf::{CommandBuffer, CommandBufferInfo},
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
             device::Device,
-            fence::Fence,
+            fence::{Fence, FenceDroppable},
             format_aspect_mask,
             graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{
@@ -58,7 +58,6 @@ use {
     std::{
         cell::RefCell,
         collections::{BTreeMap, HashMap, HashSet, VecDeque},
-        fmt::Debug as FmtDebug,
         iter::repeat_n,
         mem::take,
         ops::Range,
@@ -974,6 +973,18 @@ impl Drop for CommandRecordingResources {
     }
 }
 
+#[derive(Debug)]
+struct SubmittedCommand {
+    cmd: CommandData,
+    _resources: CommandRecordingResources,
+}
+
+impl SubmittedCommand {
+    fn signal_executed(&self) {
+        self.cmd.tracking.signal_executed();
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ImageQueueOwnershipTransfer {
     dst_queue_family_index: u32,
@@ -1432,7 +1443,7 @@ where
 
         drop(state);
 
-        fence.drop_when_signaled(self.state.clone());
+        fence.drop_fence_droppable(RecordedSubmissionDrop(self.state.clone()));
     }
 
     /// Submits this recorded submission using either `vkQueueSubmit` or `vkQueueSubmit2`.
@@ -1443,7 +1454,7 @@ where
         submit_info: impl Into<QueueSubmitInfo<'a>>,
     ) -> Result<(), DriverError> {
         #[cfg(feature = "checked")]
-        if fence.queued {
+        if fence.queued.get() {
             fence.wait()?;
             fence.reset()?;
         }
@@ -1581,7 +1592,31 @@ where
 #[derive(Debug)]
 struct RecordedSubmissionState {
     _releases: Vec<QueueOwnershipRelease>,
+    executed: bool,
     submission: Submission,
+}
+
+impl RecordedSubmissionState {
+    fn signal_executed(&mut self) {
+        if self.executed {
+            return;
+        }
+
+        self.executed = true;
+        self.submission.signal_executed();
+    }
+}
+
+#[derive(Debug)]
+struct RecordedSubmissionDrop(Arc<Mutex<RecordedSubmissionState>>);
+
+impl FenceDroppable for RecordedSubmissionDrop {
+    fn fence_signaled(&mut self) {
+        self.0
+            .lock()
+            .expect("poisoned recorded submission state")
+            .signal_executed();
+    }
 }
 
 /// A [`Submission`] bound to a specific command buffer for explicit recording and submission.
@@ -1850,7 +1885,7 @@ pub struct Submission {
         Option<PendingTransferNodes<vk::Image, ImageQueueOwnershipTransfer>>,
     queue_ownership_release_groups: Vec<QueueOwnershipReleaseGroup>,
     recorded_commands: Vec<CommandRecordingResources>,
-    submit_retained: Vec<Box<dyn FmtDebug + Send + 'static>>,
+    submit_retained: Vec<SubmittedCommand>,
 }
 
 impl Submission {
@@ -1885,6 +1920,12 @@ impl Submission {
 
     pub(crate) fn graph(&self) -> &Graph {
         &self.graph
+    }
+
+    fn signal_executed(&self) {
+        for command in &self.submit_retained {
+            command.signal_executed();
+        }
     }
 
     pub(crate) fn assert_reusable_commands(&self) {
@@ -1982,6 +2023,7 @@ impl Submission {
             queue_ownership_release_waits: waits,
             state: Arc::new(Mutex::new(RecordedSubmissionState {
                 _releases: releases,
+                executed: false,
                 submission: self,
             })),
         }
@@ -4785,12 +4827,13 @@ impl Submission {
                     if cmd_idx == schedule_idx {
                         // This was a scheduled cmd - store it!
 
-                        self.submit_retained.push(Box::new((
+                        self.submit_retained.push(SubmittedCommand {
                             cmd,
-                            self.recorded_commands
+                            _resources: self
+                                .recorded_commands
                                 .pop()
                                 .expect("missing recorded command"),
-                        )));
+                        });
                         break;
                     } else {
                         debug_assert!(cmd_idx > schedule_idx);
@@ -6361,6 +6404,7 @@ mod tests {
             name: None,
 
             stream_scope_id: None,
+            tracking: Default::default(),
         };
 
         Submission::build_subpass_dependencies(&pass, &ExternalRenderPassAccessHistory::new(1))
@@ -6407,6 +6451,7 @@ mod tests {
             name: None,
 
             stream_scope_id: None,
+            tracking: Default::default(),
         };
 
         Submission::build_subpass_dependencies(&pass, &ExternalRenderPassAccessHistory::new(1))
@@ -6483,6 +6528,7 @@ mod tests {
             name: None,
 
             stream_scope_id: None,
+            tracking: Default::default(),
         }
     }
 
@@ -6948,6 +6994,7 @@ mod tests {
             state: Arc::new(Mutex::new(RecordedSubmissionState {
                 submission,
                 _releases: Vec::new(),
+                executed: false,
             })),
         };
 
@@ -7003,6 +7050,7 @@ mod tests {
             state: Arc::new(Mutex::new(RecordedSubmissionState {
                 submission,
                 _releases: Vec::new(),
+                executed: false,
             })),
         };
 
@@ -8222,6 +8270,7 @@ mod tests {
             name: None,
 
             stream_scope_id: None,
+            tracking: Default::default(),
         };
         let dependencies =
             Submission::build_subpass_dependencies(&pass, &ExternalRenderPassAccessHistory::new(1));

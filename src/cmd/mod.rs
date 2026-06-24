@@ -41,8 +41,8 @@ use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
         AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode, BufferNode, CommandData,
-        CommandFunction, Execution, Graph, ImageLeaseNode, ImageNode, Node, Resource,
-        SwapchainImageNode,
+        CommandExecution, CommandFunction, Execution, Graph, ImageLeaseNode, ImageNode, Node,
+        Resource, SwapchainImageNode,
     },
     crate::{
         NodeIndex,
@@ -94,6 +94,7 @@ impl<'a> Command<'a> {
             #[cfg(debug_assertions)]
             name: None,
             stream_scope_id: None,
+            tracking: Default::default(),
         });
 
         Self {
@@ -101,6 +102,14 @@ impl<'a> Command<'a> {
             exec_idx: 0,
             graph,
         }
+    }
+
+    /// Returns a handle that tracks whether this graph command has completed device execution.
+    ///
+    /// This may be called multiple times. Each returned handle independently observes the same
+    /// command execution.
+    pub fn track_execution(&mut self) -> CommandExecution {
+        self.cmd_mut().tracking.track()
     }
 
     fn cmd(&self) -> &CommandData {
