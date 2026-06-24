@@ -5,22 +5,22 @@
 
 /// Common imports for applications using the ImGui integration.
 pub mod prelude {
-    pub use super::{Condition, ImGui, Ui, imgui};
+    pub use super::{Condition, Frame, ImGui, Image, ImageSource, Ui, imgui};
 }
 
 pub use imgui::{self, Condition, Ui};
 
-type DrawCmdInfo = (usize, [f32; 4], usize, usize);
+type DrawCmdInfo = (usize, [f32; 4], usize, usize, TextureId);
 
 use {
     bytemuck::cast_slice,
-    imgui::{Context, DrawCmd, DrawCmdParams},
+    imgui::{Context, DrawCmd, DrawCmdParams, TextureId},
     imgui_winit_support::{
         winit::{event::Event, window::Window},
         {HiDpiMode, WinitPlatform},
     },
     log::warn,
-    std::{sync::Arc, time::Duration},
+    std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration},
     vk_graph::{
         Graph,
         cmd::{LoadOp, StoreOp},
@@ -29,11 +29,11 @@ use {
             buffer::{Buffer, BufferInfo},
             device::Device,
             graphics::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
-            image::{Image, ImageInfo},
+            image::{Image as DriverImage, ImageInfo},
             shader::Shader,
             sync::AccessType,
         },
-        node::ImageLeaseNode,
+        node::{AnyImageNode, ImageLeaseNode, ImageNode},
         pool::{Lease, Pool},
     },
     vk_shader_macros::include_glsl,
@@ -43,9 +43,33 @@ use {
 #[derive(Debug)]
 pub struct ImGui {
     context: Context,
-    font_atlas_image: Option<Arc<Lease<Image>>>,
+    font_atlas_image: Option<Arc<Lease<DriverImage>>>,
+    next_texture_id: usize,
     pipeline: GraphicsPipeline,
     platform: WinitPlatform,
+    user_images: HashMap<TextureId, AnyImageNode>,
+}
+
+/// Frame-scoped helper for registering user images with ImGui draw commands.
+pub struct Frame<'a> {
+    next_texture_id: &'a mut usize,
+    user_images: &'a mut HashMap<TextureId, AnyImageNode>,
+}
+
+/// A frame-scoped ImGui image registration.
+///
+/// Dropping this value releases the typed handle. The underlying texture binding remains valid
+/// until the current ImGui frame is rendered, because ImGui consumes draw commands after UI code
+/// returns.
+pub struct Image<'a> {
+    id: TextureId,
+    _frame: PhantomData<&'a Frame<'a>>,
+}
+
+/// Image source accepted by [`Frame::image`].
+#[derive(Clone, Copy, Debug)]
+pub struct ImageSource {
+    image: AnyImageNode,
 }
 
 fn supported_draw_cmd(draw_cmd: DrawCmd) -> Option<DrawCmdInfo> {
@@ -57,9 +81,10 @@ fn supported_draw_cmd(draw_cmd: DrawCmd) -> Option<DrawCmdInfo> {
                     clip_rect,
                     idx_offset,
                     vtx_offset,
+                    texture_id,
                     ..
                 },
-        } => Some((count, clip_rect, idx_offset, vtx_offset)),
+        } => Some((count, clip_rect, idx_offset, vtx_offset, texture_id)),
         DrawCmd::ResetRenderState => {
             warn!("unsupported imgui draw command: reset render state");
             None
@@ -67,6 +92,53 @@ fn supported_draw_cmd(draw_cmd: DrawCmd) -> Option<DrawCmdInfo> {
         DrawCmd::RawCallback { .. } => {
             warn!("unsupported imgui draw command: raw callback");
             None
+        }
+    }
+}
+
+impl<'a> Frame<'a> {
+    /// Registers an image for use by ImGui widgets during this frame.
+    pub fn image(&mut self, image: impl Into<ImageSource>) -> Image<'_> {
+        let id = TextureId::new(*self.next_texture_id);
+        *self.next_texture_id += 1;
+        self.user_images.insert(id, image.into().image);
+
+        Image {
+            id,
+            _frame: PhantomData,
+        }
+    }
+}
+
+impl Image<'_> {
+    /// Returns the ImGui texture id for this image.
+    pub const fn id(&self) -> TextureId {
+        self.id
+    }
+}
+
+impl Drop for Image<'_> {
+    fn drop(&mut self) {}
+}
+
+impl From<AnyImageNode> for ImageSource {
+    fn from(image: AnyImageNode) -> Self {
+        Self { image }
+    }
+}
+
+impl From<ImageLeaseNode> for ImageSource {
+    fn from(image: ImageLeaseNode) -> Self {
+        Self {
+            image: image.into(),
+        }
+    }
+}
+
+impl From<ImageNode> for ImageSource {
+    fn from(image: ImageNode) -> Self {
+        Self {
+            image: image.into(),
         }
     }
 }
@@ -91,8 +163,10 @@ impl ImGui {
         Self {
             context,
             font_atlas_image: None,
+            next_texture_id: 1,
             pipeline,
             platform,
+            user_images: Default::default(),
         }
     }
 
@@ -108,10 +182,10 @@ impl ImGui {
         window: &Window,
         pool: &mut P,
         graph: &mut Graph,
-        ui_func: impl FnOnce(&mut Ui, &mut P, &mut Graph),
+        ui_func: impl FnOnce(&mut Frame<'_>, &mut Ui, &mut P, &mut Graph),
     ) -> ImageLeaseNode
     where
-        P: Pool<BufferInfo, Buffer> + Pool<ImageInfo, Image>,
+        P: Pool<BufferInfo, Buffer> + Pool<ImageInfo, DriverImage>,
     {
         let hidpi = self.platform.hidpi_factor();
 
@@ -133,10 +207,14 @@ impl ImGui {
             .prepare_frame(io, window)
             .expect("invalid imgui frame");
 
-        // Let the caller draw the GUI
+        // Let the caller draw the GUI and register graph images used by image widgets.
         let ui = self.context.frame();
+        let mut frame = Frame {
+            next_texture_id: &mut self.next_texture_id,
+            user_images: &mut self.user_images,
+        };
 
-        ui_func(ui, pool, graph);
+        ui_func(&mut frame, ui, pool, graph);
 
         self.platform.prepare_render(ui, window);
         let draw_data = self.context.render();
@@ -216,59 +294,67 @@ impl ImGui {
             let window_height =
                 self.platform.hidpi_factor() as f32 / window.inner_size().height as f32;
 
-            graph
-                .begin_cmd()
-                .debug_name("imgui")
-                .bind_pipeline(&self.pipeline)
-                .resource_access(index_buf, AccessType::IndexBuffer)
-                .resource_access(vertex_buf, AccessType::VertexBuffer)
-                .shader_resource_access(
-                    0,
-                    font_atlas_image,
-                    AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
-                )
-                .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store)
-                .record_cmd(move |cmd| {
-                    cmd.push_constants(0, &window_width.to_ne_bytes())
-                        .push_constants(4, &window_height.to_ne_bytes())
-                        .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
-                        .bind_vertex_buffer(0, vertex_buf, 0);
+            for (index_count, clip_rect, first_index, vertex_offset, texture_id) in draw_cmds {
+                let texture = self
+                    .user_images
+                    .get(&texture_id)
+                    .copied()
+                    .unwrap_or_else(|| font_atlas_image.into());
+                let clip_rect = [
+                    (clip_rect[0] - display_pos[0]) * framebuffer_scale[0],
+                    (clip_rect[1] - display_pos[1]) * framebuffer_scale[1],
+                    (clip_rect[2] - display_pos[0]) * framebuffer_scale[0],
+                    (clip_rect[3] - display_pos[1]) * framebuffer_scale[1],
+                ];
+                let x = clip_rect[0].floor() as i32;
+                let y = clip_rect[1].floor() as i32;
+                let width = (clip_rect[2] - clip_rect[0]).ceil() as u32;
+                let height = (clip_rect[3] - clip_rect[1]).ceil() as u32;
 
-                    for (index_count, clip_rect, first_index, vertex_offset) in draw_cmds {
-                        let clip_rect = [
-                            (clip_rect[0] - display_pos[0]) * framebuffer_scale[0],
-                            (clip_rect[1] - display_pos[1]) * framebuffer_scale[1],
-                            (clip_rect[2] - display_pos[0]) * framebuffer_scale[0],
-                            (clip_rect[3] - display_pos[1]) * framebuffer_scale[1],
-                        ];
-                        let x = clip_rect[0].floor() as i32;
-                        let y = clip_rect[1].floor() as i32;
-                        let width = (clip_rect[2] - clip_rect[0]).ceil() as u32;
-                        let height = (clip_rect[3] - clip_rect[1]).ceil() as u32;
-                        cmd.set_scissor(
-                            0,
-                            &[vk::Rect2D {
-                                offset: vk::Offset2D { x, y },
-                                extent: vk::Extent2D { width, height },
-                            }],
-                        )
-                        .draw_indexed(
-                            index_count as _,
-                            1,
-                            first_index as _,
-                            vertex_offset as _,
-                            0,
-                        );
-                    }
-                });
+                graph
+                    .begin_cmd()
+                    .debug_name("imgui")
+                    .bind_pipeline(&self.pipeline)
+                    .resource_access(index_buf, AccessType::IndexBuffer)
+                    .resource_access(vertex_buf, AccessType::VertexBuffer)
+                    .shader_resource_access(
+                        0,
+                        texture,
+                        AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+                    )
+                    .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store)
+                    .record_cmd(move |cmd| {
+                        cmd.push_constants(0, &window_width.to_ne_bytes())
+                            .push_constants(4, &window_height.to_ne_bytes())
+                            .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
+                            .bind_vertex_buffer(0, vertex_buf, 0)
+                            .set_scissor(
+                                0,
+                                &[vk::Rect2D {
+                                    offset: vk::Offset2D { x, y },
+                                    extent: vk::Extent2D { width, height },
+                                }],
+                            )
+                            .draw_indexed(
+                                index_count as _,
+                                1,
+                                first_index as _,
+                                vertex_offset as _,
+                                0,
+                            );
+                    });
+            }
         }
+
+        self.user_images.clear();
+        self.next_texture_id = 1;
 
         image
     }
 
     fn lease_font_atlas_image<P>(&mut self, pool: &mut P, graph: &mut Graph)
     where
-        P: Pool<BufferInfo, Buffer> + Pool<ImageInfo, Image>,
+        P: Pool<BufferInfo, Buffer> + Pool<ImageInfo, DriverImage>,
     {
         use imgui::{FontConfig, FontGlyphRanges, FontSource};
 
@@ -355,7 +441,7 @@ mod test {
 
         assert_eq!(
             supported_draw_cmd(draw_cmd),
-            Some((42, [1.0, 2.0, 3.0, 4.0], 6, 5))
+            Some((42, [1.0, 2.0, 3.0, 4.0], 6, 5, TextureId::new(7)))
         );
     }
 
