@@ -61,8 +61,8 @@ These patterns are safe:
 Host-mappable buffers require extra understanding to use properly.
 
 The contents of a buffer are undefined from the time of submission until the returned `Fence` is
-signaled. Use `Fence::is_signaled` or `Fence::wait_signaled` before reading or writing host-mapped
-memory touched by that submission.
+signaled. Use `Fence::status` or `Fence::wait` before reading or writing host-mapped memory touched
+by that submission.
 
 See:
 [_`examples/cpu_readback.rs`_](https://github.com/attackgoat/vk-graph/blob/main/examples/cpu_readback.rs)

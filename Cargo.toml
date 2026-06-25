@@ -24,17 +24,17 @@ readme = "README.md"
 log = "0.4"
 profiling = "1.0"
 read-only = "0.1"
-vk-graph = { path = "", version = "0.14.2" }
-vk-graph-egui = { path = "crates/vk-graph-egui", version = "0.1.1" }
+vk-graph = { path = "", version = "0.14.3" }
+vk-graph-egui = { path = "crates/vk-graph-egui", version = "0.1.2" }
 vk-graph-fx = { path = "crates/vk-graph-fx", version = "0.1.1" }
 vk-graph-hot = { path = "crates/vk-graph-hot", version = "0.1.1" }
-vk-graph-imgui = { path = "crates/vk-graph-imgui", version = "0.1.1" }
-vk-graph-window = { path = "crates/vk-graph-window", version = "0.1.1" }
+vk-graph-imgui = { path = "crates/vk-graph-imgui", version = "0.1.2" }
+vk-graph-window = { path = "crates/vk-graph-window", version = "0.1.2" }
 winit = "0.30"
 
 [package]
 name = "vk-graph"
-version = "0.14.2"
+version = "0.14.3"
 authors = ["John Wells <john@attackgoat.com>"]
 edition.workspace = true
 license.workspace = true

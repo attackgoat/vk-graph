@@ -69,7 +69,7 @@ fn main() -> Result<(), DriverError> {
     let mut fence = graph
         .finalize()
         .queue_submit(&mut HashPool::new(&device), 0, 0)?;
-    fence.wait_signaled()?;
+    fence.wait()?;
 
     // For each image we have reduced each 2x2 pixel group into the min/max values of each group
     let min_result_data: &[f32] = cast_slice(Buffer::mapped_slice(&min_result_buf));

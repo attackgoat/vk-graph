@@ -73,11 +73,23 @@ unsafe extern "system" fn debug_callback(
 
     if is_error {
         error!("{message}");
-    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
+    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING)
+        && !var("VK_GRAPH_DEBUG_IGNORE_WARNING")
+            .map(var_value_is_set)
+            .unwrap_or_default()
+    {
         warn!("{message}");
-    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::INFO) {
+    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::INFO)
+        && !var("VK_GRAPH_DEBUG_IGNORE_INFO")
+            .map(var_value_is_set)
+            .unwrap_or_default()
+    {
         info!("{message}");
-    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE) {
+    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE)
+        && !var("VK_GRAPH_DEBUG_IGNORE_VERBOSE")
+            .map(var_value_is_set)
+            .unwrap_or_default()
+    {
         debug!("{message}");
     }
 
@@ -102,8 +114,8 @@ unsafe extern "system" fn debug_callback(
     }
 
     if var(SKIP_VALIDATION_PARK_ENV)
-        .map(|value| !matches!(value.as_str(), "" | "0" | "false" | "False" | "FALSE"))
-        .unwrap_or(false)
+        .map(var_value_is_set)
+        .unwrap_or_default()
     {
         warn!("validation callback park skipped; execution will continue");
 
@@ -187,6 +199,10 @@ fn has_vk_khr_surface(entry: &ash::Entry, instance: vk::Instance) -> bool {
             .get_instance_proc_addr(instance, name.as_ptr())
             .is_some()
     })
+}
+
+fn var_value_is_set(val: String) -> bool {
+    !matches!(val.as_str(), "" | "0" | "false" | "False" | "FALSE")
 }
 
 /// Vulkan API version.

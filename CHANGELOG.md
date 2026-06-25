@@ -7,6 +7,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-06-25
+
+### Added
+
+- Command builder one-shot commands for recording graph work.
+- `vk-graph-imgui` support for frame-scoped user images in ImGui widgets.
+
+### Changed
+
+- Workspace integration crates affected by this release now target `vk-graph` `0.14.3` and are
+  versioned as `0.1.2`.
+
+### Deprecated
+
+- `Fence::is_signaled`; use `Fence::status` instead.
+- `Fence::wait_signaled`; use `Fence::wait` instead.
+
 ## [0.14.2] - 2026-06-18
 
 ### Added
@@ -712,7 +729,8 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
   platforms and require no bare-metal graphics API knowledge
 - "Hello, world!" example using a bitmapped font
 
-[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.3...HEAD
+[0.14.3]: https://crates.io/crates/vk-graph/0.14.3
 [0.14.2]: https://crates.io/crates/vk-graph/0.14.2
 [0.1.0]: https://crates.io/crates/screen-13/0.1.0
 [0.2.0]: https://crates.io/crates/screen-13/0.2.0

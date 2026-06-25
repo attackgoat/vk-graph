@@ -273,11 +273,11 @@ graph, but they may do so manually:
 #     graph: Graph,
 #     device: &Device,
 # ) -> Result<(), DriverError> {
-// NOTE: This will stall! Use Fence::is_signaled to check periodically instead.
+// NOTE: This will stall! Use Fence::status to check periodically instead.
 let mut fence = graph
     .finalize()
     .queue_submit(&mut LazyPool::new(device), 0, 0)?;
-fence.wait_signaled()?;
+fence.wait()?;
 # Ok(()) }
 ```
 

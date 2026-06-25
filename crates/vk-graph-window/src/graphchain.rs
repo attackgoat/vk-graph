@@ -183,7 +183,7 @@ impl Graphchain {
         if self.recreate_pending {
             for frame in &mut self.frames {
                 if frame.fence.is_queued() {
-                    frame.fence.wait_signaled()?.reset()?;
+                    frame.fence.wait()?.reset()?;
                 }
             }
 
@@ -206,7 +206,7 @@ impl Graphchain {
         let frame = &mut self.frames[self.frame_idx];
 
         if frame.fence.is_queued() {
-            frame.fence.wait_signaled()?.reset()?;
+            frame.fence.wait()?.reset()?;
         }
 
         self.strategy.prepare_frame(
@@ -560,7 +560,7 @@ impl Drop for Graphchain {
         let device = frame.cmd_buf.device.clone();
 
         for frame in &mut self.frames {
-            if frame.fence.is_queued() && frame.fence.wait_signaled().is_err() {
+            if frame.fence.is_queued() && frame.fence.wait().is_err() {
                 return;
             }
         }

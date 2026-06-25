@@ -147,7 +147,7 @@ impl CommandBuffer {
     /// 2. Record commands.
     /// 3. End recording with [`Self::end`].
     /// 4. Submit this command buffer with `queue_submit`.
-    /// 5. Later, wait for completion with [`Fence::is_signaled`] or [`Fence::wait_signaled`].
+    /// 5. Later, check or wait for completion with [`Fence::status`] or [`Fence::wait`].
     /// 6. Before re-submitting this same command buffer, reset the fence with [`Fence::reset`],
     ///    then begin recording again.
     ///

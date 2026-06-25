@@ -134,7 +134,7 @@ fn exclusive_sum(
         .queue_submit(&mut HashPool::new(device), 0, 0)?;
 
     let started = Instant::now();
-    fence.wait_signaled()?;
+    fence.wait()?;
 
     println!(
         "Waited {}μs (len={})",
