@@ -1,6 +1,6 @@
 [package]
 name = "vk-graph-egui"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Christian Döring <christian.doering@tum.de>"]
 description = "egui renderer integration for vk-graph"
 documentation = "https://docs.rs/vk-graph-egui"

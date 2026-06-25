@@ -6,6 +6,11 @@ This crate is versioned independently from `vk-graph`.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-25
+
+- Supports `vk-graph` `0.14.3`.
+- Adds frame-scoped image registration for rendering user textures in ImGui widgets.
+
 ## [0.1.1] - 2026-06-18
 
 - Supports `vk-graph` `0.14.2`.
