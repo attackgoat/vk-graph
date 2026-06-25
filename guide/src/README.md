@@ -25,6 +25,9 @@ Driver
 Graph
   : _Builder-pattern for Vulkan commands_
 
+Command
+  : _Explicit command recording and region-level transfer helpers_
+
 Submission
   : _Automated graph execution_
 

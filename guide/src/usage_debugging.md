@@ -98,7 +98,8 @@ echo 100 | sudo tee /sys/devices/system/cpu/intel_pstate/min_perf_pct
 misuse patterns that the VVL cannot catch:
 
 - Missing `resource_access` / `shader_resource_access` declarations before using a resource
-- [`update_buffer`] and [`copy_buffer_region`](crate::Graph::copy_buffer_region) buffer bounds
+- [`update_buffer`](crate::Graph::update_buffer) and command-level
+  [`copy_buffer`](crate::cmd::Command::copy_buffer) buffer bounds
 - Valid image aspect masks and subresource ranges
 - Cross-graph node ownership checks
 

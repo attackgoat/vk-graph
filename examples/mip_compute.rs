@@ -136,27 +136,31 @@ fn main() -> Result<(), DriverError> {
         &device,
         BufferInfo::host_mem(size_of::<f32>() as _, vk::BufferUsageFlags::TRANSFER_DST),
     )?);
-    graph.copy_image_to_buffer_region(
-        depth_pyramid,
-        depth_pixel,
-        [vk::BufferImageCopy {
-            buffer_offset: 0,
-            buffer_row_length: 1,
-            buffer_image_height: 1,
-            image_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: depth_info.mip_level_count - 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
-            image_extent: vk::Extent3D {
-                width: 1,
-                height: 1,
-                depth: 1,
-            },
-        }],
-    );
+    graph
+        .begin_cmd()
+        .debug_name("copy image to buffer")
+        .copy_image_to_buffer(
+            depth_pyramid,
+            depth_pixel,
+            [vk::BufferImageCopy {
+                buffer_offset: 0,
+                buffer_row_length: 1,
+                buffer_image_height: 1,
+                image_subresource: vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: depth_info.mip_level_count - 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                image_extent: vk::Extent3D {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+            }],
+        )
+        .end_cmd();
 
     let depth_pixel = graph.resource(depth_pixel).clone();
 

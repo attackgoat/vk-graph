@@ -3,6 +3,7 @@
 `vk-graph` exposes two styles of commands:
 
 API docs: [`Graph::begin_cmd`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.begin_cmd),
+[`Graph::builder`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.builder),
 [`Command::record_cmd`](https://docs.rs/vk-graph/latest/vk_graph/cmd/struct.Command.html#method.record_cmd),
 [`Graph::finalize`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.finalize).
 
@@ -101,13 +102,14 @@ graph
 - Use `copy_buffer_to_image` and `copy_image_to_buffer` for upload and readback paths.
 - Use `copy_image` when source and destination texel footprints already match.
 - Use `blit_image` when you need scaling or filtering.
-- Use the `*_region` variants when you need precise offsets, layers, mip levels, or partial copies.
+- Use `begin_cmd()` command methods when you need precise offsets, layers, mip levels, or partial
+  copies.
 
-## Region Variants
+## Explicit Regions
 
-Each built-in helper also has a more explicit form such as `copy_buffer_region` or
-`copy_buffer_to_image_region`. Use those variants when the whole-resource convenience behavior is
-too broad.
+Whole-resource helpers live on `Graph`. Explicit-region transfer methods live on `Command`. Use the
+`Command` versions to compose with `debug_name`, resource access declarations, and other command
+recording.
 
 ```no_run
 # use vk_graph::Graph;
@@ -128,14 +130,35 @@ let dst = graph.bind_resource(Buffer::create(
     BufferInfo::device_mem(4096, vk::BufferUsageFlags::TRANSFER_DST),
 )?);
 
-graph.copy_buffer_region(
-    src,
-    dst,
-    [vk::BufferCopy {
-        src_offset: 512,
-        dst_offset: 1024,
-        size: 256,
-    }],
-);
+graph
+    .begin_cmd()
+    .debug_name("copy buffer region")
+    .copy_buffer(
+        src,
+        dst,
+        [vk::BufferCopy {
+            src_offset: 512,
+            dst_offset: 1024,
+            size: 256,
+        }],
+    )
+    .end_cmd();
 # Ok(()) }
+```
+
+## Graph Builder
+
+`Graph::builder()` offers the same whole-resource helpers in a chainable style and finishes with
+`build()`:
+
+```no_run
+# use vk_graph::Graph;
+# use vk_graph::driver::ash::vk;
+# use vk_graph::node::{BufferNode, ImageNode};
+# fn test(buffer: BufferNode, image: ImageNode) {
+let graph = Graph::builder()
+    .update_buffer(buffer, 0, [1, 2, 3, 4])
+    .copy_buffer_to_image(buffer, image)
+    .build();
+# }
 ```

@@ -46,7 +46,10 @@ use {
     },
     crate::{
         NodeIndex,
-        driver::{buffer::BufferSubresourceRange, image::ImageViewInfo},
+        driver::{
+            buffer::BufferSubresourceRange, format_texel_block_extent, format_texel_block_size,
+            image::ImageViewInfo, image_subresource_range_from_layers,
+        },
         stream::{AccelerationStructureArg, BufferArg, ImageArg},
     },
     ash::vk,
@@ -85,6 +88,137 @@ pub struct Command<'a> {
     pub(super) graph: &'a mut Graph,
 }
 
+/// Builder for incrementally constructing a [`Command`].
+pub struct CommandBuilder<'a> {
+    cmd: Command<'a>,
+}
+
+impl<'a> CommandBuilder<'a> {
+    /// Begins a new command in `graph`.
+    pub fn new(graph: &'a mut Graph) -> Self {
+        Self {
+            cmd: graph.begin_cmd(),
+        }
+    }
+
+    /// Builds the command without pushing it to the graph.
+    pub fn build(self) -> Command<'a> {
+        self.cmd
+    }
+
+    /// Pushes the command onto its graph and returns the graph.
+    pub fn push_cmd(self) -> &'a mut Graph {
+        self.cmd.end_cmd()
+    }
+
+    /// Blits image regions.
+    #[allow(deprecated)]
+    pub fn blit_image(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
+        filter: vk::Filter,
+        regions: impl AsRef<[vk::ImageBlit]> + 'static + Send,
+    ) -> Self {
+        self.cmd = self.cmd.blit_image(src, dst, filter, regions);
+        self
+    }
+
+    /// Clears a color image.
+    #[allow(deprecated)]
+    pub fn clear_color_image(
+        mut self,
+        image: impl Into<AnyImageNode>,
+        color: impl Into<ClearColorValue>,
+    ) -> Self {
+        self.cmd = self.cmd.clear_color_image(image, color);
+        self
+    }
+
+    /// Clears a depth/stencil image.
+    #[allow(deprecated)]
+    pub fn clear_depth_stencil_image(
+        mut self,
+        image: impl Into<AnyImageNode>,
+        depth: f32,
+        stencil: u32,
+    ) -> Self {
+        self.cmd = self.cmd.clear_depth_stencil_image(image, depth, stencil);
+        self
+    }
+
+    /// Copies data between buffer regions.
+    #[allow(deprecated)]
+    pub fn copy_buffer(
+        mut self,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyBufferNode>,
+        regions: impl AsRef<[vk::BufferCopy]> + 'static + Send,
+    ) -> Self {
+        self.cmd = self.cmd.copy_buffer(src, dst, regions);
+        self
+    }
+
+    /// Copies data from a buffer into image regions.
+    #[allow(deprecated)]
+    pub fn copy_buffer_to_image(
+        mut self,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyImageNode>,
+        regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
+    ) -> Self {
+        self.cmd = self.cmd.copy_buffer_to_image(src, dst, regions);
+        self
+    }
+
+    /// Copies data between image regions.
+    #[allow(deprecated)]
+    pub fn copy_image(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
+        regions: impl AsRef<[vk::ImageCopy]> + 'static + Send,
+    ) -> Self {
+        self.cmd = self.cmd.copy_image(src, dst, regions);
+        self
+    }
+
+    /// Copies image region data into a buffer.
+    #[allow(deprecated)]
+    pub fn copy_image_to_buffer(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyBufferNode>,
+        regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
+    ) -> Self {
+        self.cmd = self.cmd.copy_image_to_buffer(src, dst, regions);
+        self
+    }
+
+    /// Fills a region of a buffer with a fixed value.
+    #[allow(deprecated)]
+    pub fn fill_buffer(
+        mut self,
+        buffer: impl Into<AnyBufferNode>,
+        region: Range<vk::DeviceSize>,
+        data: u32,
+    ) -> Self {
+        self.cmd = self.cmd.fill_buffer(buffer, region, data);
+        self
+    }
+
+    /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html) command.
+    pub fn update_buffer(
+        mut self,
+        buffer: impl Into<AnyBufferNode>,
+        offset: vk::DeviceSize,
+        data: impl AsRef<[u8]> + 'static + Send,
+    ) -> Self {
+        self.cmd = self.cmd.update_buffer(buffer, offset, data);
+        self
+    }
+}
+
 #[allow(private_bounds)]
 impl<'a> Command<'a> {
     pub(super) fn new(graph: &'a mut Graph) -> Self {
@@ -102,6 +236,16 @@ impl<'a> Command<'a> {
             exec_idx: 0,
             graph,
         }
+    }
+
+    /// Begins a command builder in `graph`.
+    pub fn builder(graph: &'a mut Graph) -> CommandBuilder<'a> {
+        CommandBuilder::new(graph)
+    }
+
+    /// Converts this command into a builder.
+    pub fn into_builder(self) -> CommandBuilder<'a> {
+        CommandBuilder { cmd: self }
     }
 
     /// Returns a handle that tracks whether this graph command has completed device execution.
@@ -247,6 +391,328 @@ impl<'a> Command<'a> {
         });
     }
 
+    /// Blits image regions.
+    pub fn blit_image(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
+        filter: vk::Filter,
+        regions: impl AsRef<[vk::ImageBlit]> + 'static + Send,
+    ) -> Self {
+        let src = src.into();
+        let dst = dst.into();
+        let regions = Arc::<[vk::ImageBlit]>::from(regions.as_ref());
+
+        for region in regions.as_ref() {
+            self.set_subresource_access(
+                src,
+                image_subresource_range_from_layers(region.src_subresource),
+                AccessType::TransferRead,
+            );
+            self.set_subresource_access(
+                dst,
+                image_subresource_range_from_layers(region.dst_subresource),
+                AccessType::TransferWrite,
+            );
+        }
+
+        self.record_stream_mut(move |cmd| {
+            let src_image = cmd.resource(src).handle;
+            let dst_image = cmd.resource(dst).handle;
+
+            unsafe {
+                cmd.device.cmd_blit_image(
+                    cmd.handle,
+                    src_image,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    dst_image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    regions.as_ref(),
+                    filter,
+                );
+            }
+        });
+        self
+    }
+
+    /// Clears a color image.
+    pub fn clear_color_image(
+        mut self,
+        image: impl Into<AnyImageNode>,
+        color: impl Into<ClearColorValue>,
+    ) -> Self {
+        let color = color.into().into();
+        let image = image.into();
+        let image_view = self.graph.resources[image.index()]
+            .expect_image_info()
+            .into();
+
+        self.set_subresource_access(image, image_view, AccessType::TransferWrite);
+        self.record_stream_mut(move |cmd| {
+            let image = cmd.resource(image);
+
+            unsafe {
+                cmd.device.cmd_clear_color_image(
+                    cmd.handle,
+                    image.handle,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &color,
+                    &[image_view],
+                );
+            }
+        });
+        self
+    }
+
+    /// Clears a depth/stencil image.
+    pub fn clear_depth_stencil_image(
+        mut self,
+        image: impl Into<AnyImageNode>,
+        depth: f32,
+        stencil: u32,
+    ) -> Self {
+        let image = image.into();
+        let image_view = self.graph.resources[image.index()]
+            .expect_image_info()
+            .into();
+
+        self.set_subresource_access(image, image_view, AccessType::TransferWrite);
+        self.record_stream_mut(move |cmd| {
+            let image = cmd.resource(image);
+
+            unsafe {
+                cmd.device.cmd_clear_depth_stencil_image(
+                    cmd.handle,
+                    image.handle,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &vk::ClearDepthStencilValue { depth, stencil },
+                    &[image_view],
+                );
+            }
+        });
+        self
+    }
+
+    /// Copies data between buffer regions.
+    pub fn copy_buffer(
+        mut self,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyBufferNode>,
+        regions: impl AsRef<[vk::BufferCopy]> + 'static + Send,
+    ) -> Self {
+        let src = src.into();
+        let dst = dst.into();
+        let regions = Arc::<[vk::BufferCopy]>::from(regions.as_ref());
+
+        #[cfg(feature = "checked")]
+        let src_size = self.graph.resources[src.index()].expect_buffer_info().size;
+
+        #[cfg(feature = "checked")]
+        let dst_size = self.graph.resources[dst.index()].expect_buffer_info().size;
+
+        for region in regions.iter() {
+            #[cfg(feature = "checked")]
+            {
+                assert!(
+                    region.src_offset + region.size <= src_size,
+                    "source range end ({}) exceeds source size ({src_size})",
+                    region.src_offset + region.size
+                );
+                assert!(
+                    region.dst_offset + region.size <= dst_size,
+                    "destination range end ({}) exceeds destination size ({dst_size})",
+                    region.dst_offset + region.size
+                );
+            };
+
+            self.set_subresource_access(
+                src,
+                region.src_offset..region.src_offset + region.size,
+                AccessType::TransferRead,
+            );
+            self.set_subresource_access(
+                dst,
+                region.dst_offset..region.dst_offset + region.size,
+                AccessType::TransferWrite,
+            );
+        }
+
+        self.record_stream_mut(move |cmd| {
+            let src = cmd.resource(src);
+            let dst = cmd.resource(dst);
+
+            unsafe {
+                cmd.device
+                    .cmd_copy_buffer(cmd.handle, src.handle, dst.handle, &regions);
+            }
+        });
+        self
+    }
+
+    /// Copies data from a buffer into image regions.
+    pub fn copy_buffer_to_image(
+        mut self,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyImageNode>,
+        regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
+    ) -> Self {
+        let src = src.into();
+        let dst = dst.into();
+        let dst_info = self.graph.resources[dst.index()].expect_image_info();
+        let regions = Arc::<[vk::BufferImageCopy]>::from(regions.as_ref());
+
+        for region in regions.iter() {
+            let block_bytes_size = format_texel_block_size(dst_info.format);
+            let (block_height, block_width) = format_texel_block_extent(dst_info.format);
+            let data_size = block_bytes_size
+                * (region.buffer_row_length / block_width)
+                * (region.buffer_image_height / block_height);
+
+            self.set_subresource_access(
+                src,
+                region.buffer_offset..region.buffer_offset + data_size as vk::DeviceSize,
+                AccessType::TransferRead,
+            );
+            self.set_subresource_access(
+                dst,
+                image_subresource_range_from_layers(region.image_subresource),
+                AccessType::TransferWrite,
+            );
+        }
+
+        self.record_stream_mut(move |cmd| {
+            let src = cmd.resource(src);
+            let dst = cmd.resource(dst);
+
+            unsafe {
+                cmd.device.cmd_copy_buffer_to_image(
+                    cmd.handle,
+                    src.handle,
+                    dst.handle,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &regions,
+                );
+            }
+        });
+        self
+    }
+
+    /// Copies data between image regions.
+    pub fn copy_image(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
+        regions: impl AsRef<[vk::ImageCopy]> + 'static + Send,
+    ) -> Self {
+        let src = src.into();
+        let dst = dst.into();
+        let regions = Arc::<[vk::ImageCopy]>::from(regions.as_ref());
+
+        for region in regions.iter() {
+            self.set_subresource_access(
+                src,
+                image_subresource_range_from_layers(region.src_subresource),
+                AccessType::TransferRead,
+            );
+            self.set_subresource_access(
+                dst,
+                image_subresource_range_from_layers(region.dst_subresource),
+                AccessType::TransferWrite,
+            );
+        }
+
+        self.record_stream_mut(move |cmd| {
+            let src = cmd.resource(src);
+            let dst = cmd.resource(dst);
+
+            unsafe {
+                cmd.device.cmd_copy_image(
+                    cmd.handle,
+                    src.handle,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    dst.handle,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &regions,
+                );
+            }
+        });
+        self
+    }
+
+    /// Copies image region data into a buffer.
+    pub fn copy_image_to_buffer(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyBufferNode>,
+        regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
+    ) -> Self {
+        let src = src.into();
+        let src_info = self.graph.resources[src.index()].expect_image_info();
+        let dst = dst.into();
+        let regions = Arc::<[vk::BufferImageCopy]>::from(regions.as_ref());
+
+        for region in regions.iter() {
+            let block_bytes_size = format_texel_block_size(src_info.format);
+            let (block_height, block_width) = format_texel_block_extent(src_info.format);
+            let data_size = block_bytes_size
+                * (region.buffer_row_length / block_width)
+                * (region.buffer_image_height / block_height);
+
+            self.set_subresource_access(
+                src,
+                image_subresource_range_from_layers(region.image_subresource),
+                AccessType::TransferRead,
+            );
+            self.set_subresource_access(
+                dst,
+                region.buffer_offset..region.buffer_offset + data_size as vk::DeviceSize,
+                AccessType::TransferWrite,
+            );
+        }
+
+        self.record_stream_mut(move |cmd| {
+            let src = cmd.resource(src);
+            let dst = cmd.resource(dst);
+
+            unsafe {
+                cmd.device.cmd_copy_image_to_buffer(
+                    cmd.handle,
+                    src.handle,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    dst.handle,
+                    &regions,
+                );
+            }
+        });
+        self
+    }
+
+    /// Fills a region of a buffer with a fixed value.
+    pub fn fill_buffer(
+        mut self,
+        buffer: impl Into<AnyBufferNode>,
+        region: Range<vk::DeviceSize>,
+        data: u32,
+    ) -> Self {
+        let buffer = buffer.into();
+
+        self.set_subresource_access(buffer, region.clone(), AccessType::TransferWrite);
+        self.record_stream_mut(move |cmd| {
+            let buffer = cmd.resource(buffer);
+
+            unsafe {
+                cmd.device.cmd_fill_buffer(
+                    cmd.handle,
+                    buffer.handle,
+                    region.start,
+                    region.end - region.start,
+                    data,
+                );
+            }
+        });
+        self
+    }
+
     pub(crate) fn record_stream(
         mut self,
         func: impl for<'r> Fn(CommandRef<'r>) + Send + Sync + 'static,
@@ -348,6 +814,57 @@ impl<'a> Command<'a> {
         SubresourceRange: From<N::Range>,
     {
         self.set_subresource_access(resource_node, subresource, access);
+        self
+    }
+
+    /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html)
+    /// command.
+    ///
+    /// Vulkan requires `data` to be at most `65536` bytes.
+    ///
+    /// These constraints are validated by the Vulkan Validation Layer (VVL) when it is active.
+    /// When the `checked` feature is enabled, `vk-graph` also validates the data size and bounds
+    /// before recording the command.
+    #[profiling::function]
+    pub fn update_buffer(
+        mut self,
+        buffer: impl Into<AnyBufferNode>,
+        offset: vk::DeviceSize,
+        data: impl AsRef<[u8]> + 'static + Send,
+    ) -> Self {
+        debug_assert!(data.as_ref().len() <= 64 * 1024);
+
+        let buffer = buffer.into();
+        let data_end = offset + data.as_ref().len() as vk::DeviceSize;
+
+        #[cfg(feature = "checked")]
+        {
+            assert!(
+                data.as_ref().len() <= 64 * 1024,
+                "data length ({}) exceeds vkCmdUpdateBuffer limit (65536)",
+                data.as_ref().len()
+            );
+
+            let buffer_info = self.graph.resources[buffer.index()].expect_buffer_info();
+
+            assert!(
+                data_end <= buffer_info.size,
+                "data range end ({data_end}) exceeds buffer size ({})",
+                buffer_info.size
+            );
+        }
+
+        let data = Arc::<[u8]>::from(data.as_ref());
+
+        self.set_subresource_access(buffer, offset..data_end, AccessType::TransferWrite);
+        self.record_stream_mut(move |cmd| {
+            let buffer = cmd.resource(buffer);
+
+            unsafe {
+                cmd.device
+                    .cmd_update_buffer(cmd.handle, buffer.handle, offset, &data);
+            }
+        });
         self
     }
 }

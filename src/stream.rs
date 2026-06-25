@@ -761,7 +761,9 @@ impl CommandStreamMut {
         self
     }
 
-    /// Stream equivalent of [`Graph::blit_image_region`].
+    /// Deprecated stream equivalent of explicit-region blitting.
+    #[doc(hidden)]
+    #[deprecated(note = "use Command::blit_image for explicit regions")]
     pub fn blit_image_region(
         &mut self,
         src: impl Into<AnyImageNode>,
@@ -769,7 +771,11 @@ impl CommandStreamMut {
         filter: vk::Filter,
         regions: impl AsRef<[vk::ImageBlit]> + 'static + Send,
     ) -> &mut Self {
-        self.graph.blit_image_region(src, dst, filter, regions);
+        self.graph
+            .begin_cmd()
+            .debug_name("blit image")
+            .blit_image(src, dst, filter, regions)
+            .end_cmd();
         self
     }
 
@@ -804,14 +810,20 @@ impl CommandStreamMut {
         self
     }
 
-    /// Stream equivalent of [`Graph::copy_buffer_region`].
+    /// Deprecated stream equivalent of explicit-region buffer copies.
+    #[doc(hidden)]
+    #[deprecated(note = "use Command::copy_buffer for explicit regions")]
     pub fn copy_buffer_region(
         &mut self,
         src: impl Into<AnyBufferNode>,
         dst: impl Into<AnyBufferNode>,
         regions: impl AsRef<[vk::BufferCopy]> + 'static + Send,
     ) -> &mut Self {
-        self.graph.copy_buffer_region(src, dst, regions);
+        self.graph
+            .begin_cmd()
+            .debug_name("copy buffer")
+            .copy_buffer(src, dst, regions)
+            .end_cmd();
         self
     }
 
@@ -825,14 +837,20 @@ impl CommandStreamMut {
         self
     }
 
-    /// Stream equivalent of [`Graph::copy_buffer_to_image_region`].
+    /// Deprecated stream equivalent of explicit-region buffer-to-image copies.
+    #[doc(hidden)]
+    #[deprecated(note = "use Command::copy_buffer_to_image for explicit regions")]
     pub fn copy_buffer_to_image_region(
         &mut self,
         src: impl Into<AnyBufferNode>,
         dst: impl Into<AnyImageNode>,
         regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
     ) -> &mut Self {
-        self.graph.copy_buffer_to_image_region(src, dst, regions);
+        self.graph
+            .begin_cmd()
+            .debug_name("copy buffer to image")
+            .copy_buffer_to_image(src, dst, regions)
+            .end_cmd();
         self
     }
 
@@ -846,14 +864,20 @@ impl CommandStreamMut {
         self
     }
 
-    /// Stream equivalent of [`Graph::copy_image_region`].
+    /// Deprecated stream equivalent of explicit-region image copies.
+    #[doc(hidden)]
+    #[deprecated(note = "use Command::copy_image for explicit regions")]
     pub fn copy_image_region(
         &mut self,
         src: impl Into<AnyImageNode>,
         dst: impl Into<AnyImageNode>,
         regions: impl AsRef<[vk::ImageCopy]> + 'static + Send,
     ) -> &mut Self {
-        self.graph.copy_image_region(src, dst, regions);
+        self.graph
+            .begin_cmd()
+            .debug_name("copy image")
+            .copy_image(src, dst, regions)
+            .end_cmd();
         self
     }
 
@@ -867,14 +891,20 @@ impl CommandStreamMut {
         self
     }
 
-    /// Stream equivalent of [`Graph::copy_image_to_buffer_region`].
+    /// Deprecated stream equivalent of explicit-region image-to-buffer copies.
+    #[doc(hidden)]
+    #[deprecated(note = "use Command::copy_image_to_buffer for explicit regions")]
     pub fn copy_image_to_buffer_region(
         &mut self,
         src: impl Into<AnyImageNode>,
         dst: impl Into<AnyBufferNode>,
         regions: impl AsRef<[vk::BufferImageCopy]> + 'static + Send,
     ) -> &mut Self {
-        self.graph.copy_image_to_buffer_region(src, dst, regions);
+        self.graph
+            .begin_cmd()
+            .debug_name("copy image to buffer")
+            .copy_image_to_buffer(src, dst, regions)
+            .end_cmd();
         self
     }
 
@@ -1374,6 +1404,7 @@ mod tests {
     use super::*;
     use crate::{
         driver::{
+            buffer::BufferInfo,
             descriptor_set::{DescriptorPool, DescriptorPoolInfo},
             render_pass::{RenderPass, RenderPassInfo},
         },
@@ -1418,6 +1449,23 @@ mod tests {
 
         graph.insert_cmd_stream(&stream).finish();
         assert_eq!(graph.cmds.len(), 1);
+    }
+
+    #[test]
+    fn graph_copy_wrapper_can_prepare_stream() {
+        let _stream = CommandStream::finalize(|stream| {
+            let src = stream.arg(BufferInfo::device_mem(
+                4,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+            ));
+            let dst = stream.arg(BufferInfo::device_mem(
+                4,
+                vk::BufferUsageFlags::TRANSFER_DST,
+            ));
+
+            stream.graph.copy_buffer(src, dst);
+        })
+        .into_stream();
     }
 
     #[test]

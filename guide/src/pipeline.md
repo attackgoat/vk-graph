@@ -78,7 +78,9 @@ graph
 ```
 
 A call to `Graph::end_cmd` is not required. The _end-command_ method exists to support builder-style
-function-chaining. In the above example two commands are built and added to the graph.
+function-chaining. In the above example two commands are built and added to the graph. If you want a
+standalone command builder, `Command::builder(&mut graph)` and `begin_cmd().into_builder()` expose
+the same command-level transfer helpers and finish with `push_cmd()` or `build()`.
 
 ## Shaders
 

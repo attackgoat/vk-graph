@@ -199,31 +199,36 @@ fn main() -> anyhow::Result<()> {
             let j = frame.width as f32 / 10.0;
             let k = frame.height as f32 / 10.0;
 
-            frame.graph.blit_image_region(
-                image,
-                frame.swapchain_image,
-                vk::Filter::NEAREST,
-                [vk::ImageBlit {
-                    src_subresource: COLOR_SUBRESOURCE_LAYER,
-                    src_offsets: [
-                        vk::Offset3D { x: 0, y: 0, z: 0 },
-                        vk::Offset3D { x: 10, y: 10, z: 1 },
-                    ],
-                    dst_subresource: COLOR_SUBRESOURCE_LAYER,
-                    dst_offsets: [
-                        vk::Offset3D {
-                            x: ((x * j) + j) as i32,
-                            y: ((y * k) + k) as i32,
-                            z: 0,
-                        },
-                        vk::Offset3D {
-                            x: ((x * j) + (2.0 * j)) as i32,
-                            y: ((y * k) + (2.0 * k)) as i32,
-                            z: 1,
-                        },
-                    ],
-                }],
-            );
+            frame
+                .graph
+                .begin_cmd()
+                .debug_name("blit image")
+                .blit_image(
+                    image,
+                    frame.swapchain_image,
+                    vk::Filter::NEAREST,
+                    [vk::ImageBlit {
+                        src_subresource: COLOR_SUBRESOURCE_LAYER,
+                        src_offsets: [
+                            vk::Offset3D { x: 0, y: 0, z: 0 },
+                            vk::Offset3D { x: 10, y: 10, z: 1 },
+                        ],
+                        dst_subresource: COLOR_SUBRESOURCE_LAYER,
+                        dst_offsets: [
+                            vk::Offset3D {
+                                x: ((x * j) + j) as i32,
+                                y: ((y * k) + k) as i32,
+                                z: 0,
+                            },
+                            vk::Offset3D {
+                                x: ((x * j) + (2.0 * j)) as i32,
+                                y: ((y * k) + (2.0 * k)) as i32,
+                                z: 1,
+                            },
+                        ],
+                    }],
+                )
+                .end_cmd();
         }
 
         let fps = (1.0 / elapsed.as_secs_f32()).round();

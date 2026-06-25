@@ -127,31 +127,35 @@ impl Egui {
                     let image =
                         graph.bind_resource(self.textures.remove(id).expect("missing texture"));
 
-                    graph.copy_buffer_to_image_region(
-                        tmp_buf,
-                        image,
-                        [vk::BufferImageCopy {
-                            buffer_offset: 0,
-                            buffer_row_length: delta.image.width() as u32,
-                            buffer_image_height: delta.image.height() as u32,
-                            image_offset: vk::Offset3D {
-                                x: pos[0] as i32,
-                                y: pos[1] as i32,
-                                z: 0,
-                            },
-                            image_extent: vk::Extent3D {
-                                width: delta.image.width() as u32,
-                                height: delta.image.height() as u32,
-                                depth: 1,
-                            },
-                            image_subresource: vk::ImageSubresourceLayers {
-                                aspect_mask: vk::ImageAspectFlags::COLOR,
-                                mip_level: 0,
-                                base_array_layer: 0,
-                                layer_count: 1,
-                            },
-                        }],
-                    );
+                    graph
+                        .begin_cmd()
+                        .debug_name("copy buffer to image")
+                        .copy_buffer_to_image(
+                            tmp_buf,
+                            image,
+                            [vk::BufferImageCopy {
+                                buffer_offset: 0,
+                                buffer_row_length: delta.image.width() as u32,
+                                buffer_image_height: delta.image.height() as u32,
+                                image_offset: vk::Offset3D {
+                                    x: pos[0] as i32,
+                                    y: pos[1] as i32,
+                                    z: 0,
+                                },
+                                image_extent: vk::Extent3D {
+                                    width: delta.image.width() as u32,
+                                    height: delta.image.height() as u32,
+                                    depth: 1,
+                                },
+                                image_subresource: vk::ImageSubresourceLayers {
+                                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                                    mip_level: 0,
+                                    base_array_layer: 0,
+                                    layer_count: 1,
+                                },
+                            }],
+                        )
+                        .end_cmd();
                     (*id, AnyImageNode::from(image))
                 } else {
                     let image = graph.bind_resource(
