@@ -2,13 +2,18 @@
 
 use {
     super::{DriverError, device::Device},
+    crate::submission::TimestampQueryPool,
     ash::vk,
     log::{error, trace},
-    std::{cell::Cell, cell::RefCell, fmt::Debug, thread::panicking},
+    std::{
+        cell::{Cell, RefCell},
+        fmt::Debug,
+        thread::panicking,
+    },
 };
 
 pub(crate) trait FenceDroppable: Debug + Send {
-    fn fence_signaled(&mut self) {}
+    fn fence_signaled(&mut self, _fence: &Fence) {}
 }
 
 #[derive(Debug)]
@@ -36,6 +41,12 @@ pub struct Fence {
 
     pub(crate) queued: Cell<bool>,
     droppables: RefCell<Vec<Box<dyn FenceDroppable + 'static>>>,
+
+    /// Timestamp query results for queued work once this fence has signaled.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub timestamps: TimestampQueryPool,
 }
 
 impl Fence {
@@ -47,7 +58,8 @@ impl Fence {
             device: device.clone(),
             handle: Device::create_fence(device, signaled)?,
             queued: Cell::new(signaled),
-            droppables: RefCell::new(Vec::new()),
+            droppables: Default::default(),
+            timestamps: TimestampQueryPool::empty(),
         })
     }
 
@@ -69,7 +81,7 @@ impl Fence {
         }
 
         for droppable in droppables.iter_mut() {
-            droppable.fence_signaled();
+            droppable.fence_signaled(self);
         }
 
         droppables.clear();
@@ -79,6 +91,10 @@ impl Fence {
     #[doc(hidden)]
     pub fn is_signaled(&self) -> Result<bool, DriverError> {
         self.status()
+    }
+
+    pub(crate) fn set_timestamps(&mut self, timestamps: TimestampQueryPool) {
+        self.timestamps = timestamps;
     }
 
     /// Returns `true` if this fence is signaled.
@@ -138,6 +154,7 @@ impl Fence {
         }
 
         self.queued.set(false);
+        self.timestamps = TimestampQueryPool::empty();
 
         Ok(self)
     }

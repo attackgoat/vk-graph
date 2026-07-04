@@ -60,6 +60,7 @@ pub mod surface;
 pub mod swapchain;
 
 pub(crate) mod descriptor_set;
+pub(crate) mod query_pool;
 
 mod descriptor_set_layout;
 

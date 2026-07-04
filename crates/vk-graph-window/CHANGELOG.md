@@ -6,6 +6,12 @@ This crate is versioned independently from `vk-graph`.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-03
+
+- Supports `vk-graph` `0.14.4`.
+- `Graphchain::present_image` now returns `SubmissionQueryPool` with timestamp results for the
+  submitted graph work.
+
 ## [0.1.2] - 2026-06-25
 
 - Supports `vk-graph` `0.14.3`.

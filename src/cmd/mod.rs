@@ -42,7 +42,7 @@ use {
         AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
         AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode, BufferNode, CommandData,
         CommandExecution, CommandFunction, Execution, Graph, ImageLeaseNode, ImageNode, Node,
-        Resource, SwapchainImageNode,
+        Resource, SwapchainImageNode, TimestampQuery, TimestampQueryPlacement,
     },
     crate::{
         NodeIndex,
@@ -254,6 +254,23 @@ impl<'a> Command<'a> {
     /// command execution.
     pub fn track_execution(&mut self) -> CommandExecution {
         self.cmd_mut().tracking.track()
+    }
+
+    /// Records a timestamp query point at the current position in this command.
+    ///
+    /// A timestamp written before any command work is recorded at the start of this command. After
+    /// command work is recorded, timestamps are recorded after the most recently added execution.
+    ///
+    /// See [`Graph::write_timestamp`] for graph-boundary timestamps.
+    pub fn write_timestamp(&mut self) -> TimestampQuery {
+        let (exec_idx, placement) = if self.exec_idx == 0 {
+            (0, TimestampQueryPlacement::BeforeExec)
+        } else {
+            (self.exec_idx - 1, TimestampQueryPlacement::AfterExec)
+        };
+
+        self.graph
+            .write_timestamp_at(self.cmd_idx, exec_idx, placement)
     }
 
     fn cmd(&self) -> &CommandData {

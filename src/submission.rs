@@ -19,11 +19,11 @@
 use {
     super::{
         AnyResource, Attachment, CommandData, ExecutionAccess, ExecutionPipeline, Graph, LoadOp,
-        Node, NodeIndex,
+        Node, NodeIndex, TimestampQueryData, TimestampQueryPlacement,
         cmd::{SubresourceAccess, SubresourceRange},
     },
     crate::{
-        StoreOp,
+        StoreOp, TimestampQuery,
         cmd::CommandRef,
         driver::{
             AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DescriptorSet, DriverError,
@@ -41,14 +41,17 @@ use {
                 DenseMap, Image, image_subresource_range_contains,
                 image_subresource_range_intersection,
             },
-            initial_image_layout_access, is_read_access, pipeline_stage_access_flags,
+            initial_image_layout_access, is_read_access,
+            physical_device::Vulkan10Limits,
+            pipeline_stage_access_flags,
+            query_pool::{QueryPool, QueryPoolInfo},
             render_pass::{RenderPass, RenderPassInfo},
         },
         lazy_str,
         node::AnyNode,
         pool::{Lease, Pool, SubmissionPool},
     },
-    ash::vk,
+    ash::vk::{self, QueueFamilyProperties},
     fixedbitset::FixedBitSet,
     log::{
         Level::{Debug, Trace},
@@ -63,12 +66,16 @@ use {
         ops::Range,
         slice,
         sync::{Arc, Mutex},
+        time::Duration,
     },
     vk_sync::{
         AccessType, BufferBarrier, GlobalBarrier, ImageBarrier, ImageLayout,
         get_buffer_memory_barrier, get_image_memory_barrier, get_memory_barrier,
     },
 };
+
+#[cfg(feature = "checked")]
+use super::GraphId;
 
 #[cfg(not(feature = "checked"))]
 use std::hint::unreachable_unchecked;
@@ -950,7 +957,7 @@ struct QueueOwnershipReleaseWait {
     device_index: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct CommandRecordingResources {
     descriptor_pool: Option<Lease<DescriptorPool>>,
     descriptor_sets: Vec<Vec<DescriptorSet>>,
@@ -1415,13 +1422,12 @@ impl<Cb> RecordedSubmission<Cb>
 where
     Cb: AsRef<CommandBuffer>,
 {
-    fn attach(&self, fence: &mut Fence, queue_index: u32) {
-        let state = self
-            .state
-            .lock()
-            .expect("poisoned recorded submission state");
-
-        let queue_family_index = self.cmd_buf.as_ref().info.queue_family_index;
+    fn attach_locked(
+        state: &mut RecordedSubmissionState,
+        cmd_buf: &CommandBuffer,
+        queue_index: u32,
+    ) -> Option<SubmittedTimestampQueries> {
+        let queue_family_index = cmd_buf.info.queue_family_index;
 
         for (node_idx, ranges) in &state.submission.exclusive_buffer_ranges {
             if let Some(resource) = state.submission.graph.resources[*node_idx].as_buffer() {
@@ -1441,9 +1447,7 @@ where
             }
         }
 
-        drop(state);
-
-        fence.drop_fence_droppable(RecordedSubmissionDrop(self.state.clone()));
+        state.submission.query_pool_results.take()
     }
 
     /// Submits this recorded submission using either `vkQueueSubmit` or `vkQueueSubmit2`.
@@ -1582,7 +1586,30 @@ where
             }
         }
 
-        self.attach(fence, queue_index);
+        let mut state = self
+            .state
+            .lock()
+            .expect("poisoned recorded submission state");
+
+        #[cfg(feature = "checked")]
+        let timestamp_query_graph_id = state.submission.graph.graph_id();
+
+        let submitted_timestamps = Self::attach_locked(&mut state, command_buffer, queue_index);
+        drop(state);
+
+        #[cfg(feature = "checked")]
+        fence.set_timestamps(TimestampQueryPool::pending(timestamp_query_graph_id));
+
+        #[cfg(not(feature = "checked"))]
+        fence.set_timestamps(TimestampQueryPool::pending());
+
+        if let Some(submitted_timestamps) = submitted_timestamps {
+            fence.drop_fence_droppable(submitted_timestamps);
+        } else {
+            fence.drop_fence_droppable(TimestampQueryCompletion);
+        }
+
+        fence.drop_fence_droppable(RecordedSubmissionDrop(self.state.clone()));
         self.queue_ownership_release_waits.clear();
 
         Ok(())
@@ -1611,7 +1638,7 @@ impl RecordedSubmissionState {
 struct RecordedSubmissionDrop(Arc<Mutex<RecordedSubmissionState>>);
 
 impl FenceDroppable for RecordedSubmissionDrop {
-    fn fence_signaled(&mut self) {
+    fn fence_signaled(&mut self, _fence: &Fence) {
         self.0
             .lock()
             .expect("poisoned recorded submission state")
@@ -1884,6 +1911,8 @@ pub struct Submission {
     pending_image_transfer_nodes:
         Option<PendingTransferNodes<vk::Image, ImageQueueOwnershipTransfer>>,
     queue_ownership_release_groups: Vec<QueueOwnershipReleaseGroup>,
+    query_pool_results: Option<SubmittedTimestampQueries>,
+    query_pool_reset: bool,
     recorded_commands: Vec<CommandRecordingResources>,
     submit_retained: Vec<SubmittedCommand>,
 }
@@ -1912,6 +1941,8 @@ impl Submission {
             pending_buffer_transfer_nodes: None,
             graph,
             queue_ownership_release_groups: Vec::new(),
+            query_pool_results: None,
+            query_pool_reset: false,
             recorded_commands,
             pending_image_transfer_nodes: None,
             submit_retained: Vec::new(),
@@ -3634,6 +3665,8 @@ impl Submission {
         CMD_SLOTS.with_borrow_mut(|cmds| {
             debug_assert!(cmds.is_empty());
 
+            let old_cmd_len = self.graph.cmds.len();
+            let mut old_to_new_cmd = vec![(0, 0); old_cmd_len + 1];
             cmds.extend(self.graph.cmds.drain(..).map(Some));
 
             let mut schedule_idx = 0;
@@ -3641,9 +3674,12 @@ impl Submission {
             // debug!("attempting to merge {} passes", schedule.len(),);
 
             while schedule_idx < schedule.len() {
+                let first_cmd_idx = schedule[schedule_idx];
                 let mut cmd = cmds[schedule[schedule_idx]]
                     .take()
                     .expect("missing scheduled cmd");
+                let new_cmd_idx = self.graph.cmds.len();
+                old_to_new_cmd[first_cmd_idx] = (new_cmd_idx, 0);
 
                 // Find candidates
                 let merge_start = schedule_idx + 1;
@@ -3692,10 +3728,14 @@ impl Submission {
                     cmd.execs.reserve(additional_exec_count);
                 }
 
+                let mut exec_offset = cmd.execs.len();
                 for merge_idx in merge_start..merge_end {
+                    let old_cmd_idx = schedule[merge_idx];
                     let mut other = cmds[schedule[merge_idx]]
                         .take()
                         .expect("missing scheduled cmd");
+                    old_to_new_cmd[old_cmd_idx] = (new_cmd_idx, exec_offset);
+                    exec_offset += other.execs.len();
                     name.push_str(" + ");
                     name.push_str(other.name());
                     cmd.execs.append(&mut other.execs);
@@ -3718,8 +3758,22 @@ impl Submission {
             }
 
             // Add the remaining cmds back into the graph for later
-            for cmd in cmds.drain(..).flatten() {
+            for (old_cmd_idx, cmd) in cmds.drain(..).enumerate() {
+                let Some(cmd) = cmd else {
+                    continue;
+                };
+
+                old_to_new_cmd[old_cmd_idx] = (self.graph.cmds.len(), 0);
                 self.graph.cmds.push(cmd);
+            }
+            old_to_new_cmd[old_cmd_len] = (self.graph.cmds.len(), 0);
+
+            if let Some(timestamp_queries) = &mut self.graph.timestamp_queries {
+                for query in timestamp_queries.iter_mut().flatten() {
+                    let (command_idx, exec_idx) = old_to_new_cmd[query.command_idx];
+                    query.command_idx = command_idx;
+                    query.exec_idx += exec_idx;
+                }
             }
         });
     }
@@ -3730,6 +3784,114 @@ impl Submission {
         unsafe {
             cmd.device
                 .cmd_next_subpass(cmd.handle, vk::SubpassContents::INLINE);
+        }
+    }
+
+    fn prepare_timestamp_query_results(
+        &mut self,
+        cmd_buf: &CommandBuffer,
+    ) -> Result<(), DriverError> {
+        let Some(timestamp_queries) = &self.graph.timestamp_queries else {
+            return Ok(());
+        };
+
+        let query_capacity = cmd_buf
+            .device
+            .physical
+            .properties_v1_1
+            .max_multiview_view_count
+            .max(1);
+        let pending_pool_query_count =
+            timestamp_queries.iter().flatten().count() as u32 * query_capacity;
+        if pending_pool_query_count == 0 {
+            return Ok(());
+        }
+
+        let result_info_count = timestamp_queries
+            .iter()
+            .flatten()
+            .map(|timestamp_query| timestamp_query.query.index() + 1)
+            .max()
+            .unwrap_or_default();
+
+        self.query_pool_results = SubmittedTimestampQueries::create(
+            &cmd_buf.device,
+            cmd_buf.info.queue_family_index,
+            result_info_count,
+            1 + pending_pool_query_count,
+        )
+        .map(Some)?;
+
+        Ok(())
+    }
+
+    fn queue_family_supports_timestamp_queries(queue_family: &QueueFamilyProperties) -> bool {
+        queue_family.timestamp_valid_bits != 0
+            && queue_family
+                .queue_flags
+                .intersects(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+    }
+
+    fn timestamp_query_pool_query_count(
+        cmds: &[CommandData],
+        timestamp_query: &TimestampQueryData,
+    ) -> u32 {
+        if matches!(
+            timestamp_query.placement,
+            TimestampQueryPlacement::BeforeExec
+        ) && timestamp_query.exec_idx == 0
+        {
+            return 1;
+        }
+
+        cmds.get(timestamp_query.command_idx)
+            .and_then(|cmd| cmd.execs.get(timestamp_query.exec_idx))
+            .map(|exec| exec.view_mask.count_ones().max(1))
+            .unwrap_or(1)
+    }
+
+    fn prepare_timestamp_queries_for_commands(
+        &mut self,
+        command_indices: &[usize],
+        include_final_timestamp_queries: bool,
+    ) {
+        let Some(timestamp_queries) = &mut self.graph.timestamp_queries else {
+            return;
+        };
+        let Some(query_pool_results) = &mut self.query_pool_results else {
+            return;
+        };
+
+        let cmds = &self.graph.cmds;
+        let command_count = cmds.len();
+        let mut scheduled_commands = FixedBitSet::with_capacity(command_count + 1);
+        for command_idx in command_indices.iter().copied() {
+            scheduled_commands.insert(command_idx);
+        }
+        if include_final_timestamp_queries {
+            scheduled_commands.insert(command_count);
+        }
+
+        for timestamp_query in timestamp_queries.iter_mut().flatten() {
+            if !scheduled_commands.contains(timestamp_query.command_idx) {
+                continue;
+            }
+
+            let pool_query = timestamp_query.pool_query.unwrap_or_else(|| {
+                let pool_query = query_pool_results.allocate_query(
+                    Self::timestamp_query_pool_query_count(cmds, timestamp_query),
+                );
+                timestamp_query.pool_query = Some(pool_query);
+
+                pool_query
+            });
+
+            query_pool_results.set_result_info(
+                timestamp_query.query,
+                TimestampQueryResultInfo {
+                    timestamp_query: pool_query,
+                },
+            );
         }
     }
 
@@ -4621,7 +4783,12 @@ impl Submission {
     ) -> Result<(), DriverError> {
         #[cfg(feature = "checked")]
         let graph_id = self.graph.graph_id();
+        let query_pool = self
+            .query_pool_results
+            .as_ref()
+            .map(SubmittedTimestampQueries::query_pool);
         for cmd_idx in cmd_indices {
+            let timestamp_queries = self.take_timestamp_queries_for_command(cmd_idx);
             let cmd = &mut self.graph.cmds[cmd_idx];
 
             profiling::scope!("Cmd", cmd.name());
@@ -4629,6 +4796,18 @@ impl Submission {
                 .stream_scope_id
                 .and_then(|_| CommandBufferDebugLabel::begin(cmd_buf, "command stream boundary"));
             let _cmd_label = CommandBufferDebugLabel::begin(cmd_buf, cmd.name());
+            let mut next_timestamp_query_idx = 0;
+
+            if let Some(timestamp_queries) = &timestamp_queries {
+                next_timestamp_query_idx = Self::write_timestamp_queries(
+                    cmd_buf,
+                    query_pool,
+                    timestamp_queries,
+                    TimestampQueryPlacement::BeforeExec,
+                    0,
+                    next_timestamp_query_idx,
+                );
+            }
 
             let recorded_command = &mut self.recorded_commands[cmd_idx];
             let is_graphics = recorded_command.render_pass.is_some();
@@ -4690,8 +4869,21 @@ impl Submission {
 
                 let exec = &mut cmd.execs[exec_idx];
 
-                if is_graphics && exec_idx > 0 {
-                    Self::next_subpass(cmd_buf);
+                if exec_idx > 0 {
+                    if is_graphics {
+                        Self::next_subpass(cmd_buf);
+                    }
+
+                    if let Some(timestamp_queries) = &timestamp_queries {
+                        next_timestamp_query_idx = Self::write_timestamp_queries(
+                            cmd_buf,
+                            query_pool,
+                            timestamp_queries,
+                            TimestampQueryPlacement::BeforeExec,
+                            exec_idx,
+                            next_timestamp_query_idx,
+                        );
+                    }
                 }
 
                 if let Some(pipeline) = exec.pipeline.as_mut() {
@@ -4760,6 +4952,17 @@ impl Submission {
                         graph_id,
                     ));
                 }
+
+                if let Some(timestamp_queries) = &timestamp_queries {
+                    next_timestamp_query_idx = Self::write_timestamp_queries(
+                        cmd_buf,
+                        query_pool,
+                        timestamp_queries,
+                        TimestampQueryPlacement::AfterExec,
+                        exec_idx,
+                        next_timestamp_query_idx,
+                    );
+                }
             }
 
             if is_graphics {
@@ -4807,7 +5010,68 @@ impl Submission {
         self.queue_ownership_release_groups
             .extend(self.collect_queue_ownership_release_groups());
 
+        let has_pending_timestamp_queries = self
+            .graph
+            .timestamp_queries
+            .as_ref()
+            .is_some_and(|timestamp_queries| timestamp_queries.iter().any(Option::is_some));
+        let include_final_timestamp_queries = schedule.cmds.len() == self.graph.cmds.len();
+
+        if has_pending_timestamp_queries {
+            if cmd_buf
+                .device
+                .physical
+                .queue_families
+                .get(cmd_buf.info.queue_family_index as usize)
+                .is_none_or(|queue_family| {
+                    !Self::queue_family_supports_timestamp_queries(queue_family)
+                })
+            {
+                self.graph.timestamp_queries = None;
+            } else {
+                if self.query_pool_results.is_none() {
+                    self.prepare_timestamp_query_results(cmd_buf)?;
+                }
+
+                self.prepare_timestamp_queries_for_commands(
+                    &schedule.cmds,
+                    include_final_timestamp_queries,
+                );
+
+                if !self.query_pool_reset {
+                    let query_pool_results = self
+                        .query_pool_results
+                        .as_ref()
+                        .expect("missing query pool results");
+                    query_pool_results.reset(cmd_buf);
+                    query_pool_results.write_epoch(cmd_buf);
+                    self.query_pool_reset = true;
+                }
+            }
+        }
+
         self.record_cmd_indices(cmd_buf, schedule.cmds.iter().copied())?;
+
+        if include_final_timestamp_queries
+            && let Some(timestamp_queries) =
+                self.take_timestamp_queries_for_command(self.graph.cmds.len())
+        {
+            let query_pool = self
+                .query_pool_results
+                .as_ref()
+                .map(SubmittedTimestampQueries::query_pool);
+
+            Self::write_timestamp_queries(
+                cmd_buf,
+                query_pool,
+                &timestamp_queries,
+                TimestampQueryPlacement::BeforeExec,
+                0,
+                0,
+            );
+        }
+
+        self.remap_timestamp_queries_after_removing_scheduled(&schedule.cmds);
 
         thread_local! {
             static PASSES: RefCell<Vec<CommandData>> = Default::default();
@@ -4852,6 +5116,31 @@ impl Submission {
         log::trace!("Recorded passes");
 
         Ok(())
+    }
+
+    fn remap_timestamp_queries_after_removing_scheduled(&mut self, schedule: &[usize]) {
+        let old_cmd_len = self.graph.cmds.len();
+        let mut scheduled = FixedBitSet::with_capacity(old_cmd_len);
+        for cmd_idx in schedule.iter().copied() {
+            scheduled.insert(cmd_idx);
+        }
+
+        let mut old_to_new_cmd_idx = vec![0; old_cmd_len + 1];
+        let mut new_cmd_idx = 0;
+        for (old_cmd_idx, new_idx) in old_to_new_cmd_idx.iter_mut().enumerate().take(old_cmd_len) {
+            *new_idx = new_cmd_idx;
+            if !scheduled.contains(old_cmd_idx) {
+                new_cmd_idx += 1;
+            }
+        }
+
+        old_to_new_cmd_idx[old_cmd_len] = new_cmd_idx;
+
+        if let Some(timestamp_queries) = &mut self.graph.timestamp_queries {
+            for query in timestamp_queries.iter_mut().flatten() {
+                query.command_idx = old_to_new_cmd_idx[query.command_idx];
+            }
+        }
     }
 
     #[profiling::function]
@@ -5074,6 +5363,40 @@ impl Submission {
                 }),
             );
         }
+    }
+
+    fn take_timestamp_queries_for_command(
+        &mut self,
+        command_idx: usize,
+    ) -> Option<Box<[TimestampQueryData]>> {
+        let Some(graph_timestamp_queries) = &mut self.graph.timestamp_queries else {
+            return None;
+        };
+
+        let mut timestamp_queries = Vec::new();
+
+        for timestamp_query in graph_timestamp_queries {
+            if timestamp_query
+                .as_ref()
+                .is_some_and(|timestamp_query| timestamp_query.command_idx == command_idx)
+            {
+                timestamp_queries.push(
+                    timestamp_query
+                        .take()
+                        .expect("missing timestamp query after command match"),
+                );
+            }
+        }
+
+        timestamp_queries.sort_unstable_by_key(|timestamp_query| {
+            (
+                timestamp_query.exec_idx,
+                timestamp_query.placement,
+                timestamp_query.query.index(),
+            )
+        });
+
+        (!timestamp_queries.is_empty()).then(|| timestamp_queries.into_boxed_slice())
     }
 
     /// Records and submits all remaining commands using an internally allocated command buffer.
@@ -5563,6 +5886,55 @@ impl Submission {
         Ok(())
         })
     }
+
+    fn write_timestamp_queries(
+        cmd_buf: &CommandBuffer,
+        query_pool: Option<vk::QueryPool>,
+        timestamp_queries: &[TimestampQueryData],
+        placement: TimestampQueryPlacement,
+        exec_idx: usize,
+        start_idx: usize,
+    ) -> usize {
+        let mut query_idx = start_idx;
+
+        while let Some(timestamp_query) = timestamp_queries.get(query_idx) {
+            if timestamp_query.exec_idx < exec_idx
+                || timestamp_query.exec_idx == exec_idx && timestamp_query.placement < placement
+            {
+                query_idx += 1;
+                continue;
+            }
+
+            if timestamp_query.exec_idx > exec_idx
+                || timestamp_query.exec_idx == exec_idx && timestamp_query.placement > placement
+            {
+                break;
+            }
+
+            let query_pool = query_pool.expect("missing query pool results");
+            let pool_query = timestamp_query
+                .pool_query
+                .expect("missing timestamp query pool index");
+
+            unsafe {
+                cmd_buf.device.cmd_write_timestamp(
+                    cmd_buf.handle,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    query_pool,
+                    pool_query,
+                );
+            }
+
+            query_idx += 1;
+        }
+
+        query_idx
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TimestampQueryResultInfo {
+    timestamp_query: u32,
 }
 
 #[derive(Default)]
@@ -5574,6 +5946,238 @@ struct SubmitScratch {
     wait_infos: Vec<vk::SemaphoreSubmitInfo<'static>>,
     wait_semaphores: Vec<vk::Semaphore>,
     wait_stage_masks: Vec<vk::PipelineStageFlags>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SubmittedTimestampQueries {
+    epoch_query: u32,
+    next_query: u32,
+    query_pool: QueryPool,
+    query_count: u32,
+    result_infos: Vec<Option<TimestampQueryResultInfo>>,
+    timestamp_period: f32,
+    timestamp_valid_bits: u32,
+}
+
+impl SubmittedTimestampQueries {
+    fn create(
+        device: &Device,
+        queue_family_index: u32,
+        result_info_count: u32,
+        query_count: u32,
+    ) -> Result<Self, DriverError> {
+        let device = device.clone();
+        let Vulkan10Limits {
+            timestamp_period, ..
+        } = device.physical.properties_v1_0.limits;
+        let QueueFamilyProperties {
+            timestamp_valid_bits,
+            ..
+        } = device.physical.queue_families[queue_family_index as usize];
+        let query_pool = QueryPool::create(&device, QueryPoolInfo::timestamp(query_count))?;
+
+        Ok(Self {
+            epoch_query: 0,
+            next_query: 1,
+            query_pool,
+            query_count,
+            result_infos: vec![None; result_info_count as usize],
+            timestamp_period,
+            timestamp_valid_bits,
+        })
+    }
+
+    fn allocate_query(&mut self, query_count: u32) -> u32 {
+        let query_count = query_count.max(1);
+        let query = self.next_query;
+        self.next_query += query_count;
+
+        assert!(
+            self.next_query <= self.query_count,
+            "timestamp query pool exhausted while assigning query"
+        );
+
+        query
+    }
+
+    fn set_result_info(&mut self, query: TimestampQuery, result_info: TimestampQueryResultInfo) {
+        let index = query.index() as usize;
+        if index >= self.result_infos.len() {
+            self.result_infos.resize(index + 1, None);
+        }
+
+        self.result_infos[index] = Some(result_info);
+    }
+
+    fn query_pool(&self) -> vk::QueryPool {
+        self.query_pool.handle
+    }
+
+    fn reset(&self, cmd_buf: &CommandBuffer) {
+        self.query_pool.reset(cmd_buf, 0, self.query_count);
+    }
+
+    fn write_epoch(&self, cmd_buf: &CommandBuffer) {
+        unsafe {
+            cmd_buf.device.cmd_write_timestamp(
+                cmd_buf.handle,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                self.query_pool.handle,
+                self.epoch_query,
+            );
+        }
+    }
+
+    fn timestamp_results(&self) -> Result<Box<[Option<Duration>]>, DriverError> {
+        let epoch =
+            self.query_pool
+                .results_u64(self.epoch_query, 1, vk::QueryResultFlags::empty())?[0];
+
+        let mut results = Vec::with_capacity(self.result_infos.len());
+        for result_info in &self.result_infos {
+            let Some(result_info) = result_info else {
+                results.push(None);
+                continue;
+            };
+
+            let timestamp = self.query_pool.results_u64(
+                result_info.timestamp_query,
+                1,
+                vk::QueryResultFlags::empty(),
+            )?[0];
+
+            results.push(Some(Self::timestamp_duration_since(
+                timestamp,
+                epoch,
+                self.timestamp_valid_bits,
+                self.timestamp_period,
+            )));
+        }
+
+        Ok(results.into_boxed_slice())
+    }
+
+    fn timestamp_duration_since(
+        timestamp: u64,
+        earlier: u64,
+        timestamp_valid_bits: u32,
+        timestamp_period: f32,
+    ) -> Duration {
+        let mask = if timestamp_valid_bits >= u64::BITS {
+            u64::MAX
+        } else {
+            (1_u64 << timestamp_valid_bits) - 1
+        };
+        let elapsed_ticks = timestamp.wrapping_sub(earlier) & mask;
+
+        Duration::from_secs_f64(elapsed_ticks as f64 * timestamp_period as f64 / 1_000_000_000.0)
+    }
+}
+
+impl FenceDroppable for SubmittedTimestampQueries {
+    fn fence_signaled(&mut self, fence: &Fence) {
+        match self.timestamp_results() {
+            Ok(results) => fence.timestamps.set(results),
+            Err(err) => {
+                warn!("unable to read timestamp query pool results: {err}");
+                fence.timestamps.complete_without_results();
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TimestampQueryCompletion;
+
+impl FenceDroppable for TimestampQueryCompletion {
+    fn fence_signaled(&mut self, fence: &Fence) {
+        fence.timestamps.complete_without_results();
+    }
+}
+
+/// Timestamp query results associated with a completed fence.
+#[derive(Clone, Debug)]
+pub struct TimestampQueryPool {
+    inner: Arc<Mutex<TimestampQueryPoolInner>>,
+}
+
+impl TimestampQueryPool {
+    pub(crate) fn empty() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(TimestampQueryPoolInner {
+                got_results: true,
+                #[cfg(feature = "checked")]
+                graph_id: None,
+                timestamps: None,
+            })),
+        }
+    }
+
+    pub(crate) fn pending(#[cfg(feature = "checked")] graph_id: GraphId) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(TimestampQueryPoolInner {
+                got_results: false,
+                #[cfg(feature = "checked")]
+                graph_id: Some(graph_id),
+                timestamps: None,
+            })),
+        }
+    }
+
+    pub(crate) fn set(&self, timestamps: Box<[Option<Duration>]>) {
+        let mut inner = self.inner.lock().expect("timestamp query pool poisoned");
+        inner.timestamps = Some(timestamps);
+        inner.got_results = true;
+    }
+
+    pub(crate) fn complete_without_results(&self) {
+        self.inner
+            .lock()
+            .expect("timestamp query pool poisoned")
+            .got_results = true;
+    }
+
+    /// Returns `true` once the associated submission has completed.
+    ///
+    /// A complete pool can still return `None` for a query when timestamps were unsupported,
+    /// omitted, or never submitted.
+    pub fn has_results(&self) -> bool {
+        self.inner
+            .lock()
+            .expect("timestamp query pool poisoned")
+            .got_results
+    }
+
+    /// Returns the duration from submission start to `query`, or `None` if results are not available.
+    ///
+    /// `None` can mean the submission is still pending, timestamps were unsupported for the queue,
+    /// or the query point was not part of submitted graph work. Use [`Self::has_results`] to
+    /// distinguish pending work from a completed submission with no timestamp for this query.
+    ///
+    /// When the `checked` feature is enabled, this panics if `query` belongs to a different graph.
+    pub fn duration(&self, query: TimestampQuery) -> Option<Duration> {
+        let inner = self.inner.lock().expect("timestamp query pool poisoned");
+
+        #[cfg(feature = "checked")]
+        assert_eq!(
+            inner.graph_id,
+            Some(query.graph_id()),
+            "timestamp query belongs to a different graph"
+        );
+
+        inner
+            .timestamps
+            .as_ref()
+            .and_then(|timestamps| timestamps.get(query.index() as usize).copied().flatten())
+    }
+}
+
+#[derive(Debug)]
+struct TimestampQueryPoolInner {
+    got_results: bool,
+    #[cfg(feature = "checked")]
+    graph_id: Option<GraphId>,
+    timestamps: Option<Box<[Option<Duration>]>>,
 }
 
 #[doc(hidden)]
@@ -5933,6 +6537,7 @@ mod tests {
     };
     use crate::{
         Attachment, DepthStencilAttachment, Execution, Graph, LoadOp, Node, StoreOp,
+        TimestampQuery,
         driver::{
             DriverError, SharingMode,
             accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -5955,6 +6560,7 @@ mod tests {
             mem::ManuallyDrop,
             ops::Deref,
             sync::{Arc, Mutex, MutexGuard, OnceLock},
+            time::Duration,
         },
         vk_shader_macros::glsl,
         vk_sync::AccessType,
@@ -6030,6 +6636,97 @@ mod tests {
         pending
             .iter()
             .find_map(|(idx, handle, transfers)| (idx == node_idx).then_some((handle, transfers)))
+    }
+
+    fn pending_timestamp_query_pool(query: TimestampQuery) -> super::TimestampQueryPool {
+        #[cfg(feature = "checked")]
+        {
+            super::TimestampQueryPool::pending(query.graph_id())
+        }
+
+        #[cfg(not(feature = "checked"))]
+        {
+            let _ = query;
+            super::TimestampQueryPool::pending()
+        }
+    }
+
+    #[test]
+    fn timestamp_query_pool_exposes_only_relative_results() {
+        let mut graph = Graph::new();
+        let start = graph.write_timestamp();
+        let end = graph.write_timestamp();
+        let pool = pending_timestamp_query_pool(start);
+
+        assert!(!pool.has_results());
+
+        pool.set(
+            vec![
+                Some(Duration::from_millis(5)),
+                Some(Duration::from_millis(11)),
+            ]
+            .into_boxed_slice(),
+        );
+
+        let result = pool.duration(start).expect("missing timestamp result");
+        assert_eq!(result, Duration::from_millis(5));
+        assert_eq!(pool.duration(end), Some(Duration::from_millis(11)));
+        assert!(pool.has_results());
+    }
+
+    #[test]
+    fn timestamp_query_pool_returns_none_before_results_are_set() {
+        let mut graph = Graph::new();
+        let query = graph.write_timestamp();
+        let pool = pending_timestamp_query_pool(query);
+
+        assert_eq!(pool.duration(query), None);
+        assert!(!pool.has_results());
+
+        pool.complete_without_results();
+
+        assert_eq!(pool.duration(query), None);
+        assert!(pool.has_results());
+    }
+
+    #[test]
+    fn timestamp_duration_uses_valid_bits_and_wraparound() {
+        assert_eq!(
+            super::SubmittedTimestampQueries::timestamp_duration_since(1, 14, 4, 1.0),
+            Duration::from_nanos(3),
+        );
+        assert_eq!(
+            super::SubmittedTimestampQueries::timestamp_duration_since(20, 4, 64, 2.0),
+            Duration::from_nanos(32),
+        );
+    }
+
+    #[test]
+    fn timestamp_queries_require_queue_family_that_can_reset_queries() {
+        let mut queue_family = vk::QueueFamilyProperties {
+            queue_flags: vk::QueueFlags::TRANSFER,
+            timestamp_valid_bits: 64,
+            ..Default::default()
+        };
+
+        assert!(!Submission::queue_family_supports_timestamp_queries(
+            &queue_family
+        ));
+
+        queue_family.queue_flags = vk::QueueFlags::COMPUTE;
+        assert!(Submission::queue_family_supports_timestamp_queries(
+            &queue_family
+        ));
+
+        queue_family.queue_flags = vk::QueueFlags::GRAPHICS;
+        assert!(Submission::queue_family_supports_timestamp_queries(
+            &queue_family
+        ));
+
+        queue_family.timestamp_valid_bits = 0;
+        assert!(!Submission::queue_family_supports_timestamp_queries(
+            &queue_family
+        ));
     }
 
     #[test]
@@ -6988,7 +7685,12 @@ mod tests {
 
         let mut fence = Fence::create(&device, false)?;
         let cmd_buf = CommandBuffer::create(&device, CommandBufferInfo::new(3))?;
-        let recorded = RecordedSubmission {
+        cmd_buf.begin(
+            &vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        )?;
+        cmd_buf.end()?;
+        let mut recorded = RecordedSubmission {
             cmd_buf,
             queue_ownership_release_waits: Vec::new(),
             state: Arc::new(Mutex::new(RecordedSubmissionState {
@@ -6998,7 +7700,7 @@ mod tests {
             })),
         };
 
-        recorded.attach(&mut fence, 7);
+        recorded.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
 
         let state = recorded.state.lock().expect("poisoned recorded state");
         let sync_info = state.submission.graph.resource(image).sync_info();
@@ -7044,7 +7746,12 @@ mod tests {
 
         let mut fence = Fence::create(&device, false)?;
         let cmd_buf = CommandBuffer::create(&device, CommandBufferInfo::new(3))?;
-        let recorded = RecordedSubmission {
+        cmd_buf.begin(
+            &vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        )?;
+        cmd_buf.end()?;
+        let mut recorded = RecordedSubmission {
             cmd_buf,
             queue_ownership_release_waits: Vec::new(),
             state: Arc::new(Mutex::new(RecordedSubmissionState {
@@ -7054,7 +7761,7 @@ mod tests {
             })),
         };
 
-        recorded.attach(&mut fence, 7);
+        recorded.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
 
         let state = recorded.state.lock().expect("poisoned recorded state");
         let sync_info = state.submission.graph.resource(buffer).sync_info();
@@ -7547,8 +8254,8 @@ mod tests {
 
         let recorded = submission.record(&mut pool, &mut cmd_buf, RecordSelection::All)?;
         recorded.cmd_buf.end()?;
-        let replay = recorded.finish()?;
-        replay.attach(&mut fence, 0);
+        let mut replay = recorded.finish()?;
+        replay.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
 
         Ok(())
     }

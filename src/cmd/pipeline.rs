@@ -4,7 +4,7 @@ use {
         ViewInfo,
     },
     crate::{
-        ExecutionPipeline,
+        ExecutionPipeline, TimestampQuery,
         driver::{
             compute::ComputePipeline, graphics::GraphicsPipeline, ray_tracing::RayTracingPipeline,
         },
@@ -122,6 +122,11 @@ impl<'c, T> PipelineCommand<'c, T> {
         R: Resource,
     {
         self.cmd.bind_resource(resource)
+    }
+
+    /// Equivalent to [`Command::write_timestamp`] for a command that already has a bound pipeline.
+    pub fn write_timestamp(&mut self) -> TimestampQuery {
+        self.cmd.write_timestamp()
     }
 
     /// Equivalent to [`Command::end_cmd`] for a command that already has a bound pipeline.

@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-07-03
+
+### Added
+
+- `Graph::write_timestamp`, `Command::write_timestamp`, and `PipelineCommand::write_timestamp` for
+  device performance queries.
+- `Fence::timestamps` and `TimestampQueryPool` for retrieving submitted timestamp results.
+- Checked builds validate that `TimestampQueryPool::duration` receives a timestamp query from the
+  same graph.
+
+### Changed
+
+- `vk-graph-window` now targets `vk-graph` `0.14.4` and is versioned as `0.1.3`.
+
 ## [0.14.3] - 2026-06-25
 
 ### Added

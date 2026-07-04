@@ -58,12 +58,12 @@ use {
     ash::vk,
     smallvec::SmallVec,
     std::{
+        cell::RefCell,
         cmp::Ord,
         collections::{BTreeMap, HashMap},
         fmt::{Debug, Formatter},
         mem,
-        ops::Range,
-        ops::{Deref, DerefMut},
+        ops::{Deref, DerefMut, Range},
         slice::Iter,
         sync::{
             Arc,
@@ -962,6 +962,7 @@ struct FrozenExecutionAccess {
 pub struct Graph {
     cmds: Vec<CommandData>,
     resources: ResourceMap,
+    timestamp_queries: Option<Vec<Option<TimestampQueryData>>>,
 
     #[cfg(feature = "checked")]
     graph_id: GraphId,
@@ -1099,6 +1100,7 @@ impl Default for Graph {
         Self {
             cmds: Default::default(),
             resources: Default::default(),
+            timestamp_queries: Default::default(),
 
             #[cfg(feature = "checked")]
             graph_id: GraphId::next(),
@@ -1556,18 +1558,52 @@ impl Graph {
     /// commands.
     #[profiling::function]
     pub fn finalize(mut self) -> Submission {
-        // The final execution of each command has no function.
-        self.cmds.retain_mut(|cmd| {
-            debug_assert!(cmd.expect_last_exec().func.is_none());
+        thread_local! {
+            static TLS: RefCell<Vec<usize>> = Default::default();
+        }
 
-            cmd.execs.pop();
+        TLS.with_borrow_mut(|tls| {
+            let old_cmd_len = self.cmds.len();
 
-            for exec in &mut cmd.execs {
-                exec.accesses.freeze();
+            tls.clear();
+            tls.resize(old_cmd_len + 1, 0);
+
+            let mut old_cmd_idx = 0;
+            let mut new_cmd_idx = 0;
+
+            self.cmds.retain_mut(|cmd| {
+                tls[old_cmd_idx] = new_cmd_idx;
+                old_cmd_idx += 1;
+
+                // The final execution of each command has no function.
+                debug_assert!(cmd.expect_last_exec().func.is_none());
+
+                cmd.execs.pop();
+
+                for exec in &mut cmd.execs {
+                    exec.accesses.freeze();
+                }
+
+                if cmd.execs.is_empty() {
+                    false
+                } else {
+                    new_cmd_idx += 1;
+                    true
+                }
+            });
+
+            tls[old_cmd_len] = new_cmd_idx;
+
+            if let Some(timestamp_queries) = &mut self.timestamp_queries {
+                for query in timestamp_queries.iter_mut().flatten() {
+                    query.command_idx = tls[query.command_idx];
+                }
             }
-
-            !cmd.execs.is_empty()
         });
+
+        if let Some(timestamp_queries) = &self.timestamp_queries {
+            stat::sample_timestamp_queries_len(timestamp_queries.iter().flatten().count());
+        }
 
         Submission::new(self)
     }
@@ -1647,6 +1683,48 @@ impl Graph {
                 }
             })
             .end_cmd()
+    }
+
+    /// Records a [`vkCmdWriteTimestamp`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdWriteTimestamp.html) query point.
+    ///
+    /// Timestamp results report durations from the start of submission command recording. They do
+    /// not expose absolute device timestamps or constrain scheduling beyond existing command
+    /// dependencies.
+    ///
+    /// Timestamp query points are only written when graph work is recorded and submitted. A graph
+    /// or record selection that contains only timestamps and no commands completes without writing
+    /// timestamp queries; those query durations remain `None`.
+    ///
+    /// For timestamps inside a command, use [`cmd::Command::write_timestamp`] or
+    /// [`cmd::PipelineCommand::write_timestamp`].
+    pub fn write_timestamp(&mut self) -> TimestampQuery {
+        self.write_timestamp_at(self.cmds.len(), 0, TimestampQueryPlacement::BeforeExec)
+    }
+
+    pub(crate) fn write_timestamp_at(
+        &mut self,
+        command_idx: usize,
+        exec_idx: usize,
+        placement: TimestampQueryPlacement,
+    ) -> TimestampQuery {
+        let timestamp_queries = self.timestamp_queries.get_or_insert_with(|| {
+            Vec::with_capacity(stat::thread_local_timestamp_queries_capacity_hint())
+        });
+        let query = TimestampQuery {
+            index: timestamp_queries.len() as u32,
+            #[cfg(feature = "checked")]
+            graph_id: self.graph_id,
+        };
+
+        timestamp_queries.push(Some(TimestampQueryData {
+            command_idx,
+            exec_idx,
+            placement,
+            pool_query: None,
+            query,
+        }));
+
+        query
     }
 }
 
@@ -1918,6 +1996,76 @@ pub enum StoreOp {
 
     /// The attachment will be preserved in memory.
     Store,
+}
+
+/// Identifies a timestamp query written by [`Graph::write_timestamp`],
+/// [`cmd::Command::write_timestamp`], or [`cmd::PipelineCommand::write_timestamp`].
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TimestampQuery {
+    index: u32,
+
+    #[cfg(feature = "checked")]
+    graph_id: GraphId,
+}
+
+impl TimestampQuery {
+    pub(crate) fn index(self) -> u32 {
+        self.index
+    }
+
+    #[cfg(feature = "checked")]
+    pub(crate) fn graph_id(self) -> GraphId {
+        self.graph_id
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TimestampQueryData {
+    command_idx: usize,
+    exec_idx: usize,
+    placement: TimestampQueryPlacement,
+    pool_query: Option<u32>,
+    query: TimestampQuery,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum TimestampQueryPlacement {
+    BeforeExec,
+    AfterExec,
+}
+
+#[doc(hidden)]
+pub mod stat {
+    use std::cell::RefCell;
+
+    const WINDOW_SIZE: usize = 3;
+
+    thread_local! {
+        static TIMESTAMP_QUERIES_CAPACITY: RefCell<([usize; WINDOW_SIZE], usize)> = const {
+            RefCell::new(([16; WINDOW_SIZE], 0))
+        };
+    }
+
+    pub(crate) fn sample_timestamp_queries_len(len: usize) {
+        TIMESTAMP_QUERIES_CAPACITY.with_borrow_mut(|(capacities, index)| {
+            capacities[*index] = len;
+            *index += 1;
+            *index %= WINDOW_SIZE;
+        });
+    }
+
+    pub fn set_thread_local_timestamp_queries_capacity_hint(capacity: usize) {
+        TIMESTAMP_QUERIES_CAPACITY.with_borrow_mut(|(capacities, _)| {
+            for val in capacities.iter_mut() {
+                *val = capacity;
+            }
+        });
+    }
+
+    pub(crate) fn thread_local_timestamp_queries_capacity_hint() -> usize {
+        TIMESTAMP_QUERIES_CAPACITY
+            .with_borrow(|(capacities, _)| capacities.iter().sum::<usize>() / WINDOW_SIZE)
+    }
 }
 
 #[cfg(test)]

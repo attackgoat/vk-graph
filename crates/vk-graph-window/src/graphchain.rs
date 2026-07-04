@@ -27,7 +27,7 @@ use {
         },
         node::SwapchainImageNode,
         pool::{Pool, SubmissionPool},
-        submission::{QueueSubmitInfo, RecordSelection, SemaphoreSubmitInfo},
+        submission::{QueueSubmitInfo, RecordSelection, SemaphoreSubmitInfo, TimestampQueryPool},
     },
 };
 
@@ -279,7 +279,7 @@ impl Graphchain {
         graph: Graph,
         image_node: SwapchainImageNode,
         queue_index: u32,
-    ) -> Result<(), GraphchainError>
+    ) -> Result<SubmissionQueryPool, GraphchainError>
     where
         P: Pool<CommandBufferInfo, CommandBuffer> + SubmissionPool,
     {
@@ -435,6 +435,9 @@ impl Graphchain {
         let signals = slice::from_ref(&signal);
         let submit_info = QueueSubmitInfo::queue_submit(waits, signals);
         recorded.queue_submit(&mut frame.fence, queue_index, submit_info)?;
+        let submission_queries = SubmissionQueryPool {
+            timestamps: frame.fence.timestamps.clone(),
+        };
 
         // Only mark presentation as pending when the driver actually queued the present.
         let present_info = PresentInfo {
@@ -479,7 +482,7 @@ impl Graphchain {
             }
         }
 
-        Ok(())
+        Ok(submission_queries)
     }
 
     /// Updates the requested information which controls the graphchain.
@@ -1178,6 +1181,20 @@ struct FrameSlot {
     cmd_buf: CommandBuffer,
     fence: Fence,
     swapchain_acquired: vk::Semaphore,
+}
+
+/// Query result proxies for graph work submitted by [`Graphchain::present_image`].
+///
+/// These handles are detached from the frame slot when it is reused. Timestamp completion is
+/// reported after `Graphchain` observes the submitted frame fence signal.
+///
+/// This does not describe presentation status; presentation failures are reported through
+/// [`GraphchainError`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct SubmissionQueryPool {
+    /// Timestamp query results for the submitted work.
+    pub timestamps: TimestampQueryPool,
 }
 
 #[cfg(test)]
