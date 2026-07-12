@@ -60,7 +60,8 @@ use {
     smallvec::SmallVec,
     std::{
         cell::RefCell,
-        collections::{BTreeMap, HashMap, HashSet, VecDeque},
+        cmp::Reverse,
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
         iter::repeat_n,
         mem::take,
         ops::Range,
@@ -843,16 +844,6 @@ impl CommandAccessIndex {
         let end_idx = cmds.partition_point(|&cmd_idx| cmd_idx < end_cmd_idx);
 
         cmds[..end_idx].iter().rev().copied()
-    }
-
-    #[profiling::function]
-    fn prior_read_dependency_cmds(
-        &self,
-        cmd_idx: usize,
-        end_cmd_idx: usize,
-    ) -> impl Iterator<Item = usize> + '_ {
-        self.read_nodes_for_cmd(cmd_idx)
-            .flat_map(move |node_idx| self.prior_cmds_for_node(node_idx, end_cmd_idx))
     }
 
     fn update(&mut self, graph: &Graph, end_cmd_idx: usize) {
@@ -1746,8 +1737,13 @@ where
 #[derive(Default)]
 struct Schedule {
     access_index: CommandAccessIndex,
-    interdependent: Vec<Vec<usize>>,
     cmds: Vec<usize>,
+    local_of_global: Vec<usize>,
+    successors: Vec<Vec<usize>>,
+    predecessor_counts: Vec<usize>,
+    remaining_predecessors: Vec<usize>,
+    ready: BTreeSet<(usize, Reverse<usize>)>,
+    reordered: Vec<usize>,
 }
 
 impl Schedule {
@@ -1759,75 +1755,86 @@ impl Schedule {
 
         let cmd_count = self.cmds.len();
 
-        for dep_cmds in self.interdependent.iter_mut() {
-            dep_cmds.clear();
-        }
-
-        self.interdependent.resize_with(cmd_count, Vec::new);
-
-        let mut local_of_global = vec![usize::MAX; end_cmd_idx];
+        self.local_of_global.resize(end_cmd_idx, usize::MAX);
+        self.local_of_global.fill(usize::MAX);
 
         for (local_idx, &cmd_idx) in self.cmds.iter().enumerate() {
-            local_of_global[cmd_idx] = local_idx;
+            self.local_of_global[cmd_idx] = local_idx;
         }
 
-        let mut seen_deps = FixedBitSet::with_capacity(cmd_count);
+        for successors in &mut self.successors {
+            successors.clear();
+        }
+        self.successors.resize_with(cmd_count, Vec::new);
+        self.predecessor_counts.resize(cmd_count, 0);
+        self.predecessor_counts.fill(0);
 
-        for (local_idx, &cmd_idx) in self.cmds.iter().enumerate() {
-            for dep_cmd_idx in self
-                .access_index
-                .prior_read_dependency_cmds(cmd_idx, end_cmd_idx)
-            {
-                let dep_local_idx = local_of_global[dep_cmd_idx];
-                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+        // Consecutive selected users of each resource form a dependency chain. This preserves the
+        // original relative order for every shared-resource pair while still allowing unrelated
+        // command chains to be grouped for locality.
+        for resource_cmds in &self.access_index.cmds_by_node {
+            let mut previous = Option::<usize>::None;
+            for &cmd_idx in resource_cmds {
+                let Some(&local_idx) = self.local_of_global.get(cmd_idx) else {
+                    continue;
+                };
+
+                if local_idx == usize::MAX {
                     continue;
                 }
 
-                if !seen_deps.put(dep_local_idx) {
-                    self.interdependent[local_idx].push(dep_local_idx);
+                if let Some(previous_idx) = previous {
+                    self.successors[previous_idx].push(local_idx);
+                    self.predecessor_counts[local_idx] += 1;
                 }
-            }
 
-            for dep_cmd_idx in self
-                .access_index
-                .prior_read_dependency_cmds(cmd_idx, end_cmd_idx)
-            {
-                let dep_local_idx = local_of_global[dep_cmd_idx];
-                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
-                    seen_deps.set(dep_local_idx, false);
+                previous = Some(local_idx);
+            }
+        }
+
+        self.remaining_predecessors
+            .clone_from(&self.predecessor_counts);
+        self.ready.clear();
+
+        for local_idx in self
+            .remaining_predecessors
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, remaining)| (*remaining == 0).then_some(idx))
+        {
+            self.ready.insert((0, Reverse(local_idx)));
+        }
+
+        self.reordered.clear();
+        self.reordered.reserve(cmd_count);
+
+        while let Some((_, Reverse(local_idx))) = self.ready.pop_last() {
+            self.reordered.push(self.cmds[local_idx]);
+
+            for &successor_idx in &self.successors[local_idx] {
+                let remaining = &mut self.remaining_predecessors[successor_idx];
+
+                debug_assert!(*remaining > 0);
+
+                *remaining -= 1;
+
+                if *remaining == 0 {
+                    self.ready.insert((
+                        self.predecessor_counts[successor_idx],
+                        Reverse(successor_idx),
+                    ));
                 }
             }
         }
 
-        let mut scheduled = FixedBitSet::with_capacity(cmd_count);
-        let mut scheduled_count = 0;
+        assert_eq!(
+            self.reordered.len(),
+            cmd_count,
+            "command dependency cycle detected"
+        );
 
-        while scheduled_count < cmd_count {
-            let mut best_idx = scheduled_count;
-            let mut best_overlap = self.interdependent[best_idx].len();
-
-            for idx in (scheduled_count + 1)..cmd_count {
-                let mut overlap = 0;
-
-                for &dep_local in &self.interdependent[idx] {
-                    if scheduled.contains(dep_local) {
-                        overlap += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                if overlap > best_overlap {
-                    best_overlap = overlap;
-                    best_idx = idx;
-                }
-            }
-
-            scheduled.insert(best_idx);
-            self.cmds.swap(scheduled_count, best_idx);
-            self.interdependent.swap(scheduled_count, best_idx);
-            scheduled_count += 1;
-        }
+        self.cmds.clear();
+        self.cmds.append(&mut self.reordered);
     }
 }
 
@@ -6182,7 +6189,10 @@ struct TimestampQueryPoolInner {
 
 #[doc(hidden)]
 pub mod bench {
-    use super::{CommandAccessIndex, Schedule};
+    use {
+        super::{CommandAccessIndex, Schedule},
+        crate::Graph,
+    };
 
     /// Synthetic workload description for scheduler benchmarks.
     #[derive(Clone, Copy, Debug)]
@@ -6291,6 +6301,61 @@ pub mod bench {
             }
         }
 
+        /// Builds a scheduler benchmark from a graph, optionally repeating its disconnected
+        /// topology with independently remapped command and resource indices.
+        pub fn from_graph(graph: &Graph, repeat_count: usize) -> Self {
+            assert!(repeat_count > 0, "repeat_count must be greater than zero");
+
+            let base_cmd_count = graph.cmds.len();
+            let base_resource_count = graph.resources.len();
+            assert!(base_cmd_count > 0, "graph must contain commands");
+            assert!(base_resource_count > 0, "graph must contain resources");
+
+            let mut base = CommandAccessIndex::default();
+            base.update_from_cmds(&graph.cmds, base_resource_count);
+
+            let cmd_count = base_cmd_count * repeat_count;
+            let resource_count = base_resource_count * repeat_count;
+            let mut cmds_by_node = Vec::with_capacity(resource_count);
+            let mut accessed_nodes_by_cmd = Vec::with_capacity(cmd_count);
+
+            for copy_idx in 0..repeat_count {
+                let cmd_offset = copy_idx * base_cmd_count;
+                let resource_offset = copy_idx * base_resource_count;
+
+                cmds_by_node.extend(base.cmds_by_node.iter().map(|cmds| {
+                    cmds.iter()
+                        .map(|cmd_idx| cmd_offset + cmd_idx)
+                        .collect::<Vec<_>>()
+                }));
+                accessed_nodes_by_cmd.extend(base.accessed_nodes_by_cmd.iter().map(|nodes| {
+                    nodes
+                        .iter()
+                        .map(|node_idx| resource_offset + node_idx)
+                        .collect::<Vec<_>>()
+                }));
+            }
+
+            let cmds = (0..cmd_count).collect::<Vec<_>>();
+            Self {
+                schedule: Schedule {
+                    access_index: CommandAccessIndex {
+                        cmds_by_node,
+                        accessed_nodes_by_cmd,
+                    },
+                    cmds: cmds.clone(),
+                    ..Default::default()
+                },
+                original_cmds: cmds,
+                end_cmd_idx: cmd_count,
+            }
+        }
+
+        /// Returns the number of commands reordered by each benchmark iteration.
+        pub fn cmd_count(&self) -> usize {
+            self.end_cmd_idx
+        }
+
         /// Restores the original schedule, reorders it once, and returns a checksum.
         pub fn reorder_once(&mut self) -> u64 {
             self.schedule.cmds.clear();
@@ -6328,10 +6393,7 @@ pub mod bench {
 
 #[doc(hidden)]
 pub mod fuzz {
-    use {
-        super::{CommandAccessIndex, Schedule},
-        fixedbitset::FixedBitSet,
-    };
+    use super::{CommandAccessIndex, Schedule};
 
     #[derive(Clone, Copy, Debug)]
     pub struct ResourceAccess {
@@ -6375,13 +6437,13 @@ pub mod fuzz {
         repeat.reorder_cmds(cmd_count);
         assert_eq!(reordered, repeat.cmds, "reordering is not deterministic");
 
-        assert_hazard_order_preserved(&reordered, &normalized_accesses);
-
         let expected = reference_reorder(access_index, cmd_count);
         assert_eq!(
             reordered, expected,
             "reordering diverged from reference implementation"
         );
+
+        assert_hazard_order_preserved(&reordered, &normalized_accesses);
     }
 
     fn build_access_index(
@@ -6456,73 +6518,44 @@ pub mod fuzz {
     }
 
     fn reference_reorder(access_index: CommandAccessIndex, cmd_count: usize) -> Vec<usize> {
-        let mut cmds = (0..cmd_count).collect::<Vec<_>>();
-        if cmds.len() < 3 {
-            return cmds;
+        if cmd_count < 3 {
+            return (0..cmd_count).collect();
         }
 
-        let mut interdependent = vec![Vec::new(); cmd_count];
-        let mut local_of_global = vec![usize::MAX; cmd_count];
-        let mut seen_deps = FixedBitSet::with_capacity(cmd_count);
-        let mut scheduled = FixedBitSet::with_capacity(cmd_count);
-
-        for (local_idx, &cmd_idx) in cmds.iter().enumerate() {
-            local_of_global[cmd_idx] = local_idx;
+        let mut predecessors = vec![Vec::new(); cmd_count];
+        for resource_cmds in &access_index.cmds_by_node {
+            for pair in resource_cmds.windows(2) {
+                predecessors[pair[1]].push(pair[0]);
+            }
         }
 
-        for (local_idx, &cmd_idx) in cmds.iter().enumerate() {
-            for dep_cmd_idx in access_index.prior_read_dependency_cmds(cmd_idx, cmd_count) {
-                let dep_local_idx = local_of_global[dep_cmd_idx];
-                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+        let mut scheduled = vec![false; cmd_count];
+        let mut reordered = Vec::with_capacity(cmd_count);
+        while reordered.len() < cmd_count {
+            let mut best = None;
+            for cmd_idx in 0..cmd_count {
+                if scheduled[cmd_idx]
+                    || !predecessors[cmd_idx]
+                        .iter()
+                        .all(|&predecessor| scheduled[predecessor])
+                {
                     continue;
                 }
 
-                if !seen_deps.put(dep_local_idx) {
-                    interdependent[local_idx].push(dep_local_idx);
+                let score = predecessors[cmd_idx].len();
+                if best.is_none_or(|(best_score, best_idx)| {
+                    score > best_score || (score == best_score && cmd_idx < best_idx)
+                }) {
+                    best = Some((score, cmd_idx));
                 }
             }
 
-            for dep_cmd_idx in access_index.prior_read_dependency_cmds(cmd_idx, cmd_count) {
-                let dep_local_idx = local_of_global[dep_cmd_idx];
-                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
-                    seen_deps.set(dep_local_idx, false);
-                }
-            }
+            let (_, best_idx) = best.expect("command dependency cycle detected");
+            scheduled[best_idx] = true;
+            reordered.push(best_idx);
         }
 
-        let mut scheduled_count = 0;
-        while scheduled_count < cmd_count {
-            let mut best_idx = scheduled_count;
-            let mut best_overlap = interdependent[best_idx].len();
-
-            for (idx, dep_cmds) in interdependent[..cmd_count]
-                .iter()
-                .enumerate()
-                .skip(scheduled_count + 1)
-            {
-                let mut overlap = 0;
-
-                for &dep_local in dep_cmds {
-                    if scheduled.contains(dep_local) {
-                        overlap += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                if overlap > best_overlap {
-                    best_overlap = overlap;
-                    best_idx = idx;
-                }
-            }
-
-            scheduled.insert(best_idx);
-            cmds.swap(scheduled_count, best_idx);
-            interdependent.swap(scheduled_count, best_idx);
-            scheduled_count += 1;
-        }
-
-        cmds
+        reordered
     }
 }
 
@@ -7318,7 +7351,7 @@ mod tests {
     }
 
     #[test]
-    fn reorder_scheduled_cmds_matches_original_seed_choice() {
+    fn reorder_scheduled_cmds_groups_ready_dependency_chain() {
         let mut schedule = schedule_with_access_index(
             &[0, 1, 2, 3],
             &[&[0, 1], &[1, 2], &[1, 3]],
@@ -7789,6 +7822,55 @@ mod tests {
     }
 
     #[test]
+    fn reorder_scheduled_cmds_preserves_both_branches_before_join() {
+        let mut schedule =
+            schedule_with_access_index(&[0, 1, 2], &[&[0, 2], &[1, 2]], &[&[0], &[1], &[0, 1]]);
+
+        schedule.reorder_cmds(3);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_prioritizes_ready_resource_successors() {
+        let mut schedule = schedule_with_access_index(
+            &[0, 1, 2, 3, 4],
+            &[&[0, 1, 3], &[0, 4], &[3]],
+            &[&[0, 1], &[0], &[], &[0, 2], &[1]],
+        );
+
+        schedule.reorder_cmds(5);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 3, 4, 2]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_ready_ties_use_original_order() {
+        let mut schedule = schedule_with_access_index(
+            &[0, 1, 2, 3, 4, 5],
+            &[&[1, 2], &[1, 4], &[0, 1, 5]],
+            &[&[2], &[0, 1, 2], &[0], &[], &[1], &[2]],
+        );
+
+        schedule.reorder_cmds(6);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2, 4, 5, 3]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_handles_noncontiguous_global_indices() {
+        let mut schedule = schedule_with_access_index(
+            &[1, 3, 5, 7],
+            &[&[1, 5], &[3, 5, 7]],
+            &[&[], &[0], &[], &[1], &[], &[0, 1], &[], &[1]],
+        );
+
+        schedule.reorder_cmds(8);
+
+        assert_eq!(schedule.cmds, vec![1, 3, 5, 7]);
+    }
+
+    #[test]
     fn reorder_scheduled_cmds_preserves_write_only_order() {
         let mut schedule = schedule_with_access_index(
             &[0, 1, 2, 3],
@@ -7843,6 +7925,47 @@ mod tests {
                     cmd_idx: 3,
                     write: false,
                 }],
+            ],
+        );
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_preserves_displaced_write_before_read() {
+        fuzz::check_schedule_reordering(
+            6,
+            &[
+                vec![
+                    fuzz::ResourceAccess {
+                        cmd_idx: 0,
+                        write: false,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 1,
+                        write: true,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 2,
+                        write: false,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 5,
+                        write: true,
+                    },
+                ],
+                vec![
+                    fuzz::ResourceAccess {
+                        cmd_idx: 0,
+                        write: false,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 3,
+                        write: true,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 4,
+                        write: false,
+                    },
+                ],
             ],
         );
     }
