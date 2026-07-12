@@ -1036,6 +1036,7 @@ impl<A> CommandStreamDraft<A> {
 /// An in-progress invocation of a [`CommandStream`] into a [`Graph`].
 ///
 /// Bind every declared stream argument before calling [`CommandStreamRun::finish`].
+/// Distinct stream arguments must bind to distinct parent-graph nodes.
 ///
 /// ```no_run
 /// # use ash::vk;
@@ -1065,6 +1066,13 @@ pub struct CommandStreamRun<'a, A> {
 
 impl<'a, A> CommandStreamRun<'a, A> {
     /// Sets a stream argument to a graph node for this invocation.
+    ///
+    /// The same argument may be rebound, but distinct arguments cannot bind to the same parent
+    /// node. Stream scheduling and resource ownership tracking use node identity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if another argument is already bound to `node`.
     pub fn with_arg<T, N>(mut self, arg: StreamArg<T>, node: N) -> Self
     where
         N: StreamArgBindable<T>,
@@ -1076,7 +1084,15 @@ impl<'a, A> CommandStreamRun<'a, A> {
         );
         node.assert_parent_node();
         self.graph.assert_node_owner(&node);
-        self.bindings[arg.arg_index] = Some(node.index());
+        let node_idx = node.index();
+        assert!(
+            self.bindings
+                .iter()
+                .enumerate()
+                .all(|(arg_idx, binding)| arg_idx == arg.arg_index || *binding != Some(node_idx)),
+            "distinct command stream arguments cannot bind to the same parent graph node"
+        );
+        self.bindings[arg.arg_index] = Some(node_idx);
         self
     }
 
@@ -1400,7 +1416,7 @@ stream_resource_node!(
 );
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
     use crate::{
         driver::{
@@ -1429,6 +1445,46 @@ mod tests {
         ) -> Result<crate::pool::Lease<RenderPass>, DriverError> {
             unreachable!()
         }
+    }
+
+    fn bind_test_buffer(graph: &mut Graph) -> BufferNode {
+        let index = graph.bind_stream_arg_resource(AnyResource::BufferArg(BufferInfo::device_mem(
+            4,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+        )));
+        BufferNode::new(
+            index,
+            #[cfg(feature = "checked")]
+            graph.graph_id(),
+        )
+    }
+
+    fn two_buffer_arg_stream() -> CommandStreamDraft<(BufferArg, BufferArg)> {
+        CommandStream::finalize(|stream| {
+            let first = stream.arg(BufferInfo::device_mem(
+                4,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+            ));
+            let second = stream.arg(BufferInfo::device_mem(
+                4,
+                vk::BufferUsageFlags::TRANSFER_DST,
+            ));
+
+            stream
+                .begin_cmd()
+                .resource_access(first, vk_sync::AccessType::TransferRead)
+                .record_cmd(|_| {});
+            stream
+                .begin_cmd()
+                .resource_access(second, vk_sync::AccessType::TransferWrite)
+                .record_cmd(|_| {});
+            stream
+                .begin_cmd()
+                .resource_access(first, vk_sync::AccessType::TransferRead)
+                .record_cmd(|_| {});
+
+            (first, second)
+        })
     }
 
     #[test]
@@ -1506,6 +1562,56 @@ mod tests {
 
         graph.insert_cmd_stream(&stream).finish();
         assert_eq!(graph.cmds.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "distinct command stream arguments cannot bind to the same parent graph node"
+    )]
+    fn unprepared_stream_rejects_aliased_arguments() {
+        let stream = two_buffer_arg_stream().into_stream();
+        let mut graph = Graph::new();
+        let buffer = bind_test_buffer(&mut graph);
+
+        graph
+            .insert_cmd_stream(&stream)
+            .with_arg(stream.args.0, buffer)
+            .with_arg(stream.args.1, buffer)
+            .finish();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "distinct command stream arguments cannot bind to the same parent graph node"
+    )]
+    fn prepared_stream_rejects_aliased_arguments() {
+        let mut pool = NoopPool;
+        let stream = two_buffer_arg_stream()
+            .prepare(&mut pool)
+            .expect("prepare stream");
+        let mut graph = Graph::new();
+        let buffer = bind_test_buffer(&mut graph);
+
+        graph
+            .insert_cmd_stream(&stream)
+            .with_arg(stream.args.0, buffer)
+            .with_arg(stream.args.1, buffer)
+            .finish();
+    }
+
+    #[test]
+    fn same_argument_can_be_rebound() {
+        let stream = two_buffer_arg_stream().into_stream();
+        let mut graph = Graph::new();
+        let first = bind_test_buffer(&mut graph);
+        let second = bind_test_buffer(&mut graph);
+
+        graph
+            .insert_cmd_stream(&stream)
+            .with_arg(stream.args.0, first)
+            .with_arg(stream.args.0, second)
+            .with_arg(stream.args.1, first)
+            .finish();
     }
 
     #[test]

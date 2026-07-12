@@ -789,7 +789,7 @@ struct OverviewEdge {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use {
         super::*,
         crate::driver::{

@@ -3156,7 +3156,7 @@ impl From<vk::PhysicalDeviceVulkan12Properties<'_>> for Vulkan12Properties {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     fn c_chars(bytes: &[u8]) -> Vec<c_char> {

@@ -6560,7 +6560,7 @@ pub mod fuzz {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::{
         BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData,
         ExternalRenderPassAccessHistory, ImageQueueOwnershipTransfer, NodeIndex,
