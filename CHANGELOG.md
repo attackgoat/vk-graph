@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-07-13
+
+### Added
+
+- `Fixture` import and export support for serializing graph resource and command relationships.
+- Real-workload fixtures and benchmarks for submission scheduling.
+
+### Changed
+
+- Submission command reordering now uses dependency-safe topological scheduling to reduce
+  scheduling overhead while preserving per-resource command order.
+- Distinct command-stream arguments can no longer bind to the same parent graph node.
+
+### Fixed
+
+- Partial `RecordSelection` scheduling now includes complete predecessor command prefixes when a
+  resource is rediscovered at a later command boundary.
+- Repeated partial recordings no longer duplicate queue-family ownership transfers for overlapping
+  buffer and image subresource ranges.
+
 ## [0.14.4] - 2026-07-03
 
 ### Added
@@ -743,7 +763,9 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
   platforms and require no bare-metal graphics API knowledge
 - "Hello, world!" example using a bitmapped font
 
-[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.5...HEAD
+[0.14.5]: https://crates.io/crates/vk-graph/0.14.5
+[0.14.4]: https://crates.io/crates/vk-graph/0.14.4
 [0.14.3]: https://crates.io/crates/vk-graph/0.14.3
 [0.14.2]: https://crates.io/crates/vk-graph/0.14.2
 [0.1.0]: https://crates.io/crates/screen-13/0.1.0

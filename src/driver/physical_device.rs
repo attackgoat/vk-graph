@@ -930,7 +930,7 @@ impl Debug for PhysicalDevice {
         write!(
             f,
             "{} ({:?})",
-            &self.properties_v1_0.device_name, self.properties_v1_0.device_type
+            self.properties_v1_0.device_name, self.properties_v1_0.device_type
         )
     }
 }

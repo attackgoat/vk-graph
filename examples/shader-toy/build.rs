@@ -184,7 +184,7 @@ fn read_shader_source(path: impl AsRef<Path>) -> String {
             &mut self,
             path: &ResolvedIncludePath,
         ) -> Result<String, BoxedIncludeProviderError> {
-            println!("cargo:rerun-if-changed={}", &path.0);
+            println!("cargo:rerun-if-changed={}", path.0);
 
             Ok(read_to_string(&path.0)?)
         }
