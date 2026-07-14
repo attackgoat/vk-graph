@@ -21,6 +21,10 @@ pub mod pool;
 pub mod stream;
 pub mod submission;
 
+#[doc(hidden)]
+pub use self::fixture::Fixture;
+
+mod fixture;
 mod lazy_str;
 
 pub use self::lazy_str::LazyStr;

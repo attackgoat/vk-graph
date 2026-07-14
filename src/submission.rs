@@ -38,7 +38,7 @@ use {
             format_aspect_mask,
             graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{
-                DenseMap, Image, image_subresource_range_contains,
+                DenseMap, Image, ImageInfo, image_subresource_range_contains,
                 image_subresource_range_intersection,
             },
             initial_image_layout_access, is_read_access,
@@ -60,7 +60,8 @@ use {
     smallvec::SmallVec,
     std::{
         cell::RefCell,
-        collections::{BTreeMap, HashMap, HashSet, VecDeque},
+        cmp::Reverse,
+        collections::{BTreeMap, BTreeSet, HashMap},
         iter::repeat_n,
         mem::take,
         ops::Range,
@@ -599,41 +600,18 @@ fn pipeline_barrier_from_iters<'a>(
 }
 
 fn schedule_dependency_cmds_before_target_access(
-    access_index: &CommandAccessIndex,
     target_node_idx: usize,
     first_target_cmd_idx: usize,
-    schedule: &mut Vec<usize>,
+    schedule: &mut Schedule,
 ) {
-    let mut pending_nodes = VecDeque::new();
-    let mut scheduled = FixedBitSet::with_capacity(first_target_cmd_idx);
-    let mut queued_nodes = FixedBitSet::with_capacity(access_index.cmds_by_node.len());
+    let required_prefixes = schedule
+        .access_index
+        .read_nodes_for_cmd(first_target_cmd_idx)
+        .filter(|&node_idx| node_idx != target_node_idx)
+        .map(|node_idx| (node_idx, first_target_cmd_idx))
+        .collect::<SmallVec<[_; 8]>>();
 
-    for node_idx in access_index.read_nodes_for_cmd(first_target_cmd_idx) {
-        if node_idx != target_node_idx {
-            pending_nodes.push_back((node_idx, first_target_cmd_idx));
-            queued_nodes.insert(node_idx);
-        }
-    }
-
-    while let Some((node_idx, end_cmd_idx)) = pending_nodes.pop_front() {
-        for cmd_idx in access_index.prior_cmds_for_node(node_idx, end_cmd_idx) {
-            if scheduled.put(cmd_idx) {
-                continue;
-            }
-
-            schedule.push(cmd_idx);
-
-            for read_node_idx in access_index.read_nodes_for_cmd(cmd_idx) {
-                if queued_nodes.put(read_node_idx) {
-                    continue;
-                }
-
-                pending_nodes.push_back((read_node_idx, cmd_idx));
-            }
-        }
-    }
-
-    schedule.sort_unstable();
+    schedule.schedule_required_node_prefixes(required_prefixes);
 }
 
 fn submit_stage_mask_legacy(stage_mask: vk::PipelineStageFlags2) -> vk::PipelineStageFlags {
@@ -799,26 +777,6 @@ struct BufferQueueOwnershipTransfer {
     range: BufferSubresourceRange,
     dst_queue_family_index: u32,
     src_queue_family_index: u32,
-    src_queue_index: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct BufferSubresourceRangeKey {
-    start: vk::DeviceSize,
-    end: vk::DeviceSize,
-}
-
-impl BufferSubresourceRangeKey {
-    fn from_range(BufferSubresourceRange { start, end }: BufferSubresourceRange) -> Self {
-        Self { start, end }
-    }
-
-    fn into_range(self) -> BufferSubresourceRange {
-        BufferSubresourceRange {
-            start: self.start,
-            end: self.end,
-        }
-    }
 }
 
 #[derive(Clone, Default)]
@@ -831,28 +789,6 @@ impl CommandAccessIndex {
     #[profiling::function]
     fn read_nodes_for_cmd(&self, cmd_idx: usize) -> impl ExactSizeIterator<Item = usize> + '_ {
         self.accessed_nodes_by_cmd[cmd_idx].iter().copied()
-    }
-
-    #[profiling::function]
-    fn prior_cmds_for_node(
-        &self,
-        node_idx: usize,
-        end_cmd_idx: usize,
-    ) -> impl Iterator<Item = usize> + '_ {
-        let cmds = &self.cmds_by_node[node_idx];
-        let end_idx = cmds.partition_point(|&cmd_idx| cmd_idx < end_cmd_idx);
-
-        cmds[..end_idx].iter().rev().copied()
-    }
-
-    #[profiling::function]
-    fn prior_read_dependency_cmds(
-        &self,
-        cmd_idx: usize,
-        end_cmd_idx: usize,
-    ) -> impl Iterator<Item = usize> + '_ {
-        self.read_nodes_for_cmd(cmd_idx)
-            .flat_map(move |node_idx| self.prior_cmds_for_node(node_idx, end_cmd_idx))
     }
 
     fn update(&mut self, graph: &Graph, end_cmd_idx: usize) {
@@ -1011,12 +947,6 @@ impl PartialEq for ImageQueueOwnershipTransfer {
     }
 }
 
-#[derive(Debug)]
-struct ImageRangeSet {
-    image: vk::Image,
-    range_keys: HashSet<ImageSubresourceRangeKey>,
-}
-
 struct ImageSubresourceRangeDebug(vk::ImageSubresourceRange);
 
 impl std::fmt::Debug for ImageSubresourceRangeDebug {
@@ -1032,54 +962,6 @@ impl std::fmt::Debug for ImageSubresourceRangeDebug {
 
         let mip_levels = self.0.base_mip_level..self.0.base_mip_level + self.0.level_count;
         mip_levels.fmt(f)
-    }
-}
-
-/// This is needed because vk::ImageSubresourceRange doesn't currently support Hash
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct ImageSubresourceRangeKey {
-    aspect_mask: vk::ImageAspectFlags,
-    base_array_layer: u32,
-    layer_count: u32,
-    base_mip_level: u32,
-    level_count: u32,
-}
-
-impl ImageSubresourceRangeKey {
-    fn from_range(
-        vk::ImageSubresourceRange {
-            aspect_mask,
-            base_array_layer,
-            layer_count,
-            base_mip_level,
-            level_count,
-        }: vk::ImageSubresourceRange,
-    ) -> Self {
-        Self {
-            aspect_mask,
-            base_array_layer,
-            layer_count,
-            base_mip_level,
-            level_count,
-        }
-    }
-
-    fn into_range(
-        Self {
-            aspect_mask,
-            base_array_layer,
-            layer_count,
-            base_mip_level,
-            level_count,
-        }: Self,
-    ) -> vk::ImageSubresourceRange {
-        vk::ImageSubresourceRange {
-            aspect_mask,
-            base_array_layer,
-            layer_count,
-            base_mip_level,
-            level_count,
-        }
     }
 }
 
@@ -1272,6 +1154,27 @@ struct QueueOwnershipReleaseGroup {
     images: Vec<(vk::Image, vk::ImageLayout, vk::ImageSubresourceRange)>,
     src_queue_family_index: u32,
     src_queue_index: u32,
+}
+
+fn queue_ownership_release_group(
+    groups: &mut Vec<QueueOwnershipReleaseGroup>,
+    src_queue_family_index: u32,
+    src_queue_index: u32,
+) -> &mut QueueOwnershipReleaseGroup {
+    if let Some(group_idx) = groups.iter().position(|group| {
+        group.src_queue_family_index == src_queue_family_index
+            && group.src_queue_index == src_queue_index
+    }) {
+        return &mut groups[group_idx];
+    }
+
+    groups.push(QueueOwnershipReleaseGroup {
+        buffers: Vec::new(),
+        images: Vec::new(),
+        src_queue_family_index,
+        src_queue_index,
+    });
+    groups.last_mut().expect("missing ownership release group")
 }
 
 /// Submission payload for [`RecordedSubmission::queue_submit`].
@@ -1663,6 +1566,7 @@ pub struct Recording<'p, P, Cb> {
     #[readonly]
     pub resource_pool: &'p mut P,
 
+    ownership: RecordingOwnership,
     submission: Submission,
 }
 
@@ -1690,6 +1594,7 @@ where
         P: Pool<CommandBufferInfo, CommandBuffer>,
     {
         let Self {
+            ownership: _,
             cmd_buf,
             resource_pool,
             submission,
@@ -1739,18 +1644,163 @@ where
             self.resource_pool,
             self.cmd_buf.as_ref(),
             selection.into(),
+            &mut self.ownership,
         )
     }
+}
+
+#[derive(Debug, Default)]
+struct RecordingOwnership {
+    // These ranges are effectively owned by this recording, but global ownership is not updated
+    // until its command buffer is submitted successfully.
+    buffers: HashMap<usize, Vec<BufferSubresourceRange>>,
+    images: HashMap<usize, DenseMap<bool>>,
+}
+
+impl RecordingOwnership {
+    fn claim_buffer(
+        &mut self,
+        node_idx: usize,
+        range: BufferSubresourceRange,
+    ) -> SmallVec<[BufferSubresourceRange; 4]> {
+        let claimed = self.buffers.entry(node_idx).or_default();
+        let mut unclaimed = SmallVec::<[BufferSubresourceRange; 4]>::from_slice(&[range]);
+
+        for &claimed_range in claimed.iter() {
+            let mut remaining = SmallVec::<[BufferSubresourceRange; 4]>::new();
+
+            for range in unclaimed.drain(..) {
+                let Some(overlap) = range.intersection(claimed_range) else {
+                    remaining.push(range);
+                    continue;
+                };
+
+                if range.start < overlap.start {
+                    remaining.push(BufferSubresourceRange {
+                        start: range.start,
+                        end: overlap.start,
+                    });
+                }
+                if overlap.end < range.end {
+                    remaining.push(BufferSubresourceRange {
+                        start: overlap.end,
+                        end: range.end,
+                    });
+                }
+            }
+
+            unclaimed = remaining;
+            if unclaimed.is_empty() {
+                break;
+            }
+        }
+
+        claimed.extend(unclaimed.iter().copied());
+        unclaimed
+    }
+
+    fn claim_image(
+        &mut self,
+        node_idx: usize,
+        info: ImageInfo,
+        range: vk::ImageSubresourceRange,
+    ) -> SmallVec<[vk::ImageSubresourceRange; 4]> {
+        self.images
+            .entry(node_idx)
+            .or_insert_with(|| DenseMap::new(info, false))
+            .swap(true, range)
+            .filter_map(|(claimed, range)| (!claimed).then_some(range))
+            .collect()
+    }
+}
+
+#[derive(Default)]
+struct NodeScheduleScratch {
+    covered_node_prefixes: Vec<usize>,
+    pending_cmds: Vec<usize>,
+    selected_cmds: FixedBitSet,
 }
 
 #[derive(Default)]
 struct Schedule {
     access_index: CommandAccessIndex,
-    interdependent: Vec<Vec<usize>>,
     cmds: Vec<usize>,
+    local_of_global: Vec<usize>,
+    successors: Vec<Vec<usize>>,
+    predecessor_counts: Vec<usize>,
+    remaining_predecessors: Vec<usize>,
+    ready: BTreeSet<(usize, Reverse<usize>)>,
+    reordered: Vec<usize>,
+    node_schedule: NodeScheduleScratch,
 }
 
 impl Schedule {
+    fn schedule_required_node_prefixes(
+        &mut self,
+        required_prefixes: impl IntoIterator<Item = (usize, usize)>,
+    ) {
+        fn schedule_node_prefix(
+            access_index: &CommandAccessIndex,
+            schedule: &mut Vec<usize>,
+            scratch: &mut NodeScheduleScratch,
+            node_idx: usize,
+            end_cmd_idx: usize,
+        ) {
+            let node_cmds = &access_index.cmds_by_node[node_idx];
+            let end_prefix = node_cmds.partition_point(|&cmd_idx| cmd_idx < end_cmd_idx);
+            let start_prefix = scratch.covered_node_prefixes[node_idx];
+
+            if end_prefix <= start_prefix {
+                return;
+            }
+
+            scratch.covered_node_prefixes[node_idx] = end_prefix;
+
+            // Selecting any user of a resource requires the complete preceding resource prefix.
+            for &cmd_idx in &node_cmds[start_prefix..end_prefix] {
+                if !scratch.selected_cmds.put(cmd_idx) {
+                    schedule.push(cmd_idx);
+                    scratch.pending_cmds.push(cmd_idx);
+                }
+            }
+        }
+
+        self.cmds.clear();
+        self.node_schedule.covered_node_prefixes.clear();
+        self.node_schedule
+            .covered_node_prefixes
+            .resize(self.access_index.cmds_by_node.len(), 0);
+        self.node_schedule.pending_cmds.clear();
+        self.node_schedule.selected_cmds.clear();
+        self.node_schedule
+            .selected_cmds
+            .grow(self.access_index.accessed_nodes_by_cmd.len());
+
+        for (node_idx, end_cmd_idx) in required_prefixes {
+            schedule_node_prefix(
+                &self.access_index,
+                &mut self.cmds,
+                &mut self.node_schedule,
+                node_idx,
+                end_cmd_idx,
+            );
+        }
+
+        while let Some(cmd_idx) = self.node_schedule.pending_cmds.pop() {
+            for node_idx in self.access_index.read_nodes_for_cmd(cmd_idx) {
+                schedule_node_prefix(
+                    &self.access_index,
+                    &mut self.cmds,
+                    &mut self.node_schedule,
+                    node_idx,
+                    cmd_idx + 1,
+                );
+            }
+        }
+
+        self.cmds.sort_unstable();
+    }
+
     #[profiling::function]
     fn reorder_cmds(&mut self, end_cmd_idx: usize) {
         if self.cmds.len() < 3 {
@@ -1759,75 +1809,86 @@ impl Schedule {
 
         let cmd_count = self.cmds.len();
 
-        for dep_cmds in self.interdependent.iter_mut() {
-            dep_cmds.clear();
-        }
-
-        self.interdependent.resize_with(cmd_count, Vec::new);
-
-        let mut local_of_global = vec![usize::MAX; end_cmd_idx];
+        self.local_of_global.resize(end_cmd_idx, usize::MAX);
+        self.local_of_global.fill(usize::MAX);
 
         for (local_idx, &cmd_idx) in self.cmds.iter().enumerate() {
-            local_of_global[cmd_idx] = local_idx;
+            self.local_of_global[cmd_idx] = local_idx;
         }
 
-        let mut seen_deps = FixedBitSet::with_capacity(cmd_count);
+        for successors in &mut self.successors {
+            successors.clear();
+        }
+        self.successors.resize_with(cmd_count, Vec::new);
+        self.predecessor_counts.resize(cmd_count, 0);
+        self.predecessor_counts.fill(0);
 
-        for (local_idx, &cmd_idx) in self.cmds.iter().enumerate() {
-            for dep_cmd_idx in self
-                .access_index
-                .prior_read_dependency_cmds(cmd_idx, end_cmd_idx)
-            {
-                let dep_local_idx = local_of_global[dep_cmd_idx];
-                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+        // Consecutive selected users of each resource form a dependency chain. This preserves the
+        // original relative order for every shared-resource pair while still allowing unrelated
+        // command chains to be grouped for locality.
+        for resource_cmds in &self.access_index.cmds_by_node {
+            let mut previous = Option::<usize>::None;
+            for &cmd_idx in resource_cmds {
+                let Some(&local_idx) = self.local_of_global.get(cmd_idx) else {
+                    continue;
+                };
+
+                if local_idx == usize::MAX {
                     continue;
                 }
 
-                if !seen_deps.put(dep_local_idx) {
-                    self.interdependent[local_idx].push(dep_local_idx);
+                if let Some(previous_idx) = previous {
+                    self.successors[previous_idx].push(local_idx);
+                    self.predecessor_counts[local_idx] += 1;
                 }
-            }
 
-            for dep_cmd_idx in self
-                .access_index
-                .prior_read_dependency_cmds(cmd_idx, end_cmd_idx)
-            {
-                let dep_local_idx = local_of_global[dep_cmd_idx];
-                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
-                    seen_deps.set(dep_local_idx, false);
+                previous = Some(local_idx);
+            }
+        }
+
+        self.remaining_predecessors
+            .clone_from(&self.predecessor_counts);
+        self.ready.clear();
+
+        for local_idx in self
+            .remaining_predecessors
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, remaining)| (*remaining == 0).then_some(idx))
+        {
+            self.ready.insert((0, Reverse(local_idx)));
+        }
+
+        self.reordered.clear();
+        self.reordered.reserve(cmd_count);
+
+        while let Some((_, Reverse(local_idx))) = self.ready.pop_last() {
+            self.reordered.push(self.cmds[local_idx]);
+
+            for &successor_idx in &self.successors[local_idx] {
+                let remaining = &mut self.remaining_predecessors[successor_idx];
+
+                debug_assert!(*remaining > 0);
+
+                *remaining -= 1;
+
+                if *remaining == 0 {
+                    self.ready.insert((
+                        self.predecessor_counts[successor_idx],
+                        Reverse(successor_idx),
+                    ));
                 }
             }
         }
 
-        let mut scheduled = FixedBitSet::with_capacity(cmd_count);
-        let mut scheduled_count = 0;
+        assert_eq!(
+            self.reordered.len(),
+            cmd_count,
+            "command dependency cycle detected"
+        );
 
-        while scheduled_count < cmd_count {
-            let mut best_idx = scheduled_count;
-            let mut best_overlap = self.interdependent[best_idx].len();
-
-            for idx in (scheduled_count + 1)..cmd_count {
-                let mut overlap = 0;
-
-                for &dep_local in &self.interdependent[idx] {
-                    if scheduled.contains(dep_local) {
-                        overlap += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                if overlap > best_overlap {
-                    best_overlap = overlap;
-                    best_idx = idx;
-                }
-            }
-
-            scheduled.insert(best_idx);
-            self.cmds.swap(scheduled_count, best_idx);
-            self.interdependent.swap(scheduled_count, best_idx);
-            scheduled_count += 1;
-        }
+        self.cmds.clear();
+        self.cmds.append(&mut self.reordered);
     }
 }
 
@@ -2020,6 +2081,8 @@ impl Submission {
         &mut self,
         cmd_buf: &CommandBuffer,
     ) -> Result<(), DriverError> {
+        let mut ownership = RecordingOwnership::default();
+
         thread_local! {
             static SCHEDULE: RefCell<Schedule> = Default::default();
         }
@@ -2030,9 +2093,7 @@ impl Submission {
                 .update(&self.graph, self.graph.cmds.len());
             schedule.cmds.clear();
             schedule.cmds.extend(0..self.graph.cmds.len());
-            self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index);
-            self.queue_ownership_release_groups
-                .extend(self.collect_queue_ownership_release_groups());
+            self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index, &mut ownership);
         });
 
         self.record_cmd_indices(cmd_buf, 0..self.graph.cmds.len())?;
@@ -2686,69 +2747,6 @@ impl Submission {
         }
 
         Ok(())
-    }
-
-    /// Collects release groups from pending ownership transfers.
-    fn collect_queue_ownership_release_groups(&self) -> Box<[QueueOwnershipReleaseGroup]> {
-        let mut release_groups = Vec::<QueueOwnershipReleaseGroup>::new();
-
-        thread_local! {
-            static TRANSFER_GROUP_INDICES: RefCell<HashMap<(u32, u32), usize>> = Default::default();
-        }
-
-        TRANSFER_GROUP_INDICES.with_borrow_mut(|tls| {
-            tls.clear();
-
-            if let Some(pending_buffer_transfer_nodes) = &self.pending_buffer_transfer_nodes {
-                for (_, buffer, transfers) in pending_buffer_transfer_nodes.iter() {
-                    for transfer in transfers.iter().copied() {
-                        let key = (transfer.src_queue_family_index, transfer.src_queue_index);
-                        let buffer_transfer = (buffer, transfer.range);
-
-                        if let Some(&group_idx) = tls.get(&key) {
-                            release_groups[group_idx].buffers.push(buffer_transfer);
-                        } else {
-                            let group_idx = release_groups.len();
-
-                            release_groups.push(QueueOwnershipReleaseGroup {
-                                src_queue_family_index: key.0,
-                                src_queue_index: key.1,
-                                buffers: vec![buffer_transfer],
-                                images: Vec::new(),
-                            });
-
-                            tls.insert(key, group_idx);
-                        }
-                    }
-                }
-            }
-
-            if let Some(pending_image_transfer_nodes) = &self.pending_image_transfer_nodes {
-                for (_, image, transfers) in pending_image_transfer_nodes.iter() {
-                    for transfer in transfers.iter().copied() {
-                        let key = (transfer.src_queue_family_index, transfer.src_queue_index);
-                        let image_transfer = (image, transfer.layout, transfer.range);
-
-                        if let Some(&group_idx) = tls.get(&key) {
-                            release_groups[group_idx].images.push(image_transfer);
-                        } else {
-                            let group_idx = release_groups.len();
-
-                            release_groups.push(QueueOwnershipReleaseGroup {
-                                src_queue_family_index: key.0,
-                                src_queue_index: key.1,
-                                buffers: Vec::new(),
-                                images: vec![image_transfer],
-                            });
-
-                            tls.insert(key, group_idx);
-                        }
-                    }
-                }
-            }
-        });
-
-        release_groups.into_boxed_slice()
     }
 
     /// Returns `true` when this submission contains no more commands to record.
@@ -3900,16 +3898,21 @@ impl Submission {
         resource_pool: &mut P,
         cmd_buf: &CommandBuffer,
         node: AnyNode,
+        ownership: &mut RecordingOwnership,
     ) -> Result<(), DriverError>
     where
         P: SubmissionPool,
     {
         match node {
             AnyNode::AccelerationStructure(node) => {
-                self.record_resource_impl(resource_pool, cmd_buf, node)
+                self.record_resource_impl(resource_pool, cmd_buf, node, ownership)
             }
-            AnyNode::Buffer(node) => self.record_resource_impl(resource_pool, cmd_buf, node),
-            AnyNode::Image(node) => self.record_resource_impl(resource_pool, cmd_buf, node),
+            AnyNode::Buffer(node) => {
+                self.record_resource_impl(resource_pool, cmd_buf, node, ownership)
+            }
+            AnyNode::Image(node) => {
+                self.record_resource_impl(resource_pool, cmd_buf, node, ownership)
+            }
         }
     }
 
@@ -3919,6 +3922,7 @@ impl Submission {
         resource_pool: &mut P,
         cmd_buf: &CommandBuffer,
         selection: RecordSelection<'a>,
+        ownership: &mut RecordingOwnership,
     ) -> Result<(), DriverError>
     where
         P: SubmissionPool,
@@ -3926,22 +3930,24 @@ impl Submission {
         let _ = CommandBufferDebugLabel::begin(cmd_buf, "graph submission");
 
         match selection {
-            RecordSelection::All => self.record_impl(resource_pool, cmd_buf),
+            RecordSelection::All => self.record_impl(resource_pool, cmd_buf, ownership),
             RecordSelection::Dependencies(node) => match node {
                 AnyNode::AccelerationStructure(node) => {
-                    self.record_resource_dependencies_impl(resource_pool, cmd_buf, node)
+                    self.record_resource_dependencies_impl(resource_pool, cmd_buf, node, ownership)
                 }
                 AnyNode::Buffer(node) => {
-                    self.record_resource_dependencies_impl(resource_pool, cmd_buf, node)
+                    self.record_resource_dependencies_impl(resource_pool, cmd_buf, node, ownership)
                 }
                 AnyNode::Image(node) => {
-                    self.record_resource_dependencies_impl(resource_pool, cmd_buf, node)
+                    self.record_resource_dependencies_impl(resource_pool, cmd_buf, node, ownership)
                 }
             },
-            RecordSelection::Node(node) => self.record_node(resource_pool, cmd_buf, node),
+            RecordSelection::Node(node) => {
+                self.record_node(resource_pool, cmd_buf, node, ownership)
+            }
             RecordSelection::Nodes(nodes) => {
                 for &node in nodes {
-                    self.record_node(resource_pool, cmd_buf, node)?;
+                    self.record_node(resource_pool, cmd_buf, node, ownership)?;
                 }
 
                 Ok(())
@@ -4577,6 +4583,7 @@ impl Submission {
         cmd_buf: &CommandBuffer,
         node_idx: usize,
         end_cmd_idx: usize,
+        ownership: &mut RecordingOwnership,
     ) -> Result<(), DriverError>
     where
         P: SubmissionPool,
@@ -4590,67 +4597,40 @@ impl Submission {
             schedule.cmds.clear();
 
             self.schedule_node_cmds(node_idx, end_cmd_idx, schedule);
-            self.record_scheduled_cmds(pool, cmd_buf, schedule, end_cmd_idx)
+            self.record_scheduled_cmds(pool, cmd_buf, schedule, end_cmd_idx, ownership)
         })
     }
 
-    fn track_pending_transfers(&mut self, schedule: &Schedule, queue_family_index: u32) {
-        #[derive(Debug)]
-        struct BufferRangeSet {
-            buffer: vk::Buffer,
-            range_keys: HashSet<BufferSubresourceRangeKey>,
-        }
+    fn track_pending_transfers(
+        &mut self,
+        schedule: &Schedule,
+        queue_family_index: u32,
+        ownership: &mut RecordingOwnership,
+    ) {
+        let resource_count = self.graph.resources.len();
 
-        #[derive(Default)]
-        struct PendingTransferScratch {
-            buffers: HashMap<usize, BufferRangeSet>,
-            images: HashMap<usize, ImageRangeSet>,
-        }
+        for cmd_idx in schedule.cmds.iter().copied() {
+            let cmd = &self.graph.cmds[cmd_idx];
 
-        thread_local! {
-            static PENDING_TRANSFER: RefCell<PendingTransferScratch> = Default::default();
-        }
+            for (node_idx, accesses) in cmd.execs.iter().flat_map(|exec| exec.accesses.iter()) {
+                if let Some(buffer) = self.graph.resources[node_idx].as_buffer() {
+                    if buffer.info.sharing_mode == vk::SharingMode::CONCURRENT {
+                        continue;
+                    }
 
-        PENDING_TRANSFER.with_borrow_mut(|tls| {
-            tls.buffers.clear();
-            tls.images.clear();
-
-            for cmd_idx in schedule.cmds.iter().copied() {
-                let cmd = &self.graph.cmds[cmd_idx];
-
-                for (node_idx, accesses) in cmd.execs.iter().flat_map(|exec| exec.accesses.iter()) {
-                    if let Some(buffer) = self.graph.resources[node_idx].as_buffer() {
-                        if buffer.info.sharing_mode == vk::SharingMode::CONCURRENT {
+                    for access in accesses.iter() {
+                        let SubresourceRange::Buffer(access_range) = access.subresource else {
                             continue;
-                        }
+                        };
+                        let unclaimed = ownership
+                            .claim_buffer(node_idx, access_range.resolve_whole(buffer.info.size));
 
-                        let transfer =
-                            tls.buffers
-                                .entry(node_idx)
-                                .or_insert_with(|| BufferRangeSet {
-                                    buffer: buffer.handle,
-                                    range_keys: Default::default(),
-                                });
+                        self.exclusive_buffer_ranges
+                            .entry(node_idx)
+                            .or_default()
+                            .extend(unclaimed.iter().copied());
 
-                        for access in accesses.iter() {
-                            let SubresourceRange::Buffer(access_range) = access.subresource else {
-                                continue;
-                            };
-
-                            let access_range = BufferSubresourceRange {
-                                start: access_range.start,
-                                end: if access_range.end == vk::WHOLE_SIZE {
-                                    buffer.info.size
-                                } else {
-                                    access_range.end
-                                },
-                            };
-                            let access_key = BufferSubresourceRangeKey::from_range(access_range);
-
-                            if !transfer.range_keys.insert(access_key) {
-                                continue;
-                            }
-
+                        for access_range in unclaimed {
                             for (subresource, sharing) in
                                 buffer.sync_info_with_sharing_range(access_range)
                             {
@@ -4658,58 +4638,59 @@ impl Submission {
                                 else {
                                     continue;
                                 };
-
                                 let Some((src_queue_family_index, src_queue_index)) =
                                     exclusive_transfer_source(sharing, queue_family_index)
                                 else {
                                     continue;
                                 };
+                                let transfer = BufferQueueOwnershipTransfer {
+                                    src_queue_family_index,
+                                    dst_queue_family_index: queue_family_index,
+                                    range,
+                                };
 
+                                queue_ownership_release_group(
+                                    &mut self.queue_ownership_release_groups,
+                                    src_queue_family_index,
+                                    src_queue_index,
+                                )
+                                .buffers
+                                .push((buffer.handle, range));
                                 self.pending_buffer_transfer_nodes
                                     .get_or_insert_with(|| {
-                                        PendingTransferNodes::new(self.graph.resources.len())
+                                        PendingTransferNodes::new(resource_count)
                                     })
-                                    .push_transfer(
-                                        node_idx,
-                                        transfer.buffer,
-                                        BufferQueueOwnershipTransfer {
-                                            src_queue_family_index,
-                                            src_queue_index,
-                                            dst_queue_family_index: queue_family_index,
-                                            range,
-                                        },
-                                    );
+                                    .push_transfer(node_idx, buffer.handle, transfer);
                             }
                         }
-
-                        continue;
                     }
 
-                    let Some(image) = self.graph.resources[node_idx].as_image() else {
+                    continue;
+                }
+
+                let Some(image) = self.graph.resources[node_idx].as_image() else {
+                    continue;
+                };
+                if image.info.sharing_mode == vk::SharingMode::CONCURRENT {
+                    continue;
+                }
+
+                for access in accesses.iter() {
+                    let SubresourceRange::Image(access_range) = access.subresource else {
                         continue;
                     };
+                    let unclaimed = ownership.claim_image(
+                        node_idx,
+                        image.info,
+                        image.info.resolve_subresource_counts(access_range),
+                    );
 
-                    if image.info.sharing_mode == vk::SharingMode::CONCURRENT {
-                        continue;
-                    }
+                    self.exclusive_image_ranges
+                        .entry(node_idx)
+                        .or_default()
+                        .extend(unclaimed.iter().copied());
 
-                    let transfer = tls.images.entry(node_idx).or_insert_with(|| ImageRangeSet {
-                        image: image.handle,
-                        range_keys: Default::default(),
-                    });
-
-                    for access in accesses.iter() {
-                        let SubresourceRange::Image(access_range) = access.subresource else {
-                            continue;
-                        };
-
-                        let access_range = image.info.resolve_subresource_counts(access_range);
-                        let access_key = ImageSubresourceRangeKey::from_range(access_range);
-
-                        if !transfer.range_keys.insert(access_key) {
-                            continue;
-                        }
-
+                    for access_range in unclaimed {
                         for (subresource, sharing) in
                             image.sync_info_with_sharing_range(access_range)
                         {
@@ -4719,61 +4700,35 @@ impl Submission {
                             ) else {
                                 continue;
                             };
-
-                            let layout = subresource.layout.unwrap_or(vk::ImageLayout::UNDEFINED);
-
                             let Some((src_queue_family_index, src_queue_index)) =
                                 exclusive_transfer_source(sharing, queue_family_index)
                             else {
                                 continue;
                             };
+                            let layout = subresource.layout.unwrap_or(vk::ImageLayout::UNDEFINED);
+                            let transfer = ImageQueueOwnershipTransfer {
+                                src_queue_family_index,
+                                src_queue_index,
+                                dst_queue_family_index: queue_family_index,
+                                layout,
+                                range,
+                            };
 
+                            queue_ownership_release_group(
+                                &mut self.queue_ownership_release_groups,
+                                src_queue_family_index,
+                                src_queue_index,
+                            )
+                            .images
+                            .push((image.handle, layout, range));
                             self.pending_image_transfer_nodes
-                                .get_or_insert_with(|| {
-                                    PendingTransferNodes::new(self.graph.resources.len())
-                                })
-                                .push_transfer(
-                                    node_idx,
-                                    transfer.image,
-                                    ImageQueueOwnershipTransfer {
-                                        src_queue_family_index,
-                                        src_queue_index,
-                                        dst_queue_family_index: queue_family_index,
-                                        layout,
-                                        range,
-                                    },
-                                );
+                                .get_or_insert_with(|| PendingTransferNodes::new(resource_count))
+                                .push_transfer(node_idx, image.handle, transfer);
                         }
                     }
                 }
             }
-
-            for (node_idx, transfer) in tls.buffers.iter() {
-                self.exclusive_buffer_ranges
-                    .entry(*node_idx)
-                    .or_default()
-                    .extend(
-                        transfer
-                            .range_keys
-                            .iter()
-                            .copied()
-                            .map(BufferSubresourceRangeKey::into_range),
-                    );
-            }
-
-            for (node_idx, transfer) in tls.images.iter() {
-                self.exclusive_image_ranges
-                    .entry(*node_idx)
-                    .or_default()
-                    .extend(
-                        transfer
-                            .range_keys
-                            .iter()
-                            .copied()
-                            .map(ImageSubresourceRangeKey::into_range),
-                    );
-            }
-        });
+        }
     }
 
     fn record_cmd_indices(
@@ -4984,6 +4939,7 @@ impl Submission {
         cmd_buf: &CommandBuffer,
         schedule: &mut Schedule,
         end_cmd_idx: usize,
+        ownership: &mut RecordingOwnership,
     ) -> Result<(), DriverError>
     where
         P: SubmissionPool,
@@ -5006,9 +4962,7 @@ impl Submission {
         schedule.reorder_cmds(end_cmd_idx);
         self.merge_scheduled_cmds(&mut schedule.cmds);
         self.lease_scheduled_resources(pool, &schedule.cmds)?;
-        self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index);
-        self.queue_ownership_release_groups
-            .extend(self.collect_queue_ownership_release_groups());
+        self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index, ownership);
 
         let has_pending_timestamp_queries = self
             .graph
@@ -5193,92 +5147,32 @@ impl Submission {
     /// given node.
     #[profiling::function]
     fn schedule_node_cmds(&self, node_idx: usize, end_cmd_idx: usize, schedule: &mut Schedule) {
-        #[derive(Default)]
-        struct ScheduleSearchScratch {
-            pending_nodes: VecDeque<(usize, usize)>,
-            resolved_nodes: FixedBitSet,
-            scheduled_cmds: FixedBitSet,
-        }
+        trace!("scheduling node {node_idx}");
+        schedule.schedule_required_node_prefixes([(node_idx, end_cmd_idx)]);
 
-        thread_local! {
-            static SCHEDULE_SEARCH: RefCell<ScheduleSearchScratch> = Default::default();
-        }
-
-        SCHEDULE_SEARCH.with_borrow_mut(|tls| {
-            tls.scheduled_cmds.clear();
-            tls.scheduled_cmds.grow(end_cmd_idx);
-
-            tls.resolved_nodes.clear();
-            tls.resolved_nodes.grow(self.graph.resources.len());
-
-            debug_assert!(tls.pending_nodes.is_empty());
-
-            trace!("scheduling node {node_idx}");
-
-            tls.resolved_nodes.insert(node_idx);
-
-            // Schedule the first set of cmds for the node we're trying to resolve
-            for cmd_idx in schedule
-                .access_index
-                .prior_cmds_for_node(node_idx, end_cmd_idx)
-            {
-                trace!(
-                    "  cmd [{cmd_idx}: {}] is dependent",
-                    self.graph.cmds[cmd_idx].name()
+        if log_enabled!(Debug) {
+            if !schedule.cmds.is_empty() {
+                debug!(
+                    "schedule: {}",
+                    schedule
+                        .cmds
+                        .iter()
+                        .copied()
+                        .map(|idx| format!("[{}: {}]", idx, self.graph.cmds[idx].name()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
-
-                debug_assert!(!tls.scheduled_cmds.contains(cmd_idx));
-
-                tls.scheduled_cmds.insert(cmd_idx);
-                schedule.cmds.push(cmd_idx);
-
-                for node_idx in schedule.access_index.read_nodes_for_cmd(cmd_idx) {
-                    trace!("    node {node_idx} is dependent");
-
-                    if !tls.resolved_nodes.put(node_idx) {
-                        tls.pending_nodes.push_back((node_idx, cmd_idx));
-                    }
-                }
             }
 
-            trace!("secondary cmds below");
+            if log_enabled!(Trace) {
+                let unscheduled = (0..end_cmd_idx)
+                    .filter(|&cmd_idx| !schedule.node_schedule.selected_cmds.contains(cmd_idx))
+                    .collect::<Box<_>>();
 
-            // Now schedule all nodes that are required, going through the tree to find them
-            while let Some((node_idx, cmd_idx)) = tls.pending_nodes.pop_front() {
-                trace!("  node {node_idx} is dependent");
-
-                for dep_cmd_idx in schedule
-                    .access_index
-                    .prior_cmds_for_node(node_idx, cmd_idx + 1)
-                {
-                    if !tls.scheduled_cmds.put(dep_cmd_idx) {
-                        schedule.cmds.push(dep_cmd_idx);
-
-                        trace!(
-                            "  cmd [{dep_cmd_idx}: {}] is dependent",
-                            self.graph.cmds[dep_cmd_idx].name()
-                        );
-
-                        for node_idx in schedule.access_index.read_nodes_for_cmd(dep_cmd_idx) {
-                            trace!("    node {node_idx} is dependent");
-
-                            if !tls.resolved_nodes.put(node_idx) {
-                                tls.pending_nodes.push_back((node_idx, dep_cmd_idx));
-                            }
-                        }
-                    }
-                }
-            }
-
-            schedule.cmds.sort_unstable();
-
-            if log_enabled!(Debug) {
-                if !schedule.cmds.is_empty() {
-                    // These are the indexes of the cmds this thread is about to resolve
-                    debug!(
-                        "schedule: {}",
-                        schedule
-                            .cmds
+                if !unscheduled.is_empty() {
+                    trace!(
+                        "delaying: {}",
+                        unscheduled
                             .iter()
                             .copied()
                             .map(|idx| format!("[{}: {}]", idx, self.graph.cmds[idx].name()))
@@ -5287,45 +5181,21 @@ impl Submission {
                     );
                 }
 
-                if log_enabled!(Trace) {
-                    let unscheduled = (0..end_cmd_idx)
-                        .filter(|&cmd_idx| !tls.scheduled_cmds.contains(cmd_idx))
-                        .collect::<Box<_>>();
-
-                    if !unscheduled.is_empty() {
-                        // These cmds are within the range of cmds we thought we had to do
-                        // right now, but it turns out that nothing in "schedule" relies on them
-                        trace!(
-                            "delaying: {}",
-                            unscheduled
-                                .iter()
-                                .copied()
-                                .map(|idx| format!("[{}: {}]", idx, self.graph.cmds[idx].name()))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        );
-                    }
-
-                    if end_cmd_idx < self.graph.cmds.len() {
-                        // These cmds existing on the graph but are not being considered right
-                        // now because we've been told to stop work at the "end_cmd_idx" point
-                        trace!(
-                            "ignoring: {}",
-                            self.graph.cmds[end_cmd_idx..]
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, cmd)| format!(
-                                    "[{}: {}]",
-                                    idx + end_cmd_idx,
-                                    cmd.name()
-                                ))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        );
-                    }
+                if end_cmd_idx < self.graph.cmds.len() {
+                    trace!(
+                        "ignoring: {}",
+                        self.graph.cmds[end_cmd_idx..]
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, cmd)| {
+                                format!("[{}: {}]", idx + end_cmd_idx, cmd.name())
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                 }
             }
-        });
+        }
     }
 
     fn set_scissor(cmd_buf: &CommandBuffer, x: i32, y: i32, width: u32, height: u32) {
@@ -5450,9 +5320,16 @@ impl Submission {
         P: SubmissionPool,
         Cb: AsRef<CommandBuffer>,
     {
-        self.record_selection_impl(resource_pool, cmd_buf.as_ref(), selection.into())?;
+        let mut ownership = RecordingOwnership::default();
+        self.record_selection_impl(
+            resource_pool,
+            cmd_buf.as_ref(),
+            selection.into(),
+            &mut ownership,
+        )?;
 
         Ok(Recording {
+            ownership,
             cmd_buf,
             resource_pool,
             submission: self,
@@ -5460,7 +5337,12 @@ impl Submission {
     }
 
     #[profiling::function]
-    fn record_impl<P>(&mut self, pool: &mut P, cmd_buf: &CommandBuffer) -> Result<(), DriverError>
+    fn record_impl<P>(
+        &mut self,
+        pool: &mut P,
+        cmd_buf: &CommandBuffer,
+        ownership: &mut RecordingOwnership,
+    ) -> Result<(), DriverError>
     where
         P: SubmissionPool,
     {
@@ -5479,7 +5361,7 @@ impl Submission {
             schedule.cmds.clear();
             schedule.cmds.extend(0..self.graph.cmds.len());
 
-            self.record_scheduled_cmds(pool, cmd_buf, schedule, self.graph.cmds.len())
+            self.record_scheduled_cmds(pool, cmd_buf, schedule, self.graph.cmds.len(), ownership)
         })
     }
 
@@ -5489,6 +5371,7 @@ impl Submission {
         pool: &mut P,
         cmd_buf: &CommandBuffer,
         resource_node: impl Node,
+        ownership: &mut RecordingOwnership,
     ) -> Result<(), DriverError>
     where
         P: SubmissionPool,
@@ -5507,14 +5390,8 @@ impl Submission {
 
             SCHEDULE.with_borrow_mut(|tls| {
                 tls.access_index.update(&self.graph, end_pass_idx + 1);
-                tls.cmds.clear();
-                schedule_dependency_cmds_before_target_access(
-                    &tls.access_index,
-                    node_idx,
-                    end_pass_idx,
-                    &mut tls.cmds,
-                );
-                self.record_scheduled_cmds(pool, cmd_buf, tls, end_pass_idx)
+                schedule_dependency_cmds_before_target_access(node_idx, end_pass_idx, tls);
+                self.record_scheduled_cmds(pool, cmd_buf, tls, end_pass_idx, ownership)
             })?;
         }
 
@@ -5527,6 +5404,7 @@ impl Submission {
         pool: &mut P,
         cmd_buf: &CommandBuffer,
         resource_node: impl Node,
+        ownership: &mut RecordingOwnership,
     ) -> Result<(), DriverError>
     where
         P: SubmissionPool,
@@ -5542,7 +5420,7 @@ impl Submission {
         }
 
         let end_pass_idx = self.graph.cmds.len();
-        self.record_node_cmds(pool, cmd_buf, node_idx, end_pass_idx)
+        self.record_node_cmds(pool, cmd_buf, node_idx, end_pass_idx, ownership)
     }
 
     #[profiling::function]
@@ -6182,7 +6060,10 @@ struct TimestampQueryPoolInner {
 
 #[doc(hidden)]
 pub mod bench {
-    use super::{CommandAccessIndex, Schedule};
+    use {
+        super::{CommandAccessIndex, Schedule},
+        crate::Graph,
+    };
 
     /// Synthetic workload description for scheduler benchmarks.
     #[derive(Clone, Copy, Debug)]
@@ -6291,6 +6172,61 @@ pub mod bench {
             }
         }
 
+        /// Builds a scheduler benchmark from a graph, optionally repeating its disconnected
+        /// topology with independently remapped command and resource indices.
+        pub fn from_graph(graph: &Graph, repeat_count: usize) -> Self {
+            assert!(repeat_count > 0, "repeat_count must be greater than zero");
+
+            let base_cmd_count = graph.cmds.len();
+            let base_resource_count = graph.resources.len();
+            assert!(base_cmd_count > 0, "graph must contain commands");
+            assert!(base_resource_count > 0, "graph must contain resources");
+
+            let mut base = CommandAccessIndex::default();
+            base.update_from_cmds(&graph.cmds, base_resource_count);
+
+            let cmd_count = base_cmd_count * repeat_count;
+            let resource_count = base_resource_count * repeat_count;
+            let mut cmds_by_node = Vec::with_capacity(resource_count);
+            let mut accessed_nodes_by_cmd = Vec::with_capacity(cmd_count);
+
+            for copy_idx in 0..repeat_count {
+                let cmd_offset = copy_idx * base_cmd_count;
+                let resource_offset = copy_idx * base_resource_count;
+
+                cmds_by_node.extend(base.cmds_by_node.iter().map(|cmds| {
+                    cmds.iter()
+                        .map(|cmd_idx| cmd_offset + cmd_idx)
+                        .collect::<Vec<_>>()
+                }));
+                accessed_nodes_by_cmd.extend(base.accessed_nodes_by_cmd.iter().map(|nodes| {
+                    nodes
+                        .iter()
+                        .map(|node_idx| resource_offset + node_idx)
+                        .collect::<Vec<_>>()
+                }));
+            }
+
+            let cmds = (0..cmd_count).collect::<Vec<_>>();
+            Self {
+                schedule: Schedule {
+                    access_index: CommandAccessIndex {
+                        cmds_by_node,
+                        accessed_nodes_by_cmd,
+                    },
+                    cmds: cmds.clone(),
+                    ..Default::default()
+                },
+                original_cmds: cmds,
+                end_cmd_idx: cmd_count,
+            }
+        }
+
+        /// Returns the number of commands reordered by each benchmark iteration.
+        pub fn cmd_count(&self) -> usize {
+            self.end_cmd_idx
+        }
+
         /// Restores the original schedule, reorders it once, and returns a checksum.
         pub fn reorder_once(&mut self) -> u64 {
             self.schedule.cmds.clear();
@@ -6328,10 +6264,7 @@ pub mod bench {
 
 #[doc(hidden)]
 pub mod fuzz {
-    use {
-        super::{CommandAccessIndex, Schedule},
-        fixedbitset::FixedBitSet,
-    };
+    use super::{CommandAccessIndex, Schedule};
 
     #[derive(Clone, Copy, Debug)]
     pub struct ResourceAccess {
@@ -6375,13 +6308,13 @@ pub mod fuzz {
         repeat.reorder_cmds(cmd_count);
         assert_eq!(reordered, repeat.cmds, "reordering is not deterministic");
 
-        assert_hazard_order_preserved(&reordered, &normalized_accesses);
-
         let expected = reference_reorder(access_index, cmd_count);
         assert_eq!(
             reordered, expected,
             "reordering diverged from reference implementation"
         );
+
+        assert_hazard_order_preserved(&reordered, &normalized_accesses);
     }
 
     fn build_access_index(
@@ -6456,87 +6389,58 @@ pub mod fuzz {
     }
 
     fn reference_reorder(access_index: CommandAccessIndex, cmd_count: usize) -> Vec<usize> {
-        let mut cmds = (0..cmd_count).collect::<Vec<_>>();
-        if cmds.len() < 3 {
-            return cmds;
+        if cmd_count < 3 {
+            return (0..cmd_count).collect();
         }
 
-        let mut interdependent = vec![Vec::new(); cmd_count];
-        let mut local_of_global = vec![usize::MAX; cmd_count];
-        let mut seen_deps = FixedBitSet::with_capacity(cmd_count);
-        let mut scheduled = FixedBitSet::with_capacity(cmd_count);
-
-        for (local_idx, &cmd_idx) in cmds.iter().enumerate() {
-            local_of_global[cmd_idx] = local_idx;
+        let mut predecessors = vec![Vec::new(); cmd_count];
+        for resource_cmds in &access_index.cmds_by_node {
+            for pair in resource_cmds.windows(2) {
+                predecessors[pair[1]].push(pair[0]);
+            }
         }
 
-        for (local_idx, &cmd_idx) in cmds.iter().enumerate() {
-            for dep_cmd_idx in access_index.prior_read_dependency_cmds(cmd_idx, cmd_count) {
-                let dep_local_idx = local_of_global[dep_cmd_idx];
-                if dep_local_idx == usize::MAX || dep_local_idx == local_idx {
+        let mut scheduled = vec![false; cmd_count];
+        let mut reordered = Vec::with_capacity(cmd_count);
+        while reordered.len() < cmd_count {
+            let mut best = None;
+            for cmd_idx in 0..cmd_count {
+                if scheduled[cmd_idx]
+                    || !predecessors[cmd_idx]
+                        .iter()
+                        .all(|&predecessor| scheduled[predecessor])
+                {
                     continue;
                 }
 
-                if !seen_deps.put(dep_local_idx) {
-                    interdependent[local_idx].push(dep_local_idx);
+                let score = predecessors[cmd_idx].len();
+                if best.is_none_or(|(best_score, best_idx)| {
+                    score > best_score || (score == best_score && cmd_idx < best_idx)
+                }) {
+                    best = Some((score, cmd_idx));
                 }
             }
 
-            for dep_cmd_idx in access_index.prior_read_dependency_cmds(cmd_idx, cmd_count) {
-                let dep_local_idx = local_of_global[dep_cmd_idx];
-                if dep_local_idx != usize::MAX && dep_local_idx != local_idx {
-                    seen_deps.set(dep_local_idx, false);
-                }
-            }
+            let (_, best_idx) = best.expect("command dependency cycle detected");
+            scheduled[best_idx] = true;
+            reordered.push(best_idx);
         }
 
-        let mut scheduled_count = 0;
-        while scheduled_count < cmd_count {
-            let mut best_idx = scheduled_count;
-            let mut best_overlap = interdependent[best_idx].len();
-
-            for (idx, dep_cmds) in interdependent[..cmd_count]
-                .iter()
-                .enumerate()
-                .skip(scheduled_count + 1)
-            {
-                let mut overlap = 0;
-
-                for &dep_local in dep_cmds {
-                    if scheduled.contains(dep_local) {
-                        overlap += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                if overlap > best_overlap {
-                    best_overlap = overlap;
-                    best_idx = idx;
-                }
-            }
-
-            scheduled.insert(best_idx);
-            cmds.swap(scheduled_count, best_idx);
-            interdependent.swap(scheduled_count, best_idx);
-            scheduled_count += 1;
-        }
-
-        cmds
+        reordered
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::{
         BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData,
         ExternalRenderPassAccessHistory, ImageQueueOwnershipTransfer, NodeIndex,
         PipelineStageAccessFlags, QueueSubmitInfo, RecordSelection, RecordedSubmission,
-        RecordedSubmissionState, Schedule, SemaphoreSubmitInfo, Submission, SubresourceAccess,
-        SubresourceRange, check_queue_submit_args, fuzz,
+        RecordedSubmissionState, RecordingOwnership, Schedule, SemaphoreSubmitInfo, Submission,
+        SubresourceAccess, SubresourceRange, check_queue_submit_args, fuzz,
     };
     use crate::{
-        Attachment, DepthStencilAttachment, Execution, Graph, LoadOp, Node, StoreOp,
+        AnyResource, Attachment, DepthStencilAttachment, Execution, Graph, LoadOp, Node, StoreOp,
         TimestampQuery,
         driver::{
             DriverError, SharingMode,
@@ -6614,7 +6518,6 @@ mod tests {
         transfers.sort_unstable_by_key(|transfer| {
             (
                 transfer.src_queue_family_index,
-                transfer.src_queue_index,
                 transfer.dst_queue_family_index,
                 transfer.range.start,
                 transfer.range.end,
@@ -6636,6 +6539,17 @@ mod tests {
         pending
             .iter()
             .find_map(|(idx, handle, transfers)| (idx == node_idx).then_some((handle, transfers)))
+    }
+
+    fn simulate_partial_transfer_discovery(
+        submission: &mut Submission,
+        schedule: &Schedule,
+        queue_family_index: u32,
+        ownership: &mut RecordingOwnership,
+    ) {
+        submission.track_pending_transfers(schedule, queue_family_index, ownership);
+        submission.pending_buffer_transfer_nodes = None;
+        submission.pending_image_transfer_nodes = None;
     }
 
     fn pending_timestamp_query_pool(query: TimestampQuery) -> super::TimestampQueryPool {
@@ -6850,13 +6764,11 @@ mod tests {
                 dst_queue_family_index: 0,
                 range: consumed,
                 src_queue_family_index: 1,
-                src_queue_index: 0,
             },
             BufferQueueOwnershipTransfer {
                 dst_queue_family_index: 0,
                 range: kept,
                 src_queue_family_index: 1,
-                src_queue_index: 0,
             },
         ];
 
@@ -6900,6 +6812,39 @@ mod tests {
     }
 
     #[test]
+    fn recording_ownership_only_returns_unclaimed_buffer_ranges() {
+        let mut ownership = RecordingOwnership::default();
+        let first = BufferSubresourceRange { start: 0, end: 8 };
+        let overlap = BufferSubresourceRange { start: 4, end: 12 };
+
+        assert_eq!(ownership.claim_buffer(0, first).as_slice(), &[first]);
+        assert_eq!(
+            ownership.claim_buffer(0, overlap).as_slice(),
+            &[BufferSubresourceRange { start: 8, end: 12 }]
+        );
+        assert!(ownership.claim_buffer(0, overlap).is_empty());
+    }
+
+    #[test]
+    fn recording_ownership_only_returns_unclaimed_image_subresources() {
+        let mut ownership = RecordingOwnership::default();
+        let info =
+            ImageInfo::image_2d_array(1, 1, 3, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED);
+        let first = color_subresource_range(0..2, 0..1);
+        let overlap = color_subresource_range(1..3, 0..1);
+        let remaining = color_subresource_range(2..3, 0..1);
+
+        let claimed = ownership.claim_image(0, info, first);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], first));
+
+        let claimed = ownership.claim_image(0, info, overlap);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], remaining));
+        assert!(ownership.claim_image(0, info, overlap).is_empty());
+    }
+
+    #[test]
     fn dependency_selection_schedules_inputs_to_first_target_access() {
         let access_index = CommandAccessIndex {
             /*
@@ -6909,11 +6854,68 @@ mod tests {
             cmds_by_node: vec![vec![0, 1], vec![1]],
             accessed_nodes_by_cmd: vec![vec![0], vec![0, 1]],
         };
-        let mut schedule = Vec::new();
+        let mut schedule = Schedule {
+            access_index,
+            ..Default::default()
+        };
 
-        super::schedule_dependency_cmds_before_target_access(&access_index, 1, 1, &mut schedule);
+        super::schedule_dependency_cmds_before_target_access(1, 1, &mut schedule);
 
-        assert_eq!(schedule, vec![0]);
+        assert_eq!(schedule.cmds, vec![0]);
+    }
+
+    #[test]
+    fn dependency_selection_revisits_node_at_later_boundary() {
+        let access_index = CommandAccessIndex {
+            /*
+            A is first discovered through cmd 0, then rediscovered through cmd 2. The later
+            boundary must extend A's selected prefix to include cmd 1.
+
+            cmd 0: A, B
+            cmd 1: A
+            cmd 2: A, C
+            cmd 3: B, C, T
+            */
+            cmds_by_node: vec![vec![0, 1, 2], vec![0, 3], vec![2, 3], vec![3]],
+            accessed_nodes_by_cmd: vec![vec![0, 1], vec![0], vec![0, 2], vec![1, 2, 3]],
+        };
+        let mut schedule = Schedule {
+            access_index,
+            ..Default::default()
+        };
+
+        super::schedule_dependency_cmds_before_target_access(3, 3, &mut schedule);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn node_selection_revisits_node_at_later_boundary() {
+        let mut graph = Graph::new();
+        for _ in 0..4 {
+            graph.bind_stream_arg_resource(AnyResource::BufferArg(BufferInfo::device_mem(
+                1,
+                vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
+            )));
+        }
+        graph.cmds = vec![
+            command_with_accesses(&[(0, AccessType::TransferRead), (1, AccessType::TransferRead)]),
+            command_with_accesses(&[(0, AccessType::TransferRead)]),
+            command_with_accesses(&[(0, AccessType::TransferRead), (2, AccessType::TransferRead)]),
+            command_with_accesses(&[
+                (1, AccessType::TransferRead),
+                (2, AccessType::TransferRead),
+                (3, AccessType::TransferWrite),
+            ]),
+        ];
+
+        let submission = Submission::new(graph);
+        let mut schedule = Schedule::default();
+        schedule.access_index.update(&submission.graph, 4);
+
+        submission.schedule_node_cmds(1, 4, &mut schedule);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2, 3]);
     }
 
     #[cfg(test)]
@@ -7280,11 +7282,14 @@ mod tests {
             cmds_by_node: vec![vec![0, 1], vec![1]],
             accessed_nodes_by_cmd: vec![vec![0], vec![0, 0, 1]],
         };
-        let mut schedule = Vec::new();
+        let mut schedule = Schedule {
+            access_index,
+            ..Default::default()
+        };
 
-        super::schedule_dependency_cmds_before_target_access(&access_index, 1, 1, &mut schedule);
+        super::schedule_dependency_cmds_before_target_access(1, 1, &mut schedule);
 
-        assert_eq!(schedule, vec![0]);
+        assert_eq!(schedule.cmds, vec![0]);
     }
 
     #[test]
@@ -7318,7 +7323,7 @@ mod tests {
     }
 
     #[test]
-    fn reorder_scheduled_cmds_matches_original_seed_choice() {
+    fn reorder_scheduled_cmds_groups_ready_dependency_chain() {
         let mut schedule = schedule_with_access_index(
             &[0, 1, 2, 3],
             &[&[0, 1], &[1, 2], &[1, 3]],
@@ -7332,7 +7337,7 @@ mod tests {
 
     #[test]
     fn queue_ownership_release_groups_group_by_source_queue() {
-        use super::{ImageQueueOwnershipTransfer, image_subresource_range_eq};
+        use super::{image_subresource_range_eq, queue_ownership_release_group};
 
         let mut submission = Submission::new(Graph::new());
         let image = vk::Image::null();
@@ -7352,45 +7357,17 @@ mod tests {
             level_count: 1,
         };
 
-        let pending_image_transfer_nodes = submission
-            .pending_image_transfer_nodes
-            .get_or_insert_with(|| super::PendingTransferNodes::new(1));
-        pending_image_transfer_nodes.push_transfer(
-            0,
-            image,
-            ImageQueueOwnershipTransfer {
-                src_queue_family_index: 1,
-                src_queue_index: 2,
-                dst_queue_family_index: 3,
-                layout: vk::ImageLayout::GENERAL,
-                range: range_a,
-            },
-        );
-        pending_image_transfer_nodes.push_transfer(
-            0,
-            image,
-            ImageQueueOwnershipTransfer {
-                src_queue_family_index: 1,
-                src_queue_index: 2,
-                dst_queue_family_index: 3,
-                layout: vk::ImageLayout::GENERAL,
-                range: range_b,
-            },
-        );
-        pending_image_transfer_nodes.push_transfer(
-            0,
-            image,
-            ImageQueueOwnershipTransfer {
-                src_queue_family_index: 4,
-                src_queue_index: 5,
-                dst_queue_family_index: 3,
-                layout: vk::ImageLayout::GENERAL,
-                range: range_a,
-            },
-        );
+        queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 1, 2)
+            .images
+            .push((image, vk::ImageLayout::GENERAL, range_a));
+        queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 1, 2)
+            .images
+            .push((image, vk::ImageLayout::GENERAL, range_b));
+        queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 4, 5)
+            .images
+            .push((image, vk::ImageLayout::GENERAL, range_a));
 
-        let groups = submission.collect_queue_ownership_release_groups();
-        let mut groups = groups.into_vec();
+        let mut groups = submission.queue_ownership_release_groups;
         sort_queue_ownership_release_groups(&mut groups);
 
         assert_eq!(groups.len(), 2);
@@ -7465,12 +7442,14 @@ mod tests {
             .end_cmd();
 
         let mut submission = graph.finalize();
+        let mut ownership = RecordingOwnership::default();
         submission.track_pending_transfers(
             &Schedule {
                 cmds: vec![0],
                 ..Default::default()
             },
             3,
+            &mut ownership,
         );
 
         let (handle, transfers) = pending_transfer_for_node(
@@ -7541,12 +7520,14 @@ mod tests {
             .end_cmd();
 
         let mut submission = graph.finalize();
+        let mut ownership = RecordingOwnership::default();
         submission.track_pending_transfers(
             &Schedule {
                 cmds: vec![0],
                 ..Default::default()
             },
             3,
+            &mut ownership,
         );
 
         let (handle, transfers) = pending_transfer_for_node(
@@ -7583,6 +7564,189 @@ mod tests {
 
     #[test]
     #[ignore = "requires Vulkan device"]
+    fn repeated_partial_recording_does_not_duplicate_buffer_ownership_transfer()
+    -> Result<(), DriverError> {
+        let device = test_device()?;
+        let mut graph = Graph::new();
+        let buffer = graph.bind_resource(Buffer::create(
+            &device,
+            BufferInfo::device_mem(16, vk::BufferUsageFlags::TRANSFER_DST),
+        )?);
+        let range = BufferSubresourceRange { start: 0, end: 16 };
+
+        graph
+            .resource(buffer)
+            .set_sharing_ranges(SharingMode::Exclusive(Some((1, 0))), &[range]);
+        graph
+            .begin_cmd()
+            .debug_name("touch shared range")
+            .subresource_access(buffer, range, AccessType::TransferWrite)
+            .record_cmd(|_| {})
+            .end_cmd();
+
+        let mut submission = graph.finalize();
+        let schedule = Schedule {
+            cmds: vec![0],
+            ..Default::default()
+        };
+        let mut ownership = RecordingOwnership::default();
+
+        simulate_partial_transfer_discovery(&mut submission, &schedule, 3, &mut ownership);
+        simulate_partial_transfer_discovery(&mut submission, &schedule, 3, &mut ownership);
+
+        let released_ranges = submission
+            .queue_ownership_release_groups
+            .iter()
+            .flat_map(|group| group.buffers.iter())
+            .map(|(_, range)| *range)
+            .collect::<Vec<_>>();
+        assert_eq!(released_ranges, vec![range]);
+        assert_eq!(
+            submission.exclusive_buffer_ranges[&buffer.index()],
+            vec![range]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn partial_recording_transfers_only_unclaimed_buffer_overlap() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let mut graph = Graph::new();
+        let buffer = graph.bind_resource(Buffer::create(
+            &device,
+            BufferInfo::device_mem(12, vk::BufferUsageFlags::TRANSFER_DST),
+        )?);
+        let first = BufferSubresourceRange { start: 0, end: 8 };
+        let second = BufferSubresourceRange { start: 4, end: 12 };
+
+        graph.resource(buffer).set_sharing_ranges(
+            SharingMode::Exclusive(Some((1, 0))),
+            &[BufferSubresourceRange { start: 0, end: 12 }],
+        );
+        graph
+            .begin_cmd()
+            .debug_name("touch first overlapping range")
+            .subresource_access(buffer, first, AccessType::TransferWrite)
+            .record_cmd(|_| {})
+            .end_cmd();
+        graph
+            .begin_cmd()
+            .debug_name("touch second overlapping range")
+            .subresource_access(buffer, second, AccessType::TransferWrite)
+            .record_cmd(|_| {})
+            .end_cmd();
+
+        let mut submission = graph.finalize();
+        let mut ownership = RecordingOwnership::default();
+        simulate_partial_transfer_discovery(
+            &mut submission,
+            &Schedule {
+                cmds: vec![0],
+                ..Default::default()
+            },
+            3,
+            &mut ownership,
+        );
+        simulate_partial_transfer_discovery(
+            &mut submission,
+            &Schedule {
+                cmds: vec![1],
+                ..Default::default()
+            },
+            3,
+            &mut ownership,
+        );
+
+        let mut released_ranges = submission
+            .queue_ownership_release_groups
+            .iter()
+            .flat_map(|group| group.buffers.iter())
+            .map(|(_, range)| *range)
+            .collect::<Vec<_>>();
+        released_ranges.sort_unstable_by_key(|range| (range.start, range.end));
+
+        assert!(
+            released_ranges
+                .windows(2)
+                .all(|ranges| ranges[0].end <= ranges[1].start),
+            "released ranges overlap: {released_ranges:?}"
+        );
+        assert_eq!(
+            released_ranges
+                .iter()
+                .map(|range| range.end - range.start)
+                .sum::<vk::DeviceSize>(),
+            12
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn repeated_partial_recording_does_not_duplicate_image_ownership_transfer()
+    -> Result<(), DriverError> {
+        let device = test_device()?;
+        let mut graph = Graph::new();
+        let image = graph.bind_resource(Image::create(
+            &device,
+            ImageInfo::image_2d_array(1, 1, 2, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED),
+        )?);
+        let range = color_subresource_range(0..2, 0..1);
+
+        graph
+            .resource(image)
+            .set_sharing_ranges(SharingMode::Exclusive(Some((1, 0))), &[range]);
+        graph
+            .begin_cmd()
+            .debug_name("touch shared image range")
+            .subresource_access(image, range, AccessType::TransferWrite)
+            .record_cmd(|_| {})
+            .end_cmd();
+
+        let mut submission = graph.finalize();
+        let schedule = Schedule {
+            cmds: vec![0],
+            ..Default::default()
+        };
+        let mut ownership = RecordingOwnership::default();
+
+        simulate_partial_transfer_discovery(&mut submission, &schedule, 3, &mut ownership);
+        let first_released_ranges = submission
+            .queue_ownership_release_groups
+            .iter()
+            .flat_map(|group| group.images.iter())
+            .map(|(_, _, range)| *range)
+            .collect::<Vec<_>>();
+        simulate_partial_transfer_discovery(&mut submission, &schedule, 3, &mut ownership);
+
+        let released_ranges = submission
+            .queue_ownership_release_groups
+            .iter()
+            .flat_map(|group| group.images.iter())
+            .map(|(_, _, range)| *range)
+            .collect::<Vec<_>>();
+        assert_eq!(released_ranges.len(), first_released_ranges.len());
+        assert!(
+            released_ranges
+                .iter()
+                .zip(&first_released_ranges)
+                .all(|(&lhs, &rhs)| super::image_subresource_range_eq(lhs, rhs)),
+            "released ranges changed: {first_released_ranges:?} -> {released_ranges:?}"
+        );
+        assert_eq!(submission.exclusive_image_ranges[&image.index()].len(), 1);
+        assert!(super::image_subresource_range_eq(
+            submission.exclusive_image_ranges[&image.index()][0],
+            range
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
     fn track_pending_transfers_keeps_exclusive_owner_without_known_layout()
     -> Result<(), DriverError> {
         let device = test_device()?;
@@ -7609,12 +7773,14 @@ mod tests {
             .end_cmd();
 
         let mut submission = graph.finalize();
+        let mut ownership = RecordingOwnership::default();
         submission.track_pending_transfers(
             &Schedule {
                 cmds: vec![0],
                 ..Default::default()
             },
             3,
+            &mut ownership,
         );
 
         let (handle, transfers) = pending_transfer_for_node(
@@ -7789,6 +7955,55 @@ mod tests {
     }
 
     #[test]
+    fn reorder_scheduled_cmds_preserves_both_branches_before_join() {
+        let mut schedule =
+            schedule_with_access_index(&[0, 1, 2], &[&[0, 2], &[1, 2]], &[&[0], &[1], &[0, 1]]);
+
+        schedule.reorder_cmds(3);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_prioritizes_ready_resource_successors() {
+        let mut schedule = schedule_with_access_index(
+            &[0, 1, 2, 3, 4],
+            &[&[0, 1, 3], &[0, 4], &[3]],
+            &[&[0, 1], &[0], &[], &[0, 2], &[1]],
+        );
+
+        schedule.reorder_cmds(5);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 3, 4, 2]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_ready_ties_use_original_order() {
+        let mut schedule = schedule_with_access_index(
+            &[0, 1, 2, 3, 4, 5],
+            &[&[1, 2], &[1, 4], &[0, 1, 5]],
+            &[&[2], &[0, 1, 2], &[0], &[], &[1], &[2]],
+        );
+
+        schedule.reorder_cmds(6);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2, 4, 5, 3]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_handles_noncontiguous_global_indices() {
+        let mut schedule = schedule_with_access_index(
+            &[1, 3, 5, 7],
+            &[&[1, 5], &[3, 5, 7]],
+            &[&[], &[0], &[], &[1], &[], &[0, 1], &[], &[1]],
+        );
+
+        schedule.reorder_cmds(8);
+
+        assert_eq!(schedule.cmds, vec![1, 3, 5, 7]);
+    }
+
+    #[test]
     fn reorder_scheduled_cmds_preserves_write_only_order() {
         let mut schedule = schedule_with_access_index(
             &[0, 1, 2, 3],
@@ -7843,6 +8058,47 @@ mod tests {
                     cmd_idx: 3,
                     write: false,
                 }],
+            ],
+        );
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_preserves_displaced_write_before_read() {
+        fuzz::check_schedule_reordering(
+            6,
+            &[
+                vec![
+                    fuzz::ResourceAccess {
+                        cmd_idx: 0,
+                        write: false,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 1,
+                        write: true,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 2,
+                        write: false,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 5,
+                        write: true,
+                    },
+                ],
+                vec![
+                    fuzz::ResourceAccess {
+                        cmd_idx: 0,
+                        write: false,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 3,
+                        write: true,
+                    },
+                    fuzz::ResourceAccess {
+                        cmd_idx: 4,
+                        write: false,
+                    },
+                ],
             ],
         );
     }
