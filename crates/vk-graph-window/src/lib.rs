@@ -342,8 +342,6 @@ impl Window {
                                     active_window.window.request_redraw();
                                     self.active_window = Some(active_window);
 
-                                    profiling::finish_frame!();
-
                                     return;
                                 }
                                 Err(err) => {
@@ -356,7 +354,6 @@ impl Window {
                                 Ok(true) => {}
                             }
 
-                            profiling::finish_frame!();
                             self.active_window = Some(active_window);
                         }
                         WindowEvent::Resized(size) if size.width * size.height > 0 => {
@@ -390,6 +387,8 @@ impl Window {
                 data: &WindowData,
                 mut f: impl FnMut(FrameContext),
             ) -> Result<bool, GraphchainError> {
+                profiling::scope!("Frame");
+
                 if self.graphchain.is_none() {
                     self.graphchain = Some(create_graphchain(device, data, &self.window)?);
                 }
@@ -449,6 +448,8 @@ impl Window {
                 }
 
                 self.window.request_redraw();
+
+                profiling::finish_frame!();
 
                 Ok(true)
             }

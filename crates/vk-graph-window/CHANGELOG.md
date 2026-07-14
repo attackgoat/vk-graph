@@ -6,6 +6,10 @@ This crate is versioned independently from `vk-graph`.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-14
+
+- Fixed built-in profiling feature
+
 ## [0.1.3] - 2026-07-03
 
 - Supports `vk-graph` `0.14.4`.

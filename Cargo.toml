@@ -29,7 +29,7 @@ vk-graph-egui = { path = "crates/vk-graph-egui", version = "0.1.2" }
 vk-graph-fx = { path = "crates/vk-graph-fx", version = "0.1.1" }
 vk-graph-hot = { path = "crates/vk-graph-hot", version = "0.1.1" }
 vk-graph-imgui = { path = "crates/vk-graph-imgui", version = "0.1.2" }
-vk-graph-window = { path = "crates/vk-graph-window", version = "0.1.3" }
+vk-graph-window = { path = "crates/vk-graph-window", version = "0.1.4" }
 winit = "0.30"
 
 [package]
