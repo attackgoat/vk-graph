@@ -82,9 +82,17 @@
 //! * Non-zero cost: atomic load and compatibility check per active cached resource
 //! * May cause GPU stalling if there is not enough work being submitted
 //! * Cached resources are typed `Arc<Lease<T>>` and are not guaranteed to be mutable or unique
+//!
+//! # Garbage Collection
+//!
+//! Wrapping a built-in pool using [`garbage_collector::GarbageCollector::new`] records successful
+//! resource requests. Calling [`garbage_collector::GarbageCollector::collect_resources`] retains
+//! only cached acceleration structures, buffers, and images that support requests made since the
+//! previous collection.
 
 pub mod cache;
 pub mod fifo;
+pub mod garbage_collector;
 pub mod hash;
 pub mod lazy;
 

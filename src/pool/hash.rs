@@ -1,7 +1,10 @@
 //! Pool which requests by exactly matching the information before creating new resources.
 
 use {
-    super::{Cache, Lease, Pool, PoolConfig},
+    super::{
+        Cache, Lease, Pool, PoolConfig,
+        garbage_collector::{CollectResources, ResourceRequests},
+    },
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
@@ -91,6 +94,17 @@ impl HashPool {
         self.clear_accel_structs();
         self.clear_buffers();
         self.clear_images();
+    }
+}
+
+impl CollectResources for HashPool {
+    fn collect_resources(&mut self, requests: &ResourceRequests) {
+        self.acceleration_structure_cache
+            .retain(|info, _| requests.accel_structs.contains(info));
+        self.buffer_cache
+            .retain(|info, _| requests.buffers.contains(info));
+        self.image_cache
+            .retain(|info, _| requests.images.contains(info));
     }
 }
 
@@ -266,3 +280,39 @@ macro_rules! lease {
 lease!(AccelerationStructureInfo => AccelerationStructure, accel_struct_capacity);
 lease!(BufferInfo => Buffer, buffer_capacity);
 lease!(ImageInfo => Image, image_capacity);
+
+#[cfg(test)]
+mod test {
+    use {
+        super::*,
+        crate::{
+            driver::device::{Device, DeviceInfo},
+            pool::garbage_collector::GarbageCollector,
+        },
+        ash::vk,
+    };
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn vulkan_garbage_collector_retains_requested_hash_buckets() -> Result<(), DriverError> {
+        let device = Device::create(DeviceInfo::default())?;
+        let mut collector = GarbageCollector::new(HashPool::with_capacity(&device, 4));
+        let retained_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::TRANSFER_SRC);
+        let removed_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::STORAGE_BUFFER);
+
+        drop(collector.resource(retained_info)?);
+        drop(collector.resource(removed_info)?);
+        collector.collect_resources();
+        assert_eq!(collector.buffer_cache.len(), 2);
+
+        drop(collector.resource(retained_info)?);
+        collector.collect_resources();
+        assert_eq!(collector.buffer_cache.len(), 1);
+        assert!(collector.buffer_cache.contains_key(&retained_info));
+
+        collector.collect_resources();
+        assert!(collector.buffer_cache.is_empty());
+
+        Ok(())
+    }
+}
