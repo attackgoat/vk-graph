@@ -4,7 +4,8 @@ API docs: [`Graph::bind_resource`](https://docs.rs/vk-graph/latest/vk_graph/stru
 [`Graph::resource`](https://docs.rs/vk-graph/latest/vk_graph/struct.Graph.html#method.resource),
 [`Node`](https://docs.rs/vk-graph/latest/vk_graph/node/trait.Node.html),
 [`Pool`](https://docs.rs/vk-graph/latest/vk_graph/pool/trait.Pool.html),
-[`Cache`](https://docs.rs/vk-graph/latest/vk_graph/pool/cache/struct.Cache.html).
+[`Cache`](https://docs.rs/vk-graph/latest/vk_graph/pool/cache/struct.Cache.html),
+[`GarbageCollector`](https://docs.rs/vk-graph/latest/vk_graph/pool/garbage_collector/struct.GarbageCollector.html).
 
 > [!CAUTION]
 > All pipelines and resources (_buffers, images, and acceleration structures_) used in a `Graph`
@@ -65,6 +66,17 @@ over any `Pool`.
 
 Cached resources let complex graphs reuse compatible resources while keeping the pooling strategy
 separate from the reuse policy.
+
+## Garbage Collection
+
+The built-in pools may be wrapped in `GarbageCollector` to automatically remove cached acceleration
+structures, buffers, and images that no longer match the application's requests. Successful requests
+are observed until `GarbageCollector::collect_resources` is called. Collection retains resources
+supporting those requests, then starts a new observation interval.
+
+Calling `collect_resources` without making any requests clears all managed resources. Checked-out
+resources remain valid during collection; a resource returning to a retained bucket is considered by
+the next collection.
 
 ## Queue Sharing
 

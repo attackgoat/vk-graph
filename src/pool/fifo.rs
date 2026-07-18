@@ -3,6 +3,7 @@
 use {
     super::{
         BufferHostMappingCompatibility, Cache, Lease, Pool, PoolConfig, compatible_buffer_info,
+        garbage_collector::{CollectResources, ResourceRequests},
         with_cache,
     },
     crate::driver::{
@@ -18,6 +19,30 @@ use {
     log::debug,
     std::{collections::HashMap, sync::Arc},
 };
+
+fn compatible_accel_struct_info(
+    item_info: &AccelerationStructureInfo,
+    requested_info: &AccelerationStructureInfo,
+) -> bool {
+    item_info.size >= requested_info.size
+        && item_info.acceleration_structure_type == requested_info.acceleration_structure_type
+}
+
+fn compatible_fifo_image_info(item_info: &ImageInfo, requested_info: &ImageInfo) -> bool {
+    item_info.array_layer_count == requested_info.array_layer_count
+        && item_info.alloc_dedicated == requested_info.alloc_dedicated
+        && item_info.depth == requested_info.depth
+        && item_info.format == requested_info.format
+        && item_info.height == requested_info.height
+        && item_info.mip_level_count == requested_info.mip_level_count
+        && item_info.sample_count == requested_info.sample_count
+        && item_info.sharing_mode == requested_info.sharing_mode
+        && item_info.tiling == requested_info.tiling
+        && item_info.image_type == requested_info.image_type
+        && item_info.width == requested_info.width
+        && item_info.flags.contains(requested_info.flags)
+        && item_info.usage.contains(requested_info.usage)
+}
 
 /// A memory-efficient resource allocator.
 ///
@@ -116,6 +141,52 @@ impl FifoPool {
     }
 }
 
+impl CollectResources for FifoPool {
+    fn collect_resources(&mut self, requests: &ResourceRequests) {
+        if requests.accel_structs.is_empty() {
+            self.clear_accel_structs();
+        } else {
+            with_cache(&self.accel_struct_cache, |cache| {
+                cache.retain(|item| {
+                    requests
+                        .accel_structs
+                        .iter()
+                        .any(|info| compatible_accel_struct_info(&item.info, info))
+                });
+            });
+        }
+
+        if requests.buffers.is_empty() {
+            self.clear_buffers();
+        } else {
+            with_cache(&self.buffer_cache, |cache| {
+                cache.retain(|item| {
+                    requests.buffers.iter().any(|info| {
+                        compatible_buffer_info(
+                            &item.info,
+                            info,
+                            BufferHostMappingCompatibility::Exact,
+                        )
+                    })
+                });
+            });
+        }
+
+        if requests.images.is_empty() {
+            self.clear_images();
+        } else {
+            with_cache(&self.image_cache, |cache| {
+                cache.retain(|item| {
+                    requests
+                        .images
+                        .iter()
+                        .any(|info| compatible_fifo_image_info(&item.info, info))
+                });
+            });
+        }
+    }
+}
+
 impl Pool<AccelerationStructureInfo, AccelerationStructure> for FifoPool {
     #[profiling::function]
     fn resource(
@@ -131,9 +202,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for FifoPool {
                 // Look for a compatible acceleration structure (big enough and same type)
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
-                    if item.info.size >= info.size
-                        && item.info.acceleration_structure_type == info.acceleration_structure_type
-                    {
+                    if compatible_accel_struct_info(&item.info, &info) {
                         let item = cache.swap_remove(idx);
 
                         return Some(Lease::new(cache_ref.clone(), item));
@@ -276,20 +345,7 @@ impl Pool<ImageInfo, Image> for FifoPool {
                 // usage flags)
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
-                    if item.info.array_layer_count == info.array_layer_count
-                        && item.info.alloc_dedicated == info.alloc_dedicated
-                        && item.info.depth == info.depth
-                        && item.info.format == info.format
-                        && item.info.height == info.height
-                        && item.info.mip_level_count == info.mip_level_count
-                        && item.info.sample_count == info.sample_count
-                        && item.info.sharing_mode == info.sharing_mode
-                        && item.info.tiling == info.tiling
-                        && item.info.image_type == info.image_type
-                        && item.info.width == info.width
-                        && item.info.flags.contains(info.flags)
-                        && item.info.usage.contains(info.usage)
-                    {
+                    if compatible_fifo_image_info(&item.info, &info) {
                         let item = cache.swap_remove(idx);
 
                         return Some(Lease::new(cache_ref.clone(), item));
@@ -330,5 +386,40 @@ impl Pool<RenderPassInfo, RenderPass> for FifoPool {
             })?;
 
         Ok(Lease::new(Arc::downgrade(cache_ref), item))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use {
+        super::*,
+        crate::{
+            driver::device::{Device, DeviceInfo},
+            pool::garbage_collector::GarbageCollector,
+        },
+        ash::vk,
+    };
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn vulkan_garbage_collector_retains_supported_fifo_resources() -> Result<(), DriverError> {
+        let device = Device::create(DeviceInfo::default())?;
+        let mut collector = GarbageCollector::new(FifoPool::with_capacity(&device, 4));
+        let retained_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::TRANSFER_SRC);
+        let removed_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::STORAGE_BUFFER);
+
+        drop(collector.resource(retained_info)?);
+        drop(collector.resource(removed_info)?);
+        collector.collect_resources();
+        assert_eq!(with_cache(&collector.buffer_cache, |cache| cache.len()), 2);
+
+        drop(collector.resource(retained_info)?);
+        collector.collect_resources();
+        assert_eq!(with_cache(&collector.buffer_cache, |cache| cache.len()), 1);
+
+        collector.collect_resources();
+        assert_eq!(with_cache(&collector.buffer_cache, |cache| cache.len()), 0);
+
+        Ok(())
     }
 }
