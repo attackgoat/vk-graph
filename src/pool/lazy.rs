@@ -3,6 +3,8 @@
 use {
     super::{
         BufferHostMappingCompatibility, Cache, Lease, Pool, PoolConfig, compatible_buffer_info,
+        garbage_collector::{CollectResources, ResourceRequests},
+        with_cache,
     },
     crate::driver::{
         DriverError,
@@ -18,6 +20,33 @@ use {
     log::debug,
     std::{collections::HashMap, sync::Arc},
 };
+
+type BufferKey = (bool, vk::DeviceSize, vk::SharingMode);
+
+fn buffer_key(info: &BufferInfo) -> BufferKey {
+    (
+        info.host_readable | info.host_writable,
+        info.alignment,
+        info.sharing_mode,
+    )
+}
+
+fn compatible_accel_struct_info(
+    item_info: &AccelerationStructureInfo,
+    requested_info: &AccelerationStructureInfo,
+) -> bool {
+    item_info.acceleration_structure_type == requested_info.acceleration_structure_type
+        && item_info.size >= requested_info.size
+}
+
+fn compatible_lazy_buffer_info(item_info: &BufferInfo, requested_info: &BufferInfo) -> bool {
+    buffer_key(item_info) == buffer_key(requested_info)
+        && compatible_buffer_info(
+            item_info,
+            requested_info,
+            BufferHostMappingCompatibility::Superset,
+        )
+}
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct ImageKey {
@@ -50,6 +79,12 @@ impl From<ImageInfo> for ImageKey {
     }
 }
 
+fn compatible_lazy_image_info(item_info: &ImageInfo, requested_info: &ImageInfo) -> bool {
+    ImageKey::from(*item_info) == ImageKey::from(*requested_info)
+        && item_info.flags.contains(requested_info.flags)
+        && item_info.usage.contains(requested_info.usage)
+}
+
 /// A balanced resource allocator.
 ///
 /// The information for each resource request is compared against the stored resources for
@@ -80,7 +115,7 @@ impl From<ImageInfo> for ImageKey {
 #[read_only::cast]
 pub struct LazyPool {
     accel_struct_cache: HashMap<vk::AccelerationStructureTypeKHR, Cache<AccelerationStructure>>,
-    buffer_cache: HashMap<(bool, vk::DeviceSize, vk::SharingMode), Cache<Buffer>>,
+    buffer_cache: HashMap<BufferKey, Cache<Buffer>>,
     command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
     descriptor_pool_cache: Cache<DescriptorPool>,
 
@@ -179,6 +214,67 @@ impl LazyPool {
     }
 }
 
+impl CollectResources for LazyPool {
+    fn collect_resources(&mut self, requests: &ResourceRequests) {
+        self.accel_struct_cache.retain(|accel_struct_ty, cache| {
+            let retain_bucket = requests
+                .accel_structs
+                .iter()
+                .any(|info| info.acceleration_structure_type == *accel_struct_ty);
+
+            if retain_bucket {
+                with_cache(cache, |cache| {
+                    cache.retain(|item| {
+                        requests
+                            .accel_structs
+                            .iter()
+                            .any(|info| compatible_accel_struct_info(&item.info, info))
+                    });
+                });
+            }
+
+            retain_bucket
+        });
+
+        self.buffer_cache.retain(|key, cache| {
+            let retain_bucket = requests.buffers.iter().any(|info| buffer_key(info) == *key);
+
+            if retain_bucket {
+                with_cache(cache, |cache| {
+                    cache.retain(|item| {
+                        requests
+                            .buffers
+                            .iter()
+                            .any(|info| compatible_lazy_buffer_info(&item.info, info))
+                    });
+                });
+            }
+
+            retain_bucket
+        });
+
+        self.image_cache.retain(|key, cache| {
+            let retain_bucket = requests
+                .images
+                .iter()
+                .any(|info| ImageKey::from(*info) == *key);
+
+            if retain_bucket {
+                with_cache(cache, |cache| {
+                    cache.retain(|item| {
+                        requests
+                            .images
+                            .iter()
+                            .any(|info| compatible_lazy_image_info(&item.info, info))
+                    });
+                });
+            }
+
+            retain_bucket
+        });
+    }
+}
+
 impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
     #[profiling::function]
     fn resource(
@@ -203,7 +299,7 @@ impl Pool<AccelerationStructureInfo, AccelerationStructure> for LazyPool {
             // Look for a compatible acceleration structure (big enough)
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
-                if item.info.size >= info.size {
+                if compatible_accel_struct_info(&item.info, &info) {
                     let item = cache.swap_remove(idx);
 
                     return Ok(Lease::new(cache_ref, item));
@@ -224,11 +320,7 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
     fn resource(&mut self, info: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
         let cache = self
             .buffer_cache
-            .entry((
-                info.host_readable | info.host_writable,
-                info.alignment,
-                info.sharing_mode,
-            ))
+            .entry(buffer_key(&info))
             .or_insert_with(|| PoolConfig::explicit_cache(self.info.buffer_capacity));
         let cache_ref = Arc::downgrade(cache);
 
@@ -244,11 +336,7 @@ impl Pool<BufferInfo, Buffer> for LazyPool {
             // Look for a compatible buffer (big enough and superset of usage flags)
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
-                if compatible_buffer_info(
-                    &item.info,
-                    &info,
-                    BufferHostMappingCompatibility::Superset,
-                ) {
+                if compatible_lazy_buffer_info(&item.info, &info) {
                     let item = cache.swap_remove(idx);
 
                     return Ok(Lease::new(cache_ref, item));
@@ -361,7 +449,7 @@ impl Pool<ImageInfo, Image> for LazyPool {
             // Look for a compatible image (superset of creation flags and usage flags)
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
-                if item.info.flags.contains(info.flags) && item.info.usage.contains(info.usage) {
+                if compatible_lazy_image_info(&item.info, &info) {
                     let item = cache.swap_remove(idx);
 
                     return Ok(Lease::new(cache_ref, item));
@@ -405,5 +493,46 @@ impl Pool<RenderPassInfo, RenderPass> for LazyPool {
         })?;
 
         Ok(Lease::new(Arc::downgrade(cache_ref), item))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use {
+        super::*,
+        crate::{
+            driver::device::{Device, DeviceInfo},
+            pool::garbage_collector::GarbageCollector,
+        },
+    };
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn vulkan_garbage_collector_retains_supported_lazy_resources() -> Result<(), DriverError> {
+        let device = Device::create(DeviceInfo::default())?;
+        let mut collector = GarbageCollector::new(LazyPool::with_capacity(&device, 4));
+        let retained_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::TRANSFER_SRC);
+        let removed_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::STORAGE_BUFFER);
+        let key = buffer_key(&retained_info);
+
+        drop(collector.resource(retained_info)?);
+        drop(collector.resource(removed_info)?);
+        collector.collect_resources();
+        assert_eq!(
+            with_cache(&collector.buffer_cache[&key], |cache| cache.len()),
+            2
+        );
+
+        drop(collector.resource(retained_info)?);
+        collector.collect_resources();
+        assert_eq!(
+            with_cache(&collector.buffer_cache[&key], |cache| cache.len()),
+            1
+        );
+
+        collector.collect_resources();
+        assert!(collector.buffer_cache.is_empty());
+
+        Ok(())
     }
 }
