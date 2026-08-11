@@ -8,7 +8,7 @@ use {
         merge_push_constant_ranges,
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader, SpecializationMap},
     },
-    crate::lazy_str,
+    crate::{driver::DescriptorSetLayout, lazy_str},
     ash::vk,
     derive_builder::Builder,
     log::{Level::Trace, log_enabled, trace, warn},
@@ -488,7 +488,7 @@ impl GraphicsPipeline {
         let descriptor_sets_layouts = descriptor_info
             .layouts
             .values()
-            .map(|descriptor_set_layout| descriptor_set_layout.handle)
+            .map(DescriptorSetLayout::handle)
             .collect::<Box<_>>();
 
         let push_constants = shaders

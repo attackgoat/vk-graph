@@ -45,6 +45,7 @@ use {
             accel_struct::AccelerationStructureInfo,
             buffer::BufferInfo,
             compute::ComputePipeline,
+            descriptor_set::DescriptorSet,
             format_aspect_mask,
             graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{ImageInfo, ImageViewInfo, SampleCount},
@@ -562,16 +563,16 @@ impl CommandData {
     fn descriptor_pools_sizes(
         &self,
     ) -> impl Iterator<Item = impl Iterator<Item = (&vk::DescriptorType, &u32)>> {
-        self.execs
-            .iter()
-            .flat_map(|exec| &exec.pipeline)
-            .map(|pipeline| {
+        self.execs.iter().flat_map(|exec| {
+            exec.pipeline.iter().map(move |pipeline| {
                 pipeline
                     .descriptor_info()
                     .pool_sizes
-                    .values()
-                    .flat_map(HashMap::iter)
+                    .iter()
+                    .filter(move |(set, _)| !exec.descriptor_sets.contains_key(set))
+                    .flat_map(|(_, pool)| pool.iter())
             })
+        })
     }
 
     fn expect_first_exec(&self) -> &Execution {
@@ -834,6 +835,7 @@ struct Execution {
     accesses: ExecutionAccess,
     attachments: ExecutionAttachmentMap,
     bindings: BTreeMap<Binding, (NodeIndex, ViewInfo)>,
+    descriptor_sets: BTreeMap<u32, DescriptorSet>,
 
     correlated_view_mask: u32,
     depth_stencil: Option<DepthStencilInfo>,
@@ -870,6 +872,7 @@ impl Debug for Execution {
             .field("accesses", &self.accesses)
             .field("attachments", &self.attachments)
             .field("bindings", &self.bindings)
+            .field("descriptor_sets", &self.descriptor_sets)
             .field("correlated_view_mask", &self.correlated_view_mask)
             .field("depth_stencil", &self.depth_stencil)
             .field("render_area", &self.render_area)

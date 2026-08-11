@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- First-class immutable `driver::descriptor_set::DescriptorSet` allocations with explicit buffer,
+  image, acceleration-structure, and descriptor-copy updates.
+- `PipelineCommand::bind_descriptor_set` for reusing populated descriptor sets in regular graph
+  commands while declaring graph resource accesses separately.
+
+### Changed
+
+- Compatible pipeline variants now share canonical descriptor set layouts and immutable samplers.
+- Supplied descriptor set slots bypass graph-managed descriptor allocation and updates.
+
 ## [0.14.5] - 2026-07-13
 
 ### Added

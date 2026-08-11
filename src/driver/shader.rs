@@ -94,7 +94,11 @@
 //! [`Shader`] values around only as long as they are useful to construct or rebuild pipelines.
 
 use {
-    super::{DescriptorSetLayout, DriverError, VertexInputState, device::Device},
+    super::{
+        DescriptorSetLayout, DriverError, VertexInputState,
+        descriptor_set_layout::{DescriptorSetLayoutBindingInfo, DescriptorSetLayoutInfo},
+        device::Device,
+    },
     ash::vk,
     derive_builder::{Builder, UninitializedFieldError},
     log::{debug, error, trace, warn},
@@ -110,7 +114,6 @@ use {
     std::{
         collections::{BTreeMap, HashMap},
         fmt::{Debug, Formatter},
-        iter::repeat_n,
         ops::Deref,
         panic::{AssertUnwindSafe, catch_unwind},
         thread::panicking,
@@ -272,9 +275,6 @@ impl DescriptorInfo {
 pub(crate) struct PipelineDescriptorInfo {
     pub layouts: BTreeMap<u32, DescriptorSetLayout>,
     pub pool_sizes: HashMap<u32, HashMap<vk::DescriptorType, u32>>,
-
-    #[allow(dead_code)]
-    samplers: Box<[Sampler]>,
 }
 
 impl PipelineDescriptorInfo {
@@ -294,47 +294,6 @@ impl PipelineDescriptorInfo {
 
         //trace!("descriptor_bindings: {:#?}", &descriptor_bindings);
 
-        let mut sampler_info_binding_count = HashMap::<_, u32>::with_capacity(
-            descriptor_bindings
-                .values()
-                .filter(|(descriptor_info, _)| descriptor_info.sampler_info().is_some())
-                .count(),
-        );
-
-        for (sampler_info, binding_count) in
-            descriptor_bindings
-                .values()
-                .filter_map(|(descriptor_info, _)| {
-                    descriptor_info
-                        .sampler_info()
-                        .map(|sampler_info| (sampler_info, descriptor_info.binding_count()))
-                })
-        {
-            sampler_info_binding_count
-                .entry(sampler_info)
-                .and_modify(|sampler_info_binding_count| {
-                    *sampler_info_binding_count = binding_count.max(*sampler_info_binding_count);
-                })
-                .or_insert(binding_count);
-        }
-
-        let mut samplers = sampler_info_binding_count
-            .keys()
-            .copied()
-            .map(|sampler_info| {
-                Sampler::create(device, sampler_info).map(|sampler| (sampler_info, sampler))
-            })
-            .collect::<Result<HashMap<_, _>, _>>()?;
-        let immutable_samplers = sampler_info_binding_count
-            .iter()
-            .map(|(sampler_info, &binding_count)| {
-                (
-                    *sampler_info,
-                    repeat_n(*samplers[sampler_info], binding_count as _).collect::<Box<_>>(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-
         for descriptor_set_idx in 0..descriptor_set_count {
             let mut binding_counts = HashMap::<vk::DescriptorType, u32>::new();
             let mut bindings = vec![];
@@ -346,23 +305,25 @@ impl PipelineDescriptorInfo {
                 let descriptor_ty = descriptor_info.descriptor_type();
                 *binding_counts.entry(descriptor_ty).or_default() +=
                     descriptor_info.binding_count();
-                let mut binding = vk::DescriptorSetLayoutBinding::default()
-                    .binding(descriptor.binding)
-                    .descriptor_count(descriptor_info.binding_count())
-                    .descriptor_type(descriptor_ty)
-                    .stage_flags(*stage_flags);
-
-                if let Some(immutable_samplers) =
-                    descriptor_info.sampler_info().map(|sampler_info| {
-                        &immutable_samplers[&sampler_info]
-                            [0..descriptor_info.binding_count() as usize]
-                    })
-                {
-                    binding = binding.immutable_samplers(immutable_samplers);
-                }
-
-                bindings.push(binding);
+                bindings.push(DescriptorSetLayoutBindingInfo {
+                    binding: descriptor.binding,
+                    binding_flags: if device
+                        .physical
+                        .features_v1_2
+                        .descriptor_binding_partially_bound
+                    {
+                        vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                    } else {
+                        vk::DescriptorBindingFlags::empty()
+                    },
+                    descriptor_count: descriptor_info.binding_count(),
+                    descriptor_type: descriptor_ty,
+                    immutable_sampler: descriptor_info.sampler_info(),
+                    stage_flags: *stage_flags,
+                });
             }
+
+            bindings.sort_unstable_by_key(|binding| binding.binding);
 
             let pool_size = pool_sizes
                 .entry(descriptor_set_idx)
@@ -372,42 +333,16 @@ impl PipelineDescriptorInfo {
                 *pool_size.entry(descriptor_ty).or_default() += binding_count;
             }
 
-            //trace!("bindings: {:#?}", &bindings);
-
-            let mut create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-
-            /*
-            The bindless flags have to be created for every descriptor set layout binding.
-            See [`VkDescriptorSetLayoutBindingFlagsCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorSetLayoutBindingFlagsCreateInfo.html)
-            Maybe using one vector and updating it would be more efficient.
-            */
-            let bindless_flags = vec![vk::DescriptorBindingFlags::PARTIALLY_BOUND; bindings.len()];
-            let mut bindless_flags = if device
-                .physical
-                .features_v1_2
-                .descriptor_binding_partially_bound
-            {
-                let bindless_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
-                    .binding_flags(&bindless_flags);
-                Some(bindless_flags)
-            } else {
-                None
-            };
-
-            if let Some(bindless_flags) = bindless_flags.as_mut() {
-                create_info = create_info.push_next(bindless_flags);
-            }
-
             layouts.insert(
                 descriptor_set_idx,
-                DescriptorSetLayout::create(device, &create_info)?,
+                DescriptorSetLayout::get_or_create(
+                    device,
+                    DescriptorSetLayoutInfo {
+                        bindings: bindings.into_boxed_slice(),
+                    },
+                )?,
             );
         }
-
-        let samplers = samplers
-            .drain()
-            .map(|(_, sampler)| sampler)
-            .collect::<Box<_>>();
 
         //trace!("layouts {:#?}", &layouts);
         // trace!("pool_sizes {:#?}", &pool_sizes);
@@ -415,7 +350,6 @@ impl PipelineDescriptorInfo {
         Ok(Self {
             layouts,
             pool_sizes,
-            samplers,
         })
     }
 }

@@ -6,7 +6,7 @@ use {
         device::Device,
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
-    crate::lazy_str,
+    crate::{driver::DescriptorSetLayout, lazy_str},
     ash::vk::{self, Handle as _},
     derive_builder::Builder,
     log::{trace, warn},
@@ -87,7 +87,7 @@ impl ComputePipeline {
         let descriptor_set_layouts = descriptor_info
             .layouts
             .values()
-            .map(|descriptor_set_layout| descriptor_set_layout.handle)
+            .map(DescriptorSetLayout::handle)
             .collect::<Box<_>>();
 
         unsafe {

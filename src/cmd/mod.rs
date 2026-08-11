@@ -331,6 +331,7 @@ impl<'a> Command<'a> {
             last_exec.func = Some(CommandFunction::Once(Box::new(func)));
 
             Execution {
+                descriptor_sets: last_exec.descriptor_sets.clone(),
                 pipeline: last_exec.pipeline.clone(),
                 ..Default::default()
             }
@@ -350,6 +351,7 @@ impl<'a> Command<'a> {
             last_exec.func = Some(CommandFunction::Reusable(Arc::new(func)));
 
             Execution {
+                descriptor_sets: last_exec.descriptor_sets.clone(),
                 pipeline: last_exec.pipeline.clone(),
                 ..Default::default()
             }
@@ -918,11 +920,6 @@ pub struct Binding {
 impl Binding {
     pub(super) fn into_tuple(self) -> (DescriptorSetIndex, BindingIndex, BindingOffset) {
         (self.set, self.binding, self.offset)
-    }
-
-    pub(super) fn set(self) -> DescriptorSetIndex {
-        let (res, _, _) = self.into_tuple();
-        res
     }
 }
 

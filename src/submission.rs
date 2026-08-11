@@ -26,13 +26,13 @@ use {
         StoreOp, TimestampQuery,
         cmd::CommandRef,
         driver::{
-            AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DescriptorSet, DriverError,
-            FramebufferAttachmentImageInfo, FramebufferInfo, SharingMode, SubpassDependency,
-            SubpassInfo,
+            AttachmentInfo, AttachmentRef, Descriptor, DescriptorInfo, DriverError,
+            FramebufferAttachmentImageInfo, FramebufferInfo, RawDescriptorSet, SharingMode,
+            SubpassDependency, SubpassInfo,
             accel_struct::AccelerationStructure,
             buffer::{Buffer, BufferSubresourceRange},
             cmd_buf::{CommandBuffer, CommandBufferInfo},
-            descriptor_set::{DescriptorPool, DescriptorPoolInfo},
+            descriptor_set::{DescriptorPool, DescriptorPoolInfo, DescriptorSet},
             device::Device,
             fence::{Fence, FenceDroppable},
             format_aspect_mask,
@@ -896,7 +896,7 @@ struct QueueOwnershipReleaseWait {
 #[derive(Debug, Default)]
 struct CommandRecordingResources {
     descriptor_pool: Option<Lease<DescriptorPool>>,
-    descriptor_sets: Vec<Vec<DescriptorSet>>,
+    descriptor_sets: Vec<Vec<RecordingDescriptorSet>>,
     render_pass: Option<Lease<RenderPass>>,
 }
 
@@ -1244,6 +1244,21 @@ impl<'a> From<(&'a [SemaphoreSubmitInfo], &'a [SemaphoreSubmitInfo])> for QueueS
 impl<'a> From<(&'a [SemaphoreSubmit2Info], &'a [SemaphoreSubmit2Info])> for QueueSubmitInfo<'a> {
     fn from((waits, signals): (&'a [SemaphoreSubmit2Info], &'a [SemaphoreSubmit2Info])) -> Self {
         Self::QueueSubmit2 { waits, signals }
+    }
+}
+
+#[derive(Debug)]
+enum RecordingDescriptorSet {
+    Automatic(RawDescriptorSet),
+    Supplied(DescriptorSet),
+}
+
+impl RecordingDescriptorSet {
+    fn handle(&self) -> vk::DescriptorSet {
+        match self {
+            Self::Automatic(descriptor_set) => **descriptor_set,
+            Self::Supplied(descriptor_set) => descriptor_set.handle(),
+        }
     }
 }
 
@@ -2663,7 +2678,7 @@ impl Submission {
                 descriptor_sets.extend(
                     exec_descriptor_sets
                         .iter()
-                        .map(|descriptor_set| **descriptor_set),
+                        .map(RecordingDescriptorSet::handle),
                 );
 
                 trace!("    bind descriptor sets {:?}", descriptor_sets);
@@ -2763,14 +2778,20 @@ impl Submission {
     where
         P: SubmissionPool,
     {
-        let max_set_idx = pass
+        let max_sets = pass
             .execs
             .iter()
-            .flat_map(|exec| exec.bindings.keys())
-            .map(|descriptor| descriptor.set())
-            .max()
-            .unwrap_or_default();
-        let max_sets = pass.execs.len() as u32 * (max_set_idx + 1);
+            .filter_map(|exec| {
+                exec.pipeline.as_ref().map(|pipeline| {
+                    pipeline
+                        .descriptor_info()
+                        .layouts
+                        .keys()
+                        .filter(|set| !exec.descriptor_sets.contains_key(set))
+                        .count() as u32
+                })
+            })
+            .sum();
         let mut info = DescriptorPoolInfo {
             max_sets,
             ..Default::default()
@@ -2831,8 +2852,8 @@ impl Submission {
             }
         }
 
-        // It's possible to execute a command-only pipeline
-        if info.is_empty() {
+        // It's possible to execute a command-only pipeline or use only supplied descriptor sets.
+        if info.max_sets == 0 {
             return Ok(None);
         }
 
@@ -3580,23 +3601,30 @@ impl Submission {
             let descriptor_pool = Self::lease_descriptor_pool(pool, pass)?;
             let mut descriptor_sets = Vec::with_capacity(pass.execs.len());
             descriptor_sets.resize_with(pass.execs.len(), Vec::new);
-            if let Some(descriptor_pool) = descriptor_pool.as_ref() {
-                for (exec_idx, exec) in pass.execs.iter().enumerate() {
-                    let Some(pipeline) = exec.pipeline.as_ref() else {
-                        continue;
-                    };
+            for (exec_idx, exec) in pass.execs.iter().enumerate() {
+                let Some(pipeline) = exec.pipeline.as_ref() else {
+                    continue;
+                };
 
-                    let layouts = pipeline.descriptor_info().layouts.values();
-                    descriptor_sets[exec_idx] = layouts
-                        .into_iter()
-                        .map(|descriptor_set_layout| {
+                descriptor_sets[exec_idx] = pipeline
+                    .descriptor_info()
+                    .layouts
+                    .iter()
+                    .map(|(&set, descriptor_set_layout)| {
+                        if let Some(descriptor_set) = exec.descriptor_sets.get(&set) {
+                            Ok(RecordingDescriptorSet::Supplied(descriptor_set.clone()))
+                        } else {
+                            let descriptor_pool = descriptor_pool
+                                .as_ref()
+                                .expect("missing automatic descriptor pool");
                             DescriptorPool::allocate_descriptor_set(
                                 descriptor_pool,
                                 descriptor_set_layout,
                             )
-                        })
-                        .collect::<Result<_, _>>()?;
-                }
+                            .map(RecordingDescriptorSet::Automatic)
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
             }
 
             /*
@@ -3621,8 +3649,11 @@ impl Submission {
                         .inner
                         .descriptor_info
                         .pool_sizes
-                        .values()
-                        .filter_map(|pool| pool.get(&vk::DescriptorType::INPUT_ATTACHMENT))
+                        .iter()
+                        .filter(|(set, _)| {
+                            !pass.expect_first_exec().descriptor_sets.contains_key(set)
+                        })
+                        .filter_map(|(_, pool)| { pool.get(&vk::DescriptorType::INPUT_ATTACHMENT) })
                         .next()
                         .is_none()
             );
@@ -5491,6 +5522,10 @@ impl Submission {
                     );
                     return Err(DriverError::InvalidData);
                 };
+                if exec.descriptor_sets.contains_key(&descriptor_set_idx) {
+                    continue;
+                }
+
                 let descriptor_type = descriptor_info.descriptor_type();
                 let bound_node = &bindings[*node_idx];
                 if let Some(image) = bound_node.as_image() {
@@ -5505,23 +5540,7 @@ impl Submission {
                     let image_layout = match descriptor_type {
                         vk::DescriptorType::COMBINED_IMAGE_SAMPLER
                         | vk::DescriptorType::SAMPLED_IMAGE => {
-                            if image_view_info.aspect_mask.contains(
-                                vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
-                            ) {
-                                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                            } else if image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::DEPTH)
-                            {
-                                vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL
-                            } else if image_view_info
-                                .aspect_mask
-                                .contains(vk::ImageAspectFlags::STENCIL)
-                            {
-                                vk::ImageLayout::STENCIL_READ_ONLY_OPTIMAL
-                            } else {
-                                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-                            }
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
                         }
                         vk::DescriptorType::STORAGE_IMAGE => vk::ImageLayout::GENERAL,
                         _ => {
@@ -5541,7 +5560,7 @@ impl Submission {
                         tls.image_writes.push(IndexedWrite {
                             info_idx: tls.image_infos.len(),
                             write: vk::WriteDescriptorSet {
-                                dst_set: *descriptor_sets[descriptor_set_idx as usize],
+                                dst_set: descriptor_sets[descriptor_set_idx as usize].handle(),
                                 dst_binding,
                                 descriptor_type,
                                 descriptor_count: 1,
@@ -5568,7 +5587,7 @@ impl Submission {
                         tls.buffer_writes.push(IndexedWrite {
                             info_idx: tls.buffer_infos.len(),
                             write: vk::WriteDescriptorSet {
-                                dst_set: *descriptor_sets[descriptor_set_idx as usize],
+                                dst_set: descriptor_sets[descriptor_set_idx as usize].handle(),
                                 dst_binding,
                                 descriptor_type,
                                 descriptor_count: 1,
@@ -5594,7 +5613,7 @@ impl Submission {
                         tls.accel_struct_writes.push(IndexedWrite {
                             info_idx: tls.accel_struct_handles.len(),
                             write: vk::WriteDescriptorSet::default()
-                                .dst_set(*descriptor_sets[descriptor_set_idx as usize])
+                                .dst_set(descriptor_sets[descriptor_set_idx as usize].handle())
                                 .dst_binding(dst_binding)
                                 .descriptor_type(descriptor_type)
                                 .descriptor_count(1),
@@ -5633,6 +5652,10 @@ impl Submission {
                         (descriptor_info, _),
                     ) in &pipeline.inner.descriptor_bindings
                     {
+                        if exec.descriptor_sets.contains_key(&descriptor_set_idx) {
+                            continue;
+                        }
+
                         if let DescriptorInfo::InputAttachment(_, attachment_idx) = *descriptor_info
                         {
                             let current_attachment = exec
@@ -5663,7 +5686,7 @@ impl Submission {
                             tls.image_writes.push(IndexedWrite {
                                 info_idx: tls.image_infos.len(),
                                 write: vk::WriteDescriptorSet {
-                                    dst_set: *descriptor_sets[descriptor_set_idx as usize],
+                                    dst_set: descriptor_sets[descriptor_set_idx as usize].handle(),
                                     dst_binding,
                                     descriptor_type: vk::DescriptorType::INPUT_ATTACHMENT,
                                     descriptor_count: 1,
@@ -6448,6 +6471,8 @@ mod test {
             ash::vk,
             buffer::{Buffer, BufferInfo, BufferSubresourceRange},
             cmd_buf::{CommandBuffer, CommandBufferInfo},
+            compute::{ComputePipeline, ComputePipelineInfo},
+            descriptor_set::{DescriptorSet, DescriptorSetInfo, DescriptorSetUpdateInfo},
             device::{Device, DeviceInfo},
             fence::Fence,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
@@ -8279,6 +8304,92 @@ mod test {
             check_queue_submit_args(&waits, &[]),
             Err(DriverError::Unsupported)
         ));
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn supplied_descriptor_set_reuses_compatible_pipeline_layout() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let spirv = glsl!(
+            r#"
+            #version 460 core
+            #pragma shader_stage(compute)
+
+            layout(local_size_x = 1) in;
+            layout(set = 0, binding = 0) buffer DataA {
+                uint value;
+            } data_a;
+            layout(set = 1, binding = 0) buffer DataB {
+                uint value;
+            } data_b;
+
+            void main() {
+                data_a.value = 1;
+                data_b.value = 2;
+            }
+            "#
+        );
+        let pipeline =
+            ComputePipeline::create(&device, ComputePipelineInfo::default(), spirv.as_slice())?;
+        let compatible_pipeline =
+            ComputePipeline::create(&device, ComputePipelineInfo::default(), spirv.as_slice())?;
+        let buffer_a = Arc::new(Buffer::create(
+            &device,
+            BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
+        )?);
+        let buffer_b = Arc::new(Buffer::create(
+            &device,
+            BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
+        )?);
+        let descriptor_set = DescriptorSet::alloc_and_update(
+            &pipeline,
+            DescriptorSetInfo::builder().set(0),
+            DescriptorSetUpdateInfo::buffer(0, &buffer_a),
+        )?;
+        let descriptor_set_a = DescriptorSet::alloc_and_update(
+            &pipeline,
+            DescriptorSetInfo::builder().set(0),
+            DescriptorSetUpdateInfo::copy(&descriptor_set, 0, 0),
+        )?;
+        let descriptor_set_b = DescriptorSet::alloc_and_update(
+            &pipeline,
+            DescriptorSetInfo::builder().set(1),
+            DescriptorSetUpdateInfo::buffer(0, &buffer_b),
+        )?;
+        drop(descriptor_set);
+        drop(pipeline);
+
+        let mut graph = Graph::new();
+        let buffer_a_node = graph.bind_resource(&buffer_a);
+        let buffer_b_node = graph.bind_resource(&buffer_b);
+        graph
+            .begin_cmd()
+            .bind_pipeline(&compatible_pipeline)
+            .bind_descriptor_set(&descriptor_set_a)
+            .resource_access(buffer_a_node, AccessType::ComputeShaderWrite)
+            .shader_resource_access((1, 0), buffer_b_node, AccessType::ComputeShaderWrite)
+            .record_cmd(|cmd| {
+                cmd.dispatch(1, 1, 1);
+            })
+            .end_cmd();
+        graph
+            .begin_cmd()
+            .bind_pipeline(&compatible_pipeline)
+            .bind_descriptor_set(&descriptor_set_a)
+            .bind_descriptor_set(&descriptor_set_b)
+            .resource_access(buffer_a_node, AccessType::ComputeShaderWrite)
+            .resource_access(buffer_b_node, AccessType::ComputeShaderWrite)
+            .record_cmd(|cmd| {
+                cmd.dispatch(1, 1, 1);
+            })
+            .end_cmd();
+
+        let mut fence = graph
+            .finalize()
+            .queue_submit(&mut HashPool::new(&device), 0, 0)?;
+        fence.wait()?;
+
+        Ok(())
     }
 
     fn test_device() -> Result<TestDevice, DriverError> {

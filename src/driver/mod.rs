@@ -9,6 +9,7 @@
 //!
 //! - [`AccelerationStructure`](accel_struct::AccelerationStructure)
 //! - [`Buffer`]
+//! - [`DescriptorSet`](descriptor_set::DescriptorSet)
 //! - [`Image`](image::Image)
 //!
 //! Resources are logically mutable. All resource types contain useful read-only public fields, for
@@ -47,6 +48,7 @@ pub mod accel_struct;
 pub mod buffer;
 pub mod cmd_buf;
 pub mod compute;
+pub mod descriptor_set;
 pub mod device;
 pub mod fence;
 pub mod graphics;
@@ -59,7 +61,6 @@ pub mod shader;
 pub mod surface;
 pub mod swapchain;
 
-pub(crate) mod descriptor_set;
 pub(crate) mod query_pool;
 
 mod descriptor_set_layout;
@@ -90,7 +91,7 @@ pub use ash::{self};
 pub use vk_sync::{self as sync};
 
 pub(crate) use self::{
-    descriptor_set::DescriptorSet,
+    descriptor_set::RawDescriptorSet,
     descriptor_set_layout::DescriptorSetLayout,
     render_pass::{
         AttachmentInfo, AttachmentRef, FramebufferAttachmentImageInfo, FramebufferInfo,

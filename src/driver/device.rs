@@ -424,6 +424,10 @@ impl Device {
         Arc::ptr_eq(&lhs.inner, &rhs.inner)
     }
 
+    pub(crate) fn identity(this: &Self) -> usize {
+        Arc::as_ptr(&this.inner) as usize
+    }
+
     /// Returns the device-owned pipeline cache handle.
     pub(crate) fn pipeline_cache(this: &Self) -> vk::PipelineCache {
         this.inner.pipeline_cache
