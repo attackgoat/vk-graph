@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-08-11
+
 ### Added
 
 - `GarbageCollector` pool wrapper for retaining only cached acceleration structures, buffers, and
@@ -769,7 +771,8 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
   platforms and require no bare-metal graphics API knowledge
 - "Hello, world!" example using a bitmapped font
 
-[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.6...HEAD
+[0.14.6]: https://crates.io/crates/vk-graph/0.14.6
 [0.14.5]: https://crates.io/crates/vk-graph/0.14.5
 [0.14.4]: https://crates.io/crates/vk-graph/0.14.4
 [0.14.3]: https://crates.io/crates/vk-graph/0.14.3
