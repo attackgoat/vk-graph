@@ -697,6 +697,13 @@ impl DescriptorSet {
         );
     }
 
+    /// Sets the debugging name assigned to this descriptor set.
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
+        self.set_debug_name(name);
+
+        self
+    }
+
     pub(crate) fn is_compatible(&self, set: u32, layout: &DescriptorSetLayout) -> bool {
         self.inner.info.set == set && self.inner.layout.is_same(layout)
     }
@@ -814,7 +821,9 @@ impl From<(u32, [u32; 1])> for DescriptorSetBinding {
     }
 }
 
-/// Information used to allocate a [`DescriptorSet`].
+/// Information selecting the pipeline layout used to allocate a [`DescriptorSet`].
+///
+/// Descriptor contents are supplied separately through [`DescriptorSetUpdateInfo`] values.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct DescriptorSetInfo {
     /// The pipeline descriptor set index whose layout will be used.
