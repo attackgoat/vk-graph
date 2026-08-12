@@ -308,10 +308,11 @@ impl PipelineDescriptorInfo {
                     descriptor_info.binding_count();
                 bindings.push(DescriptorSetLayoutBindingInfo {
                     binding: descriptor.binding,
-                    binding_flags: if device
-                        .physical
-                        .features_v1_2
-                        .descriptor_binding_partially_bound
+                    binding_flags: if bindless_descriptors.contains(descriptor)
+                        && device
+                            .physical
+                            .features_v1_2
+                            .descriptor_binding_partially_bound
                     {
                         vk::DescriptorBindingFlags::PARTIALLY_BOUND
                     } else {
