@@ -112,7 +112,7 @@ use {
         var::Variable,
     },
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::{BTreeMap, HashMap, HashSet},
         fmt::{Debug, Formatter},
         ops::Deref,
         panic::{AssertUnwindSafe, catch_unwind},
@@ -282,6 +282,7 @@ impl PipelineDescriptorInfo {
     pub fn create(
         device: &Device,
         descriptor_bindings: &DescriptorBindingMap,
+        bindless_descriptors: &HashSet<Descriptor>,
     ) -> Result<Self, DriverError> {
         let descriptor_set_count = descriptor_bindings
             .keys()

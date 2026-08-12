@@ -13,6 +13,7 @@ use {
     derive_builder::Builder,
     log::warn,
     std::{
+        collections::HashSet,
         ffi::CString,
         fmt::{Debug, Formatter},
         hash::{Hash, Hasher},
@@ -129,13 +130,16 @@ impl RayTracingPipeline {
         let mut descriptor_bindings = Shader::merge_descriptor_bindings(
             shaders.iter().map(|shader| shader.descriptor_bindings()),
         )?;
-        for (descriptor_info, _) in descriptor_bindings.values_mut() {
+        let mut bindless_descriptors = HashSet::new();
+        for (descriptor, (descriptor_info, _)) in descriptor_bindings.iter_mut() {
             if descriptor_info.binding_count() == 0 {
+                bindless_descriptors.insert(*descriptor);
                 descriptor_info.set_binding_count(info.bindless_descriptor_count);
             }
         }
 
-        let descriptor_info = PipelineDescriptorInfo::create(device, &descriptor_bindings)?;
+        let descriptor_info =
+            PipelineDescriptorInfo::create(device, &descriptor_bindings, &bindless_descriptors)?;
         let layouts = descriptor_info
             .layouts
             .values()
