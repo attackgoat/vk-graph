@@ -11,6 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `GarbageCollector` pool wrapper for retaining only cached acceleration structures, buffers, and
   images that support recently observed requests.
+- `Image::view` is public for integrations that need a cached native Vulkan image-view handle.
 
 ## [0.14.5] - 2026-07-13
 

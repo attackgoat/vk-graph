@@ -108,7 +108,7 @@ use {
         var::Variable,
     },
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::{BTreeMap, HashMap, HashSet},
         fmt::{Debug, Formatter},
         iter::repeat_n,
         ops::Deref,
@@ -282,6 +282,7 @@ impl PipelineDescriptorInfo {
     pub fn create(
         device: &Device,
         descriptor_bindings: &DescriptorBindingMap,
+        bindless_descriptors: &HashSet<Descriptor>,
     ) -> Result<Self, DriverError> {
         let descriptor_set_count = descriptor_bindings
             .keys()
@@ -381,11 +382,28 @@ impl PipelineDescriptorInfo {
             See [`VkDescriptorSetLayoutBindingFlagsCreateInfo`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkDescriptorSetLayoutBindingFlagsCreateInfo.html)
             Maybe using one vector and updating it would be more efficient.
             */
-            let bindless_flags = vec![vk::DescriptorBindingFlags::PARTIALLY_BOUND; bindings.len()];
+            let bindless_flags = bindings
+                .iter()
+                .map(|binding| {
+                    let descriptor = Descriptor {
+                        set: descriptor_set_idx,
+                        binding: binding.binding,
+                    };
+
+                    if bindless_descriptors.contains(&descriptor) {
+                        vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                    } else {
+                        vk::DescriptorBindingFlags::empty()
+                    }
+                })
+                .collect::<Vec<_>>();
             let mut bindless_flags = if device
                 .physical
                 .features_v1_2
                 .descriptor_binding_partially_bound
+                && bindless_flags
+                    .iter()
+                    .any(|flags| flags.contains(vk::DescriptorBindingFlags::PARTIALLY_BOUND))
             {
                 let bindless_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
                     .binding_flags(&bindless_flags);

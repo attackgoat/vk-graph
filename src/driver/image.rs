@@ -1626,8 +1626,13 @@ impl Image {
         }
     }
 
+    /// Returns a cached Vulkan image view matching `info`.
+    ///
+    /// The returned handle remains valid until this image is dropped. Repeated calls with the same
+    /// information return the same handle. Calling [`Self::to_detached`] transfers the view cache
+    /// to the detached image, so callers must not retain handles across that unsafe operation.
     #[profiling::function]
-    pub(crate) fn view(&self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
+    pub fn view(&self, info: ImageViewInfo) -> Result<vk::ImageView, DriverError> {
         self.with_image_view_cache(|cache| {
             Ok(match cache.entry(info) {
                 Entry::Occupied(entry) => entry.get().image_view,
