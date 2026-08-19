@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-08-19
+
 ### Added
 
 - First-class immutable `driver::descriptor_set::DescriptorSet` allocations with explicit buffer,
@@ -785,7 +787,8 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
   platforms and require no bare-metal graphics API knowledge
 - "Hello, world!" example using a bitmapped font
 
-[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.6...HEAD
+[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.7...HEAD
+[0.14.7]: https://crates.io/crates/vk-graph/0.14.7
 [0.14.6]: https://crates.io/crates/vk-graph/0.14.6
 [0.14.5]: https://crates.io/crates/vk-graph/0.14.5
 [0.14.4]: https://crates.io/crates/vk-graph/0.14.4
