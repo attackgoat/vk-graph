@@ -11,6 +11,7 @@ use {
         driver::{
             DriverError,
             buffer::Buffer,
+            descriptor_set::{DescriptorSet, DescriptorSetInfo, DescriptorSetUpdateInfo},
             device::Device,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
@@ -34,6 +35,14 @@ fn main() -> Result<(), WindowError> {
         .build()?;
     let images = create_images(&window.device)?;
     let pipeline = create_graphics_pipeline(&window.device)?;
+    let descriptor_set = DescriptorSet::alloc_and_update(
+        &pipeline,
+        DescriptorSetInfo::builder().set(0).build(),
+        images
+            .iter()
+            .enumerate()
+            .map(|(idx, image)| DescriptorSetUpdateInfo::image((0, [idx as u32]), image)),
+    )?;
     let draw_buf = create_indirect_buffer(&window.device)?;
 
     window.run(|frame| {
@@ -44,12 +53,12 @@ fn main() -> Result<(), WindowError> {
             .begin_cmd()
             .debug_name("Test")
             .bind_pipeline(&pipeline)
+            .bind_descriptor_set(&descriptor_set)
             .resource_access(draw_buf_node, AccessType::IndirectBuffer);
 
-        for (idx, image) in images.iter().enumerate() {
+        for image in &images {
             let image = cmd.bind_resource(image);
-            cmd.set_shader_resource_access(
-                (0, [idx as u32]),
+            cmd.set_resource_access(
                 image,
                 AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
             );

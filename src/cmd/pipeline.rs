@@ -6,7 +6,8 @@ use {
     crate::{
         ExecutionPipeline, TimestampQuery,
         driver::{
-            compute::ComputePipeline, graphics::GraphicsPipeline, ray_tracing::RayTracingPipeline,
+            compute::ComputePipeline, descriptor_set::DescriptorSet, graphics::GraphicsPipeline,
+            ray_tracing::RayTracingPipeline,
         },
     },
     std::marker::PhantomData,
@@ -108,6 +109,42 @@ pub struct PipelineCommand<'c, T> {
 // NOTE: There are specific implementations of T in the compute, graphics, and ray tracing modules
 #[allow(private_bounds)]
 impl<'c, T> PipelineCommand<'c, T> {
+    /// Binds an explicitly populated descriptor set to this and subsequent executions using the
+    /// current pipeline.
+    ///
+    /// This does not declare graph resource accesses. Use [`Self::resource_access`] for every
+    /// resource the recorded work accesses through the set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the descriptor set index does not exist in the current pipeline or its layout is
+    /// incompatible.
+    pub fn bind_descriptor_set(mut self, descriptor_set: &DescriptorSet) -> Self {
+        self.set_descriptor_set(descriptor_set);
+        self
+    }
+
+    /// Mutable-borrow form of [`Self::bind_descriptor_set`].
+    pub fn set_descriptor_set(&mut self, descriptor_set: &DescriptorSet) -> &mut Self {
+        let set = descriptor_set.info().set;
+        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
+        let pipeline = exec.pipeline.as_ref().expect("missing command pipeline");
+        let layout = pipeline
+            .descriptor_info()
+            .layouts
+            .get(&set)
+            .unwrap_or_else(|| panic!("pipeline descriptor set {set} does not exist"));
+
+        assert!(
+            descriptor_set.is_compatible(set, layout),
+            "descriptor set {set} is incompatible with the bound pipeline"
+        );
+
+        exec.descriptor_sets.insert(set, descriptor_set.clone());
+
+        self
+    }
+
     /// Equivalent to [`Command::bind_pipeline`] for a command that already has a bound pipeline.
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where

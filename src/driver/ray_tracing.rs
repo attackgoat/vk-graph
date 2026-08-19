@@ -8,7 +8,7 @@ use {
         physical_device::khr::RayTracingPipelineProperties,
         shader::{DescriptorBindingMap, PipelineDescriptorInfo, Shader},
     },
-    crate::lazy_str,
+    crate::{driver::DescriptorSetLayout, lazy_str},
     ash::vk::{self, Handle},
     derive_builder::Builder,
     log::warn,
@@ -143,7 +143,7 @@ impl RayTracingPipeline {
         let layouts = descriptor_info
             .layouts
             .values()
-            .map(|layout| layout.handle)
+            .map(DescriptorSetLayout::handle)
             .collect::<Box<_>>();
 
         unsafe {

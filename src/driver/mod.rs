@@ -9,9 +9,10 @@
 //!
 //! - [`AccelerationStructure`](accel_struct::AccelerationStructure)
 //! - [`Buffer`]
+//! - [`DescriptorSet`](descriptor_set::DescriptorSet)
 //! - [`Image`](image::Image)
 //!
-//! Resources are logically mutable. All resource types contain useful read-only public fields, for
+//! Graph-tracked resources are logically mutable and contain useful read-only public fields, for
 //! example:
 //!
 //! | [`Buffer`] field | Type |
@@ -20,8 +21,11 @@
 //! | [`handle`](Buffer::handle) | [`vk::Buffer`] |
 //! | [`info`](Buffer::info) | [`BufferInfo`] |
 //!
-//! Resources use atomic [`AccessType`](sync::AccessType) values to maintain consistency and track
-//! changes.
+//! [`DescriptorSet`](descriptor_set::DescriptorSet) is instead a shared immutable wrapper and
+//! exposes the same information through `device()`, `handle()`, and `info()` methods.
+//!
+//! Graph-tracked resources use atomic [`AccessType`](sync::AccessType) values to maintain
+//! consistency and track changes. Descriptor contents do not declare graph synchronization.
 //!
 //! # Pipelines
 //!
@@ -47,6 +51,7 @@ pub mod accel_struct;
 pub mod buffer;
 pub mod cmd_buf;
 pub mod compute;
+pub mod descriptor_set;
 pub mod device;
 pub mod fence;
 pub mod graphics;
@@ -59,7 +64,6 @@ pub mod shader;
 pub mod surface;
 pub mod swapchain;
 
-pub(crate) mod descriptor_set;
 pub(crate) mod query_pool;
 
 mod descriptor_set_layout;
@@ -90,7 +94,7 @@ pub use ash::{self};
 pub use vk_sync::{self as sync};
 
 pub(crate) use self::{
-    descriptor_set::DescriptorSet,
+    descriptor_set::RawDescriptorSet,
     descriptor_set_layout::DescriptorSetLayout,
     render_pass::{
         AttachmentInfo, AttachmentRef, FramebufferAttachmentImageInfo, FramebufferInfo,
