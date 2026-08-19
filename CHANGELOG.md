@@ -13,6 +13,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   image, acceleration-structure, and descriptor-copy updates.
 - `PipelineCommand::bind_descriptor_set` for reusing populated descriptor sets in regular graph
   commands while declaring graph resource accesses separately.
+- `Device::merge_pipeline_cache_data` and `Device::pipeline_cache_data` so that ICD-managed
+  pipeline caches may be read and persisted.
 
 ### Changed
 

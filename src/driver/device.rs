@@ -433,6 +433,47 @@ impl Device {
         this.inner.pipeline_cache
     }
 
+    /// Merges serialized Vulkan pipeline-cache data into the device-owned cache.
+    pub fn merge_pipeline_cache_data(this: &Self, data: &[u8]) -> Result<(), DriverError> {
+        let info = vk::PipelineCacheCreateInfo::default().initial_data(data);
+
+        let source =
+            unsafe { this.create_pipeline_cache(&info, None) }.map_err(|err| match err {
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                    DriverError::OutOfMemory
+                }
+                _ => DriverError::Unsupported,
+            })?;
+
+        // Safety: DO NOT BREAK THE 1-2-3 CHAIN
+        // 1. Observe result but do not break control flow
+        let result = unsafe { this.merge_pipeline_caches(this.inner.pipeline_cache, &[source]) }
+            .map_err(|err| match err {
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                    DriverError::OutOfMemory
+                }
+                _ => DriverError::Unsupported,
+            });
+
+        // 2. Always destroy obj
+        unsafe { this.destroy_pipeline_cache(source, None) };
+
+        // 3. Return
+        result
+    }
+
+    /// Returns serialized data from the device-owned Vulkan pipeline cache.
+    pub fn pipeline_cache_data(this: &Self) -> Result<Box<[u8]>, DriverError> {
+        unsafe { this.get_pipeline_cache_data(this.inner.pipeline_cache) }
+            .map_err(|err| match err {
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
+                    DriverError::OutOfMemory
+                }
+                _ => DriverError::Unsupported,
+            })
+            .map(Vec::into_boxed_slice)
+    }
+
     /// Retrieves a Vulkan private-data name associated with `handle`.
     ///
     /// Returns `None` when metadata is not available or when the `VK_EXT_private_data` extension is
