@@ -1944,7 +1944,7 @@ impl ImageInfo {
         range
     }
 
-    fn is_full_subresource_range(self, range: vk::ImageSubresourceRange) -> bool {
+    pub(crate) fn is_full_subresource_range(self, range: vk::ImageSubresourceRange) -> bool {
         range.aspect_mask == format_aspect_mask(self.format)
             && range.base_array_layer == 0
             && range.layer_count == self.array_layer_count
