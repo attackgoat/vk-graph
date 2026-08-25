@@ -229,7 +229,7 @@ fn consume_pending_buffer_transfers(
 }
 
 fn consume_pending_image_transfers(
-    transfers: &mut Vec<ImageQueueOwnershipTransfer>,
+    transfers: &mut Vec<ImageOwnershipTransfer>,
     range: vk::ImageSubresourceRange,
 ) -> bool {
     transfers
@@ -259,7 +259,7 @@ fn image_barriers_from_transfers<'a>(
     prev_access: &'a AccessType,
     next_access: &'a AccessType,
     range: vk::ImageSubresourceRange,
-    transfers: &'a [ImageQueueOwnershipTransfer],
+    transfers: &'a [ImageOwnershipTransfer],
     discard_contents: bool,
 ) -> impl Iterator<Item = ImageBarrier<'a>> + 'a {
     image_barrier_transfer_ranges(transfers, range).map(move |(range, transfer)| {
@@ -290,12 +290,12 @@ fn image_barriers_from_transfers<'a>(
 }
 
 fn image_barrier_transfer_ranges<'a>(
-    transfers: &'a [ImageQueueOwnershipTransfer],
+    transfers: &'a [ImageOwnershipTransfer],
     range: vk::ImageSubresourceRange,
 ) -> impl Iterator<
     Item = (
         vk::ImageSubresourceRange,
-        Option<&'a ImageQueueOwnershipTransfer>,
+        Option<&'a ImageOwnershipTransfer>,
     ),
 > + 'a {
     thread_local! {
@@ -311,7 +311,7 @@ fn image_barrier_transfer_ranges<'a>(
     }
 
     struct ImageBarrierTransferIter<'a> {
-        transfers: &'a [ImageQueueOwnershipTransfer],
+        transfers: &'a [ImageOwnershipTransfer],
         overlaps: Vec<(usize, vk::ImageSubresourceRange)>,
         aspect_cuts: Vec<u32>,
         layer_cuts: Vec<u32>,
@@ -327,7 +327,7 @@ fn image_barrier_transfer_ranges<'a>(
     impl<'a> Iterator for ImageBarrierTransferIter<'a> {
         type Item = (
             vk::ImageSubresourceRange,
-            Option<&'a ImageQueueOwnershipTransfer>,
+            Option<&'a ImageOwnershipTransfer>,
         );
 
         fn next(&mut self) -> Option<Self::Item> {
@@ -996,7 +996,7 @@ impl ImageOwnership {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ImageQueueOwnershipTransfer {
+struct ImageOwnershipTransfer {
     dst_queue_family_index: u32,
     layout: vk::ImageLayout,
     range: vk::ImageSubresourceRange,
@@ -1004,7 +1004,7 @@ struct ImageQueueOwnershipTransfer {
     src_queue_index: u32,
 }
 
-impl PartialEq for ImageQueueOwnershipTransfer {
+impl PartialEq for ImageOwnershipTransfer {
     fn eq(&self, other: &Self) -> bool {
         self.dst_queue_family_index == other.dst_queue_family_index
             && self.layout == other.layout
@@ -2056,7 +2056,7 @@ pub struct Submission {
     pending_buffer_transfer_nodes:
         Option<PendingTransferNodes<vk::Buffer, BufferQueueOwnershipTransfer>>,
     pending_image_transfer_nodes:
-        Option<PendingTransferNodes<vk::Image, ImageQueueOwnershipTransfer>>,
+        Option<PendingTransferNodes<vk::Image, ImageOwnershipTransfer>>,
     queue_ownership_release_groups: Vec<QueueOwnershipReleaseGroup>,
     query_pool_results: Option<SubmittedTimestampQueries>,
     query_pool_reset: bool,
@@ -4066,7 +4066,7 @@ impl Submission {
             PendingTransferNodes<vk::Buffer, BufferQueueOwnershipTransfer>,
         >,
         pending_image_transfer_nodes: &mut Option<
-            PendingTransferNodes<vk::Image, ImageQueueOwnershipTransfer>,
+            PendingTransferNodes<vk::Image, ImageOwnershipTransfer>,
         >,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
@@ -4376,7 +4376,7 @@ impl Submission {
             PendingTransferNodes<vk::Buffer, BufferQueueOwnershipTransfer>,
         >,
         pending_image_transfer_nodes: &mut Option<
-            PendingTransferNodes<vk::Image, ImageQueueOwnershipTransfer>,
+            PendingTransferNodes<vk::Image, ImageOwnershipTransfer>,
         >,
     ) {
         struct ImageResourceBarrier {
@@ -4808,7 +4808,7 @@ impl Submission {
                                 continue;
                             };
                             let layout = subresource.layout.unwrap_or(vk::ImageLayout::UNDEFINED);
-                            let transfer = ImageQueueOwnershipTransfer {
+                            let transfer = ImageOwnershipTransfer {
                                 src_queue_family_index,
                                 src_queue_index,
                                 dst_queue_family_index: queue_family_index,
@@ -6528,7 +6528,7 @@ pub mod fuzz {
 mod test {
     use super::{
         BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData,
-        ExternalRenderPassAccessHistory, ImageOwnership, ImageQueueOwnershipTransfer, NodeIndex,
+        ExternalRenderPassAccessHistory, ImageOwnership, ImageOwnershipTransfer, NodeIndex,
         PipelineStageAccessFlags, QueueSubmitInfo, RecordSelection, RecordedSubmission,
         RecordedSubmissionState, RecordingOwnership, Schedule, SemaphoreSubmitInfo, Submission,
         SubresourceAccess, SubresourceRange, check_queue_submit_args, fuzz,
@@ -6593,7 +6593,7 @@ mod test {
     }
 
     #[cfg(test)]
-    fn sort_pending_image_transfers(transfers: &mut [ImageQueueOwnershipTransfer]) {
+    fn sort_pending_image_transfers(transfers: &mut [ImageOwnershipTransfer]) {
         transfers.sort_unstable_by_key(|transfer| {
             (
                 transfer.src_queue_family_index,
@@ -6882,14 +6882,14 @@ mod test {
         let consumed = color_subresource_range(0..1, 0..1);
         let kept = color_subresource_range(1..2, 0..1);
         let mut pending = vec![
-            ImageQueueOwnershipTransfer {
+            ImageOwnershipTransfer {
                 dst_queue_family_index: 0,
                 layout: vk::ImageLayout::GENERAL,
                 range: consumed,
                 src_queue_family_index: 1,
                 src_queue_index: 0,
             },
-            ImageQueueOwnershipTransfer {
+            ImageOwnershipTransfer {
                 dst_queue_family_index: 0,
                 layout: vk::ImageLayout::GENERAL,
                 range: kept,
@@ -7554,7 +7554,7 @@ mod test {
 
         let range_a = color_subresource_range(0..1, 0..1);
         let range_b = color_subresource_range(1..2, 0..1);
-        let transfers = [ImageQueueOwnershipTransfer {
+        let transfers = [ImageOwnershipTransfer {
             src_queue_family_index: 1,
             src_queue_index: 2,
             dst_queue_family_index: 3,
