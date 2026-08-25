@@ -61,7 +61,7 @@ use {
     std::{
         cell::RefCell,
         cmp::Reverse,
-        collections::{BTreeMap, BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry},
         iter::repeat_n,
         mem::take,
         ops::Range,
@@ -928,6 +928,73 @@ impl SubmittedCommand {
     }
 }
 
+#[derive(Debug)]
+enum ImageOwnership {
+    Whole,
+    DualAspect(vk::ImageAspectFlags),
+    Dense(DenseMap<bool>),
+}
+
+impl ImageOwnership {
+    fn new(info: ImageInfo, range: vk::ImageSubresourceRange) -> Self {
+        if info.is_full_subresource_range(range) {
+            return Self::Whole;
+        }
+
+        let aspect_mask = format_aspect_mask(info.format);
+        if aspect_mask.as_raw().count_ones() == 2
+            && info.array_layer_count == 1
+            && info.mip_level_count == 1
+        {
+            return Self::DualAspect(range.aspect_mask);
+        }
+
+        let mut claimed = DenseMap::new(info, false);
+        claimed.swap(true, range).for_each(drop);
+
+        Self::Dense(claimed)
+    }
+
+    fn claim(
+        &mut self,
+        info: ImageInfo,
+        mut range: vk::ImageSubresourceRange,
+    ) -> SmallVec<[vk::ImageSubresourceRange; 4]> {
+        match self {
+            Self::Whole => SmallVec::new(),
+            Self::DualAspect(claimed) => {
+                let unclaimed = range.aspect_mask & !*claimed;
+                *claimed |= range.aspect_mask;
+                let whole = claimed.contains(format_aspect_mask(info.format));
+
+                if whole {
+                    *self = Self::Whole;
+                }
+
+                if unclaimed.is_empty() {
+                    return SmallVec::new();
+                }
+
+                range.aspect_mask = unclaimed;
+
+                SmallVec::from_slice(&[range])
+            }
+            Self::Dense(claimed) => {
+                let unclaimed = claimed
+                    .swap(true, range)
+                    .filter_map(|(claimed, range)| (!claimed).then_some(range))
+                    .collect();
+
+                if info.is_full_subresource_range(range) {
+                    *self = Self::Whole;
+                }
+
+                unclaimed
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ImageQueueOwnershipTransfer {
     dst_queue_family_index: u32,
@@ -1669,7 +1736,7 @@ struct RecordingOwnership {
     // These ranges are effectively owned by this recording, but global ownership is not updated
     // until its command buffer is submitted successfully.
     buffers: HashMap<usize, Vec<BufferSubresourceRange>>,
-    images: HashMap<usize, DenseMap<bool>>,
+    images: HashMap<usize, ImageOwnership>,
 }
 
 impl RecordingOwnership {
@@ -1720,12 +1787,16 @@ impl RecordingOwnership {
         info: ImageInfo,
         range: vk::ImageSubresourceRange,
     ) -> SmallVec<[vk::ImageSubresourceRange; 4]> {
-        self.images
-            .entry(node_idx)
-            .or_insert_with(|| DenseMap::new(info, false))
-            .swap(true, range)
-            .filter_map(|(claimed, range)| (!claimed).then_some(range))
-            .collect()
+        let range = info.resolve_subresource_counts(range);
+
+        match self.images.entry(node_idx) {
+            Entry::Occupied(mut entry) => entry.get_mut().claim(info, range),
+            Entry::Vacant(entry) => {
+                entry.insert(ImageOwnership::new(info, range));
+
+                SmallVec::from_slice(&[range])
+            }
+        }
     }
 }
 
@@ -6457,7 +6528,7 @@ pub mod fuzz {
 mod test {
     use super::{
         BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData,
-        ExternalRenderPassAccessHistory, ImageQueueOwnershipTransfer, NodeIndex,
+        ExternalRenderPassAccessHistory, ImageOwnership, ImageQueueOwnershipTransfer, NodeIndex,
         PipelineStageAccessFlags, QueueSubmitInfo, RecordSelection, RecordedSubmission,
         RecordedSubmissionState, RecordingOwnership, Schedule, SemaphoreSubmitInfo, Submission,
         SubresourceAccess, SubresourceRange, check_queue_submit_args, fuzz,
@@ -6867,6 +6938,81 @@ mod test {
         assert_eq!(claimed.len(), 1);
         assert!(super::image_subresource_range_eq(claimed[0], remaining));
         assert!(ownership.claim_image(0, info, overlap).is_empty());
+    }
+
+    #[test]
+    fn recording_ownership_keeps_whole_image_claims_uniform() {
+        let mut ownership = RecordingOwnership::default();
+        let info =
+            ImageInfo::image_2d_array(1, 1, 3, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED)
+                .into_builder()
+                .mip_level_count(4)
+                .build();
+        let whole = color_subresource_range(0..3, 0..4);
+        let partial = color_subresource_range(1..2, 2..3);
+
+        let claimed = ownership.claim_image(0, info, whole);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], whole));
+        assert!(matches!(ownership.images[&0], ImageOwnership::Whole));
+
+        assert!(ownership.claim_image(0, info, whole).is_empty());
+        assert!(ownership.claim_image(0, info, partial).is_empty());
+    }
+
+    #[test]
+    fn recording_ownership_tracks_dual_aspects_without_dense_map() {
+        let mut ownership = RecordingOwnership::default();
+        let info = ImageInfo::image_2d(
+            1,
+            1,
+            vk::Format::D32_SFLOAT_S8_UINT,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        );
+        let depth = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::DEPTH,
+            base_array_layer: 0,
+            layer_count: 1,
+            base_mip_level: 0,
+            level_count: 1,
+        };
+        let stencil = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::STENCIL,
+            ..depth
+        };
+
+        let claimed = ownership.claim_image(0, info, depth);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], depth));
+        assert!(matches!(
+            ownership.images[&0],
+            ImageOwnership::DualAspect(mask) if mask == vk::ImageAspectFlags::DEPTH
+        ));
+
+        assert!(ownership.claim_image(0, info, depth).is_empty());
+        let claimed = ownership.claim_image(0, info, stencil);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], stencil));
+        assert!(matches!(ownership.images[&0], ImageOwnership::Whole));
+    }
+
+    #[test]
+    fn recording_ownership_promotes_dense_claims_to_whole() {
+        let mut ownership = RecordingOwnership::default();
+        let info =
+            ImageInfo::image_2d_array(1, 1, 3, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED);
+        let partial = color_subresource_range(0..2, 0..1);
+        let whole = color_subresource_range(0..3, 0..1);
+        let remaining = color_subresource_range(2..3, 0..1);
+
+        ownership.claim_image(0, info, partial);
+        assert!(matches!(ownership.images[&0], ImageOwnership::Dense(_)));
+
+        let claimed = ownership.claim_image(0, info, whole);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], remaining));
+        assert!(matches!(ownership.images[&0], ImageOwnership::Whole));
+        assert!(ownership.claim_image(0, info, partial).is_empty());
     }
 
     #[test]
