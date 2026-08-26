@@ -12,9 +12,10 @@ API docs: [`Submission`](https://docs.rs/vk-graph/latest/vk_graph/struct.Submiss
 [`RecordedSubmission::queue_submit`](https://docs.rs/vk-graph/latest/vk_graph/struct.RecordedSubmission.html#method.queue_submit),
 [`CommandBuffer::has_executed`](https://docs.rs/vk-graph/latest/vk_graph/driver/cmd_buf/struct.CommandBuffer.html#method.has_executed).
 
-More precisely, `vk-graph` stores the most recent access type of each subresource of a resource. As
-commands are submitted to the Vulkan implementation queue, the internal state of these resources is
-updated.
+More precisely, `vk-graph` stores the current synchronization state of each resource subresource.
+Images can retain the exact set of sampled-image reader stages within one synchronization epoch;
+other states retain one access type. As commands are submitted to the Vulkan implementation queue,
+the internal state of these resources is updated.
 
 Resource state is updated during the following function calls:
 

@@ -232,6 +232,38 @@ fn image_swap_access_bench(c: &mut Criterion) {
         b.iter(|| black_box(h.swap_access(AccessType::AnyShaderWrite, full_range(1, 1))));
     });
 
+    let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+    let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+
+    // Sampled-reader accumulation is the synchronization optimization's primary path.
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    h.swap_access(compute_read, full_range(1, 1));
+    group.bench_function("uniform_sampled_compute_steady", |b| {
+        b.iter(|| black_box(h.swap_access(compute_read, full_range(1, 1))));
+    });
+
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    h.swap_access(compute_read, full_range(1, 1));
+    group.bench_function("uniform_sampled_epoch_steady", |b| {
+        b.iter(|| black_box(h.swap_accesses([(compute_read, full_range(1, 1))])));
+    });
+
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    group.bench_function("uniform_sampled_compute_ray", |b| {
+        b.iter(|| {
+            black_box(h.swap_access(compute_read, full_range(1, 1)));
+            black_box(h.swap_access(ray_read, full_range(1, 1)));
+        });
+    });
+
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    group.bench_function("uniform_sampled_read_write", |b| {
+        b.iter(|| {
+            black_box(h.swap_access(compute_read, full_range(1, 1)));
+            black_box(h.swap_access(AccessType::ComputeShaderWrite, full_range(1, 1)));
+        });
+    });
+
     // 18. Batch 4 swaps on dense 4x4 — mix of single and multi-subresource ranges
     let h = SwapAccessBenchHarness::new(4, 4, vk::Format::R8G8B8A8_UNORM);
     group.bench_function("batch_4_swaps", |b| {

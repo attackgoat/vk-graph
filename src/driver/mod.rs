@@ -24,8 +24,8 @@
 //! [`DescriptorSet`](descriptor_set::DescriptorSet) is instead a shared immutable wrapper and
 //! exposes the same information through `device()`, `handle()`, and `info()` methods.
 //!
-//! Graph-tracked resources use atomic [`AccessType`](sync::AccessType) values to maintain
-//! consistency and track changes. Descriptor contents do not declare graph synchronization.
+//! Graph-tracked resources use atomic synchronization state to maintain consistency and track
+//! access changes. Descriptor contents do not declare graph synchronization.
 //!
 //! # Pipelines
 //!
