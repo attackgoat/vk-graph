@@ -51,6 +51,36 @@ fn submission_reorder_bench(c: &mut Criterion) {
                 long_lived_uses: 220,
             },
         ),
+        (
+            "material_array",
+            ReorderBenchSpec {
+                cmd_count: 10,
+                resource_count: 2_048,
+                short_lived_uses: 1,
+                long_lived_resource_count: 2_048,
+                long_lived_uses: 10,
+            },
+        ),
+        (
+            "material_array_rr",
+            ReorderBenchSpec {
+                cmd_count: 11,
+                resource_count: 2_048,
+                short_lived_uses: 1,
+                long_lived_resource_count: 2_048,
+                long_lived_uses: 11,
+            },
+        ),
+        (
+            "material_array_max_bounces",
+            ReorderBenchSpec {
+                cmd_count: 25,
+                resource_count: 2_048,
+                short_lived_uses: 1,
+                long_lived_resource_count: 2_048,
+                long_lived_uses: 25,
+            },
+        ),
     ] {
         let mut harness = ReorderBenchHarness::new(spec);
         group.throughput(Throughput::Elements(spec.cmd_count as u64));

@@ -1860,7 +1860,6 @@ macro_rules! resource {
             impl Resource for $name {
                 type Node = [<$name Node>];
 
-                #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // Bind a new owned resource, such as Image or Buffer.
 
@@ -1872,7 +1871,6 @@ macro_rules! resource {
             impl Resource for Arc<$name> {
                 type Node = [<$name Node>];
 
-                #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // Bind an existing shared resource, such as Arc<Image> or Arc<Buffer>.
 
@@ -1898,7 +1896,6 @@ macro_rules! resource {
             impl Resource for Lease<$name> {
                 type Node = [<$name LeaseNode>];
 
-                #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // Bind a new pooled resource, such as Lease<Image> or Lease<Buffer>.
 
@@ -1910,7 +1907,6 @@ macro_rules! resource {
             impl Resource  for Arc<Lease<$name>> {
                 type Node = [<$name LeaseNode>];
 
-                #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // Bind an existing shared pooled resource, such as Arc<Lease<Image>> or
                     // Arc<Lease<Buffer>>.
