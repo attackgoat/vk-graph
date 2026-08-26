@@ -1889,6 +1889,37 @@ impl Schedule {
 
     #[profiling::function]
     fn reorder_cmds(&mut self, end_cmd_idx: usize) {
+        #[inline(always)]
+        fn add_resource_chain(
+            resource_cmds: &[usize],
+            chain_count: usize,
+            local_of_global: &[usize],
+            successors: &mut [Vec<usize>],
+            predecessor_counts: &mut [usize],
+            omitted_predecessor_counts: &mut [usize],
+        ) {
+            let mut previous = Option::<usize>::None;
+            for &cmd_idx in resource_cmds {
+                let Some(&local_idx) = local_of_global.get(cmd_idx) else {
+                    continue;
+                };
+
+                if local_idx == usize::MAX {
+                    continue;
+                }
+
+                if let Some(previous_idx) = previous {
+                    successors[previous_idx].push(local_idx);
+                    predecessor_counts[local_idx] += chain_count;
+                    if chain_count > 1 {
+                        omitted_predecessor_counts[local_idx] += chain_count - 1;
+                    }
+                }
+
+                previous = Some(local_idx);
+            }
+        }
+
         if self.cmds.len() < 3 {
             return;
         }
@@ -1908,32 +1939,70 @@ impl Schedule {
         self.successors.resize_with(cmd_count, Vec::new);
         self.predecessor_counts.resize(cmd_count, 0);
         self.predecessor_counts.fill(0);
+        self.remaining_predecessors.resize(cmd_count, 0);
+
+        // A successful prior reorder consumes every stored incoming edge.
+        debug_assert!(self.remaining_predecessors.iter().all(|&count| count == 0));
 
         // Consecutive selected users of each resource form a dependency chain. This preserves the
         // original relative order for every shared-resource pair while still allowing unrelated
         // command chains to be grouped for locality.
-        for resource_cmds in &self.access_index.cmds_by_node {
-            let mut previous = Option::<usize>::None;
-            for &cmd_idx in resource_cmds {
-                let Some(&local_idx) = self.local_of_global.get(cmd_idx) else {
-                    continue;
-                };
-
-                if local_idx == usize::MAX {
-                    continue;
+        // Comparing whole use chains only pays off for resource-heavy schedules such as bindless
+        // arrays. Sparse schedules retain the original construction path.
+        let group_resource_chains =
+            self.access_index.cmds_by_node.len() >= cmd_count.saturating_mul(4);
+        if group_resource_chains {
+            let mut resource_idx = 0;
+            let mut compressed_resource_chains = false;
+            while resource_idx < self.access_index.cmds_by_node.len() {
+                let resource_cmds = &self.access_index.cmds_by_node[resource_idx];
+                let mut run_end = resource_idx + 1;
+                while self.access_index.cmds_by_node.get(run_end) == Some(resource_cmds) {
+                    run_end += 1;
                 }
+                let chain_count = run_end - resource_idx;
+                compressed_resource_chains |= chain_count > 1;
 
-                if let Some(previous_idx) = previous {
-                    self.successors[previous_idx].push(local_idx);
-                    self.predecessor_counts[local_idx] += 1;
-                }
-
-                previous = Some(local_idx);
+                add_resource_chain(
+                    resource_cmds,
+                    chain_count,
+                    &self.local_of_global,
+                    &mut self.successors,
+                    &mut self.predecessor_counts,
+                    &mut self.remaining_predecessors,
+                );
+                resource_idx = run_end;
             }
+
+            if compressed_resource_chains {
+                for (remaining, &predecessor_count) in self
+                    .remaining_predecessors
+                    .iter_mut()
+                    .zip(&self.predecessor_counts)
+                {
+                    debug_assert!(*remaining <= predecessor_count);
+                    *remaining = predecessor_count - *remaining;
+                }
+            } else {
+                self.remaining_predecessors
+                    .clone_from(&self.predecessor_counts);
+            }
+        } else {
+            for resource_cmds in &self.access_index.cmds_by_node {
+                add_resource_chain(
+                    resource_cmds,
+                    1,
+                    &self.local_of_global,
+                    &mut self.successors,
+                    &mut self.predecessor_counts,
+                    &mut self.remaining_predecessors,
+                );
+            }
+
+            self.remaining_predecessors
+                .clone_from(&self.predecessor_counts);
         }
 
-        self.remaining_predecessors
-            .clone_from(&self.predecessor_counts);
         self.ready.clear();
 
         for local_idx in self
@@ -2055,8 +2124,7 @@ pub struct Submission {
     graph: Graph,
     pending_buffer_transfer_nodes:
         Option<PendingTransferNodes<vk::Buffer, BufferQueueOwnershipTransfer>>,
-    pending_image_transfer_nodes:
-        Option<PendingTransferNodes<vk::Image, ImageOwnershipTransfer>>,
+    pending_image_transfer_nodes: Option<PendingTransferNodes<vk::Image, ImageOwnershipTransfer>>,
     queue_ownership_release_groups: Vec<QueueOwnershipReleaseGroup>,
     query_pool_results: Option<SubmittedTimestampQueries>,
     query_pool_reset: bool,
@@ -6231,14 +6299,14 @@ pub mod bench {
                 cmds.sort_unstable();
                 cmds.dedup();
 
-                while cmds.len() < uses {
-                    let next_cmd = (start + cmds.len() * stride + cmds.len()) % spec.cmd_count;
-                    if cmds.binary_search(&next_cmd).is_err() {
-                        cmds.push(next_cmd);
+                for next_cmd in 0..spec.cmd_count {
+                    if cmds.len() >= uses {
+                        break;
+                    }
+                    if let Err(idx) = cmds.binary_search(&next_cmd) {
+                        cmds.insert(idx, next_cmd);
                     }
                 }
-
-                cmds.sort_unstable();
 
                 for &cmd_idx in cmds.iter() {
                     accessed_nodes_by_cmd[cmd_idx].push(node_idx);
@@ -8123,6 +8191,26 @@ mod test {
         schedule.reorder_cmds(5);
 
         assert_eq!(schedule.cmds, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_groups_duplicate_resource_chains() {
+        let resource_count = 12;
+        let mut schedule = Schedule {
+            access_index: CommandAccessIndex {
+                cmds_by_node: vec![vec![0, 1, 2]; resource_count],
+                accessed_nodes_by_cmd: vec![(0..resource_count).collect(); 3],
+            },
+            cmds: vec![0, 1, 2],
+            ..Default::default()
+        };
+
+        schedule.reorder_cmds(3);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2]);
+        assert_eq!(schedule.predecessor_counts, vec![0, 12, 12]);
+        assert_eq!(schedule.successors[0], vec![1]);
+        assert_eq!(schedule.successors[1], vec![2]);
     }
 
     #[test]
