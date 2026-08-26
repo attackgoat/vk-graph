@@ -16,7 +16,7 @@ use {
         collections::{HashMap, hash_map::Entry},
         fmt::{Debug, Formatter},
         marker::PhantomData,
-        mem::{replace, take},
+        mem::take,
         ops::{Deref, DerefMut},
         sync::atomic::{AtomicU8, AtomicU16, AtomicU64, Ordering},
         thread::panicking,
@@ -30,7 +30,7 @@ use parking_lot::{Mutex, MutexGuard};
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::{Mutex, MutexGuard};
 
-const fn access_type_to_layout(access: AccessType) -> Option<vk::ImageLayout> {
+pub(crate) const fn access_type_to_layout(access: AccessType) -> Option<vk::ImageLayout> {
     match access {
         AccessType::Nothing => None,
         AccessType::ColorAttachmentRead
@@ -57,6 +57,7 @@ const fn access_type_to_layout(access: AccessType) -> Option<vk::ImageLayout> {
         | AccessType::TessellationControlShaderReadSampledImageOrUniformTexelBuffer
         | AccessType::TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer
         | AccessType::GeometryShaderReadSampledImageOrUniformTexelBuffer
+        | AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer
         | AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer
         | AccessType::MeshShaderReadSampledImageOrUniformTexelBuffer
         | AccessType::TaskShaderReadSampledImageOrUniformTexelBuffer => {
@@ -174,6 +175,28 @@ pub(crate) fn image_subresource_range_intersects(
         && lhs.base_mip_level + lhs.level_count > rhs.base_mip_level
 }
 
+fn swap_image_access_set(
+    atomic: &AtomicU16,
+    next_access: AccessType,
+    accumulate_sampled_reads: bool,
+) -> ImageAccessSet {
+    let next = ImageAccessSet::from_access(next_access);
+    if !accumulate_sampled_reads || !next.is_sampled_read() {
+        return ImageAccessSet::from_raw(atomic.swap(next.raw(), Ordering::AcqRel));
+    }
+
+    let mut current = atomic.load(Ordering::Acquire);
+    loop {
+        let prev_access = ImageAccessSet::from_raw(current);
+        let next = prev_access.after_access(next_access).raw();
+
+        match atomic.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return prev_access,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum Access {
     Dense(DenseAccess),
@@ -183,6 +206,7 @@ enum Access {
 
 impl Access {
     fn new(info: ImageInfo, access: AccessType) -> Self {
+        let access = ImageAccessSet::from_access(access);
         let aspect_count = format_aspect_mask(info.format).as_raw().count_ones() as u8;
 
         if aspect_count == 1 && info.array_layer_count == 1 && info.mip_level_count == 1 {
@@ -194,26 +218,54 @@ impl Access {
         }
     }
 
-    fn swap<'a>(
+    fn replace<'a>(
         &'a self,
-        dense: &'a Mutex<Option<DenseMap<AccessType>>>,
+        dense: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
         info: ImageInfo,
         next_access: AccessType,
         access_range: vk::ImageSubresourceRange,
     ) -> AccessIter<'a> {
+        self.swap_with(dense, info, next_access, access_range, false)
+    }
+
+    fn swap<'a>(
+        &'a self,
+        dense: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
+        info: ImageInfo,
+        next_access: AccessType,
+        access_range: vk::ImageSubresourceRange,
+    ) -> AccessIter<'a> {
+        self.swap_with(dense, info, next_access, access_range, true)
+    }
+
+    fn swap_with<'a>(
+        &'a self,
+        dense: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
+        info: ImageInfo,
+        next_access: AccessType,
+        access_range: vk::ImageSubresourceRange,
+        accumulate_sampled_reads: bool,
+    ) -> AccessIter<'a> {
         match self {
-            Self::Uniform(uniform) => {
-                AccessIter::Uniform(Some(uniform.swap(next_access, access_range)))
-            }
+            Self::Uniform(uniform) => AccessIter::Uniform(Some(uniform.swap(
+                next_access,
+                access_range,
+                accumulate_sampled_reads,
+            ))),
             Self::DualAspect(dual) => AccessIter::DualAspect(DualAspectAccessIter::new(
                 dual,
                 info,
                 next_access,
                 access_range,
+                accumulate_sampled_reads,
             )),
             Self::Dense(access) => {
                 if !access.uses_dense() && info.is_full_subresource_range(access_range) {
-                    return AccessIter::Uniform(Some(access.swap_range(next_access, access_range)));
+                    return AccessIter::Uniform(Some(access.swap_range(
+                        next_access,
+                        access_range,
+                        accumulate_sampled_reads,
+                    )));
                 }
 
                 let mut dense = dense.lock();
@@ -223,20 +275,138 @@ impl Access {
 
                 access.ensure_dense(&mut dense, info);
 
-                AccessIter::DenseMap(DenseMapIter::new(
+                AccessIter::DenseMap(ImageAccessSetMapIter::new(
                     DenseAccessMapGuard { access, dense },
                     next_access,
                     access_range,
+                    accumulate_sampled_reads,
                 ))
             }
+        }
+    }
+
+    fn swap_accesses<'a, I>(
+        &'a self,
+        dense_access: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
+        info: ImageInfo,
+        accesses: I,
+    ) -> impl Iterator<Item = (AccessType, ImageAccessSet, vk::ImageSubresourceRange)> + 'a
+    where
+        I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)> + 'a,
+    {
+        struct Iter<'a, I>
+        where
+            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+        {
+            access: &'a Access,
+            accesses: I,
+            dense_access: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
+            first_accesses: Option<DenseMap<bool>>,
+            first_access_range: Option<vk::ImageSubresourceRange>,
+            info: ImageInfo,
+            current: Option<(AccessType, AccessIter<'a>)>,
+            current_access: Option<(AccessType, DenseMapCursor)>,
+        }
+
+        impl<I> Iterator for Iter<'_, I>
+        where
+            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+        {
+            type Item = (AccessType, ImageAccessSet, vk::ImageSubresourceRange);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                    if let Some((next_access, iter)) = self.current.as_mut() {
+                        if let Some((prev_access, range)) = iter.next() {
+                            return Some((*next_access, prev_access, range));
+                        }
+
+                        self.current = None;
+                    }
+
+                    if let Some((next_access, cursor)) = self.current_access.as_mut() {
+                        if let Some((is_first_access, access_range)) =
+                            cursor.next(self.first_accesses.as_mut().unwrap(), false)
+                        {
+                            let accesses = if is_first_access {
+                                self.access.replace(
+                                    self.dense_access,
+                                    self.info,
+                                    *next_access,
+                                    access_range,
+                                )
+                            } else {
+                                self.access.swap(
+                                    self.dense_access,
+                                    self.info,
+                                    *next_access,
+                                    access_range,
+                                )
+                            };
+                            self.current = Some((*next_access, accesses));
+
+                            continue;
+                        }
+
+                        self.current_access = None;
+                    }
+
+                    let (next_access, access_range) = self.accesses.next()?;
+                    let Some(first_access_range) = self.first_access_range else {
+                        self.first_access_range = Some(access_range);
+                        self.current = Some((
+                            next_access,
+                            self.access.replace(
+                                self.dense_access,
+                                self.info,
+                                next_access,
+                                access_range,
+                            ),
+                        ));
+
+                        continue;
+                    };
+                    let first_accesses = self.first_accesses.get_or_insert_with(|| {
+                        let mut first_accesses = DenseMap::new(self.info, true);
+                        first_accesses
+                            .swap(false, first_access_range)
+                            .for_each(drop);
+                        first_accesses
+                    });
+                    self.current_access = Some((
+                        next_access,
+                        DenseMapCursor::new(first_accesses, access_range),
+                    ));
+                }
+            }
+        }
+
+        impl<I> Drop for Iter<'_, I>
+        where
+            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+        {
+            fn drop(&mut self) {
+                while self.next().is_some() {}
+            }
+        }
+
+        Iter {
+            access: self,
+            accesses,
+            dense_access,
+            first_accesses: None,
+            first_access_range: None,
+            info,
+            current: None,
+            current_access: None,
         }
     }
 }
 
 enum AccessIter<'a> {
-    DenseMap(DenseMapIter<'a, DenseAccessMapGuard<'a>, AccessType>),
+    DenseMap(ImageAccessSetMapIter<'a, DenseAccessMapGuard<'a>>),
     DualAspect(DualAspectAccessIter<'a>),
-    Uniform(Option<(AccessType, vk::ImageSubresourceRange)>),
+    Uniform(Option<(ImageAccessSet, vk::ImageSubresourceRange)>),
 }
 
 impl Drop for AccessIter<'_> {
@@ -246,7 +416,7 @@ impl Drop for AccessIter<'_> {
 }
 
 impl Iterator for AccessIter<'_> {
-    type Item = (AccessType, vk::ImageSubresourceRange);
+    type Item = (ImageAccessSet, vk::ImageSubresourceRange);
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
@@ -261,18 +431,17 @@ impl Iterator for AccessIter<'_> {
 struct DenseAccess(AtomicU16);
 
 impl DenseAccess {
-    const ACCESS_MASK: u16 = 0x00_FF;
-    const STATE_MASK: u16 = 0xFF_00;
-    const STATE_SHIFT: u16 = 8;
+    const ACCESS_MASK: u16 = ImageAccessSet::VALUE_MASK;
+    const STATE_MASK: u16 = 0b11 << Self::STATE_SHIFT;
+    const STATE_SHIFT: u16 = 11;
 
-    fn new(access: AccessType) -> Self {
+    fn new(access: ImageAccessSet) -> Self {
         Self(AtomicU16::new(
-            (DenseAccessState::Uniform as u16) << Self::STATE_SHIFT
-                | access_type_into_u8(access) as u16,
+            (DenseAccessState::Uniform as u16) << Self::STATE_SHIFT | access.raw(),
         ))
     }
 
-    fn ensure_dense(&self, dense: &mut Option<DenseMap<AccessType>>, info: ImageInfo) {
+    fn ensure_dense(&self, dense: &mut Option<DenseMap<ImageAccessSet>>, info: ImageInfo) {
         if self.is_dense_active() {
             debug_assert!(dense.is_some());
             return;
@@ -288,8 +457,8 @@ impl DenseAccess {
         self.state() == DenseAccessState::Dense
     }
 
-    fn load(&self) -> AccessType {
-        access_type_from_u8((self.0.load(Ordering::Acquire) & Self::ACCESS_MASK) as u8)
+    fn load(&self) -> ImageAccessSet {
+        ImageAccessSet::from_raw(self.0.load(Ordering::Acquire) & Self::ACCESS_MASK)
     }
 
     fn set_dense(&self) {
@@ -309,10 +478,9 @@ impl DenseAccess {
         );
     }
 
-    fn set_uniform(&self, next_access: AccessType) {
+    fn set_uniform(&self, next_access: ImageAccessSet) {
         self.0.store(
-            (DenseAccessState::Uniform as u16) << Self::STATE_SHIFT
-                | access_type_into_u8(next_access) as u16,
+            (DenseAccessState::Uniform as u16) << Self::STATE_SHIFT | next_access.raw(),
             Ordering::Release,
         );
     }
@@ -330,12 +498,27 @@ impl DenseAccess {
         &self,
         next_access: AccessType,
         access_range: vk::ImageSubresourceRange,
-    ) -> (AccessType, vk::ImageSubresourceRange) {
-        let packed = (DenseAccessState::Uniform as u16) << Self::STATE_SHIFT
-            | access_type_into_u8(next_access) as u16;
-        let prev = self.0.swap(packed, Ordering::AcqRel);
+        accumulate_sampled_reads: bool,
+    ) -> (ImageAccessSet, vk::ImageSubresourceRange) {
+        let mut current = self.0.load(Ordering::Acquire);
+        loop {
+            let prev_access = ImageAccessSet::from_raw(current & ImageAccessSet::VALUE_MASK);
+            let next_access = if accumulate_sampled_reads {
+                prev_access.after_access(next_access)
+            } else {
+                ImageAccessSet::from_access(next_access)
+            };
+            let packed =
+                (DenseAccessState::Uniform as u16) << Self::STATE_SHIFT | next_access.raw();
 
-        (access_type_from_u8(prev as u8), access_range)
+            match self
+                .0
+                .compare_exchange_weak(current, packed, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return (prev_access, access_range),
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     fn uses_dense(&self) -> bool {
@@ -345,7 +528,7 @@ impl DenseAccess {
 
 struct DenseAccessMapGuard<'a> {
     access: &'a DenseAccess,
-    dense: MutexGuard<'a, Option<DenseMap<AccessType>>>,
+    dense: MutexGuard<'a, Option<DenseMap<ImageAccessSet>>>,
 }
 
 impl DenseAccessMapGuard<'_> {
@@ -365,7 +548,7 @@ impl DenseAccessMapGuard<'_> {
 }
 
 impl Deref for DenseAccessMapGuard<'_> {
-    type Target = DenseMap<AccessType>;
+    type Target = DenseMap<ImageAccessSet>;
 
     fn deref(&self) -> &Self::Target {
         self.dense.as_ref().expect("missing dense access state")
@@ -517,6 +700,18 @@ impl DenseMapCursor {
     where
         V: Copy + PartialEq,
     {
+        self.next_with(map, |_| value)
+    }
+
+    fn next_with<V, F>(
+        &mut self,
+        map: &mut DenseMap<V>,
+        update: F,
+    ) -> Option<(V, vk::ImageSubresourceRange)>
+    where
+        V: Copy + PartialEq,
+        F: FnOnce(V) -> V,
+    {
         if self.aspect == self.range.aspect_count {
             return None;
         }
@@ -532,18 +727,15 @@ impl DenseMapCursor {
         };
 
         let base_aspect_ordinal = map.base_aspect_ordinal(self.range.base_aspect_bit);
-        let prev_value = replace(
-            {
-                let idx = map.idx(
-                    base_aspect_ordinal + self.aspect,
-                    range.base_array_layer,
-                    range.base_mip_level,
-                );
-
-                unsafe { map.values.get_unchecked_mut(idx) }
-            },
-            value,
+        let idx = map.idx(
+            base_aspect_ordinal + self.aspect,
+            range.base_array_layer,
+            range.base_mip_level,
         );
+        let entry = unsafe { map.values.get_unchecked_mut(idx) };
+        let prev_value = *entry;
+        let value = update(prev_value);
+        *entry = value;
 
         loop {
             self.mip_level += 1;
@@ -698,21 +890,20 @@ enum DenseSharingState {
 }
 
 #[derive(Debug)]
-struct DualAspectAccess([AtomicU8; 2]);
+struct DualAspectAccess([AtomicU16; 2]);
 
 impl DualAspectAccess {
-    fn new(access: AccessType) -> Self {
-        let access = access_type_into_u8(access);
-
-        Self([AtomicU8::new(access), AtomicU8::new(access)])
+    fn new(access: ImageAccessSet) -> Self {
+        Self([AtomicU16::new(access.raw()), AtomicU16::new(access.raw())])
     }
 
-    fn load(&self, aspect_idx: usize) -> AccessType {
-        access_type_from_u8(self.0[aspect_idx].load(Ordering::Acquire))
+    fn load(&self, aspect_idx: usize) -> ImageAccessSet {
+        ImageAccessSet::from_raw(self.0[aspect_idx].load(Ordering::Acquire))
     }
 }
 
 struct DualAspectAccessIter<'a> {
+    accumulate_sampled_reads: bool,
     dual: &'a DualAspectAccess,
     format_aspect_mask: vk::ImageAspectFlags,
     next_access: AccessType,
@@ -725,6 +916,7 @@ impl<'a> DualAspectAccessIter<'a> {
         info: ImageInfo,
         next_access: AccessType,
         access_range: vk::ImageSubresourceRange,
+        accumulate_sampled_reads: bool,
     ) -> Self {
         debug_assert_eq!(access_range.base_array_layer, 0);
         debug_assert_eq!(access_range.base_mip_level, 0);
@@ -732,6 +924,7 @@ impl<'a> DualAspectAccessIter<'a> {
         debug_assert_eq!(access_range.level_count, 1);
 
         Self {
+            accumulate_sampled_reads,
             dual,
             format_aspect_mask: format_aspect_mask(info.format),
             next_access,
@@ -747,13 +940,15 @@ impl ExactSizeIterator for DualAspectAccessIter<'_> {
 }
 
 impl Iterator for DualAspectAccessIter<'_> {
-    type Item = (AccessType, vk::ImageSubresourceRange);
+    type Item = (ImageAccessSet, vk::ImageSubresourceRange);
 
     fn next(&mut self) -> Option<Self::Item> {
         let range = self.ranges.next()?;
         let aspect_idx = aspect_ordinal(self.format_aspect_mask, range.aspect_mask) as usize;
-        let prev_access = access_type_from_u8(
-            self.dual.0[aspect_idx].swap(access_type_into_u8(self.next_access), Ordering::AcqRel),
+        let prev_access = swap_image_access_set(
+            &self.dual.0[aspect_idx],
+            self.next_access,
+            self.accumulate_sampled_reads,
         );
 
         Some((prev_access, range))
@@ -947,7 +1142,7 @@ impl ExclusiveSharing {
 pub struct Image {
     access: Access,
     allocation: Option<Allocation>, // None when we don't own the image (Swapchain images)
-    dense_access: Mutex<Option<DenseMap<AccessType>>>,
+    dense_access: Mutex<Option<DenseMap<ImageAccessSet>>>,
     dense_sharing: Mutex<Option<DenseMap<SharingMode>>>,
 
     /// The device which owns this image resource.
@@ -1178,7 +1373,7 @@ impl Image {
         &self,
         next_access: AccessType,
         mut access_range: vk::ImageSubresourceRange,
-    ) -> impl Iterator<Item = (AccessType, vk::ImageSubresourceRange)> + '_ {
+    ) -> impl Iterator<Item = (ImageAccessSet, vk::ImageSubresourceRange)> + '_ {
         #[cfg(feature = "checked")]
         {
             assert_aspect_mask_supported(access_range.aspect_mask);
@@ -1210,10 +1405,29 @@ impl Image {
             .swap(&self.dense_access, self.info, next_access, access_range)
     }
 
+    /// Starts a new synchronization epoch for `access_range` and returns the preceding access.
+    pub(crate) fn replace_access(
+        &self,
+        next_access: AccessType,
+        access_range: vk::ImageSubresourceRange,
+    ) -> impl Iterator<Item = (ImageAccessSet, vk::ImageSubresourceRange)> + '_ {
+        let access_range = self.info.resolve_subresource_counts(access_range);
+
+        #[cfg(feature = "checked")]
+        {
+            assert_aspect_mask_supported(access_range.aspect_mask);
+            assert!(format_aspect_mask(self.info.format).contains(access_range.aspect_mask));
+        }
+
+        self.access
+            .replace(&self.dense_access, self.info, next_access, access_range)
+    }
+
+    /// Starts one synchronization epoch and accumulates overlapping sampled reads within it.
     pub(crate) fn swap_accesses<'a, I>(
         &'a self,
         accesses: I,
-    ) -> impl Iterator<Item = (AccessType, AccessType, vk::ImageSubresourceRange)> + 'a
+    ) -> impl Iterator<Item = (AccessType, ImageAccessSet, vk::ImageSubresourceRange)> + 'a
     where
         I: IntoIterator<Item = (AccessType, vk::ImageSubresourceRange)>,
         I::IntoIter: 'a,
@@ -1233,59 +1447,8 @@ impl Image {
                 (next_access, info.resolve_subresource_counts(access_range))
             });
 
-        struct Iter<'a, I>
-        where
-            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
-        {
-            access: &'a Access,
-            accesses: I,
-            dense_access: &'a Mutex<Option<DenseMap<AccessType>>>,
-            info: ImageInfo,
-            current: Option<(AccessType, AccessIter<'a>)>,
-        }
-
-        impl<I> Iterator for Iter<'_, I>
-        where
-            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
-        {
-            type Item = (AccessType, AccessType, vk::ImageSubresourceRange);
-
-            fn next(&mut self) -> Option<Self::Item> {
-                loop {
-                    if let Some((next_access, iter)) = self.current.as_mut() {
-                        if let Some((prev_access, range)) = iter.next() {
-                            return Some((*next_access, prev_access, range));
-                        }
-
-                        self.current = None;
-                    }
-
-                    let (next_access, access_range) = self.accesses.next()?;
-                    self.current = Some((
-                        next_access,
-                        self.access
-                            .swap(self.dense_access, self.info, next_access, access_range),
-                    ));
-                }
-            }
-        }
-
-        impl<I> Drop for Iter<'_, I>
-        where
-            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
-        {
-            fn drop(&mut self) {
-                while self.next().is_some() {}
-            }
-        }
-
-        Iter {
-            access: &self.access,
-            accesses,
-            dense_access: &self.dense_access,
-            info,
-            current: None,
-        }
+        self.access
+            .swap_accesses(&self.dense_access, info, accesses)
     }
 
     /// Returns compact synchronization information for the image's current subresource accesses.
@@ -1326,7 +1489,7 @@ impl Image {
         let format_aspect_mask = format_aspect_mask(self.info.format);
         #[derive(Clone, Copy)]
         enum AccessSource<'a> {
-            Uniform(AccessType),
+            Uniform(ImageAccessSet),
             DualAspect(&'a DualAspectAccess),
             Dense,
         }
@@ -1346,7 +1509,7 @@ impl Image {
         };
 
         struct UniformSyncInfoIter {
-            access: AccessType,
+            access: ImageAccessSet,
             sharing: SharingMode,
             subresource_ranges: ImageSubresourceRangeIter,
         }
@@ -1357,7 +1520,7 @@ impl Image {
             fn next(&mut self) -> Option<Self::Item> {
                 self.subresource_ranges.next().map(|range| {
                     (
-                        ImageSubresourceSyncInfo::from_access(self.access, range),
+                        ImageSubresourceSyncInfo::from_access_set(self.access, range),
                         self.sharing,
                     )
                 })
@@ -1377,7 +1540,7 @@ impl Image {
         struct DenseSyncInfoIter<'a> {
             access_source: AccessSource<'a>,
             format_aspect_mask: vk::ImageAspectFlags,
-            access_dense: Option<MutexGuard<'a, Option<DenseMap<AccessType>>>>,
+            access_dense: Option<MutexGuard<'a, Option<DenseMap<ImageAccessSet>>>>,
             sharing_dense: Option<MutexGuard<'a, Option<DenseMap<SharingMode>>>>,
             sharing_source: SharingSource,
             subresource_ranges: ImageSubresourceRangeIter,
@@ -1413,7 +1576,7 @@ impl Image {
                 };
 
                 Some((
-                    ImageSubresourceSyncInfo::from_access(access, range),
+                    ImageSubresourceSyncInfo::from_access_set(access, range),
                     sharing,
                 ))
             }
@@ -1716,6 +1879,228 @@ impl Eq for Image {}
 impl PartialEq for Image {
     fn eq(&self, other: &Self) -> bool {
         self.handle == other.handle
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct ImageAccessSet(u16);
+
+impl ImageAccessSet {
+    const ANY_SAMPLED_READ_BIT: u16 = 1 << 9;
+    const SAMPLED_READ_BITS: u16 = (1 << 10) - 1;
+    const SAMPLED_READ_TAG: u16 = 1 << 10;
+    const VALUE_MASK: u16 = Self::SAMPLED_READ_TAG | Self::SAMPLED_READ_BITS;
+
+    pub(crate) const fn from_access(access: AccessType) -> Self {
+        let sampled_read_bit = match access {
+            AccessType::VertexShaderReadSampledImageOrUniformTexelBuffer => 1 << 0,
+            AccessType::TessellationControlShaderReadSampledImageOrUniformTexelBuffer => 1 << 1,
+            AccessType::TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer => 1 << 2,
+            AccessType::GeometryShaderReadSampledImageOrUniformTexelBuffer => 1 << 3,
+            AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer => 1 << 4,
+            AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer => 1 << 5,
+            AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer => 1 << 6,
+            AccessType::MeshShaderReadSampledImageOrUniformTexelBuffer => 1 << 7,
+            AccessType::TaskShaderReadSampledImageOrUniformTexelBuffer => 1 << 8,
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer => Self::ANY_SAMPLED_READ_BIT,
+            _ => 0,
+        };
+
+        if sampled_read_bit == 0 {
+            Self(access_type_into_u8(access) as u16)
+        } else {
+            Self(Self::SAMPLED_READ_TAG | sampled_read_bit)
+        }
+    }
+
+    const fn from_raw(raw: u16) -> Self {
+        debug_assert!(raw & !Self::VALUE_MASK == 0);
+
+        Self(raw)
+    }
+
+    pub(crate) fn iter(self) -> ImageAccessSetIter {
+        if let Some(access) = self.non_sampled_access() {
+            ImageAccessSetIter {
+                sampled_read_bits: 0,
+                single_access: Some(access),
+            }
+        } else {
+            ImageAccessSetIter {
+                sampled_read_bits: self.0 & Self::SAMPLED_READ_BITS,
+                single_access: None,
+            }
+        }
+    }
+
+    pub(crate) const fn is_nothing(self) -> bool {
+        matches!(self.non_sampled_access(), Some(AccessType::Nothing))
+    }
+
+    const fn is_sampled_read(self) -> bool {
+        self.0 & Self::SAMPLED_READ_TAG != 0
+    }
+
+    fn layout(self) -> Option<vk::ImageLayout> {
+        self.non_sampled_access().map_or(
+            Some(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            access_type_to_layout,
+        )
+    }
+
+    const fn raw(self) -> u16 {
+        self.0
+    }
+
+    pub(crate) const fn non_sampled_access(self) -> Option<AccessType> {
+        if self.is_sampled_read() {
+            None
+        } else {
+            Some(access_type_from_u8(self.0 as u8))
+        }
+    }
+
+    pub(crate) const fn after_access(self, next_access: AccessType) -> Self {
+        let next = Self::from_access(next_access);
+        if !self.is_sampled_read() || !next.is_sampled_read() {
+            return next;
+        }
+
+        let sampled_read_bits = (self.0 | next.0) & Self::SAMPLED_READ_BITS;
+        if sampled_read_bits & Self::ANY_SAMPLED_READ_BIT != 0 {
+            Self(Self::SAMPLED_READ_TAG | Self::ANY_SAMPLED_READ_BIT)
+        } else {
+            Self(Self::SAMPLED_READ_TAG | sampled_read_bits)
+        }
+    }
+}
+
+impl Debug for ImageAccessSet {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(access) = self.non_sampled_access() {
+            access.fmt(f)
+        } else {
+            f.debug_set().entries(self.iter()).finish()
+        }
+    }
+}
+
+pub(crate) struct ImageAccessSetIter {
+    sampled_read_bits: u16,
+    single_access: Option<AccessType>,
+}
+
+impl Iterator for ImageAccessSetIter {
+    type Item = AccessType;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(access) = self.single_access.take() {
+            return Some(access);
+        }
+        if self.sampled_read_bits & ImageAccessSet::ANY_SAMPLED_READ_BIT != 0 {
+            self.sampled_read_bits = 0;
+
+            return Some(AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer);
+        }
+        if self.sampled_read_bits == 0 {
+            return None;
+        }
+
+        let bit = self.sampled_read_bits.trailing_zeros();
+        self.sampled_read_bits &= !(1 << bit);
+
+        Some(match bit {
+            0 => AccessType::VertexShaderReadSampledImageOrUniformTexelBuffer,
+            1 => AccessType::TessellationControlShaderReadSampledImageOrUniformTexelBuffer,
+            2 => AccessType::TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer,
+            3 => AccessType::GeometryShaderReadSampledImageOrUniformTexelBuffer,
+            4 => AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+            5 => AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+            6 => AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+            7 => AccessType::MeshShaderReadSampledImageOrUniformTexelBuffer,
+            8 => AccessType::TaskShaderReadSampledImageOrUniformTexelBuffer,
+            _ => unreachable!(),
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for ImageAccessSetIter {
+    fn len(&self) -> usize {
+        if self.single_access.is_some()
+            || self.sampled_read_bits & ImageAccessSet::ANY_SAMPLED_READ_BIT != 0
+        {
+            1
+        } else {
+            self.sampled_read_bits.count_ones() as _
+        }
+    }
+}
+
+struct ImageAccessSetMapIter<'a, M>
+where
+    M: DerefMut<Target = DenseMap<ImageAccessSet>>,
+{
+    __: PhantomData<&'a mut DenseMap<ImageAccessSet>>,
+    cursor: DenseMapCursor,
+    map: M,
+    accumulate_sampled_reads: bool,
+    next_access: AccessType,
+}
+
+impl<'a, M> ImageAccessSetMapIter<'a, M>
+where
+    M: DerefMut<Target = DenseMap<ImageAccessSet>>,
+{
+    fn new(
+        map: M,
+        next_access: AccessType,
+        range: vk::ImageSubresourceRange,
+        accumulate_sampled_reads: bool,
+    ) -> Self {
+        let cursor = DenseMapCursor::new(&map, range);
+
+        Self {
+            __: PhantomData,
+            cursor,
+            map,
+            accumulate_sampled_reads,
+            next_access,
+        }
+    }
+}
+
+impl<M> Drop for ImageAccessSetMapIter<'_, M>
+where
+    M: DerefMut<Target = DenseMap<ImageAccessSet>>,
+{
+    fn drop(&mut self) {
+        while self.next().is_some() {}
+    }
+}
+
+impl<'a, M> Iterator for ImageAccessSetMapIter<'a, M>
+where
+    M: DerefMut<Target = DenseMap<ImageAccessSet>>,
+{
+    type Item = (ImageAccessSet, vk::ImageSubresourceRange);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let accumulate_sampled_reads = self.accumulate_sampled_reads;
+        let next_access = self.next_access;
+
+        self.cursor.next_with(&mut self.map, |prev_access| {
+            if accumulate_sampled_reads {
+                prev_access.after_access(next_access)
+            } else {
+                ImageAccessSet::from_access(next_access)
+            }
+        })
     }
 }
 
@@ -2171,12 +2556,22 @@ impl ImageSubresourceSyncInfo {
             && self.range.base_mip_level + self.range.level_count == other.range.base_mip_level
     }
 
-    fn from_access(access: AccessType, range: vk::ImageSubresourceRange) -> Self {
-        let (stage_mask, access_mask) = pipeline_stage_access_flags(access);
+    fn from_access_set(access_set: ImageAccessSet, range: vk::ImageSubresourceRange) -> Self {
+        let (stage_mask, access_mask) = access_set.iter().fold(
+            (vk::PipelineStageFlags::empty(), vk::AccessFlags::empty()),
+            |(stage_mask, access_mask), access| {
+                let (access_stage_mask, access_mask_for_type) = pipeline_stage_access_flags(access);
+
+                (
+                    stage_mask | access_stage_mask,
+                    access_mask | access_mask_for_type,
+                )
+            },
+        );
 
         Self {
             access_mask,
-            layout: access_type_to_layout(access),
+            layout: access_set.layout(),
             queue_family_index: None,
             range,
             stage_mask,
@@ -2566,40 +2961,39 @@ impl Sharing {
 }
 
 #[derive(Debug)]
-struct UniformAccess(AtomicU8);
+struct UniformAccess(AtomicU16);
 
 impl UniformAccess {
-    fn new(access: AccessType) -> Self {
-        Self(AtomicU8::new(access_type_into_u8(access)))
+    fn new(access: ImageAccessSet) -> Self {
+        Self(AtomicU16::new(access.raw()))
     }
 
-    fn load(&self) -> AccessType {
-        access_type_from_u8(self.0.load(Ordering::Acquire))
+    fn load(&self) -> ImageAccessSet {
+        ImageAccessSet::from_raw(self.0.load(Ordering::Acquire))
     }
 
     fn swap(
         &self,
         next_access: AccessType,
         access_range: vk::ImageSubresourceRange,
-    ) -> (AccessType, vk::ImageSubresourceRange) {
+        accumulate_sampled_reads: bool,
+    ) -> (ImageAccessSet, vk::ImageSubresourceRange) {
         debug_assert_eq!(access_range.base_array_layer, 0);
         debug_assert_eq!(access_range.base_mip_level, 0);
         debug_assert_eq!(access_range.layer_count, 1);
         debug_assert_eq!(access_range.level_count, 1);
         debug_assert_eq!(access_range.aspect_mask.as_raw().count_ones(), 1);
 
-        self.swap_range(next_access, access_range)
+        self.swap_range(next_access, access_range, accumulate_sampled_reads)
     }
 
     fn swap_range(
         &self,
         next_access: AccessType,
         access_range: vk::ImageSubresourceRange,
-    ) -> (AccessType, vk::ImageSubresourceRange) {
-        let prev_access = access_type_from_u8(
-            self.0
-                .swap(access_type_into_u8(next_access), Ordering::AcqRel),
-        );
+        accumulate_sampled_reads: bool,
+    ) -> (ImageAccessSet, vk::ImageSubresourceRange) {
+        let prev_access = swap_image_access_set(&self.0, next_access, accumulate_sampled_reads);
 
         (prev_access, access_range)
     }
@@ -2611,7 +3005,7 @@ pub mod bench {
 
     pub struct SwapAccessBenchHarness {
         access: Access,
-        dense_access: Mutex<Option<DenseMap<AccessType>>>,
+        dense_access: Mutex<Option<DenseMap<ImageAccessSet>>>,
         info: ImageInfo,
     }
 
@@ -2633,7 +3027,7 @@ pub mod bench {
             &self,
             next_access: AccessType,
             mut access_range: vk::ImageSubresourceRange,
-        ) -> Vec<(AccessType, vk::ImageSubresourceRange)> {
+        ) -> Vec<(u16, vk::ImageSubresourceRange)> {
             #[cfg(feature = "checked")]
             {
                 assert_aspect_mask_supported(access_range.aspect_mask);
@@ -2662,7 +3056,24 @@ pub mod bench {
 
             self.access
                 .swap(&self.dense_access, self.info, next_access, access_range)
+                .map(|(access, range)| (access.raw(), range))
                 .collect()
+        }
+
+        pub fn swap_accesses(
+            &self,
+            accesses: impl IntoIterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+        ) -> u16 {
+            let info = self.info;
+            self.access
+                .swap_accesses(
+                    &self.dense_access,
+                    info,
+                    accesses.into_iter().map(move |(access, range)| {
+                        (access, info.resolve_subresource_counts(range))
+                    }),
+                )
+                .fold(0, |checksum, (_, access, _)| checksum ^ access.raw())
         }
     }
 }
@@ -2675,14 +3086,30 @@ mod test {
         std::ops::Range,
     };
 
+    trait IntoImageAccessSet {
+        fn into_access_set(self) -> ImageAccessSet;
+    }
+
+    impl IntoImageAccessSet for AccessType {
+        fn into_access_set(self) -> ImageAccessSet {
+            ImageAccessSet::from_access(self)
+        }
+    }
+
+    impl IntoImageAccessSet for ImageAccessSet {
+        fn into_access_set(self) -> ImageAccessSet {
+            self
+        }
+    }
+
     // ImageSubresourceRange does not implement PartialEq
-    fn assert_access_ranges_eq(
-        lhs: (AccessType, vk::ImageSubresourceRange),
-        rhs: (AccessType, vk::ImageSubresourceRange),
+    fn assert_access_ranges_eq<L: IntoImageAccessSet, R: IntoImageAccessSet>(
+        lhs: (L, vk::ImageSubresourceRange),
+        rhs: (R, vk::ImageSubresourceRange),
     ) {
         assert_eq!(
             (
-                lhs.0,
+                lhs.0.into_access_set(),
                 lhs.1.aspect_mask,
                 lhs.1.base_array_layer,
                 lhs.1.layer_count,
@@ -2690,7 +3117,7 @@ mod test {
                 lhs.1.level_count
             ),
             (
-                rhs.0,
+                rhs.0.into_access_set(),
                 rhs.1.aspect_mask,
                 rhs.1.base_array_layer,
                 rhs.1.layer_count,
@@ -2698,6 +3125,10 @@ mod test {
                 rhs.1.level_count
             )
         );
+    }
+
+    fn assert_access_set_eq(access_set: ImageAccessSet, expected: &[AccessType]) {
+        assert_eq!(access_set.iter().collect::<Vec<_>>(), expected);
     }
 
     fn image_sync_subresource(
@@ -2712,6 +3143,288 @@ mod test {
             range: image_subresource_range(aspect_mask, array_layers, mip_levels),
             stage_mask: vk::PipelineStageFlags::COMPUTE_SHADER,
         }
+    }
+
+    #[test]
+    fn ray_tracing_sampled_image_sync_info_uses_shader_read_only_layout() {
+        let sync_info = ImageSubresourceSyncInfo::from_access_set(
+            ImageAccessSet::from_access(
+                AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+            ),
+            image_subresource_range(vk::ImageAspectFlags::COLOR, 0..1, 0..1),
+        );
+
+        assert_eq!(sync_info.access_mask, vk::AccessFlags::SHADER_READ);
+        assert_eq!(
+            sync_info.layout,
+            Some(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        );
+        assert_eq!(
+            sync_info.stage_mask,
+            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+        );
+    }
+
+    #[test]
+    fn sampled_image_access_types_use_distinct_stage_bits() {
+        let sampled_reads = [
+            AccessType::VertexShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::TessellationControlShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::TessellationEvaluationShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::GeometryShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::MeshShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::TaskShaderReadSampledImageOrUniformTexelBuffer,
+        ];
+
+        for (idx, access) in sampled_reads.into_iter().enumerate() {
+            let access_set = ImageAccessSet::from_access(access);
+            assert!(access_set.is_sampled_read(), "{access:?}");
+            assert_access_set_eq(access_set, &[access]);
+
+            for other in sampled_reads.into_iter().skip(idx + 1) {
+                assert_ne!(access_set, ImageAccessSet::from_access(other));
+            }
+        }
+
+        let input_attachment = AccessType::FragmentShaderReadColorInputAttachment;
+        let access_set = ImageAccessSet::from_access(input_attachment);
+        assert!(!access_set.is_sampled_read());
+        assert_access_set_eq(access_set, &[input_attachment]);
+    }
+
+    #[test]
+    fn sampled_image_access_tracking_accumulates_exact_reader_stages() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8G8B8A8_UNORM, 1, 1);
+        let range = image_subresource_range(A::COLOR, 0..1, 0..1);
+        let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let access = Access::new(info, AccessType::Nothing);
+        let dense = Mutex::new(None);
+
+        let previous = access
+            .swap(&dense, info, compute_read, range)
+            .next()
+            .unwrap();
+        assert_access_ranges_eq(
+            previous,
+            (ImageAccessSet::from_access(AccessType::Nothing), range),
+        );
+
+        let previous = access.swap(&dense, info, ray_read, range).next().unwrap();
+        assert_access_set_eq(previous.0, &[compute_read]);
+
+        let previous = access
+            .swap(&dense, info, AccessType::ComputeShaderWrite, range)
+            .next()
+            .unwrap();
+        assert_access_set_eq(previous.0, &[compute_read, ray_read]);
+
+        let sync_info = ImageSubresourceSyncInfo::from_access_set(previous.0, previous.1);
+        assert_eq!(sync_info.access_mask, vk::AccessFlags::SHADER_READ);
+        assert_eq!(
+            sync_info.stage_mask,
+            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+        );
+
+        let previous = access
+            .swap(&dense, info, compute_read, range)
+            .next()
+            .unwrap();
+        assert_access_set_eq(previous.0, &[AccessType::ComputeShaderWrite]);
+
+        let previous = access
+            .swap(&dense, info, AccessType::TransferWrite, range)
+            .next()
+            .unwrap();
+        assert_access_set_eq(previous.0, &[compute_read]);
+    }
+
+    #[test]
+    fn broad_sampled_image_read_saturates_reader_stages() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8G8B8A8_UNORM, 1, 1);
+        let range = image_subresource_range(A::COLOR, 0..1, 0..1);
+        let broad_read = AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer;
+        let access = Access::new(
+            info,
+            AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+        );
+        let dense = Mutex::new(None);
+
+        access.swap(&dense, info, broad_read, range).for_each(drop);
+        let previous = access
+            .swap(
+                &dense,
+                info,
+                AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+                range,
+            )
+            .next()
+            .unwrap();
+        assert_access_set_eq(previous.0, &[broad_read]);
+
+        let sync_info = ImageSubresourceSyncInfo::from_access_set(previous.0, previous.1);
+        assert_eq!(sync_info.stage_mask, vk::PipelineStageFlags::ALL_COMMANDS);
+    }
+
+    #[test]
+    fn sampled_image_access_epoch_replaces_previous_reader_stages() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8G8B8A8_UNORM, 1, 1);
+        let range = image_subresource_range(A::COLOR, 0..1, 0..1);
+        let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let fragment_read = AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let access = Access::new(info, compute_read);
+        let dense = Mutex::new(None);
+
+        access.swap(&dense, info, ray_read, range).for_each(drop);
+        let previous = access
+            .replace(&dense, info, fragment_read, range)
+            .next()
+            .unwrap();
+        assert_access_set_eq(previous.0, &[compute_read, ray_read]);
+
+        let previous = access
+            .swap(&dense, info, AccessType::ComputeShaderWrite, range)
+            .next()
+            .unwrap();
+        assert_access_set_eq(previous.0, &[fragment_read]);
+    }
+
+    #[test]
+    fn sampled_image_access_batch_replaces_epoch_and_merges_overlaps() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8G8B8A8_UNORM, 2, 1);
+        let range = image_subresource_range(A::COLOR, 0..2, 0..1);
+        let partial_range = image_subresource_range(A::COLOR, 0..1, 0..1);
+        let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let access = Access::new(
+            info,
+            AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+        );
+        let dense = Mutex::new(None);
+
+        access
+            .swap_accesses(&dense, info, [(compute_read, range)].into_iter())
+            .for_each(drop);
+        let previous = access
+            .swap_accesses(
+                &dense,
+                info,
+                [(compute_read, range), (ray_read, partial_range)].into_iter(),
+            )
+            .collect::<Vec<_>>();
+
+        assert_eq!(previous.len(), 2);
+        assert_eq!(previous[0].0, compute_read);
+        assert_access_ranges_eq((previous[0].1, previous[0].2), (compute_read, range));
+        assert_eq!(previous[1].0, ray_read);
+        assert_access_ranges_eq(
+            (previous[1].1, previous[1].2),
+            (compute_read, partial_range),
+        );
+
+        let dense = dense.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let dense = dense.expect("poisoned image dense lock");
+
+        let dense = dense.as_ref().expect("missing dense access state");
+        assert_access_set_eq(dense.subresource(0, 0, 0), &[compute_read, ray_read]);
+        assert_access_set_eq(dense.subresource(0, 1, 0), &[compute_read]);
+    }
+
+    #[test]
+    fn sampled_image_access_tracking_accumulates_dense_subresources() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8G8B8A8_UNORM, 2, 2);
+        let range = image_subresource_range(A::COLOR, 0..2, 0..2);
+        let partial_range = image_subresource_range(A::COLOR, 0..1, 0..1);
+        let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let access = Access::new(info, AccessType::Nothing);
+        let dense = Mutex::new(None);
+
+        access
+            .swap(&dense, info, compute_read, range)
+            .for_each(drop);
+        access
+            .swap(&dense, info, ray_read, partial_range)
+            .for_each(drop);
+        let fragment_read = AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer;
+        let previous = access
+            .replace(&dense, info, fragment_read, partial_range)
+            .next()
+            .unwrap();
+        assert_access_set_eq(previous.0, &[compute_read, ray_read]);
+
+        let dense = dense.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let dense = dense.expect("poisoned image dense lock");
+
+        let dense = dense.as_ref().expect("missing dense access state");
+        assert_access_set_eq(dense.subresource(0, 0, 0), &[fragment_read]);
+        assert_access_set_eq(dense.subresource(0, 1, 0), &[compute_read]);
+        assert_access_set_eq(dense.subresource(0, 0, 1), &[compute_read]);
+        assert_access_set_eq(dense.subresource(0, 1, 1), &[compute_read]);
+    }
+
+    #[test]
+    fn sampled_image_access_tracking_accumulates_dual_aspects() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::D32_SFLOAT_S8_UINT, 1, 1);
+        let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let access = Access::new(info, AccessType::Nothing);
+        let dense = Mutex::new(None);
+
+        access
+            .swap(
+                &dense,
+                info,
+                compute_read,
+                image_subresource_range(A::DEPTH, 0..1, 0..1),
+            )
+            .for_each(drop);
+        access
+            .swap(
+                &dense,
+                info,
+                ray_read,
+                image_subresource_range(A::DEPTH | A::STENCIL, 0..1, 0..1),
+            )
+            .for_each(drop);
+        let fragment_read = AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer;
+        let previous = access
+            .replace(
+                &dense,
+                info,
+                fragment_read,
+                image_subresource_range(A::DEPTH, 0..1, 0..1),
+            )
+            .next()
+            .unwrap();
+        assert_access_set_eq(previous.0, &[compute_read, ray_read]);
+
+        let Access::DualAspect(access) = access else {
+            panic!("expected dual-aspect access tracking");
+        };
+        assert_access_set_eq(access.load(0), &[fragment_read]);
+        assert_access_set_eq(access.load(1), &[ray_read]);
     }
 
     #[test]
@@ -2939,7 +3652,10 @@ mod test {
         }
 
         assert!(!access.is_dense_active());
-        assert_eq!(access.load(), AccessType::AnyShaderReadOther);
+        assert_eq!(
+            access.load(),
+            ImageAccessSet::from_access(AccessType::AnyShaderReadOther)
+        );
 
         let dense = dense.lock();
         #[cfg(not(feature = "parking_lot"))]
@@ -3005,11 +3721,20 @@ mod test {
         let dense_map = dense.as_ref().expect("missing dense access map");
         assert_eq!(
             dense_map.subresource(0, 0, 0),
-            AccessType::AnyShaderReadOther
+            ImageAccessSet::from_access(AccessType::AnyShaderReadOther)
         );
-        assert_eq!(dense_map.subresource(0, 1, 0), AccessType::AnyShaderWrite);
-        assert_eq!(dense_map.subresource(0, 0, 1), AccessType::Nothing);
-        assert_eq!(dense_map.subresource(0, 1, 1), AccessType::Nothing);
+        assert_eq!(
+            dense_map.subresource(0, 1, 0),
+            ImageAccessSet::from_access(AccessType::AnyShaderWrite)
+        );
+        assert_eq!(
+            dense_map.subresource(0, 0, 1),
+            ImageAccessSet::from_access(AccessType::Nothing)
+        );
+        assert_eq!(
+            dense_map.subresource(0, 1, 1),
+            ImageAccessSet::from_access(AccessType::Nothing)
+        );
     }
 
     #[test]
@@ -3071,7 +3796,10 @@ mod test {
         drop(accesses);
 
         assert!(!access.is_dense_active());
-        assert_eq!(access.load(), AccessType::HostRead);
+        assert_eq!(
+            access.load(),
+            ImageAccessSet::from_access(AccessType::HostRead)
+        );
 
         let dense = dense.lock();
         #[cfg(not(feature = "parking_lot"))]
@@ -3995,6 +4723,9 @@ mod test {
     fn image_access_fuzz(aspect_count: u8, array_layer_count: u32, mip_level_count: u32) {
         const FUZZ_COUNT: usize = 100_000;
         static ACCESS_TYPES: &[AccessType] = &[
+            AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
             AccessType::AnyShaderReadOther,
             AccessType::AnyShaderWrite,
             AccessType::ColorAttachmentRead,
@@ -4097,6 +4828,9 @@ mod test {
     ) {
         const FUZZ_COUNT: usize = 10_000;
         static ACCESS_TYPES: &[AccessType] = &[
+            AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+            AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
             AccessType::AnyShaderReadOther,
             AccessType::AnyShaderWrite,
             AccessType::ColorAttachmentRead,
@@ -4117,7 +4851,7 @@ mod test {
         let total = (aspect_count as u32 * array_layer_count * mip_level_count) as usize;
         let access = Access::new(info, AccessType::Nothing);
         let dense = Mutex::new(None);
-        let mut data = vec![AccessType::Nothing; total];
+        let mut data = vec![ImageAccessSet::from_access(AccessType::Nothing); total];
 
         let aspect_bits = format_aspect_mask(fmt);
 
@@ -4175,7 +4909,7 @@ mod test {
                         let idx = (l * aspect_count as u32 * mip_level_count
                             + m * aspect_count as u32
                             + a as u32) as usize;
-                        data[idx] = new_access;
+                        data[idx] = data[idx].after_access(new_access);
                     }
                 }
             }

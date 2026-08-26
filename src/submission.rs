@@ -38,8 +38,8 @@ use {
             format_aspect_mask,
             graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{
-                DenseMap, Image, ImageInfo, image_subresource_range_contains,
-                image_subresource_range_intersection,
+                DenseMap, Image, ImageAccessSet, ImageInfo, access_type_to_layout,
+                image_subresource_range_contains, image_subresource_range_intersection,
             },
             initial_image_layout_access, is_read_access,
             physical_device::Vulkan10Limits,
@@ -254,14 +254,89 @@ const fn image_access_layout(access: AccessType) -> ImageLayout {
     }
 }
 
+fn image_access_set_layout(access_set: ImageAccessSet) -> ImageLayout {
+    access_set
+        .non_sampled_access()
+        .map_or(ImageLayout::Optimal, image_access_layout)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImageOwnershipLayouts {
+    old: vk::ImageLayout,
+    new: vk::ImageLayout,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TrackedImageBarrier {
+    previous_accesses: ImageAccessSet,
+    next_access: AccessType,
+    previous_layout: ImageLayout,
+    next_layout: ImageLayout,
+    ownership_layouts: Option<ImageOwnershipLayouts>,
+    discard_contents: bool,
+    src_queue_family_index: u32,
+    dst_queue_family_index: u32,
+    image: vk::Image,
+    range: vk::ImageSubresourceRange,
+}
+
+fn get_tracked_image_memory_barrier(
+    barrier: TrackedImageBarrier,
+) -> (
+    vk::PipelineStageFlags,
+    vk::PipelineStageFlags,
+    vk::ImageMemoryBarrier<'static>,
+) {
+    let ownership_layouts = barrier.ownership_layouts;
+    let previous_accesses = barrier
+        .previous_accesses
+        .iter()
+        .collect::<SmallVec<[AccessType; 10]>>();
+    let next_accesses = [barrier.next_access];
+    let (mut src_stage_mask, dst_stage_mask, barrier) = get_image_memory_barrier(&ImageBarrier {
+        previous_accesses: previous_accesses.as_slice(),
+        next_accesses: &next_accesses,
+        previous_layout: barrier.previous_layout,
+        next_layout: barrier.next_layout,
+        discard_contents: barrier.discard_contents,
+        src_queue_family_index: barrier.src_queue_family_index,
+        dst_queue_family_index: barrier.dst_queue_family_index,
+        image: barrier.image,
+        range: barrier.range,
+    });
+
+    let mut barrier = vk::ImageMemoryBarrier {
+        src_access_mask: barrier.src_access_mask,
+        dst_access_mask: barrier.dst_access_mask,
+        old_layout: barrier.old_layout,
+        new_layout: barrier.new_layout,
+        src_queue_family_index: barrier.src_queue_family_index,
+        dst_queue_family_index: barrier.dst_queue_family_index,
+        image: barrier.image,
+        subresource_range: barrier.subresource_range,
+        ..Default::default()
+    };
+
+    if let Some(layouts) = ownership_layouts {
+        // The source scope of an acquire is ignored, but its stage must still be supported by the
+        // destination queue family. ALL_COMMANDS is valid for every queue capability.
+        src_stage_mask = vk::PipelineStageFlags::ALL_COMMANDS;
+        barrier.src_access_mask = vk::AccessFlags::empty();
+        barrier.old_layout = layouts.old;
+        barrier.new_layout = layouts.new;
+    }
+
+    (src_stage_mask, dst_stage_mask, barrier)
+}
+
 fn image_barriers_from_transfers<'a>(
     image: vk::Image,
-    prev_access: &'a AccessType,
-    next_access: &'a AccessType,
+    prev_access: ImageAccessSet,
+    next_access: AccessType,
     range: vk::ImageSubresourceRange,
     transfers: &'a [ImageOwnershipTransfer],
     discard_contents: bool,
-) -> impl Iterator<Item = ImageBarrier<'a>> + 'a {
+) -> impl Iterator<Item = TrackedImageBarrier> + 'a {
     image_barrier_transfer_ranges(transfers, range).map(move |(range, transfer)| {
         trace!(
             "    image {:?} {:?} {:?}->{:?}",
@@ -271,11 +346,12 @@ fn image_barriers_from_transfers<'a>(
             next_access,
         );
 
-        ImageBarrier {
-            next_accesses: slice::from_ref(next_access),
-            next_layout: image_access_layout(*next_access),
-            previous_accesses: slice::from_ref(prev_access),
-            previous_layout: image_access_layout(*prev_access),
+        TrackedImageBarrier {
+            next_access,
+            next_layout: image_access_layout(next_access),
+            previous_accesses: prev_access,
+            previous_layout: image_access_set_layout(prev_access),
+            ownership_layouts: transfer.map(|transfer| transfer.layouts),
             discard_contents,
             src_queue_family_index: transfer.map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
                 transfer.src_queue_family_index
@@ -489,18 +565,33 @@ fn image_barrier_transfer_ranges<'a>(
     })
 }
 
-fn image_execution_discard_contents(prev_access: AccessType) -> bool {
-    prev_access == AccessType::Nothing
+fn image_execution_discard_contents(prev_access: ImageAccessSet) -> bool {
+    prev_access.is_nothing()
 }
 
 fn image_layout_transition_discard_contents(
-    prev_access: AccessType,
+    prev_access: ImageAccessSet,
     next_access: AccessType,
 ) -> bool {
     // Read/modify/write accesses must preserve the existing image contents
     // Check for "not-read" here because some accesses both read and write
     // Color Attachment Read/Write (blending) will prevent discarding contents
-    prev_access == AccessType::Nothing || !is_read_access(next_access)
+    prev_access.is_nothing() || !is_read_access(next_access)
+}
+
+fn image_ownership_layouts(
+    current_layout: Option<vk::ImageLayout>,
+    next_access: AccessType,
+    discard_contents: bool,
+) -> ImageOwnershipLayouts {
+    ImageOwnershipLayouts {
+        old: if discard_contents {
+            vk::ImageLayout::UNDEFINED
+        } else {
+            current_layout.unwrap_or(vk::ImageLayout::UNDEFINED)
+        },
+        new: access_type_to_layout(next_access).unwrap_or(vk::ImageLayout::UNDEFINED),
+    }
 }
 
 fn image_subresource_range_eq(
@@ -520,7 +611,7 @@ fn pipeline_barrier_from_iters<'a>(
     command_buffer: vk::CommandBuffer,
     global_barrier: Option<GlobalBarrier<'a>>,
     buffer_barriers: impl IntoIterator<Item = BufferBarrier<'a>>,
-    image_barriers: impl IntoIterator<Item = ImageBarrier<'a>>,
+    image_barriers: impl IntoIterator<Item = TrackedImageBarrier>,
 ) {
     #[derive(Default)]
     struct BarrierScratch {
@@ -569,20 +660,10 @@ fn pipeline_barrier_from_iters<'a>(
         }
 
         for image_barrier in image_barriers {
-            let (src_mask, dst_mask, barrier) = get_image_memory_barrier(&image_barrier);
+            let (src_mask, dst_mask, barrier) = get_tracked_image_memory_barrier(image_barrier);
             src_stage_mask |= src_mask;
             dst_stage_mask |= dst_mask;
-            tls.image_barriers.push(vk::ImageMemoryBarrier {
-                src_access_mask: barrier.src_access_mask,
-                dst_access_mask: barrier.dst_access_mask,
-                old_layout: barrier.old_layout,
-                new_layout: barrier.new_layout,
-                src_queue_family_index: barrier.src_queue_family_index,
-                dst_queue_family_index: barrier.dst_queue_family_index,
-                image: barrier.image,
-                subresource_range: barrier.subresource_range,
-                ..Default::default()
-            });
+            tls.image_barriers.push(barrier);
         }
 
         unsafe {
@@ -632,6 +713,22 @@ fn submit_stage_mask_legacy(stage_mask: vk::PipelineStageFlags2) -> vk::Pipeline
 
 fn supports_timeline_semaphores(device: &Device) -> bool {
     device.physical.features_v1_2.timeline_semaphore
+}
+
+fn image_queue_ownership_release_barrier(
+    release: ImageQueueOwnershipRelease,
+    src_queue_family_index: u32,
+    dst_queue_family_index: u32,
+) -> vk::ImageMemoryBarrier<'static> {
+    vk::ImageMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+        .dst_access_mask(vk::AccessFlags::empty())
+        .old_layout(release.layouts.old)
+        .new_layout(release.layouts.new)
+        .src_queue_family_index(src_queue_family_index)
+        .dst_queue_family_index(dst_queue_family_index)
+        .image(release.image)
+        .subresource_range(release.range)
 }
 
 /// Builds and submits a release barrier command buffer for each release group, calling
@@ -713,19 +810,14 @@ where
                         },
                     ));
 
-                    tls.release_image_barriers.extend(group.images.iter().map(
-                        |&(handle, current_layout, subresource_range)| {
-                            vk::ImageMemoryBarrier::default()
-                                .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                                .dst_access_mask(vk::AccessFlags::empty())
-                                .old_layout(current_layout)
-                                .new_layout(current_layout)
-                                .src_queue_family_index(group.src_queue_family_index)
-                                .dst_queue_family_index(target_queue_family_index)
-                                .image(handle)
-                                .subresource_range(subresource_range)
-                        },
-                    ));
+                    tls.release_image_barriers
+                        .extend(group.images.iter().copied().map(|release| {
+                            image_queue_ownership_release_barrier(
+                                release,
+                                group.src_queue_family_index,
+                                target_queue_family_index,
+                            )
+                        }));
 
                     unsafe {
                         release_cmd.device.cmd_pipeline_barrier(
@@ -998,7 +1090,7 @@ impl ImageOwnership {
 #[derive(Clone, Copy, Debug)]
 struct ImageOwnershipTransfer {
     dst_queue_family_index: u32,
-    layout: vk::ImageLayout,
+    layouts: ImageOwnershipLayouts,
     range: vk::ImageSubresourceRange,
     src_queue_family_index: u32,
     src_queue_index: u32,
@@ -1007,7 +1099,8 @@ struct ImageOwnershipTransfer {
 impl PartialEq for ImageOwnershipTransfer {
     fn eq(&self, other: &Self) -> bool {
         self.dst_queue_family_index == other.dst_queue_family_index
-            && self.layout == other.layout
+            && self.layouts.old == other.layouts.old
+            && self.layouts.new == other.layouts.new
             && self.src_queue_family_index == other.src_queue_family_index
             && self.src_queue_index == other.src_queue_index
             && image_subresource_range_eq(self.range, other.range)
@@ -1218,9 +1311,16 @@ struct QueueOwnershipRelease {
 #[derive(Debug)]
 struct QueueOwnershipReleaseGroup {
     buffers: Vec<(vk::Buffer, BufferSubresourceRange)>,
-    images: Vec<(vk::Image, vk::ImageLayout, vk::ImageSubresourceRange)>,
+    images: Vec<ImageQueueOwnershipRelease>,
     src_queue_family_index: u32,
     src_queue_index: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImageQueueOwnershipRelease {
+    image: vk::Image,
+    layouts: ImageOwnershipLayouts,
+    range: vk::ImageSubresourceRange,
 }
 
 fn queue_ownership_release_group(
@@ -4142,9 +4242,9 @@ impl Submission {
             static BARRIER: RefCell<BarrierScratch> = Default::default();
         }
 
-        struct AccessBarrier<T> {
+        struct AccessBarrier<T, A> {
             next_access: AccessType,
-            prev_access: AccessType,
+            prev_access: A,
             resource: T,
         }
 
@@ -4161,11 +4261,11 @@ impl Submission {
         #[derive(Default)]
         struct BarrierScratch {
             accel_struct_accesses: Vec<AccessType>,
-            buffers: Vec<AccessBarrier<BufferBarrierTarget>>,
-            images: Vec<AccessBarrier<ImageBarrierTarget>>,
+            buffers: Vec<AccessBarrier<BufferBarrierTarget, AccessType>>,
+            images: Vec<AccessBarrier<ImageBarrierTarget, ImageAccessSet>>,
             next_accesses: Vec<AccessType>,
-            pending_buffers: NodeIndexedScratch<AccessBarrier<BufferBarrierTarget>>,
-            pending_images: NodeIndexedScratch<AccessBarrier<ImageBarrierTarget>>,
+            pending_buffers: NodeIndexedScratch<AccessBarrier<BufferBarrierTarget, AccessType>>,
+            pending_images: NodeIndexedScratch<AccessBarrier<ImageBarrierTarget, ImageAccessSet>>,
             prev_accesses: Vec<AccessType>,
         }
 
@@ -4356,11 +4456,12 @@ impl Submission {
             {
                 let ImageBarrierTarget { image, range, .. } = *resource;
 
-                image_barriers.push(ImageBarrier {
-                    next_accesses: slice::from_ref(next_access),
-                    previous_accesses: slice::from_ref(prev_access),
+                image_barriers.push(TrackedImageBarrier {
+                    next_access: *next_access,
+                    previous_accesses: *prev_access,
                     next_layout: image_access_layout(*next_access),
-                    previous_layout: image_access_layout(*prev_access),
+                    previous_layout: image_access_set_layout(*prev_access),
+                    ownership_layouts: None,
                     discard_contents: image_execution_discard_contents(*prev_access),
                     src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
@@ -4379,8 +4480,8 @@ impl Submission {
                     {
                         image_barriers.extend(image_barriers_from_transfers(
                             resource.image,
-                            prev_access,
-                            next_access,
+                            *prev_access,
+                            *next_access,
                             resource.range,
                             transfers,
                             image_execution_discard_contents(*prev_access),
@@ -4451,7 +4552,7 @@ impl Submission {
             image: vk::Image,
             node_idx: NodeIndex,
             next_access: AccessType,
-            prev_access: AccessType,
+            prev_access: ImageAccessSet,
             range: vk::ImageSubresourceRange,
         }
 
@@ -4590,10 +4691,10 @@ impl Submission {
                             for (is_initial_layout, layout_range) in
                                 first_layout_uses.swap(false, access_range)
                             {
-                                for (prev_access, range) in
-                                    Image::swap_access(image, access, layout_range)
-                                {
-                                    if is_initial_layout {
+                                if is_initial_layout {
+                                    for (prev_access, range) in
+                                        Image::replace_access(image, access, layout_range)
+                                    {
                                         let barrier = ImageResourceBarrier {
                                             image: image.handle,
                                             node_idx,
@@ -4611,6 +4712,8 @@ impl Submission {
                                             tls.images.push(barrier);
                                         }
                                     }
+                                } else {
+                                    Image::swap_access(image, access, layout_range).for_each(drop);
                                 }
                             }
                         }
@@ -4674,8 +4777,8 @@ impl Submission {
 
                 image_barriers.extend(image_barriers_from_transfers(
                     *image,
-                    prev_access,
-                    next_access,
+                    *prev_access,
+                    *next_access,
                     *range,
                     &[],
                     image_layout_transition_discard_contents(*prev_access, *next_access),
@@ -4694,8 +4797,8 @@ impl Submission {
                     {
                         image_barriers.extend(image_barriers_from_transfers(
                             *image,
-                            prev_access,
-                            next_access,
+                            *prev_access,
+                            *next_access,
                             *range,
                             transfers,
                             image_layout_transition_discard_contents(*prev_access, *next_access),
@@ -4781,6 +4884,11 @@ impl Submission {
 
         for cmd_idx in schedule.cmds.iter().copied() {
             let cmd = &self.graph.cmds[cmd_idx];
+            let is_graphics = cmd
+                .execs
+                .first()
+                .and_then(|exec| exec.pipeline.as_ref())
+                .is_some_and(|pipeline| pipeline.is_graphics());
 
             for (node_idx, accesses) in cmd.execs.iter().flat_map(|exec| exec.accesses.iter()) {
                 if let Some(buffer) = self.graph.resources[node_idx].as_buffer() {
@@ -4875,12 +4983,23 @@ impl Submission {
                             else {
                                 continue;
                             };
-                            let layout = subresource.layout.unwrap_or(vk::ImageLayout::UNDEFINED);
+                            let next_access = if is_graphics {
+                                initial_image_layout_access(access.access)
+                            } else {
+                                access.access
+                            };
+                            let discard_contents = subresource.layout.is_none()
+                                || is_graphics && !is_read_access(next_access);
+                            let layouts = image_ownership_layouts(
+                                subresource.layout,
+                                next_access,
+                                discard_contents,
+                            );
                             let transfer = ImageOwnershipTransfer {
                                 src_queue_family_index,
                                 src_queue_index,
                                 dst_queue_family_index: queue_family_index,
-                                layout,
+                                layouts,
                                 range,
                             };
 
@@ -4890,7 +5009,11 @@ impl Submission {
                                 src_queue_index,
                             )
                             .images
-                            .push((image.handle, layout, range));
+                            .push(ImageQueueOwnershipRelease {
+                                image: image.handle,
+                                layouts,
+                                range,
+                            });
                             self.pending_image_transfer_nodes
                                 .get_or_insert_with(|| PendingTransferNodes::new(resource_count))
                                 .push_transfer(node_idx, image.handle, transfer);
@@ -6596,10 +6719,11 @@ pub mod fuzz {
 mod test {
     use super::{
         BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData,
-        ExternalRenderPassAccessHistory, ImageOwnership, ImageOwnershipTransfer, NodeIndex,
-        PipelineStageAccessFlags, QueueSubmitInfo, RecordSelection, RecordedSubmission,
-        RecordedSubmissionState, RecordingOwnership, Schedule, SemaphoreSubmitInfo, Submission,
-        SubresourceAccess, SubresourceRange, check_queue_submit_args, fuzz,
+        ExternalRenderPassAccessHistory, ImageOwnership, ImageOwnershipLayouts,
+        ImageOwnershipTransfer, ImageQueueOwnershipRelease, NodeIndex, PipelineStageAccessFlags,
+        QueueSubmitInfo, RecordSelection, RecordedSubmission, RecordedSubmissionState,
+        RecordingOwnership, Schedule, SemaphoreSubmitInfo, Submission, SubresourceAccess,
+        SubresourceRange, check_queue_submit_args, fuzz,
     };
     use crate::{
         AnyResource, Attachment, DepthStencilAttachment, Execution, Graph, LoadOp, Node, StoreOp,
@@ -6615,7 +6739,7 @@ mod test {
             device::{Device, DeviceInfo},
             fence::Fence,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
-            image::{Image, ImageInfo, SampleCount},
+            image::{Image, ImageAccessSet, ImageInfo, SampleCount},
             render_pass::SubpassDependency,
         },
         node::{AnyNode, BufferNode},
@@ -6667,7 +6791,8 @@ mod test {
                 transfer.src_queue_family_index,
                 transfer.src_queue_index,
                 transfer.dst_queue_family_index,
-                transfer.layout.as_raw(),
+                transfer.layouts.old.as_raw(),
+                transfer.layouts.new.as_raw(),
                 transfer.range.aspect_mask.as_raw(),
                 transfer.range.base_array_layer,
                 transfer.range.layer_count,
@@ -6952,14 +7077,20 @@ mod test {
         let mut pending = vec![
             ImageOwnershipTransfer {
                 dst_queue_family_index: 0,
-                layout: vk::ImageLayout::GENERAL,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
                 range: consumed,
                 src_queue_family_index: 1,
                 src_queue_index: 0,
             },
             ImageOwnershipTransfer {
                 dst_queue_family_index: 0,
-                layout: vk::ImageLayout::GENERAL,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
                 range: kept,
                 src_queue_family_index: 1,
                 src_queue_index: 0,
@@ -7164,15 +7295,16 @@ mod test {
                 .buffers
                 .sort_unstable_by_key(|(buffer, range)| (buffer.as_raw(), range.start, range.end));
 
-            group.images.sort_unstable_by_key(|(image, layout, range)| {
+            group.images.sort_unstable_by_key(|release| {
                 (
-                    image.as_raw(),
-                    layout.as_raw(),
-                    range.aspect_mask.as_raw(),
-                    range.base_array_layer,
-                    range.layer_count,
-                    range.base_mip_level,
-                    range.level_count,
+                    release.image.as_raw(),
+                    release.layouts.old.as_raw(),
+                    release.layouts.new.as_raw(),
+                    release.range.aspect_mask.as_raw(),
+                    release.range.base_array_layer,
+                    release.range.layer_count,
+                    release.range.base_mip_level,
+                    release.range.level_count,
                 )
             });
         }
@@ -7415,32 +7547,132 @@ mod test {
 
     #[test]
     fn image_execution_discard_only_when_previous_access_is_nothing() {
-        assert!(super::image_execution_discard_contents(AccessType::Nothing));
-        assert!(!super::image_execution_discard_contents(
+        let access_set = ImageAccessSet::from_access;
+
+        assert!(super::image_execution_discard_contents(access_set(
+            AccessType::Nothing
+        )));
+        assert!(!super::image_execution_discard_contents(access_set(
             AccessType::TransferRead
-        ));
-        assert!(!super::image_execution_discard_contents(
+        )));
+        assert!(!super::image_execution_discard_contents(access_set(
             AccessType::TransferWrite
-        ));
-        assert!(!super::image_execution_discard_contents(
+        )));
+        assert!(!super::image_execution_discard_contents(access_set(
             AccessType::ColorAttachmentReadWrite
-        ));
+        )));
     }
 
     #[test]
     fn image_layout_transition_discard_keeps_attachment_write_policy() {
+        let access_set = ImageAccessSet::from_access;
+
         assert!(super::image_layout_transition_discard_contents(
-            AccessType::Nothing,
+            access_set(AccessType::Nothing),
             AccessType::TransferWrite,
         ));
         assert!(super::image_layout_transition_discard_contents(
-            AccessType::TransferRead,
+            access_set(AccessType::TransferRead),
             AccessType::TransferWrite,
         ));
         assert!(!super::image_layout_transition_discard_contents(
-            AccessType::TransferWrite,
+            access_set(AccessType::TransferWrite),
             AccessType::ColorAttachmentReadWrite,
         ));
+    }
+
+    #[test]
+    fn sampled_reader_barrier_uses_exact_source_stages() {
+        let previous_accesses = ImageAccessSet::from_access(
+            AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .after_access(AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer);
+        let (src_stage_mask, dst_stage_mask, barrier) =
+            super::get_tracked_image_memory_barrier(super::TrackedImageBarrier {
+                previous_accesses,
+                next_access: AccessType::ComputeShaderWrite,
+                previous_layout: super::image_access_set_layout(previous_accesses),
+                next_layout: super::image_access_layout(AccessType::ComputeShaderWrite),
+                ownership_layouts: None,
+                discard_contents: false,
+                src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                image: vk::Image::null(),
+                range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+            });
+
+        assert_eq!(
+            src_stage_mask,
+            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+        );
+        assert_eq!(dst_stage_mask, vk::PipelineStageFlags::COMPUTE_SHADER);
+        assert_eq!(barrier.src_access_mask, vk::AccessFlags::empty());
+        assert_eq!(barrier.dst_access_mask, vk::AccessFlags::SHADER_WRITE);
+        assert_eq!(
+            barrier.old_layout,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+        assert_eq!(barrier.new_layout, vk::ImageLayout::GENERAL);
+    }
+
+    #[test]
+    fn image_ownership_barriers_use_matching_layouts_and_queue_safe_source_stage() {
+        let range = color_subresource_range(0..1, 0..1);
+        let layouts = super::image_ownership_layouts(
+            Some(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            AccessType::ComputeShaderWrite,
+            false,
+        );
+        let release = super::image_queue_ownership_release_barrier(
+            ImageQueueOwnershipRelease {
+                image: vk::Image::null(),
+                layouts,
+                range,
+            },
+            1,
+            2,
+        );
+        let previous_accesses = ImageAccessSet::from_access(
+            AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+        );
+        let (src_stage_mask, dst_stage_mask, acquire) =
+            super::get_tracked_image_memory_barrier(super::TrackedImageBarrier {
+                previous_accesses,
+                next_access: AccessType::ComputeShaderWrite,
+                previous_layout: super::image_access_set_layout(previous_accesses),
+                next_layout: super::image_access_layout(AccessType::ComputeShaderWrite),
+                ownership_layouts: Some(layouts),
+                discard_contents: false,
+                src_queue_family_index: 1,
+                dst_queue_family_index: 2,
+                image: vk::Image::null(),
+                range,
+            });
+
+        assert_eq!(src_stage_mask, vk::PipelineStageFlags::ALL_COMMANDS);
+        assert_eq!(dst_stage_mask, vk::PipelineStageFlags::COMPUTE_SHADER);
+        assert_eq!(acquire.src_access_mask, vk::AccessFlags::empty());
+        assert_eq!(release.old_layout, acquire.old_layout);
+        assert_eq!(release.new_layout, acquire.new_layout);
+        assert_eq!(
+            acquire.old_layout,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+        assert_eq!(acquire.new_layout, vk::ImageLayout::GENERAL);
+
+        let discarded = super::image_ownership_layouts(
+            Some(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            AccessType::TransferWrite,
+            true,
+        );
+        assert_eq!(discarded.old, vk::ImageLayout::UNDEFINED);
+        assert_eq!(discarded.new, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
     }
 
     fn command_with_accesses(accesses: &[(usize, AccessType)]) -> CommandData {
@@ -7598,13 +7830,34 @@ mod test {
 
         queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 1, 2)
             .images
-            .push((image, vk::ImageLayout::GENERAL, range_a));
+            .push(ImageQueueOwnershipRelease {
+                image,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
+                range: range_a,
+            });
         queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 1, 2)
             .images
-            .push((image, vk::ImageLayout::GENERAL, range_b));
+            .push(ImageQueueOwnershipRelease {
+                image,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
+                range: range_b,
+            });
         queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 4, 5)
             .images
-            .push((image, vk::ImageLayout::GENERAL, range_a));
+            .push(ImageQueueOwnershipRelease {
+                image,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
+                range: range_a,
+            });
 
         let mut groups = submission.queue_ownership_release_groups;
         sort_queue_ownership_release_groups(&mut groups);
@@ -7612,8 +7865,11 @@ mod test {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].images.len(), 2);
         assert_eq!(groups[1].images.len(), 1);
-        assert_eq!(groups[0].images[0].0, image);
-        assert!(image_subresource_range_eq(groups[0].images[0].2, range_a));
+        assert_eq!(groups[0].images[0].image, image);
+        assert!(image_subresource_range_eq(
+            groups[0].images[0].range,
+            range_a
+        ));
     }
 
     #[test]
@@ -7626,7 +7882,10 @@ mod test {
             src_queue_family_index: 1,
             src_queue_index: 2,
             dst_queue_family_index: 3,
-            layout: vk::ImageLayout::GENERAL,
+            layouts: ImageOwnershipLayouts {
+                old: vk::ImageLayout::GENERAL,
+                new: vk::ImageLayout::GENERAL,
+            },
             range: range_a,
         }];
 
@@ -7957,7 +8216,7 @@ mod test {
             .queue_ownership_release_groups
             .iter()
             .flat_map(|group| group.images.iter())
-            .map(|(_, _, range)| *range)
+            .map(|release| release.range)
             .collect::<Vec<_>>();
         simulate_partial_transfer_discovery(&mut submission, &schedule, 3, &mut ownership);
 
@@ -7965,7 +8224,7 @@ mod test {
             .queue_ownership_release_groups
             .iter()
             .flat_map(|group| group.images.iter())
-            .map(|(_, _, range)| *range)
+            .map(|release| release.range)
             .collect::<Vec<_>>();
         assert_eq!(released_ranges.len(), first_released_ranges.len());
         assert!(
@@ -8047,7 +8306,11 @@ mod test {
             transfers[0].range,
             range_a
         ));
-        assert_eq!(transfers[0].layout, vk::ImageLayout::UNDEFINED);
+        assert_eq!(transfers[0].layouts.old, vk::ImageLayout::UNDEFINED);
+        assert_eq!(
+            transfers[0].layouts.new,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        );
 
         let ranges = &submission.exclusive_image_ranges[&image.index()];
         let mut ranges = ranges.clone();
