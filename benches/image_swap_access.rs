@@ -245,7 +245,13 @@ fn image_swap_access_bench(c: &mut Criterion) {
     let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
     h.swap_access(compute_read, full_range(1, 1));
     group.bench_function("uniform_sampled_epoch_steady", |b| {
-        b.iter(|| black_box(h.swap_accesses([(compute_read, full_range(1, 1))])));
+        b.iter(|| black_box(h.swap_accesses([(compute_read, full_range(1, 1))], false)));
+    });
+
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    h.swap_access(compute_read, full_range(1, 1));
+    group.bench_function("uniform_sampled_elided_steady", |b| {
+        b.iter(|| black_box(h.swap_accesses([(ray_read, full_range(1, 1))], true)));
     });
 
     let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);

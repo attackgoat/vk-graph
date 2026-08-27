@@ -292,11 +292,11 @@ impl Access {
         accesses: I,
     ) -> impl Iterator<Item = (AccessType, ImageAccessSet, vk::ImageSubresourceRange)> + 'a
     where
-        I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)> + 'a,
+        I: Iterator<Item = (AccessType, vk::ImageSubresourceRange, bool)> + 'a,
     {
         struct Iter<'a, I>
         where
-            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange, bool)>,
         {
             access: &'a Access,
             accesses: I,
@@ -305,12 +305,12 @@ impl Access {
             first_access_range: Option<vk::ImageSubresourceRange>,
             info: ImageInfo,
             current: Option<(AccessType, AccessIter<'a>)>,
-            current_access: Option<(AccessType, DenseMapCursor)>,
+            current_access: Option<(AccessType, bool, DenseMapCursor)>,
         }
 
         impl<I> Iterator for Iter<'_, I>
         where
-            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange, bool)>,
         {
             type Item = (AccessType, ImageAccessSet, vk::ImageSubresourceRange);
 
@@ -324,11 +324,13 @@ impl Access {
                         self.current = None;
                     }
 
-                    if let Some((next_access, cursor)) = self.current_access.as_mut() {
+                    if let Some((next_access, preserve_sampled_reads, cursor)) =
+                        self.current_access.as_mut()
+                    {
                         if let Some((is_first_access, access_range)) =
                             cursor.next(self.first_accesses.as_mut().unwrap(), false)
                         {
-                            let accesses = if is_first_access {
+                            let accesses = if is_first_access && !*preserve_sampled_reads {
                                 self.access.replace(
                                     self.dense_access,
                                     self.info,
@@ -351,17 +353,27 @@ impl Access {
                         self.current_access = None;
                     }
 
-                    let (next_access, access_range) = self.accesses.next()?;
+                    let (next_access, access_range, preserve_sampled_reads) =
+                        self.accesses.next()?;
                     let Some(first_access_range) = self.first_access_range else {
                         self.first_access_range = Some(access_range);
                         self.current = Some((
                             next_access,
-                            self.access.replace(
-                                self.dense_access,
-                                self.info,
-                                next_access,
-                                access_range,
-                            ),
+                            if preserve_sampled_reads {
+                                self.access.swap(
+                                    self.dense_access,
+                                    self.info,
+                                    next_access,
+                                    access_range,
+                                )
+                            } else {
+                                self.access.replace(
+                                    self.dense_access,
+                                    self.info,
+                                    next_access,
+                                    access_range,
+                                )
+                            },
                         ));
 
                         continue;
@@ -375,6 +387,7 @@ impl Access {
                     });
                     self.current_access = Some((
                         next_access,
+                        preserve_sampled_reads,
                         DenseMapCursor::new(first_accesses, access_range),
                     ));
                 }
@@ -383,7 +396,7 @@ impl Access {
 
         impl<I> Drop for Iter<'_, I>
         where
-            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+            I: Iterator<Item = (AccessType, vk::ImageSubresourceRange, bool)>,
         {
             fn drop(&mut self) {
                 while self.next().is_some() {}
@@ -1424,28 +1437,36 @@ impl Image {
     }
 
     /// Starts one synchronization epoch and accumulates overlapping sampled reads within it.
+    ///
+    /// The input flag preserves preceding sampled readers when the corresponding barrier may be
+    /// elided.
     pub(crate) fn swap_accesses<'a, I>(
         &'a self,
         accesses: I,
     ) -> impl Iterator<Item = (AccessType, ImageAccessSet, vk::ImageSubresourceRange)> + 'a
     where
-        I: IntoIterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+        I: IntoIterator<Item = (AccessType, vk::ImageSubresourceRange, bool)>,
         I::IntoIter: 'a,
     {
         let info = self.info;
         let format_aspect_mask = format_aspect_mask(info.format);
-        let accesses = accesses
-            .into_iter()
-            .map(move |(next_access, access_range)| {
-                #[cfg(feature = "checked")]
-                {
-                    assert_aspect_mask_supported(access_range.aspect_mask);
+        let accesses =
+            accesses
+                .into_iter()
+                .map(move |(next_access, access_range, preserve_sampled_reads)| {
+                    #[cfg(feature = "checked")]
+                    {
+                        assert_aspect_mask_supported(access_range.aspect_mask);
 
-                    assert!(format_aspect_mask.contains(access_range.aspect_mask));
-                }
+                        assert!(format_aspect_mask.contains(access_range.aspect_mask));
+                    }
 
-                (next_access, info.resolve_subresource_counts(access_range))
-            });
+                    (
+                        next_access,
+                        info.resolve_subresource_counts(access_range),
+                        preserve_sampled_reads,
+                    )
+                });
 
         self.access
             .swap_accesses(&self.dense_access, info, accesses)
@@ -1937,7 +1958,7 @@ impl ImageAccessSet {
         matches!(self.non_sampled_access(), Some(AccessType::Nothing))
     }
 
-    const fn is_sampled_read(self) -> bool {
+    pub(crate) const fn is_sampled_read(self) -> bool {
         self.0 & Self::SAMPLED_READ_TAG != 0
     }
 
@@ -3063,6 +3084,7 @@ pub mod bench {
         pub fn swap_accesses(
             &self,
             accesses: impl IntoIterator<Item = (AccessType, vk::ImageSubresourceRange)>,
+            preserve_sampled_reads: bool,
         ) -> u16 {
             let info = self.info;
             self.access
@@ -3070,7 +3092,11 @@ pub mod bench {
                     &self.dense_access,
                     info,
                     accesses.into_iter().map(move |(access, range)| {
-                        (access, info.resolve_subresource_counts(range))
+                        (
+                            access,
+                            info.resolve_subresource_counts(range),
+                            preserve_sampled_reads,
+                        )
                     }),
                 )
                 .fold(0, |checksum, (_, access, _)| checksum ^ access.raw())
@@ -3316,13 +3342,17 @@ mod test {
         let dense = Mutex::new(None);
 
         access
-            .swap_accesses(&dense, info, [(compute_read, range)].into_iter())
+            .swap_accesses(&dense, info, [(compute_read, range, false)].into_iter())
             .for_each(drop);
         let previous = access
             .swap_accesses(
                 &dense,
                 info,
-                [(compute_read, range), (ray_read, partial_range)].into_iter(),
+                [
+                    (compute_read, range, false),
+                    (ray_read, partial_range, false),
+                ]
+                .into_iter(),
             )
             .collect::<Vec<_>>();
 
@@ -3343,6 +3373,53 @@ mod test {
         let dense = dense.as_ref().expect("missing dense access state");
         assert_access_set_eq(dense.subresource(0, 0, 0), &[compute_read, ray_read]);
         assert_access_set_eq(dense.subresource(0, 1, 0), &[compute_read]);
+    }
+
+    #[test]
+    fn sampled_image_access_batch_preserves_only_elided_ranges() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8G8B8A8_UNORM, 2, 1);
+        let transferred_range = image_subresource_range(A::COLOR, 0..1, 0..1);
+        let untransferred_range = image_subresource_range(A::COLOR, 1..2, 0..1);
+        let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let access = Access::new(info, compute_read);
+        let dense = Mutex::new(None);
+
+        access
+            .swap_accesses(
+                &dense,
+                info,
+                [
+                    (ray_read, transferred_range, false),
+                    (ray_read, untransferred_range, true),
+                ]
+                .into_iter(),
+            )
+            .for_each(drop);
+
+        let transferred = access
+            .replace(
+                &dense,
+                info,
+                AccessType::ComputeShaderWrite,
+                transferred_range,
+            )
+            .next()
+            .unwrap();
+        let untransferred = access
+            .replace(
+                &dense,
+                info,
+                AccessType::ComputeShaderWrite,
+                untransferred_range,
+            )
+            .next()
+            .unwrap();
+
+        assert_access_set_eq(transferred.0, &[ray_read]);
+        assert_access_set_eq(untransferred.0, &[compute_read, ray_read]);
     }
 
     #[test]
