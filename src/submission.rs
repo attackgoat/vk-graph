@@ -280,6 +280,20 @@ struct TrackedImageBarrier {
     range: vk::ImageSubresourceRange,
 }
 
+fn can_elide_sampled_read_barrier(barrier: TrackedImageBarrier) -> bool {
+    if !barrier.previous_accesses.is_sampled_read()
+        || !ImageAccessSet::from_access(barrier.next_access).is_sampled_read()
+        || barrier.ownership_layouts.is_some()
+        || barrier.discard_contents
+    {
+        return false;
+    }
+
+    let (_, _, barrier) = get_tracked_image_memory_barrier(barrier);
+    barrier.old_layout == barrier.new_layout
+        && barrier.src_queue_family_index == barrier.dst_queue_family_index
+}
+
 fn get_tracked_image_memory_barrier(
     barrier: TrackedImageBarrier,
 ) -> (
@@ -664,6 +678,13 @@ fn pipeline_barrier_from_iters<'a>(
             src_stage_mask |= src_mask;
             dst_stage_mask |= dst_mask;
             tls.image_barriers.push(barrier);
+        }
+
+        if tls.memory_barriers.is_empty()
+            && tls.buffer_barriers.is_empty()
+            && tls.image_barriers.is_empty()
+        {
+            return;
         }
 
         unsafe {
@@ -1221,6 +1242,12 @@ where
 
     fn contains(&self, node_idx: NodeIndex) -> bool {
         self.entries[node_idx].is_some()
+    }
+
+    fn get(&self, node_idx: NodeIndex) -> Option<(H, &[T])> {
+        self.entries[node_idx]
+            .as_ref()
+            .map(|entry| (entry.handle, entry.transfers.as_slice()))
     }
 
     fn is_empty(&self) -> bool {
@@ -4262,6 +4289,7 @@ impl Submission {
         struct BarrierScratch {
             accel_struct_accesses: Vec<AccessType>,
             buffers: Vec<AccessBarrier<BufferBarrierTarget, AccessType>>,
+            image_accesses: Vec<(AccessType, vk::ImageSubresourceRange, bool)>,
             images: Vec<AccessBarrier<ImageBarrierTarget, ImageAccessSet>>,
             next_accesses: Vec<AccessType>,
             pending_buffers: NodeIndexedScratch<AccessBarrier<BufferBarrierTarget, AccessType>>,
@@ -4273,6 +4301,7 @@ impl Submission {
             // Initialize TLS from a previous call
             tls.accel_struct_accesses.clear();
             tls.buffers.clear();
+            tls.image_accesses.clear();
             tls.images.clear();
             tls.next_accesses.clear();
             tls.pending_buffers.clear();
@@ -4357,21 +4386,41 @@ impl Submission {
                         }
                     }
                     ResourceRef::Image(image) => {
-                        for (next_access, prev_access, range) in Image::swap_accesses(
-                            image,
-                            node_accesses.iter().map(
-                                |&SubresourceAccess {
-                                     access,
-                                     subresource,
-                                 }| {
-                                    let SubresourceRange::Image(range) = subresource else {
-                                        unreachable!()
-                                    };
+                        let transfers = pending_image_transfer_nodes
+                            .as_ref()
+                            .and_then(|pending| pending.get(node_idx))
+                            .map_or_else(Default::default, |(_, transfers)| transfers);
+                        let mut image_accesses = take(&mut tls.image_accesses);
+                        image_accesses.clear();
 
-                                    (access, range)
-                                },
-                            ),
-                        ) {
+                        for &SubresourceAccess {
+                            access,
+                            subresource,
+                        } in node_accesses
+                        {
+                            let SubresourceRange::Image(range) = subresource else {
+                                unreachable!()
+                            };
+                            let range = image.info.resolve_subresource_counts(range);
+
+                            image_accesses.extend(
+                                image_barrier_transfer_ranges(transfers, range).map(
+                                    move |(range, transfer)| {
+                                        (
+                                            access,
+                                            range,
+                                            transfer.is_none()
+                                                && ImageAccessSet::from_access(access)
+                                                    .is_sampled_read(),
+                                        )
+                                    },
+                                ),
+                            );
+                        }
+
+                        for (next_access, prev_access, range) in
+                            Image::swap_accesses(image, image_accesses.iter().copied())
+                        {
                             let barrier = AccessBarrier {
                                 next_access,
                                 prev_access,
@@ -4390,6 +4439,8 @@ impl Submission {
                                 tls.images.push(barrier);
                             }
                         }
+
+                        tls.image_accesses = image_accesses;
                     }
                 }
             }
@@ -4408,6 +4459,7 @@ impl Submission {
             } else {
                 None
             };
+
             let mut buffer_barriers = Vec::new();
             for AccessBarrier {
                 next_access,
@@ -4456,7 +4508,7 @@ impl Submission {
             {
                 let ImageBarrierTarget { image, range, .. } = *resource;
 
-                image_barriers.push(TrackedImageBarrier {
+                let barrier = TrackedImageBarrier {
                     next_access: *next_access,
                     previous_accesses: *prev_access,
                     next_layout: image_access_layout(*next_access),
@@ -4467,7 +4519,11 @@ impl Submission {
                     dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     image,
                     range,
-                });
+                };
+
+                if !can_elide_sampled_read_barrier(barrier) {
+                    image_barriers.push(barrier);
+                }
             }
 
             if let Some(pending_image_transfer_nodes) = pending_image_transfer_nodes.as_ref() {
@@ -4478,14 +4534,17 @@ impl Submission {
                         resource,
                     } in tls.pending_images.get(node_idx)
                     {
-                        image_barriers.extend(image_barriers_from_transfers(
-                            resource.image,
-                            *prev_access,
-                            *next_access,
-                            resource.range,
-                            transfers,
-                            image_execution_discard_contents(*prev_access),
-                        ));
+                        image_barriers.extend(
+                            image_barriers_from_transfers(
+                                resource.image,
+                                *prev_access,
+                                *next_access,
+                                resource.range,
+                                transfers,
+                                image_execution_discard_contents(*prev_access),
+                            )
+                            .filter(|barrier| !can_elide_sampled_read_barrier(*barrier)),
+                        );
                     }
                 }
             }
@@ -7578,6 +7637,111 @@ mod test {
         assert!(!super::image_layout_transition_discard_contents(
             access_set(AccessType::TransferWrite),
             AccessType::ColorAttachmentReadWrite,
+        ));
+    }
+
+    fn sampled_read_barrier(
+        previous_access: AccessType,
+        next_access: AccessType,
+    ) -> super::TrackedImageBarrier {
+        let previous_accesses = ImageAccessSet::from_access(previous_access);
+
+        super::TrackedImageBarrier {
+            previous_accesses,
+            next_access,
+            previous_layout: super::image_access_set_layout(previous_accesses),
+            next_layout: super::image_access_layout(next_access),
+            ownership_layouts: None,
+            discard_contents: false,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image: vk::Image::null(),
+            range: color_subresource_range(0..1, 0..1),
+        }
+    }
+
+    #[test]
+    fn sampled_read_barrier_elision_requires_unchanged_layout_and_ownership() {
+        use AccessType as A;
+
+        let compute = A::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_tracing = A::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let broad = A::AnyShaderReadSampledImageOrUniformTexelBuffer;
+
+        for barrier in [
+            sampled_read_barrier(compute, compute),
+            sampled_read_barrier(compute, ray_tracing),
+            sampled_read_barrier(ray_tracing, compute),
+            sampled_read_barrier(broad, ray_tracing),
+        ] {
+            assert!(super::can_elide_sampled_read_barrier(barrier));
+        }
+
+        assert!(!super::can_elide_sampled_read_barrier(
+            sampled_read_barrier(compute, A::ComputeShaderWrite)
+        ));
+
+        let mut layout_transition = sampled_read_barrier(compute, ray_tracing);
+        layout_transition.next_layout = vk_sync::ImageLayout::General;
+        assert!(!super::can_elide_sampled_read_barrier(layout_transition));
+
+        let mut ownership_transfer = sampled_read_barrier(compute, ray_tracing);
+        ownership_transfer.ownership_layouts = Some(super::ImageOwnershipLayouts {
+            old: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            new: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        });
+        ownership_transfer.src_queue_family_index = 1;
+        ownership_transfer.dst_queue_family_index = 2;
+        assert!(!super::can_elide_sampled_read_barrier(ownership_transfer));
+    }
+
+    #[test]
+    fn sampled_read_barrier_elision_preserves_ownership_split() {
+        use AccessType as A;
+
+        let transferred_range = color_subresource_range(0..1, 0..1);
+        let full_range = color_subresource_range(0..2, 0..1);
+        let transfer = ImageOwnershipTransfer {
+            dst_queue_family_index: 2,
+            layouts: ImageOwnershipLayouts {
+                old: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                new: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+            range: transferred_range,
+            src_queue_family_index: 1,
+            src_queue_index: 0,
+        };
+        let barriers = super::image_barriers_from_transfers(
+            vk::Image::null(),
+            ImageAccessSet::from_access(A::ComputeShaderReadSampledImageOrUniformTexelBuffer),
+            A::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+            full_range,
+            &[transfer],
+            false,
+        )
+        .collect::<Vec<_>>();
+
+        assert_eq!(barriers.len(), 2);
+        let retained = barriers
+            .iter()
+            .filter(|&&barrier| !super::can_elide_sampled_read_barrier(barrier))
+            .collect::<Vec<_>>();
+        let elided = barriers
+            .iter()
+            .filter(|&&barrier| super::can_elide_sampled_read_barrier(barrier))
+            .collect::<Vec<_>>();
+
+        assert_eq!(retained.len(), 1);
+        assert_eq!(elided.len(), 1);
+        assert!(retained[0].ownership_layouts.is_some());
+        assert!(super::image_subresource_range_eq(
+            retained[0].range,
+            transferred_range
+        ));
+        assert!(elided[0].ownership_layouts.is_none());
+        assert!(super::image_subresource_range_eq(
+            elided[0].range,
+            color_subresource_range(1..2, 0..1)
         ));
     }
 
