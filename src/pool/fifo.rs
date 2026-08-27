@@ -110,7 +110,7 @@ impl FifoPool {
             accel_struct_cache: PoolConfig::explicit_cache(info.accel_struct_capacity),
             buffer_cache: PoolConfig::explicit_cache(info.buffer_capacity),
             command_buffer_cache: Default::default(),
-            descriptor_pool_cache: PoolConfig::default_cache(),
+            descriptor_pool_cache: PoolConfig::explicit_cache(info.descriptor_pool_capacity),
             device,
             image_cache: PoolConfig::explicit_cache(info.image_capacity),
             info,

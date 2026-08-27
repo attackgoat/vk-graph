@@ -191,7 +191,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for HashPool {
         let cache_ref = self
             .descriptor_pool_cache
             .entry(info.clone())
-            .or_insert_with(PoolConfig::default_cache);
+            .or_insert_with(|| PoolConfig::explicit_cache(self.info.descriptor_pool_capacity));
         let item = {
             #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
             let mut cache = cache_ref.lock();
