@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `PoolConfig::descriptor_pool_capacity` for configuring cached automatic descriptor pools.
+
 ## [0.14.7] - 2026-08-19
 
 ### Added
