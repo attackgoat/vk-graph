@@ -74,6 +74,7 @@ fn access_writes(access: AccessType) -> bool {
             | AccessType::RayTracingShaderReadAccelerationStructure
             | AccessType::RayTracingShaderReadOther
             | AccessType::AccelerationStructureBuildRead
+            | AccessType::AccelerationStructureBuildInputRead
     )
 }
 
@@ -356,7 +357,7 @@ impl Fixture {
                     }
 
                     let access_value = reader.u8()?;
-                    if access_value > 67 {
+                    if access_value > 69 {
                         return Err(invalid_data("invalid access type"));
                     }
 

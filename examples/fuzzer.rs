@@ -289,12 +289,15 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         .begin_cmd()
         .debug_name("build acceleration structures");
 
-    cmd.set_resource_access(index_node, AccessType::IndexBuffer);
-    cmd.set_resource_access(vertex_node, AccessType::VertexBuffer);
+    cmd.set_resource_access(index_node, AccessType::AccelerationStructureBuildInputRead);
+    cmd.set_resource_access(vertex_node, AccessType::AccelerationStructureBuildInputRead);
 
     for (blas_node, scratch_buf, _) in &blas_nodes {
         cmd.set_resource_access(*blas_node, AccessType::AccelerationStructureBuildWrite);
-        cmd.set_resource_access(*scratch_buf, AccessType::AccelerationStructureBufferWrite);
+        cmd.set_resource_access(
+            *scratch_buf,
+            AccessType::AccelerationStructureBuildScratchReadWrite,
+        );
     }
 
     // Ugly copy of the nodes that I want to figure out a way around while not being confusing
@@ -320,22 +323,25 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         cmd.set_resource_access(blas_node, AccessType::AccelerationStructureBuildRead);
     }
 
-    cmd.resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
-        .resource_access(
-            tlas_scratch_buf,
-            AccessType::AccelerationStructureBufferWrite,
-        )
-        .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
-        .record_cmd(move |cmd| {
-            let scratch_buf = cmd.resource(tlas_scratch_buf);
-            let scratch_addr = scratch_buf.device_address();
+    cmd.resource_access(
+        instance_buf,
+        AccessType::AccelerationStructureBuildInputRead,
+    )
+    .resource_access(
+        tlas_scratch_buf,
+        AccessType::AccelerationStructureBuildScratchReadWrite,
+    )
+    .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
+    .record_cmd(move |cmd| {
+        let scratch_buf = cmd.resource(tlas_scratch_buf);
+        let scratch_addr = scratch_buf.device_address();
 
-            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
-                tlas_node,
-                scratch_addr,
-                tlas_geometry_info,
-            )]);
-        });
+        cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
+            tlas_node,
+            scratch_addr,
+            tlas_geometry_info,
+        )]);
+    });
 }
 
 fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {

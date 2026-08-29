@@ -10049,4 +10049,30 @@ mod test {
             "mixed acceleration-structure slices should preserve all accesses for next-state tracking"
         );
     }
+
+    #[test]
+    fn acceleration_structure_writes_have_source_and_destination_accesses() {
+        let (src_stage_mask, dst_stage_mask, barrier) =
+            vk_sync::get_memory_barrier(&vk_sync::GlobalBarrier {
+                previous_accesses: &[AccessType::AccelerationStructureBuildWrite],
+                next_accesses: &[AccessType::RayTracingShaderReadAccelerationStructure],
+            });
+
+        assert_eq!(
+            src_stage_mask,
+            vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+        );
+        assert_eq!(
+            barrier.src_access_mask,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
+        );
+        assert_eq!(
+            dst_stage_mask,
+            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+        );
+        assert_eq!(
+            barrier.dst_access_mask,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
+        );
+    }
 }
