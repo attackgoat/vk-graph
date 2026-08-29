@@ -1,7 +1,10 @@
 //! Acceleration structure resource types
 
 use {
-    super::{Buffer, BufferInfo, DriverError, device::Device, pipeline_stage_access_flags},
+    super::{
+        Buffer, BufferInfo, DriverError, device::Device, is_write_access,
+        pipeline_stage_access_flags,
+    },
     ash::vk,
     derive_builder::Builder,
     log::warn,
@@ -855,15 +858,48 @@ impl<'a> AccessIter<'a> {
     }
 
     fn new(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_accesses: &[AccessType]) -> Self {
-        let previous_len = accesses.len();
-
         if next_accesses.is_empty() {
+            let previous_len = accesses.len();
             accesses.push(AccessType::Nothing);
-        } else {
+
+            return Self {
+                accesses,
+                idx: 0,
+                previous_len,
+            };
+        }
+
+        if next_accesses.iter().copied().any(is_write_access) {
+            let previous_len = accesses.len();
             for &next_access in next_accesses {
                 if !accesses[previous_len..].contains(&next_access) {
                     accesses.push(next_access);
                 }
+            }
+
+            return Self {
+                accesses,
+                idx: 0,
+                previous_len,
+            };
+        }
+
+        if next_accesses
+            .iter()
+            .all(|next_access| accesses.contains(next_access))
+        {
+            return Self {
+                accesses,
+                idx: 0,
+                previous_len: 0,
+            };
+        }
+
+        let previous_len = accesses.len();
+        accesses.extend_from_within(..);
+        for &next_access in next_accesses {
+            if !accesses[previous_len..].contains(&next_access) {
+                accesses.push(next_access);
             }
         }
 
@@ -988,5 +1024,34 @@ mod test {
         };
 
         assert_eq!(Builder::default().build(), info);
+    }
+
+    fn lock_accesses(accesses: &Mutex<Vec<AccessType>>) -> MutexGuard<'_, Vec<AccessType>> {
+        let accesses = accesses.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let accesses = accesses.expect("poisoned acceleration structure access lock");
+
+        accesses
+    }
+
+    fn swap_accesses(
+        accesses: &Mutex<Vec<AccessType>>,
+        next_accesses: &[AccessType],
+    ) -> Vec<AccessType> {
+        AccessIter::new(lock_accesses(accesses), next_accesses).collect()
+    }
+
+    #[test]
+    fn access_tracking_retains_write_until_next_write() {
+        let accesses = Mutex::new(vec![AccessType::Nothing]);
+        let write = AccessType::AccelerationStructureBuildWrite;
+        let read = AccessType::RayTracingShaderReadAccelerationStructure;
+
+        assert_eq!(swap_accesses(&accesses, &[write]), [AccessType::Nothing]);
+        assert_eq!(swap_accesses(&accesses, &[read]), [write]);
+        assert!(swap_accesses(&accesses, &[read]).is_empty());
+        assert_eq!(swap_accesses(&accesses, &[write]), [write, read]);
+        assert_eq!(*lock_accesses(&accesses), [write]);
     }
 }

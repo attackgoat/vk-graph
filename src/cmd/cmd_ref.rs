@@ -119,9 +119,12 @@ impl<'a> CommandRef<'a> {
     /// # let index_buf = my_graph.bind_resource(my_idx_buf);
     /// # let vertex_buf = my_graph.bind_resource(my_vtx_buf);
     /// my_graph.begin_cmd()
-    ///         .resource_access(index_buf, AccessType::IndexBuffer)
-    ///         .resource_access(vertex_buf, AccessType::VertexBuffer)
-    ///         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+    ///         .resource_access(index_buf, AccessType::AccelerationStructureBuildInputRead)
+    ///         .resource_access(vertex_buf, AccessType::AccelerationStructureBuildInputRead)
+    ///         .resource_access(
+    ///             scratch_buf,
+    ///             AccessType::AccelerationStructureBuildScratchReadWrite,
+    ///         )
     ///         .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
     ///         .record_cmd(move |cmd| {
     ///             let scratch_addr = cmd.resource(scratch_buf).device_address();
