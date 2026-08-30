@@ -10,6 +10,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `PoolConfig::descriptor_pool_capacity` for configuring cached automatic descriptor pools.
+- `ImageSet`, `ImageSetMember`, and `ImageSetNode` optimization for persistent sets of image
+  resources which declare a single aggregate `ImageAccessType` graph access.
+- `AccelerationStructureSet`, `AccelerationStructureSetMember`, and `AccelerationStructureSetNode`
+  optimization for persistent sets of acceleration-structure resources which declare aggregate
+  `AccelerationStructureAccessType` graph access.
 
 ## [0.14.7] - 2026-08-19
 

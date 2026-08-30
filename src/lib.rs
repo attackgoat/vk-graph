@@ -18,6 +18,7 @@ pub mod cmd;
 pub mod driver;
 pub mod node;
 pub mod pool;
+pub mod resource;
 pub mod stream;
 pub mod submission;
 
@@ -34,8 +35,13 @@ use {
         cmd::{AttachmentIndex, Binding, Command, SubresourceAccess, ViewInfo},
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
-            AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode,
-            ImageLeaseNode, ImageNode, SwapchainImageNode,
+            AccelerationStructureSetNode, AnyAccelerationStructureNode, AnyBufferNode,
+            AnyImageNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode, ImageSetNode,
+            SwapchainImageNode,
+        },
+        resource::{
+            AccelerationStructureSet, ImageSet, ResourceSetAccessType, ResourceSetIndex,
+            ResourceSetMap,
         },
     },
     crate::{
@@ -77,6 +83,12 @@ use {
     },
     vk_sync::AccessType,
 };
+
+#[cfg(feature = "checked")]
+use self::resource::{PhysicalAccelerationStructureId, PhysicalImageId, ResourceSet};
+
+#[cfg(feature = "checked")]
+use std::collections::HashSet;
 
 #[cfg(feature = "checked")]
 use std::sync::atomic::AtomicU64;
@@ -619,6 +631,12 @@ impl CommandData {
             exec.remap_nodes(node_map);
         }
     }
+
+    fn remap_resource_sets(&mut self, resource_set_map: &[ResourceSetIndex]) {
+        for exec in &mut self.execs {
+            exec.remap_resource_sets(resource_set_map);
+        }
+    }
 }
 
 impl Drop for CommandData {
@@ -836,6 +854,7 @@ struct Execution {
     attachments: ExecutionAttachmentMap,
     bindings: BTreeMap<Binding, (NodeIndex, ViewInfo)>,
     descriptor_sets: BTreeMap<u32, DescriptorSet>,
+    resource_set_accesses: SmallVec<[ResourceSetAccess; 1]>,
 
     correlated_view_mask: u32,
     depth_stencil: Option<DepthStencilInfo>,
@@ -845,14 +864,31 @@ struct Execution {
     func: Option<CommandFunction>,
     node_map: Option<Arc<[NodeIndex]>>,
     pipeline: Option<ExecutionPipeline>,
+    resource_set_map: Option<Arc<[ResourceSetIndex]>>,
 
     #[cfg(feature = "checked")]
     stream_graph_id: Option<GraphId>,
 }
 
 impl Execution {
+    fn push_resource_set_access(&mut self, access: ResourceSetAccess) {
+        if self.resource_set_accesses.contains(&access) {
+            return;
+        }
+
+        self.resource_set_accesses.push(access);
+    }
+
     fn remap_nodes(&mut self, node_map: &[NodeIndex]) {
-        let original_node_map = Arc::<[NodeIndex]>::from(node_map.to_vec());
+        let original_node_map = self.node_map.as_ref().map_or_else(
+            || Arc::from(node_map),
+            |previous| {
+                previous
+                    .iter()
+                    .map(|&node_idx| node_map[node_idx])
+                    .collect()
+            },
+        );
         self.accesses.remap_nodes(node_map);
         self.attachments.remap_nodes(node_map);
 
@@ -861,6 +897,22 @@ impl Execution {
             .map(|(binding, (node_idx, view))| (binding, (node_map[node_idx], view)))
             .collect();
         self.node_map = Some(original_node_map);
+    }
+
+    fn remap_resource_sets(&mut self, resource_set_map: &[ResourceSetIndex]) {
+        let original_resource_set_map = self.resource_set_map.as_ref().map_or_else(
+            || Arc::from(resource_set_map),
+            |previous| {
+                previous
+                    .iter()
+                    .map(|&index| resource_set_map[index.as_usize()])
+                    .collect()
+            },
+        );
+        for access in &mut self.resource_set_accesses {
+            access.resource_set_idx = resource_set_map[access.resource_set_idx.as_usize()];
+        }
+        self.resource_set_map = Some(original_resource_set_map);
     }
 }
 
@@ -873,6 +925,7 @@ impl Debug for Execution {
             .field("attachments", &self.attachments)
             .field("bindings", &self.bindings)
             .field("descriptor_sets", &self.descriptor_sets)
+            .field("resource_set_accesses", &self.resource_set_accesses)
             .field("correlated_view_mask", &self.correlated_view_mask)
             .field("depth_stencil", &self.depth_stencil)
             .field("render_area", &self.render_area)
@@ -968,11 +1021,18 @@ struct FrozenExecutionAccess {
 #[derive(Debug)]
 pub struct Graph {
     cmds: Vec<CommandData>,
+    resource_sets: ResourceSetMap,
     resources: ResourceMap,
     timestamp_queries: Option<Vec<Option<TimestampQueryData>>>,
 
     #[cfg(feature = "checked")]
     graph_id: GraphId,
+
+    #[cfg(feature = "checked")]
+    prepared_stream_acceleration_structure_accesses: HashSet<PhysicalAccelerationStructureId>,
+
+    #[cfg(feature = "checked")]
+    prepared_stream_image_accesses: HashSet<PhysicalImageId>,
 }
 
 /// Builder for incrementally constructing a [`Graph`].
@@ -993,7 +1053,7 @@ impl GraphBuilder {
         self.graph
     }
 
-    /// Binds a Vulkan buffer, image, or acceleration structure resource to this graph.
+    /// Binds a Vulkan resource or persistent resource set to this graph.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
         R: Resource,
@@ -1106,11 +1166,18 @@ impl Default for Graph {
     fn default() -> Self {
         Self {
             cmds: Default::default(),
+            resource_sets: Default::default(),
             resources: Default::default(),
             timestamp_queries: Default::default(),
 
             #[cfg(feature = "checked")]
             graph_id: GraphId::next(),
+
+            #[cfg(feature = "checked")]
+            prepared_stream_acceleration_structure_accesses: Default::default(),
+
+            #[cfg(feature = "checked")]
+            prepared_stream_image_accesses: Default::default(),
         }
     }
 }
@@ -1140,6 +1207,100 @@ impl Graph {
     }
 
     #[cfg(feature = "checked")]
+    fn assert_resource_set_members_are_not_accessed_directly(&self) {
+        let mut accessed_resource_sets = HashSet::with_capacity(self.resource_sets.len());
+        let mut member_acceleration_structures =
+            HashMap::<PhysicalAccelerationStructureId, usize>::new();
+        let mut member_images = HashMap::<PhysicalImageId, usize>::new();
+
+        for access in self
+            .cmds
+            .iter()
+            .flat_map(|cmd| &cmd.execs)
+            .flat_map(|exec| &exec.resource_set_accesses)
+        {
+            if !accessed_resource_sets.insert(access.resource_set_idx) {
+                continue;
+            }
+
+            match self.resource_sets.get(access.resource_set_idx) {
+                ResourceSet::AccelerationStructure(resource_set) => {
+                    member_acceleration_structures
+                        .reserve(resource_set.physical_acceleration_structure_count());
+                    for member in resource_set.unique_members() {
+                        let acceleration_structure = member.acceleration_structure();
+                        let physical_id =
+                            PhysicalAccelerationStructureId::of(acceleration_structure);
+                        let resource_addr = acceleration_structure as *const _ as usize;
+
+                        if let Some(previous_addr) =
+                            member_acceleration_structures.insert(physical_id, resource_addr)
+                        {
+                            assert!(
+                                previous_addr == resource_addr,
+                                "acceleration structure sets contain incompatible resource aliases"
+                            );
+                        }
+                    }
+                }
+                ResourceSet::Image(resource_set) => {
+                    member_images.reserve(resource_set.physical_image_count());
+                    for member in resource_set.unique_members() {
+                        let image = member.image();
+                        let image_id = PhysicalImageId::of(image);
+                        let image_addr = member.addr();
+
+                        if let Some(previous_addr) = member_images.insert(image_id, image_addr) {
+                            assert!(
+                                previous_addr == image_addr,
+                                "image sets contain incompatible image aliases"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if member_acceleration_structures.is_empty() && member_images.is_empty() {
+            return;
+        }
+
+        for physical_id in &self.prepared_stream_acceleration_structure_accesses {
+            assert!(
+                !member_acceleration_structures.contains_key(physical_id),
+                "acceleration structure set member cannot also be accessed directly"
+            );
+        }
+        for physical_id in &self.prepared_stream_image_accesses {
+            assert!(
+                !member_images.contains_key(physical_id),
+                "image set member cannot also be accessed directly"
+            );
+        }
+
+        for (node_idx, _) in self
+            .cmds
+            .iter()
+            .flat_map(|cmd| &cmd.execs)
+            .flat_map(|exec| exec.accesses.iter())
+        {
+            if let Some(acceleration_structure) = self.resources[node_idx].as_accel_struct() {
+                assert!(
+                    !member_acceleration_structures
+                        .contains_key(&PhysicalAccelerationStructureId::of(acceleration_structure)),
+                    "acceleration structure set member cannot also be accessed directly"
+                );
+            }
+            if let Some(image) = self.resources[node_idx].as_image() {
+                assert!(
+                    !member_images.contains_key(&PhysicalImageId::of(image)),
+                    "image set member cannot also be accessed directly"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "checked")]
     pub(crate) fn graph_id(&self) -> GraphId {
         self.graph_id
     }
@@ -1149,10 +1310,10 @@ impl Graph {
         Command::new(self)
     }
 
-    /// Binds a Vulkan buffer, image, or acceleration structure resource to this graph.
+    /// Binds a Vulkan resource or persistent resource set to this graph.
     ///
-    /// Bound resource nodes may be used in commands for shader pipeline operations and other
-    /// general functions.
+    /// Individual resources are inserted into the graph's resource map. Persistent set members
+    /// remain in a separate table and are represented by one aggregate graph-local handle.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
         R: Resource,
@@ -1563,6 +1724,12 @@ impl Graph {
 
     /// Finalizes the graph and provides an object with functions for submitting the resulting
     /// commands.
+    ///
+    /// # Panics
+    ///
+    /// With the `checked` feature enabled, panics if a member of an accessed resource set is also
+    /// accessed through an ordinary node or if accessed sets contain incompatible wrappers for the
+    /// same native resource.
     #[profiling::function]
     pub fn finalize(mut self) -> Submission {
         thread_local! {
@@ -1608,6 +1775,9 @@ impl Graph {
             }
         });
 
+        #[cfg(feature = "checked")]
+        self.assert_resource_set_members_are_not_accessed_directly();
+
         if let Some(timestamp_queries) = &self.timestamp_queries {
             stat::sample_timestamp_queries_len(timestamp_queries.iter().flatten().count());
         }
@@ -1625,6 +1795,8 @@ impl Graph {
     /// - Erased nodes such as [`AnyBufferNode`] and [`AnyImageNode`] return a borrow of the
     ///   underlying resource,
     ///   such as `&Buffer` or `&Image`.
+    /// - Persistent resource-set nodes return their corresponding [`AccelerationStructureSet`] or
+    ///   [`ImageSet`].
     ///
     /// This distinction lets erased node enums unify owned, leased, and swapchain-backed resources
     /// behind a single resource view.
@@ -1633,10 +1805,12 @@ impl Graph {
     /// disabled, callers must ensure `resource_node` came from this graph.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
-        N: Node,
+        N: ResourceNode,
     {
-        self.assert_node_owner(&resource_node);
-        resource_node.borrow(&self.resources)
+        #[cfg(feature = "checked")]
+        resource_node.assert_owner(self.graph_id);
+
+        resource_node.borrow(&self.resources, &self.resource_sets)
     }
 
     /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html)
@@ -1784,7 +1958,7 @@ struct NodeAccessBuilder {
 }
 
 mod private {
-    use super::{AnyResource, Node};
+    use super::{AnyResource, Node, NodeIndex, ResourceNode, ResourceSetIndex, ResourceSetMap};
 
     #[cfg(feature = "checked")]
     use super::GraphId;
@@ -1807,11 +1981,72 @@ mod private {
         fn assert_owner(&self, _graph_id: GraphId) {}
     }
 
+    #[derive(Clone, Copy)]
+    pub(crate) enum ResourceNodeIndex {
+        Resource(NodeIndex),
+        ResourceSet(ResourceSetIndex),
+    }
+
+    pub(crate) trait ResourceNodeSealed: Sized {
+        #[cfg(feature = "checked")]
+        fn assert_owner(&self, graph_id: GraphId);
+
+        fn borrow<'a>(
+            self,
+            resources: &'a [AnyResource],
+            resource_sets: &'a ResourceSetMap,
+        ) -> &'a <Self as ResourceNode>::Resource
+        where
+            Self: ResourceNode,
+        {
+            let index = self.resource_node_index();
+            self.borrow_at(resources, resource_sets, index)
+        }
+
+        fn borrow_at<'a>(
+            self,
+            resources: &'a [AnyResource],
+            resource_sets: &'a ResourceSetMap,
+            index: ResourceNodeIndex,
+        ) -> &'a <Self as ResourceNode>::Resource
+        where
+            Self: ResourceNode;
+
+        fn resource_node_index(&self) -> ResourceNodeIndex;
+    }
+
+    impl<T> ResourceNodeSealed for T
+    where
+        T: Node,
+    {
+        #[cfg(feature = "checked")]
+        fn assert_owner(&self, graph_id: GraphId) {
+            <Self as NodeSealed>::assert_owner(self, graph_id);
+        }
+
+        fn borrow_at<'a>(
+            self,
+            resources: &'a [AnyResource],
+            _resource_sets: &'a ResourceSetMap,
+            index: ResourceNodeIndex,
+        ) -> &'a <Self as ResourceNode>::Resource {
+            let ResourceNodeIndex::Resource(index) = index else {
+                unreachable!("resource node type mismatch")
+            };
+
+            <Self as NodeSealed>::borrow_at(self, resources, index)
+        }
+
+        fn resource_node_index(&self) -> ResourceNodeIndex {
+            ResourceNodeIndex::Resource(self.index())
+        }
+    }
+
     /// Prevents external implementations of [`Resource`](super::Resource).
     pub(crate) trait ResourceSealed {}
 }
 
-/// A Vulkan resource which may be bound to a [`Graph`].
+/// A Vulkan resource or persistent resource set which may be bound to a [`Graph`].
 ///
 /// See [`Graph::bind_resource`] and
 /// [`Command::bind_resource`](crate::cmd::Command::bind_resource).
@@ -1819,11 +2054,69 @@ mod private {
 /// This trait is sealed and cannot be implemented outside of `vk-graph`.
 #[allow(private_bounds)]
 pub trait Resource: private::ResourceSealed {
-    /// The resource handle type.
+    /// The graph-local handle type.
     type Node;
 
     #[doc(hidden)]
     fn bind_graph(self, _: &mut Graph) -> Self::Node;
+}
+
+/// A graph-local handle whose bound resource can be borrowed from a [`Graph`].
+///
+/// This includes ordinary Vulkan resource nodes and persistent resource-set nodes. The trait is
+/// sealed and cannot be implemented outside of `vk-graph`.
+#[allow(private_bounds)]
+pub trait ResourceNode: private::ResourceNodeSealed {
+    /// The resource returned by [`Graph::resource`].
+    type Resource;
+}
+
+impl<T> ResourceNode for T
+where
+    T: Node,
+{
+    type Resource = <T as Node>::Resource;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResourceSetAccess {
+    resource_set_idx: ResourceSetIndex,
+    access_type: ResourceSetAccessType,
+}
+
+impl ResourceSetAccess {
+    const fn acquisition_index(self, resource_set_count: usize) -> usize {
+        self.access_type.acquisition_offset() * resource_set_count
+            + self.resource_set_idx.as_usize()
+    }
+}
+
+impl private::ResourceSealed for &AccelerationStructureSet {}
+
+impl Resource for &AccelerationStructureSet {
+    type Node = AccelerationStructureSetNode;
+
+    fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+        Self::Node::new(
+            graph.resource_sets.bind_acceleration_structure(self),
+            #[cfg(feature = "checked")]
+            graph.graph_id,
+        )
+    }
+}
+
+impl private::ResourceSealed for &ImageSet {}
+
+impl Resource for &ImageSet {
+    type Node = ImageSetNode;
+
+    fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+        Self::Node::new(
+            graph.resource_sets.bind_image(self),
+            #[cfg(feature = "checked")]
+            graph.graph_id,
+        )
+    }
 }
 
 impl private::ResourceSealed for SwapchainImage {}

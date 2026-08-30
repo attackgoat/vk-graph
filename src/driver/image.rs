@@ -18,7 +18,10 @@ use {
         marker::PhantomData,
         mem::take,
         ops::{Deref, DerefMut},
-        sync::atomic::{AtomicU8, AtomicU16, AtomicU64, Ordering},
+        sync::{
+            Arc, OnceLock, Weak,
+            atomic::{AtomicU8, AtomicU16, AtomicU64, Ordering},
+        },
         thread::panicking,
     },
     vk_sync::AccessType,
@@ -977,19 +980,11 @@ struct ExclusiveSharing {
     // `promoting` keeps whole-image updates on the dense path while a partial update is
     // converting uniform tracking into subresource tracking
     dense_sharing_state: AtomicU8,
+    image_set_queues: OnceLock<Box<Mutex<Vec<Weak<ImageSetQueue>>>>>,
     uniform: AtomicU64,
 }
 
 impl ExclusiveSharing {
-    fn new(_info: ImageInfo) -> Self {
-        let sharing = SharingMode::Exclusive(None);
-
-        Self {
-            uniform: AtomicU64::new(sharing.encode()),
-            dense_sharing_state: AtomicU8::new(0),
-        }
-    }
-
     fn dense_sharing_state(&self) -> DenseSharingState {
         match self.dense_sharing_state.load(Ordering::Acquire) {
             0 => DenseSharingState::Idle,
@@ -997,6 +992,22 @@ impl ExclusiveSharing {
             2 => DenseSharingState::Dense,
             _ => unreachable!("invalid image dense sharing state"),
         }
+    }
+
+    fn invalidate_image_set_queues(&self) {
+        let Some(image_set_queues) = self.image_set_queues.get() else {
+            return;
+        };
+
+        Self::lock_image_set_queues(image_set_queues).retain(|registered| {
+            let Some(registered) = registered.upgrade() else {
+                return false;
+            };
+
+            registered.invalidate();
+
+            true
+        });
     }
 
     fn is_dense_sharing_active(&self) -> bool {
@@ -1007,18 +1018,89 @@ impl ExclusiveSharing {
         self.dense_sharing_state() == DenseSharingState::Promoting
     }
 
-    fn uses_dense_sharing(&self) -> bool {
-        self.dense_sharing_state() != DenseSharingState::Idle
+    fn lock_image_set_queues(
+        image_set_queues: &Mutex<Vec<Weak<ImageSetQueue>>>,
+    ) -> MutexGuard<'_, Vec<Weak<ImageSetQueue>>> {
+        let image_set_queues = image_set_queues.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let image_set_queues = image_set_queues.expect("poisoned image set queue lock");
+
+        image_set_queues
     }
 
-    fn set_promoting_dense_sharing(&self) {
-        self.dense_sharing_state
-            .store(DenseSharingState::Promoting as _, Ordering::Release);
+    fn new(_info: ImageInfo) -> Self {
+        let sharing = SharingMode::Exclusive(None);
+
+        Self {
+            uniform: AtomicU64::new(sharing.encode()),
+            dense_sharing_state: AtomicU8::new(0),
+            image_set_queues: OnceLock::new(),
+        }
+    }
+
+    fn promote_dense_sharing_and_set_ranges(
+        &self,
+        dense: &Mutex<Option<DenseMap<SharingMode>>>,
+        info: ImageInfo,
+        sharing: SharingMode,
+        sharing_ranges: &[vk::ImageSubresourceRange],
+    ) {
+        let mut dense = dense.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let mut dense = dense.expect("poisoned image dense lock");
+
+        if self.is_dense_sharing_active() {
+            let dense_sharing = dense.as_mut().expect("missing dense sharing state");
+            for &sharing_range in sharing_ranges {
+                dense_sharing.swap(sharing, info.resolve_subresource_counts(sharing_range));
+            }
+
+            return;
+        }
+
+        self.set_promoting_dense_sharing();
+
+        let current = SharingMode::decode(self.uniform.load(Ordering::Acquire));
+
+        *dense = Some(DenseMap::new(info, current));
+        let sharing_state = dense.as_mut().expect("missing dense sharing state");
+        for &sharing_range in sharing_ranges {
+            sharing_state.swap(sharing, info.resolve_subresource_counts(sharing_range));
+        }
+
+        self.set_dense_sharing_active();
+    }
+
+    fn register_image_set_queue(&self, queue: &Arc<ImageSetQueue>) {
+        let mut found = false;
+        let mut image_set_queues = Self::lock_image_set_queues(
+            self.image_set_queues
+                .get_or_init(|| Box::new(Mutex::new(Vec::new()))),
+        );
+        image_set_queues.retain(|registered| {
+            let Some(registered) = registered.upgrade() else {
+                return false;
+            };
+
+            found |= Arc::ptr_eq(&registered, queue);
+
+            true
+        });
+        if !found {
+            image_set_queues.push(Arc::downgrade(queue));
+        }
     }
 
     fn set_dense_sharing_active(&self) {
         self.dense_sharing_state
             .store(DenseSharingState::Dense as _, Ordering::Release);
+    }
+
+    fn set_promoting_dense_sharing(&self) {
+        self.dense_sharing_state
+            .store(DenseSharingState::Promoting as _, Ordering::Release);
     }
 
     fn set_ranges(
@@ -1031,6 +1113,8 @@ impl ExclusiveSharing {
         if sharing_ranges.is_empty() {
             return;
         }
+
+        self.invalidate_image_set_queues();
 
         if sharing_ranges.len() == 1 && info.is_full_subresource_range(sharing_ranges[0]) {
             self.set_uniform_or_dense_sharing(dense, info, sharing, sharing_ranges[0]);
@@ -1093,38 +1177,20 @@ impl ExclusiveSharing {
         }
     }
 
-    fn promote_dense_sharing_and_set_ranges(
-        &self,
-        dense: &Mutex<Option<DenseMap<SharingMode>>>,
-        info: ImageInfo,
-        sharing: SharingMode,
-        sharing_ranges: &[vk::ImageSubresourceRange],
-    ) {
-        let mut dense = dense.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let mut dense = dense.expect("poisoned image dense lock");
-
-        if self.is_dense_sharing_active() {
-            let dense_sharing = dense.as_mut().expect("missing dense sharing state");
-            for &sharing_range in sharing_ranges {
-                dense_sharing.swap(sharing, info.resolve_subresource_counts(sharing_range));
-            }
-
+    fn unregister_image_set_queue(&self, queue: &Arc<ImageSetQueue>) {
+        let Some(image_set_queues) = self.image_set_queues.get() else {
             return;
-        }
+        };
 
-        self.set_promoting_dense_sharing();
+        Self::lock_image_set_queues(image_set_queues).retain(|registered| {
+            registered
+                .upgrade()
+                .is_some_and(|registered| !Arc::ptr_eq(&registered, queue))
+        });
+    }
 
-        let current = SharingMode::decode(self.uniform.load(Ordering::Acquire));
-
-        *dense = Some(DenseMap::new(info, current));
-        let sharing_state = dense.as_mut().expect("missing dense sharing state");
-        for &sharing_range in sharing_ranges {
-            sharing_state.swap(sharing, info.resolve_subresource_counts(sharing_range));
-        }
-
-        self.set_dense_sharing_active();
+    fn uses_dense_sharing(&self) -> bool {
+        self.dense_sharing_state() != DenseSharingState::Idle
     }
 }
 
@@ -1357,6 +1423,30 @@ impl Image {
         }
     }
 
+    pub(crate) fn register_image_set_queue(&self, queue: &Arc<ImageSetQueue>) {
+        if let Sharing::Exclusive(sharing) = &self.sharing {
+            sharing.register_image_set_queue(queue);
+        }
+    }
+
+    /// Starts a new synchronization epoch for `access_range` and returns the preceding access.
+    pub(crate) fn replace_access(
+        &self,
+        next_access: AccessType,
+        access_range: vk::ImageSubresourceRange,
+    ) -> impl Iterator<Item = (ImageAccessSet, vk::ImageSubresourceRange)> + '_ {
+        let access_range = self.info.resolve_subresource_counts(access_range);
+
+        #[cfg(feature = "checked")]
+        {
+            assert_aspect_mask_supported(access_range.aspect_mask);
+            assert!(format_aspect_mask(self.info.format).contains(access_range.aspect_mask));
+        }
+
+        self.access
+            .replace(&self.dense_access, self.info, next_access, access_range)
+    }
+
     /// Sets the debugging name assigned to this image.
     pub fn set_debug_name(&self, name: impl AsRef<str>) {
         Device::try_set_debug_utils_object_name(&self.device, self.handle, &name);
@@ -1381,7 +1471,6 @@ impl Image {
     ///
     /// Returns the previous access for which a pipeline barrier should be used to prevent data
     /// corruption.
-    #[profiling::function]
     pub(crate) fn swap_access(
         &self,
         next_access: AccessType,
@@ -1416,24 +1505,6 @@ impl Image {
 
         self.access
             .swap(&self.dense_access, self.info, next_access, access_range)
-    }
-
-    /// Starts a new synchronization epoch for `access_range` and returns the preceding access.
-    pub(crate) fn replace_access(
-        &self,
-        next_access: AccessType,
-        access_range: vk::ImageSubresourceRange,
-    ) -> impl Iterator<Item = (ImageAccessSet, vk::ImageSubresourceRange)> + '_ {
-        let access_range = self.info.resolve_subresource_counts(access_range);
-
-        #[cfg(feature = "checked")]
-        {
-            assert_aspect_mask_supported(access_range.aspect_mask);
-            assert!(format_aspect_mask(self.info.format).contains(access_range.aspect_mask));
-        }
-
-        self.access
-            .replace(&self.dense_access, self.info, next_access, access_range)
     }
 
     /// Starts one synchronization epoch and accumulates overlapping sampled reads within it.
@@ -1810,6 +1881,12 @@ impl Image {
         }
     }
 
+    pub(crate) fn unregister_image_set_queue(&self, queue: &Arc<ImageSetQueue>) {
+        if let Sharing::Exclusive(sharing) = &self.sharing {
+            sharing.unregister_image_set_queue(queue);
+        }
+    }
+
     /// Returns a cached Vulkan image view matching `info`.
     ///
     /// The returned handle remains valid until this image is dropped. Repeated calls with the same
@@ -1912,6 +1989,32 @@ impl ImageAccessSet {
     const SAMPLED_READ_TAG: u16 = 1 << 10;
     const VALUE_MASK: u16 = Self::SAMPLED_READ_TAG | Self::SAMPLED_READ_BITS;
 
+    pub(crate) const fn after_access(self, next_access: AccessType) -> Self {
+        let next = Self::from_access(next_access);
+        if !self.is_sampled_read() || !next.is_sampled_read() {
+            return next;
+        }
+
+        let sampled_read_bits = (self.0 | next.0) & Self::SAMPLED_READ_BITS;
+        if sampled_read_bits & Self::ANY_SAMPLED_READ_BIT != 0 {
+            Self(Self::SAMPLED_READ_TAG | Self::ANY_SAMPLED_READ_BIT)
+        } else {
+            Self(Self::SAMPLED_READ_TAG | sampled_read_bits)
+        }
+    }
+
+    pub(crate) const fn contains_sampled_read(self, access: AccessType) -> bool {
+        let next = Self::from_access(access);
+        if !self.is_sampled_read() || !next.is_sampled_read() {
+            return false;
+        }
+
+        let previous_bits = self.0 & Self::SAMPLED_READ_BITS;
+        let next_bits = next.0 & Self::SAMPLED_READ_BITS;
+
+        previous_bits & Self::ANY_SAMPLED_READ_BIT != 0 || previous_bits & next_bits == next_bits
+    }
+
     pub(crate) const fn from_access(access: AccessType) -> Self {
         let sampled_read_bit = match access {
             AccessType::VertexShaderReadSampledImageOrUniformTexelBuffer => 1 << 0,
@@ -1978,20 +2081,6 @@ impl ImageAccessSet {
             None
         } else {
             Some(access_type_from_u8(self.0 as u8))
-        }
-    }
-
-    pub(crate) const fn after_access(self, next_access: AccessType) -> Self {
-        let next = Self::from_access(next_access);
-        if !self.is_sampled_read() || !next.is_sampled_read() {
-            return next;
-        }
-
-        let sampled_read_bits = (self.0 | next.0) & Self::SAMPLED_READ_BITS;
-        if sampled_read_bits & Self::ANY_SAMPLED_READ_BIT != 0 {
-            Self(Self::SAMPLED_READ_TAG | Self::ANY_SAMPLED_READ_BIT)
-        } else {
-            Self(Self::SAMPLED_READ_TAG | sampled_read_bits)
         }
     }
 }
@@ -2948,6 +3037,40 @@ impl From<SampleCount> for vk::SampleCountFlags {
             SampleCount::Type32 => Self::TYPE_32,
             SampleCount::Type64 => Self::TYPE_64,
         }
+    }
+}
+
+/// The last queue to which every exclusive member of an image set was submitted.
+///
+/// Member queue updates invalidate this cache. Resources are externally synchronized, so
+/// publication cannot race those updates.
+#[derive(Debug)]
+pub(crate) struct ImageSetQueue(AtomicU64);
+
+impl ImageSetQueue {
+    fn invalidate(&self) {
+        self.0
+            .store(SharingMode::Exclusive(None).encode(), Ordering::Release);
+    }
+
+    pub(crate) const fn new() -> Self {
+        Self(AtomicU64::new(SharingMode::Exclusive(None).encode()))
+    }
+
+    pub(crate) fn publish(&self, queue: (u32, u32)) {
+        self.0.store(
+            SharingMode::Exclusive(Some(queue)).encode(),
+            Ordering::Release,
+        );
+    }
+
+    pub(crate) fn queue(&self) -> Option<(u32, u32)> {
+        let SharingMode::Exclusive(queue) = SharingMode::decode(self.0.load(Ordering::Acquire))
+        else {
+            unreachable!("invalid image set queue")
+        };
+
+        queue
     }
 }
 
@@ -5132,6 +5255,52 @@ mod test {
     }
 
     #[test]
+    fn image_set_queue_invalidates_registered_queues() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8_UINT, 1, 1);
+        let sharing = ExclusiveSharing::new(info);
+        let dense = Mutex::new(None);
+        let lhs = Arc::new(ImageSetQueue::new());
+        let rhs = Arc::new(ImageSetQueue::new());
+
+        assert_eq!(lhs.queue(), None);
+        lhs.publish((7, 3));
+        rhs.publish((7, 3));
+        assert_eq!(lhs.queue(), Some((7, 3)));
+
+        sharing.register_image_set_queue(&lhs);
+        sharing.register_image_set_queue(&lhs);
+        sharing.register_image_set_queue(&rhs);
+        let registered_queue_count = || {
+            ExclusiveSharing::lock_image_set_queues(
+                sharing
+                    .image_set_queues
+                    .get()
+                    .expect("missing image set queue registrations"),
+            )
+            .len()
+        };
+        assert_eq!(registered_queue_count(), 2);
+
+        sharing.set_ranges(
+            &dense,
+            info,
+            SharingMode::Exclusive(Some((8, 4))),
+            &[image_subresource_range(A::COLOR, 0..1, 0..1)],
+        );
+        assert_eq!(lhs.queue(), None);
+        assert_eq!(rhs.queue(), None);
+
+        drop(rhs);
+        sharing.invalidate_image_set_queues();
+        assert_eq!(registered_queue_count(), 1);
+
+        sharing.unregister_image_set_queue(&lhs);
+        assert_eq!(registered_queue_count(), 0);
+    }
+
+    #[test]
     pub fn image_ownership_set_promotes_dense_on_partial_update() {
         use vk::ImageAspectFlags as A;
 
@@ -5186,6 +5355,7 @@ mod test {
         match &sharing {
             Sharing::Exclusive(exclusive) => {
                 assert!(!exclusive.is_dense_sharing_active());
+                assert!(exclusive.image_set_queues.get().is_none());
                 assert_eq!(
                     SharingMode::decode(exclusive.uniform.load(Ordering::Acquire)),
                     SharingMode::Exclusive(Some((1, 2)))
