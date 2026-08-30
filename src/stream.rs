@@ -57,11 +57,11 @@
 use crate::private::NodeSealed;
 use {
     crate::{
-        AnyResource, Graph, Node, Resource, ResourceMap,
+        AnyResource, Graph, Node, Resource, ResourceMap, ResourceNode,
         cmd::{
             AttachmentIndex, ClearColorValue, Command, CommandRef, ComputeCommandRef,
-            GraphicsCommandRef, LoadOp, PipelineCommand, RayTracingCommandRef, StoreOp,
-            Subresource, SubresourceRange,
+            GraphicsCommandRef, LoadOp, PipelineCommand, RayTracingCommandRef, ResourceAccess,
+            StoreOp,
         },
         driver::{
             DriverError,
@@ -76,8 +76,9 @@ use {
         },
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
-            AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode,
-            ImageLeaseNode, ImageNode, SwapchainImageNode,
+            AccelerationStructureSetNode, AnyAccelerationStructureNode, AnyBufferNode,
+            AnyImageNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode, ImageSetNode,
+            SwapchainImageNode,
         },
         pool::SubmissionPool,
         submission::Submission,
@@ -497,6 +498,7 @@ impl<'a> StreamCommand<'a> {
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
         R: Resource,
+        R::Node: StreamResourceNode,
     {
         self.inner.bind_resource(resource)
     }
@@ -539,20 +541,18 @@ impl<'a> StreamCommand<'a> {
     }
 
     /// Stream equivalent of [`Command::resource_access`].
-    pub fn resource_access<N>(mut self, resource_node: N, access: vk_sync::AccessType) -> Self
+    pub fn resource_access<N>(mut self, resource_node: N, access: N::Access) -> Self
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
         self.inner.set_resource_access(resource_node, access);
         self
     }
 
     /// Mutable-borrow stream equivalent of [`Command::resource_access`].
-    pub fn set_resource_access<N>(&mut self, resource_node: N, access: vk_sync::AccessType)
+    pub fn set_resource_access<N>(&mut self, resource_node: N, access: N::Access)
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
         self.inner.set_resource_access(resource_node, access);
     }
@@ -564,29 +564,24 @@ impl<'a, T> StreamPipelineCommand<'a, T> {
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
         R: Resource,
+        R::Node: StreamResourceNode,
     {
         self.inner.bind_resource(resource)
     }
 
     /// Stream equivalent of [`PipelineCommand::resource_access`].
-    pub fn resource_access<N>(mut self, resource_node: N, access: vk_sync::AccessType) -> Self
+    pub fn resource_access<N>(mut self, resource_node: N, access: N::Access) -> Self
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
         self.inner.set_resource_access(resource_node, access);
         self
     }
 
     /// Mutable-borrow stream equivalent of [`PipelineCommand::resource_access`].
-    pub fn set_resource_access<N>(
-        &mut self,
-        resource_node: N,
-        access: vk_sync::AccessType,
-    ) -> &mut Self
+    pub fn set_resource_access<N>(&mut self, resource_node: N, access: N::Access) -> &mut Self
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
         self.inner.set_resource_access(resource_node, access);
         self
@@ -738,6 +733,7 @@ impl CommandStreamMut {
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
         R: Resource,
+        R::Node: StreamResourceNode,
     {
         self.graph.bind_resource(resource)
     }
@@ -1022,11 +1018,12 @@ impl<A> CommandStreamDraft<A> {
     where
         P: SubmissionPool,
     {
-        self.inner
+        let submission = self
+            .inner
             .submission
             .get_mut()
-            .expect("poisoned command stream submission")
-            .prepare_command_stream(pool)?;
+            .expect("poisoned command stream submission");
+        submission.prepare_command_stream(pool)?;
         self.inner.prepared = true;
 
         Ok(self.into_stream())
@@ -1153,6 +1150,18 @@ impl Graph {
         let stream_graph = submission.graph();
         let mut arg_by_node = HashMap::new();
 
+        #[cfg(feature = "checked")]
+        {
+            self.prepared_stream_acceleration_structure_accesses.extend(
+                stream_graph
+                    .prepared_stream_acceleration_structure_accesses
+                    .iter()
+                    .copied(),
+            );
+            self.prepared_stream_image_accesses
+                .extend(stream_graph.prepared_stream_image_accesses.iter().copied());
+        }
+
         for (arg_idx, &node_idx) in stream.inner.arg_nodes.iter().enumerate() {
             arg_by_node.insert(node_idx, arg_idx);
         }
@@ -1165,16 +1174,23 @@ impl Graph {
                 node_map.push(self.resources.bind(resource.clone()));
             }
         }
+        let resource_set_map = stream_graph
+            .resource_sets
+            .iter()
+            .map(|resource_set| self.resource_sets.bind(resource_set))
+            .collect::<Vec<_>>();
 
         for cmd in &stream_graph.cmds {
             let mut cmd = cmd.clone();
             cmd.remap_nodes(&node_map);
+            cmd.remap_resource_sets(&resource_set_map);
 
             #[cfg(feature = "checked")]
             for exec in &mut cmd.execs {
-                exec.stream_graph_id = Some(stream.inner.graph_id);
+                exec.stream_graph_id.get_or_insert(stream.inner.graph_id);
             }
 
+            cmd.execs.push(Default::default());
             self.cmds.push(cmd);
         }
     }
@@ -1193,8 +1209,45 @@ impl Graph {
         let stream_graph = submission.graph();
         let mut arg_by_node = HashMap::new();
 
+        #[cfg(feature = "checked")]
+        {
+            self.prepared_stream_acceleration_structure_accesses.extend(
+                stream_graph
+                    .prepared_stream_acceleration_structure_accesses
+                    .iter()
+                    .copied(),
+            );
+            self.prepared_stream_image_accesses
+                .extend(stream_graph.prepared_stream_image_accesses.iter().copied());
+        }
+
         for (arg_idx, &node_idx) in stream.inner.arg_nodes.iter().enumerate() {
             arg_by_node.insert(node_idx, arg_idx);
+        }
+        let resource_set_map = stream_graph
+            .resource_sets
+            .iter()
+            .map(|resource_set| self.resource_sets.bind(resource_set))
+            .collect::<Vec<_>>();
+
+        #[cfg(feature = "checked")]
+        for (node_idx, _) in stream_graph
+            .cmds
+            .iter()
+            .flat_map(|cmd| &cmd.execs)
+            .flat_map(|exec| exec.accesses.iter())
+        {
+            if let Some(acceleration_structure) = stream_graph.resources[node_idx].as_accel_struct()
+            {
+                self.prepared_stream_acceleration_structure_accesses.insert(
+                    crate::resource::PhysicalAccelerationStructureId::of(acceleration_structure),
+                );
+            }
+
+            if let Some(image) = stream_graph.resources[node_idx].as_image() {
+                self.prepared_stream_image_accesses
+                    .insert(crate::resource::PhysicalImageId::of(image));
+            }
         }
 
         let mut cmd = self.begin_cmd().debug_name("command stream");
@@ -1219,6 +1272,17 @@ impl Graph {
                     );
                 }
             }
+        }
+        for access in stream_graph
+            .cmds
+            .iter()
+            .flat_map(|cmd| &cmd.execs)
+            .flat_map(|exec| &exec.resource_set_accesses)
+        {
+            cmd.push_resource_set_access(
+                resource_set_map[access.resource_set_idx.as_usize()],
+                access.access_type,
+            );
         }
 
         drop(submission);
@@ -1285,7 +1349,7 @@ pub trait StreamArgBindable<T>: stream_private::StreamArgBindableSealed<T> + Nod
 /// A graph node that can be borrowed while building a [`CommandStream`].
 #[allow(private_bounds)]
 #[doc(hidden)]
-pub trait StreamResourceNode: stream_private::StreamResourceNodeSealed + Node {}
+pub trait StreamResourceNode: stream_private::StreamResourceNodeSealed + ResourceNode {}
 
 mod stream_private {
     pub trait StreamArgInfoSealed {}
@@ -1408,10 +1472,12 @@ macro_rules! stream_resource_node {
 stream_resource_node!(
     AccelerationStructureNode,
     AccelerationStructureLeaseNode,
+    AccelerationStructureSetNode,
     BufferNode,
     BufferLeaseNode,
     ImageNode,
     ImageLeaseNode,
+    ImageSetNode,
     SwapchainImageNode,
 );
 
@@ -1425,6 +1491,12 @@ mod test {
             render_pass::{RenderPass, RenderPassInfo},
         },
         pool::Pool,
+        resource::{
+            AccelerationStructureAccessType, AccelerationStructureSet,
+            AccelerationStructureSetMember, ImageAccessType, ImageSet, ImageSetMember,
+            PhysicalAccelerationStructureId, PhysicalImageId, ResourceSetAccessType,
+            ResourceSetIndex,
+        },
     };
 
     struct NoopPool;
@@ -1547,7 +1619,9 @@ mod test {
         let mut graph = Graph::new();
 
         graph.insert_cmd_stream(&stream).finish();
-        assert_eq!(graph.cmds.len(), 2);
+        let submission = graph.finalize();
+
+        assert_eq!(submission.graph().cmds.len(), 2);
     }
 
     #[test]
@@ -1706,5 +1780,227 @@ mod test {
         let _ = CommandStream::finalize(|stream| {
             stream.graph.begin_cmd().record_cmd(|_| {});
         });
+    }
+
+    #[test]
+    fn image_sets_can_bind_to_unprepared_command_streams() {
+        let parent_resource_set = ImageSet::new(std::iter::empty::<ImageSetMember>()).unwrap();
+        let stream_resource_set = ImageSet::new(std::iter::empty::<ImageSetMember>()).unwrap();
+
+        let stream = CommandStream::finalize(|stream| {
+            let resource_set = stream.bind_resource(&stream_resource_set);
+            stream
+                .begin_cmd()
+                .resource_access(resource_set, ImageAccessType::SampledRead)
+                .record_cmd(|_| {});
+        })
+        .into_stream();
+        let mut graph = Graph::new();
+        graph.bind_resource(&parent_resource_set);
+        graph.insert_cmd_stream(&stream).finish();
+
+        let submission = graph.finalize();
+        let graph = submission.graph();
+        let accesses = &graph.cmds[0].execs[0].resource_set_accesses;
+
+        assert_eq!(graph.resource_sets.len(), 2);
+        assert_eq!(accesses.len(), 1);
+        assert_eq!(accesses[0].resource_set_idx, ResourceSetIndex::new(1));
+        assert_eq!(
+            accesses[0].access_type,
+            ResourceSetAccessType::Image(ImageAccessType::SampledRead)
+        );
+    }
+
+    #[test]
+    fn resource_sets_can_prepare_command_streams() {
+        let mut pool = NoopPool;
+        let parent_resource_set = ImageSet::new(std::iter::empty::<ImageSetMember>()).unwrap();
+        let image_set = ImageSet::new(std::iter::empty::<ImageSetMember>()).unwrap();
+        let acceleration_structure_set =
+            AccelerationStructureSet::new(std::iter::empty::<AccelerationStructureSetMember>())
+                .unwrap();
+
+        let stream = CommandStream::prepare(&mut pool, |stream| {
+            let image_set = stream.bind_resource(&image_set);
+            let acceleration_structure_set = stream.bind_resource(&acceleration_structure_set);
+            stream
+                .begin_cmd()
+                .resource_access(
+                    acceleration_structure_set,
+                    AccelerationStructureAccessType::BuildRead,
+                )
+                .resource_access(image_set, ImageAccessType::SampledRead)
+                .record_cmd(|_| {});
+            stream
+                .begin_cmd()
+                .resource_access(
+                    acceleration_structure_set,
+                    AccelerationStructureAccessType::RayTracingRead,
+                )
+                .resource_access(image_set, ImageAccessType::SampledRead)
+                .record_cmd(|_| {});
+        })
+        .expect("prepare stream");
+        let mut graph = Graph::new();
+        let parent_resource_set = graph.bind_resource(&parent_resource_set);
+        graph
+            .begin_cmd()
+            .resource_access(parent_resource_set, ImageAccessType::SampledRead)
+            .record_cmd(|_| {});
+        graph.insert_cmd_stream(&stream).finish();
+
+        let submission = graph.finalize();
+        let graph = submission.graph();
+        let opaque_cmd = graph
+            .cmds
+            .iter()
+            .find(|cmd| cmd.stream_scope_id.is_some())
+            .expect("missing prepared command stream");
+        let accesses = &opaque_cmd.execs[0].resource_set_accesses;
+
+        assert_eq!(graph.resource_sets.len(), 3);
+        assert_eq!(accesses.len(), 3);
+        assert!(accesses.contains(&crate::ResourceSetAccess {
+            resource_set_idx: ResourceSetIndex::new(1),
+            access_type: ResourceSetAccessType::Image(ImageAccessType::SampledRead),
+        }));
+        assert!(accesses.contains(&crate::ResourceSetAccess {
+            resource_set_idx: ResourceSetIndex::new(2),
+            access_type: ResourceSetAccessType::AccelerationStructure(
+                AccelerationStructureAccessType::BuildRead,
+            ),
+        }));
+        assert!(accesses.contains(&crate::ResourceSetAccess {
+            resource_set_idx: ResourceSetIndex::new(2),
+            access_type: ResourceSetAccessType::AccelerationStructure(
+                AccelerationStructureAccessType::RayTracingRead,
+            ),
+        }));
+    }
+
+    #[test]
+    fn prepared_command_stream_resource_sets_reuse_parent_identity() {
+        let mut pool = NoopPool;
+        let resource_set = ImageSet::new(std::iter::empty::<ImageSetMember>()).unwrap();
+        let stream = CommandStream::prepare(&mut pool, |stream| {
+            let resource_set = stream.bind_resource(&resource_set);
+            stream
+                .begin_cmd()
+                .resource_access(resource_set, ImageAccessType::SampledRead)
+                .record_cmd(|_| {});
+        })
+        .expect("prepare stream");
+        let mut graph = Graph::new();
+        graph.bind_resource(&resource_set);
+        graph.insert_cmd_stream(&stream).finish();
+
+        let submission = graph.finalize();
+        let graph = submission.graph();
+        let accesses = &graph.cmds[0].execs[0].resource_set_accesses;
+
+        assert_eq!(graph.resource_sets.len(), 1);
+        assert_eq!(accesses[0].resource_set_idx, ResourceSetIndex::new(0));
+    }
+
+    #[cfg(feature = "checked")]
+    #[test]
+    fn nested_prepared_stream_propagates_direct_resource_accesses() {
+        let acceleration_structure = PhysicalAccelerationStructureId::from_parts(1, 2);
+        let image = PhysicalImageId::from_parts(3, 4);
+        let mut pool = NoopPool;
+        let inner = CommandStream::prepare(&mut pool, |stream| {
+            stream
+                .graph
+                .prepared_stream_acceleration_structure_accesses
+                .insert(acceleration_structure);
+            stream.graph.prepared_stream_image_accesses.insert(image);
+            stream.begin_cmd().record_cmd(|_| {});
+        })
+        .expect("prepare inner stream");
+        let outer = CommandStream::prepare(&mut pool, |stream| {
+            stream.graph.insert_cmd_stream(&inner).finish();
+        })
+        .expect("prepare outer stream");
+        let mut graph = Graph::new();
+
+        graph.insert_cmd_stream(&outer).finish();
+
+        assert!(
+            graph
+                .prepared_stream_acceleration_structure_accesses
+                .contains(&acceleration_structure)
+        );
+        assert!(graph.prepared_stream_image_accesses.contains(&image));
+    }
+
+    #[cfg(feature = "checked")]
+    #[test]
+    fn nested_unprepared_stream_propagates_direct_resource_accesses() {
+        let acceleration_structure = PhysicalAccelerationStructureId::from_parts(1, 2);
+        let image = PhysicalImageId::from_parts(3, 4);
+        let mut pool = NoopPool;
+        let inner = CommandStream::prepare(&mut pool, |stream| {
+            stream
+                .graph
+                .prepared_stream_acceleration_structure_accesses
+                .insert(acceleration_structure);
+            stream.graph.prepared_stream_image_accesses.insert(image);
+            stream.begin_cmd().record_cmd(|_| {});
+        })
+        .expect("prepare inner stream");
+        let outer = CommandStream::finalize(|stream| {
+            stream.graph.insert_cmd_stream(&inner).finish();
+        })
+        .into_stream();
+        let mut graph = Graph::new();
+
+        graph.insert_cmd_stream(&outer).finish();
+
+        assert!(
+            graph
+                .prepared_stream_acceleration_structure_accesses
+                .contains(&acceleration_structure)
+        );
+        assert!(graph.prepared_stream_image_accesses.contains(&image));
+    }
+
+    #[cfg(feature = "checked")]
+    #[test]
+    fn nested_unprepared_stream_preserves_callback_owner_and_composes_set_map() {
+        let inner_set = ImageSet::new(std::iter::empty::<ImageSetMember>()).unwrap();
+        let inner = CommandStream::finalize(|stream| {
+            let set = stream.bind_resource(&inner_set);
+            stream
+                .begin_cmd()
+                .resource_access(set, ImageAccessType::SampledRead)
+                .record_cmd(move |_| {
+                    let _ = set;
+                });
+        })
+        .into_stream();
+        let inner_graph_id = inner.inner.graph_id;
+        let middle_set = ImageSet::new(std::iter::empty::<ImageSetMember>()).unwrap();
+        let middle = CommandStream::finalize(|stream| {
+            stream.bind_resource(&middle_set);
+            stream.graph.insert_cmd_stream(&inner).finish();
+        })
+        .into_stream();
+        let parent_set = ImageSet::new(std::iter::empty::<ImageSetMember>()).unwrap();
+        let mut graph = Graph::new();
+        graph.bind_resource(&parent_set);
+
+        graph.insert_cmd_stream(&middle).finish();
+
+        let exec = &graph.cmds[0].execs[0];
+        assert_eq!(exec.stream_graph_id, Some(inner_graph_id));
+        assert_eq!(
+            exec.resource_set_map.as_deref(),
+            Some([ResourceSetIndex::new(2)].as_slice())
+        );
+        assert_eq!(
+            exec.resource_set_accesses[0].resource_set_idx,
+            ResourceSetIndex::new(2)
+        );
     }
 }

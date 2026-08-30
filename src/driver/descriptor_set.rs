@@ -27,6 +27,7 @@ use {
     ash::vk,
     log::warn,
     std::{
+        cell::RefCell,
         fmt::{Debug, Formatter},
         iter,
         ops::Deref,
@@ -558,91 +559,29 @@ impl DescriptorSet {
         let descriptor_set = DescriptorPool::allocate_descriptor_set(&descriptor_pool, &layout)?;
         let handle = *descriptor_set;
 
-        for write in &writes {
-            unsafe {
-                match write {
-                    PreparedWrite::AccelerationStructure {
-                        destination,
-                        descriptor_type,
-                        resource,
-                    } => {
-                        let acceleration_structures = [resource.handle];
-                        let mut acceleration_structure_info =
-                            vk::WriteDescriptorSetAccelerationStructureKHR::default()
-                                .acceleration_structures(&acceleration_structures);
-                        let write = vk::WriteDescriptorSet::default()
-                            .dst_set(handle)
-                            .dst_binding(destination.binding)
-                            .dst_array_element(destination.array_element)
-                            .descriptor_type(*descriptor_type)
-                            .descriptor_count(1)
-                            .push_next(&mut acceleration_structure_info);
-                        device.update_descriptor_sets(slice::from_ref(&write), &[]);
-                    }
-                    PreparedWrite::Buffer {
-                        destination,
-                        descriptor_type,
-                        resource,
-                        range,
-                    } => {
-                        let range_size = if range.end == vk::WHOLE_SIZE {
-                            vk::WHOLE_SIZE
-                        } else {
-                            range.end - range.start
-                        };
-                        let buffer_info = vk::DescriptorBufferInfo::default()
-                            .buffer(resource.handle)
-                            .offset(range.start)
-                            .range(range_size);
-                        let write = vk::WriteDescriptorSet::default()
-                            .dst_set(handle)
-                            .dst_binding(destination.binding)
-                            .dst_array_element(destination.array_element)
-                            .descriptor_type(*descriptor_type)
-                            .buffer_info(slice::from_ref(&buffer_info));
-                        device.update_descriptor_sets(slice::from_ref(&write), &[]);
-                    }
-                    PreparedWrite::Image {
-                        destination,
-                        descriptor_type,
-                        image_layout,
-                        image_view,
-                        ..
-                    } => {
-                        let image_info = vk::DescriptorImageInfo::default()
-                            .image_layout(*image_layout)
-                            .image_view(*image_view);
-                        let write = vk::WriteDescriptorSet::default()
-                            .dst_set(handle)
-                            .dst_binding(destination.binding)
-                            .dst_array_element(destination.array_element)
-                            .descriptor_type(*descriptor_type)
-                            .image_info(slice::from_ref(&image_info));
-                        device.update_descriptor_sets(slice::from_ref(&write), &[]);
-                    }
-                }
-            }
-        }
+        let native_writes = writes.iter().map(DescriptorWrite::from).collect::<Box<_>>();
+        let native_copies = copies
+            .iter()
+            .map(|copy| {
+                vk::CopyDescriptorSet::default()
+                    .src_set(copy.source.handle())
+                    .src_binding(copy.source_binding.binding)
+                    .src_array_element(copy.source_binding.array_element)
+                    .dst_set(handle)
+                    .dst_binding(copy.destination.binding)
+                    .dst_array_element(copy.destination.array_element)
+                    .descriptor_count(copy.descriptor_count)
+            })
+            .collect::<Box<_>>();
 
-        if !copies.is_empty() {
-            let copy_infos = copies
-                .iter()
-                .map(|copy| {
-                    vk::CopyDescriptorSet::default()
-                        .src_set(copy.source.handle())
-                        .src_binding(copy.source_binding.binding)
-                        .src_array_element(copy.source_binding.array_element)
-                        .dst_set(handle)
-                        .dst_binding(copy.destination.binding)
-                        .dst_array_element(copy.destination.array_element)
-                        .descriptor_count(copy.descriptor_count)
-                })
-                .collect::<Vec<_>>();
-
-            unsafe {
-                device.update_descriptor_sets(&[], &copy_infos);
-            }
-        }
+        DescriptorWrite::with_updates(
+            handle,
+            &native_writes,
+            &native_copies,
+            |writes, copies| unsafe {
+                device.update_descriptor_sets(writes, copies);
+            },
+        );
 
         let resources = writes
             .into_iter()
@@ -1059,6 +998,281 @@ mod descriptor_set_private {
     }
 }
 
+#[derive(Clone, Copy)]
+enum DescriptorWrite {
+    AccelerationStructure {
+        acceleration_structure: vk::AccelerationStructureKHR,
+        descriptor_type: vk::DescriptorType,
+        destination: DescriptorSetBinding,
+    },
+    Buffer {
+        descriptor_type: vk::DescriptorType,
+        destination: DescriptorSetBinding,
+        info: vk::DescriptorBufferInfo,
+    },
+    Image {
+        descriptor_type: vk::DescriptorType,
+        destination: DescriptorSetBinding,
+        info: vk::DescriptorImageInfo,
+    },
+}
+
+impl From<&PreparedWrite> for DescriptorWrite {
+    fn from(write: &PreparedWrite) -> Self {
+        match write {
+            PreparedWrite::AccelerationStructure {
+                destination,
+                descriptor_type,
+                resource,
+            } => Self::AccelerationStructure {
+                acceleration_structure: resource.handle,
+                descriptor_type: *descriptor_type,
+                destination: *destination,
+            },
+            PreparedWrite::Buffer {
+                destination,
+                descriptor_type,
+                resource,
+                range,
+            } => Self::Buffer {
+                descriptor_type: *descriptor_type,
+                destination: *destination,
+                info: vk::DescriptorBufferInfo::default()
+                    .buffer(resource.handle)
+                    .offset(range.start)
+                    .range(if range.end == vk::WHOLE_SIZE {
+                        vk::WHOLE_SIZE
+                    } else {
+                        range.end - range.start
+                    }),
+            },
+            PreparedWrite::Image {
+                destination,
+                descriptor_type,
+                image_layout,
+                image_view,
+                ..
+            } => Self::Image {
+                descriptor_type: *descriptor_type,
+                destination: *destination,
+                info: vk::DescriptorImageInfo::default()
+                    .image_layout(*image_layout)
+                    .image_view(*image_view),
+            },
+        }
+    }
+}
+
+impl DescriptorWrite {
+    fn with_updates(
+        descriptor_set: vk::DescriptorSet,
+        writes: &[Self],
+        copies: &[vk::CopyDescriptorSet<'_>],
+        update: impl FnOnce(&[vk::WriteDescriptorSet<'_>], &[vk::CopyDescriptorSet<'_>]),
+    ) {
+        if writes.is_empty() && copies.is_empty() {
+            return;
+        }
+
+        #[derive(Default)]
+        struct DescriptorWriteScratch {
+            acceleration_structure_infos:
+                Vec<vk::WriteDescriptorSetAccelerationStructureKHR<'static>>,
+            acceleration_structures: Vec<vk::AccelerationStructureKHR>,
+            buffer_infos: Vec<vk::DescriptorBufferInfo>,
+            image_infos: Vec<vk::DescriptorImageInfo>,
+            native_writes: Vec<vk::WriteDescriptorSet<'static>>,
+            ranges: Vec<DescriptorWriteRange>,
+        }
+
+        impl DescriptorWriteScratch {
+            fn clear(&mut self) {
+                self.acceleration_structure_infos.clear();
+                self.acceleration_structures.clear();
+                self.buffer_infos.clear();
+                self.image_infos.clear();
+                self.native_writes.clear();
+                self.ranges.clear();
+            }
+        }
+
+        thread_local! {
+            static SCRATCH: RefCell<DescriptorWriteScratch> = Default::default();
+        }
+
+        SCRATCH.with_borrow_mut(|tls| {
+            tls.clear();
+            tls.ranges.reserve(writes.len());
+
+            for write in writes {
+                match *write {
+                    DescriptorWrite::AccelerationStructure {
+                        acceleration_structure,
+                        descriptor_type,
+                        destination,
+                    } => {
+                        let info_idx = tls.acceleration_structures.len();
+                        tls.acceleration_structures.push(acceleration_structure);
+                        DescriptorWriteRange::push(
+                            &mut tls.ranges,
+                            DescriptorWriteKind::AccelerationStructure,
+                            descriptor_type,
+                            destination,
+                            info_idx,
+                        );
+                    }
+                    DescriptorWrite::Buffer {
+                        descriptor_type,
+                        destination,
+                        info,
+                    } => {
+                        let info_idx = tls.buffer_infos.len();
+                        tls.buffer_infos.push(info);
+                        DescriptorWriteRange::push(
+                            &mut tls.ranges,
+                            DescriptorWriteKind::Buffer,
+                            descriptor_type,
+                            destination,
+                            info_idx,
+                        );
+                    }
+                    DescriptorWrite::Image {
+                        descriptor_type,
+                        destination,
+                        info,
+                    } => {
+                        let info_idx = tls.image_infos.len();
+                        tls.image_infos.push(info);
+                        DescriptorWriteRange::push(
+                            &mut tls.ranges,
+                            DescriptorWriteKind::Image,
+                            descriptor_type,
+                            destination,
+                            info_idx,
+                        );
+                    }
+                }
+            }
+
+            let acceleration_structure_range_count = tls
+                .ranges
+                .iter()
+                .filter(|range| range.kind == DescriptorWriteKind::AccelerationStructure)
+                .count();
+            tls.acceleration_structure_infos
+                .reserve(acceleration_structure_range_count);
+            for range in &tls.ranges {
+                if range.kind == DescriptorWriteKind::AccelerationStructure {
+                    tls.acceleration_structure_infos.push(
+                        vk::WriteDescriptorSetAccelerationStructureKHR {
+                            acceleration_structure_count: range.descriptor_count,
+                            p_acceleration_structures: unsafe {
+                                tls.acceleration_structures.as_ptr().add(range.info_idx)
+                            },
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+
+            // Assign pointers only after every backing array has reached its final allocation.
+            let acceleration_structure_infos = tls.acceleration_structure_infos.as_ptr();
+            let mut acceleration_structure_idx = 0;
+            tls.native_writes.reserve(tls.ranges.len());
+            for range in &tls.ranges {
+                let mut write = vk::WriteDescriptorSet {
+                    dst_set: descriptor_set,
+                    dst_binding: range.destination.binding,
+                    dst_array_element: range.destination.array_element,
+                    descriptor_count: range.descriptor_count,
+                    descriptor_type: range.descriptor_type,
+                    ..Default::default()
+                };
+                match range.kind {
+                    DescriptorWriteKind::AccelerationStructure => {
+                        write.p_next = unsafe {
+                            acceleration_structure_infos
+                                .add(acceleration_structure_idx)
+                                .cast()
+                        };
+                        acceleration_structure_idx += 1;
+                    }
+                    DescriptorWriteKind::Buffer => {
+                        write.p_buffer_info =
+                            unsafe { tls.buffer_infos.as_ptr().add(range.info_idx) };
+                    }
+                    DescriptorWriteKind::Image => {
+                        write.p_image_info =
+                            unsafe { tls.image_infos.as_ptr().add(range.info_idx) };
+                    }
+                }
+                tls.native_writes.push(write);
+            }
+
+            update(&tls.native_writes, copies);
+        });
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DescriptorWriteKind {
+    AccelerationStructure,
+    Buffer,
+    Image,
+}
+
+#[derive(Clone, Copy)]
+struct DescriptorWriteRange {
+    descriptor_count: u32,
+    descriptor_type: vk::DescriptorType,
+    destination: DescriptorSetBinding,
+    info_idx: usize,
+    kind: DescriptorWriteKind,
+}
+
+impl DescriptorWriteRange {
+    fn push(
+        ranges: &mut Vec<Self>,
+        kind: DescriptorWriteKind,
+        descriptor_type: vk::DescriptorType,
+        destination: DescriptorSetBinding,
+        info_idx: usize,
+    ) {
+        if let Some(previous) = ranges.last_mut()
+            && previous.kind == kind
+            && previous.descriptor_type == descriptor_type
+            && previous.destination.binding == destination.binding
+            && previous
+                .destination
+                .array_element
+                .checked_add(previous.descriptor_count)
+                == Some(destination.array_element)
+            && previous.info_idx + previous.descriptor_count as usize == info_idx
+        {
+            previous.descriptor_count = previous
+                .descriptor_count
+                .checked_add(1)
+                .expect("descriptor write count overflow");
+            return;
+        }
+
+        ranges.push(Self {
+            descriptor_count: 1,
+            descriptor_type,
+            destination,
+            info_idx,
+            kind,
+        });
+    }
+}
+
+struct PreparedCopy {
+    descriptor_count: u32,
+    destination: DescriptorSetBinding,
+    source: DescriptorSet,
+    source_binding: DescriptorSetBinding,
+}
+
 enum PreparedWrite {
     AccelerationStructure {
         destination: DescriptorSetBinding,
@@ -1078,13 +1292,6 @@ enum PreparedWrite {
         image_view: vk::ImageView,
         resource: Arc<Image>,
     },
-}
-
-struct PreparedCopy {
-    descriptor_count: u32,
-    destination: DescriptorSetBinding,
-    source: DescriptorSet,
-    source_binding: DescriptorSetBinding,
 }
 
 #[derive(Debug)]
@@ -1121,6 +1328,7 @@ impl Drop for RawDescriptorSet {
 #[cfg(test)]
 mod test {
     use super::*;
+    use ash::vk::Handle as _;
 
     #[test]
     fn descriptor_set_binding_conversions() {
@@ -1160,5 +1368,275 @@ mod test {
 
         assert_eq!(update_count([]), 0);
         assert_eq!(update_count(None), 0);
+    }
+
+    #[test]
+    fn empty_vulkan_descriptor_updates_skip_submission() {
+        let writes: [DescriptorWrite; 0] = [];
+        let copies: [vk::CopyDescriptorSet<'static>; 0] = [];
+        let mut called = false;
+
+        DescriptorWrite::with_updates(vk::DescriptorSet::null(), &writes, &copies, |_, _| {
+            called = true;
+        });
+
+        assert!(!called);
+    }
+
+    #[test]
+    fn vulkan_descriptor_updates_coalesce_large_image_array() {
+        const DESCRIPTOR_COUNT: u32 = 2_048;
+
+        let writes = (0..DESCRIPTOR_COUNT)
+            .map(|array_element| DescriptorWrite::Image {
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                destination: (0, array_element).into(),
+                info: vk::DescriptorImageInfo::default()
+                    .image_view(vk::ImageView::from_raw(u64::from(array_element) + 1)),
+            })
+            .collect::<Vec<_>>();
+
+        DescriptorWrite::with_updates(vk::DescriptorSet::from_raw(1), &writes, &[], |writes, _| {
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0].descriptor_count, DESCRIPTOR_COUNT);
+            assert_eq!(
+                unsafe { (*writes[0].p_image_info.add(DESCRIPTOR_COUNT as usize - 1)).image_view },
+                vk::ImageView::from_raw(u64::from(DESCRIPTOR_COUNT))
+            );
+        });
+    }
+
+    #[test]
+    fn vulkan_descriptor_updates_coalesce_only_contiguous_writes() {
+        let descriptor_set = vk::DescriptorSet::from_raw(1);
+        let image_views = [
+            vk::ImageView::from_raw(10),
+            vk::ImageView::from_raw(11),
+            vk::ImageView::from_raw(12),
+            vk::ImageView::from_raw(13),
+            vk::ImageView::from_raw(14),
+        ];
+        let buffers = [vk::Buffer::from_raw(20), vk::Buffer::from_raw(21)];
+        let acceleration_structures = [
+            vk::AccelerationStructureKHR::from_raw(30),
+            vk::AccelerationStructureKHR::from_raw(31),
+        ];
+        let writes = [
+            DescriptorWrite::Image {
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                destination: (7, 0).into(),
+                info: vk::DescriptorImageInfo::default().image_view(image_views[0]),
+            },
+            DescriptorWrite::Image {
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                destination: (7, 1).into(),
+                info: vk::DescriptorImageInfo::default().image_view(image_views[1]),
+            },
+            // Overlap must remain a later write so Vulkan ordering is preserved.
+            DescriptorWrite::Image {
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                destination: (7, 1).into(),
+                info: vk::DescriptorImageInfo::default().image_view(image_views[2]),
+            },
+            DescriptorWrite::Image {
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                destination: (7, 3).into(),
+                info: vk::DescriptorImageInfo::default().image_view(image_views[3]),
+            },
+            DescriptorWrite::Image {
+                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                destination: (7, 4).into(),
+                info: vk::DescriptorImageInfo::default().image_view(image_views[4]),
+            },
+            DescriptorWrite::Buffer {
+                descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+                destination: (8, 0).into(),
+                info: vk::DescriptorBufferInfo::default().buffer(buffers[0]),
+            },
+            DescriptorWrite::Buffer {
+                descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+                destination: (8, 1).into(),
+                info: vk::DescriptorBufferInfo::default().buffer(buffers[1]),
+            },
+            DescriptorWrite::AccelerationStructure {
+                acceleration_structure: acceleration_structures[0],
+                descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                destination: (9, 0).into(),
+            },
+            DescriptorWrite::AccelerationStructure {
+                acceleration_structure: acceleration_structures[1],
+                descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                destination: (9, 1).into(),
+            },
+        ];
+
+        DescriptorWrite::with_updates(descriptor_set, &writes, &[], |writes, _| {
+            assert_eq!(writes.len(), 6);
+            assert_eq!(
+                writes
+                    .iter()
+                    .map(|write| (
+                        write.dst_binding,
+                        write.dst_array_element,
+                        write.descriptor_count
+                    ))
+                    .collect::<Vec<_>>(),
+                [
+                    (7, 0, 2),
+                    (7, 1, 1),
+                    (7, 3, 1),
+                    (7, 4, 1),
+                    (8, 0, 2),
+                    (9, 0, 2),
+                ]
+            );
+            assert_eq!(
+                unsafe { (*writes[0].p_image_info).image_view },
+                image_views[0]
+            );
+            assert_eq!(
+                unsafe { (*writes[0].p_image_info.add(1)).image_view },
+                image_views[1]
+            );
+            assert_eq!(
+                unsafe { (*writes[1].p_image_info).image_view },
+                image_views[2]
+            );
+            assert_eq!(
+                unsafe { (*writes[2].p_image_info).image_view },
+                image_views[3]
+            );
+            assert_eq!(
+                unsafe { (*writes[3].p_image_info).image_view },
+                image_views[4]
+            );
+            assert_eq!(unsafe { (*writes[4].p_buffer_info).buffer }, buffers[0]);
+            assert_eq!(
+                unsafe { (*writes[4].p_buffer_info.add(1)).buffer },
+                buffers[1]
+            );
+
+            let acceleration_structure_info = unsafe {
+                &*(writes[5].p_next as *const vk::WriteDescriptorSetAccelerationStructureKHR<'_>)
+            };
+            assert_eq!(acceleration_structure_info.acceleration_structure_count, 2);
+            assert_eq!(
+                unsafe { *acceleration_structure_info.p_acceleration_structures },
+                acceleration_structures[0]
+            );
+            assert_eq!(
+                unsafe { *acceleration_structure_info.p_acceleration_structures.add(1) },
+                acceleration_structures[1]
+            );
+        });
+    }
+
+    #[test]
+    fn vulkan_descriptor_updates_preserve_disjoint_acceleration_structure_chains() {
+        let acceleration_structures = [
+            vk::AccelerationStructureKHR::from_raw(10),
+            vk::AccelerationStructureKHR::from_raw(11),
+        ];
+        let writes = [
+            DescriptorWrite::AccelerationStructure {
+                acceleration_structure: acceleration_structures[0],
+                descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                destination: (0, 0).into(),
+            },
+            DescriptorWrite::Image {
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                destination: (1, 0).into(),
+                info: vk::DescriptorImageInfo::default().image_view(vk::ImageView::from_raw(20)),
+            },
+            DescriptorWrite::AccelerationStructure {
+                acceleration_structure: acceleration_structures[1],
+                descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                destination: (0, 1).into(),
+            },
+        ];
+
+        DescriptorWrite::with_updates(vk::DescriptorSet::from_raw(1), &writes, &[], |writes, _| {
+            assert_eq!(writes.len(), 3);
+            for (write_idx, acceleration_structure_idx) in [(0, 0), (2, 1)] {
+                let info = unsafe {
+                    &*(writes[write_idx].p_next
+                        as *const vk::WriteDescriptorSetAccelerationStructureKHR<'_>)
+                };
+                assert_eq!(info.acceleration_structure_count, 1);
+                assert_eq!(
+                    unsafe { *info.p_acceleration_structures },
+                    acceleration_structures[acceleration_structure_idx]
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn vulkan_descriptor_updates_preserve_mixed_write_and_copy_order() {
+        let descriptor_set = vk::DescriptorSet::from_raw(1);
+        let image_view = vk::ImageView::from_raw(2);
+        let buffer = vk::Buffer::from_raw(3);
+        let acceleration_structure = vk::AccelerationStructureKHR::from_raw(4);
+        let source_set = vk::DescriptorSet::from_raw(5);
+        let writes = [
+            DescriptorWrite::Image {
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                destination: (7, 2).into(),
+                info: vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(image_view),
+            },
+            DescriptorWrite::Buffer {
+                descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+                destination: (3, 1).into(),
+                info: vk::DescriptorBufferInfo::default()
+                    .buffer(buffer)
+                    .offset(16)
+                    .range(32),
+            },
+            DescriptorWrite::AccelerationStructure {
+                acceleration_structure,
+                descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                destination: 9.into(),
+            },
+        ];
+        let copies = [vk::CopyDescriptorSet::default()
+            .src_set(source_set)
+            .src_binding(11)
+            .dst_set(descriptor_set)
+            .dst_binding(12)
+            .descriptor_count(2)];
+        let mut call_count = 0;
+
+        DescriptorWrite::with_updates(descriptor_set, &writes, &copies, |writes, copies| {
+            call_count += 1;
+
+            assert_eq!(
+                writes
+                    .iter()
+                    .map(|write| (write.dst_binding, write.dst_array_element))
+                    .collect::<Vec<_>>(),
+                [(7, 2), (3, 1), (9, 0)]
+            );
+            assert!(writes.iter().all(|write| write.descriptor_count == 1));
+            assert_eq!(unsafe { (*writes[0].p_image_info).image_view }, image_view);
+            assert_eq!(unsafe { (*writes[1].p_buffer_info).buffer }, buffer);
+
+            let acceleration_structure_info = unsafe {
+                &*(writes[2].p_next as *const vk::WriteDescriptorSetAccelerationStructureKHR<'_>)
+            };
+            assert_eq!(acceleration_structure_info.acceleration_structure_count, 1);
+            assert_eq!(
+                unsafe { *acceleration_structure_info.p_acceleration_structures },
+                acceleration_structure
+            );
+
+            assert_eq!(copies.len(), 1);
+            assert_eq!(copies[0].src_set, source_set);
+            assert_eq!(copies[0].dst_set, descriptor_set);
+            assert_eq!(copies[0].descriptor_count, 2);
+        });
+
+        assert_eq!(call_count, 1);
     }
 }
