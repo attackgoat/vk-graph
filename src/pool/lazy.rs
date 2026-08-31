@@ -151,7 +151,7 @@ impl LazyPool {
             accel_struct_cache: Default::default(),
             buffer_cache: Default::default(),
             command_buffer_cache: Default::default(),
-            descriptor_pool_cache: PoolConfig::default_cache(),
+            descriptor_pool_cache: PoolConfig::explicit_cache(info.descriptor_pool_capacity),
             device,
             image_cache: Default::default(),
             info,

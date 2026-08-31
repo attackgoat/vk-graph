@@ -1,6 +1,6 @@
 use {
     crate::{
-        AnyAccelerationStructureNode, AnyResource, Execution, Node,
+        AnyAccelerationStructureNode, AnyResource, Execution, ResourceNode,
         driver::{
             accel_struct::{
                 AccelerationStructureGeometry, AccelerationStructureGeometryInfo,
@@ -8,6 +8,8 @@ use {
             },
             device::Device,
         },
+        private::ResourceNodeIndex,
+        resource::{ResourceSetIndex, ResourceSetMap},
     },
     ash::vk,
     log::trace,
@@ -46,6 +48,8 @@ pub struct CommandRef<'a> {
     graph_id: crate::GraphId,
 
     node_map: Option<&'a [usize]>,
+    resource_set_map: Option<&'a [ResourceSetIndex]>,
+    resource_sets: &'a ResourceSetMap,
     resources: &'a [AnyResource],
 }
 
@@ -53,12 +57,15 @@ impl<'a> CommandRef<'a> {
     pub(crate) fn new(
         cmd: &'a crate::driver::cmd_buf::CommandBuffer,
         resources: &'a [AnyResource],
+        resource_sets: &'a ResourceSetMap,
         exec: &'a Execution,
         #[cfg(feature = "checked")] graph_id: crate::GraphId,
     ) -> Self {
         Self {
             cmd,
             node_map: exec.node_map.as_deref(),
+            resource_set_map: exec.resource_set_map.as_deref(),
+            resource_sets,
             resources,
 
             #[cfg(feature = "checked")]
@@ -119,9 +126,12 @@ impl<'a> CommandRef<'a> {
     /// # let index_buf = my_graph.bind_resource(my_idx_buf);
     /// # let vertex_buf = my_graph.bind_resource(my_vtx_buf);
     /// my_graph.begin_cmd()
-    ///         .resource_access(index_buf, AccessType::IndexBuffer)
-    ///         .resource_access(vertex_buf, AccessType::VertexBuffer)
-    ///         .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+    ///         .resource_access(index_buf, AccessType::AccelerationStructureBuildInputRead)
+    ///         .resource_access(vertex_buf, AccessType::AccelerationStructureBuildInputRead)
+    ///         .resource_access(
+    ///             scratch_buf,
+    ///             AccessType::AccelerationStructureBuildScratchReadWrite,
+    ///         )
     ///         .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
     ///         .record_cmd(move |cmd| {
     ///             let scratch_addr = cmd.resource(scratch_buf).device_address();
@@ -535,37 +545,47 @@ impl<'a> CommandRef<'a> {
         self
     }
 
-    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given bound resource node represents.
+    /// Returns a borrow of the resource or persistent resource set represented by the given node.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
-        N: Node,
+        N: ResourceNode,
     {
         #[cfg(feature = "checked")]
         resource_node.assert_owner(self.graph_id);
 
-        let mut node_idx = resource_node.index();
-        if let Some(node_map) = self.node_map {
-            node_idx = node_map[node_idx];
-        }
+        let index = match resource_node.resource_node_index() {
+            ResourceNodeIndex::Resource(mut node_idx) => {
+                if let Some(node_map) = self.node_map {
+                    node_idx = node_map[node_idx];
+                }
 
-        /*
-        You must have called an access function for this node on this execution before borrowing
-        the resource!
+                #[cfg(feature = "checked")]
+                assert!(
+                    self.exec.accesses.contains(node_idx),
+                    "unexpected node access: call an access function first"
+                );
 
-        Code that attempts to access this function is attempting to get access to the Vulkan
-        resource (buffer, image, or acceleration structure). In order to access any resources the
-        access type must first be specified so the correct barriers may be added.
+                ResourceNodeIndex::Resource(node_idx)
+            }
+            ResourceNodeIndex::ResourceSet(mut resource_set_idx) => {
+                if let Some(resource_set_map) = self.resource_set_map {
+                    resource_set_idx = resource_set_map[resource_set_idx.as_usize()];
+                }
 
-        See: https://attackgoat.github.io/vk-graph/pipeline_sync.html
-        */
-        #[cfg(feature = "checked")]
-        assert!(
-            self.exec.accesses.contains(node_idx),
-            "unexpected node access: call an access function first"
-        );
+                #[cfg(feature = "checked")]
+                assert!(
+                    self.exec
+                        .resource_set_accesses
+                        .iter()
+                        .any(|access| access.resource_set_idx == resource_set_idx),
+                    "unexpected resource set access: call an access function first"
+                );
 
-        resource_node.borrow_at(self.resources, node_idx)
+                ResourceNodeIndex::ResourceSet(resource_set_idx)
+            }
+        };
+
+        resource_node.borrow_at(self.resources, self.resource_sets, index)
     }
 }
 

@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Device::enable_background_fence_cleanup` and `BackgroundFenceCleanupGuard` for opt-in background
+  disposal of completed fence payloads, including command-buffer recycling. Concurrent guards share
+  a worker, and dropping the final guard initiates nonblocking worker shutdown.
+- `PoolConfig::descriptor_pool_capacity` for configuring cached automatic descriptor pools.
+- `ImageSet`, `ImageSetMember`, and `ImageSetNode` optimization for persistent sets of image
+  resources which declare a single aggregate `ImageAccessType` graph access.
+- `AccelerationStructureSet`, `AccelerationStructureSetMember`, and `AccelerationStructureSetNode`
+  optimization for persistent sets of acceleration-structure resources which declare aggregate
+  `AccelerationStructureAccessType` graph access.
+
 ## [0.14.7] - 2026-08-19
 
 ### Added

@@ -711,9 +711,12 @@ fn main() -> anyhow::Result<()> {
             graph
                 .begin_cmd()
                 .debug_name("Build BLAS")
-                .resource_access(index_node, AccessType::AccelerationStructureBuildRead)
-                .resource_access(vertex_node, AccessType::AccelerationStructureBuildRead)
-                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(index_node, AccessType::AccelerationStructureBuildInputRead)
+                .resource_access(vertex_node, AccessType::AccelerationStructureBuildInputRead)
+                .resource_access(
+                    scratch_buf,
+                    AccessType::AccelerationStructureBuildScratchReadWrite,
+                )
                 .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
                 .record_cmd(move |cmd| {
                     cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
@@ -743,8 +746,14 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Build TLAS")
                 .resource_access(blas_node, AccessType::AccelerationStructureBuildRead)
-                .resource_access(instance_node, AccessType::AccelerationStructureBuildRead)
-                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(
+                    instance_node,
+                    AccessType::AccelerationStructureBuildInputRead,
+                )
+                .resource_access(
+                    scratch_buf,
+                    AccessType::AccelerationStructureBuildScratchReadWrite,
+                )
                 .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
                 .record_cmd(move |cmd| {
                     cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(

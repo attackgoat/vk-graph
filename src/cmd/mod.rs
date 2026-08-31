@@ -39,16 +39,21 @@ pub use {
 
 use {
     super::{
-        AccelerationStructureLeaseNode, AccelerationStructureNode, AnyAccelerationStructureNode,
-        AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode, BufferNode, CommandData,
-        CommandExecution, CommandFunction, Execution, Graph, ImageLeaseNode, ImageNode, Node,
-        Resource, SwapchainImageNode, TimestampQuery, TimestampQueryPlacement,
+        AccelerationStructureLeaseNode, AccelerationStructureNode, AccelerationStructureSetNode,
+        AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode,
+        BufferNode, CommandData, CommandExecution, CommandFunction, Execution, Graph,
+        ImageLeaseNode, ImageNode, ImageSetNode, Node, Resource, ResourceNode, ResourceSetAccess,
+        SwapchainImageNode, TimestampQuery, TimestampQueryPlacement,
     },
     crate::{
         NodeIndex,
         driver::{
             buffer::BufferSubresourceRange, format_texel_block_extent, format_texel_block_size,
             image::ImageViewInfo, image_subresource_range_from_layers,
+        },
+        resource::{
+            AccelerationStructureAccessType, ImageAccessType, ResourceSetAccessType,
+            ResourceSetIndex,
         },
         stream::{AccelerationStructureArg, BufferArg, ImageArg},
     },
@@ -281,8 +286,8 @@ impl<'a> Command<'a> {
         &mut self.graph.cmds[self.cmd_idx]
     }
 
-    /// Binds a Vulkan buffer, image, or acceleration structure resource to the graph associated
-    /// with this command.
+    /// Binds a Vulkan resource or persistent resource set to the graph associated with this
+    /// command.
     ///
     /// Bound nodes may be used in commands for pipeline and shader operations.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
@@ -339,6 +344,19 @@ impl<'a> Command<'a> {
 
         cmd.execs.push(exec);
         self.exec_idx += 1;
+    }
+
+    pub(crate) fn push_resource_set_access(
+        &mut self,
+        resource_set_idx: ResourceSetIndex,
+        access_type: ResourceSetAccessType,
+    ) {
+        self.cmd_mut()
+            .expect_last_exec_mut()
+            .push_resource_set_access(ResourceSetAccess {
+                resource_set_idx,
+                access_type,
+            });
     }
 
     pub(crate) fn push_reusable_exec(
@@ -751,7 +769,7 @@ impl<'a> Command<'a> {
     /// which the given bound resource node represents.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
-        N: Node,
+        N: ResourceNode,
     {
         self.graph.resource(resource_node)
     }
@@ -760,11 +778,10 @@ impl<'a> Command<'a> {
     /// using `access`.
     ///
     /// An access function must be called for `resource_node` before it is used within a recording
-    /// function.
-    pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
+    /// function. The accepted access type is determined by the node.
+    pub fn resource_access<N>(mut self, resource_node: N, access: N::Access) -> Self
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
         self.set_resource_access(resource_node, access);
         self
@@ -786,15 +803,11 @@ impl<'a> Command<'a> {
     }
 
     /// Mutable-borrow form of [`Self::resource_access`].
-    pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType)
+    pub fn set_resource_access<N>(&mut self, resource_node: N, access: N::Access)
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
-        let whole_resource = resource_node.range(&self.graph.resources);
-        let subresource = SubresourceRange::from(whole_resource);
-
-        self.push_subresource_access(resource_node, subresource, access);
+        resource_node.set_resource_access(self, access);
     }
 
     pub(crate) fn set_stream_scope_id(&mut self, stream_scope_id: u64) {
@@ -962,6 +975,61 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Binding {
             offset,
             set,
         }
+    }
+}
+
+/// A node that can declare a whole-resource command access.
+///
+/// Ordinary resource nodes use [`AccessType`]. Resource-set nodes use their corresponding
+/// resource-set access type.
+///
+/// This trait is sealed and cannot be implemented outside of `vk-graph`.
+#[allow(private_bounds)]
+pub trait ResourceAccess: private::ResourceAccessSealed {
+    /// The access profile accepted by this node.
+    type Access;
+
+    #[doc(hidden)]
+    fn set_resource_access(self, cmd: &mut Command<'_>, access: Self::Access);
+}
+
+impl<N> ResourceAccess for N
+where
+    N: Node + Subresource,
+    SubresourceRange: From<N::Range>,
+{
+    type Access = AccessType;
+
+    fn set_resource_access(self, cmd: &mut Command<'_>, access: AccessType) {
+        let whole_resource = self.range(&cmd.graph.resources);
+        let subresource = SubresourceRange::from(whole_resource);
+
+        cmd.push_subresource_access(self, subresource, access);
+    }
+}
+
+impl ResourceAccess for AccelerationStructureSetNode {
+    type Access = AccelerationStructureAccessType;
+
+    fn set_resource_access(self, cmd: &mut Command<'_>, access: AccelerationStructureAccessType) {
+        #[cfg(feature = "checked")]
+        self.assert_owner(cmd.graph.graph_id);
+
+        cmd.push_resource_set_access(
+            self.index(),
+            ResourceSetAccessType::AccelerationStructure(access),
+        );
+    }
+}
+
+impl ResourceAccess for ImageSetNode {
+    type Access = ImageAccessType;
+
+    fn set_resource_access(self, cmd: &mut Command<'_>, access: ImageAccessType) {
+        #[cfg(feature = "checked")]
+        self.assert_owner(cmd.graph.graph_id);
+
+        cmd.push_resource_set_access(self.index(), ResourceSetAccessType::Image(access));
     }
 }
 
@@ -1190,7 +1258,22 @@ impl From<Range<vk::DeviceSize>> for ViewInfo {
 }
 
 mod private {
-    use crate::{AnyResource, Node};
+    use crate::{
+        AnyResource, Node,
+        node::{AccelerationStructureSetNode, ImageSetNode},
+    };
+
+    pub trait ResourceAccessSealed {}
+
+    impl<N> ResourceAccessSealed for N
+    where
+        N: Node + super::Subresource,
+        super::SubresourceRange: From<N::Range>,
+    {
+    }
+
+    impl ResourceAccessSealed for AccelerationStructureSetNode {}
+    impl ResourceAccessSealed for ImageSetNode {}
 
     pub(crate) trait SubresourceSealed: Sized {
         fn info(&self, resources: &[AnyResource]) -> <Self as super::Subresource>::Info

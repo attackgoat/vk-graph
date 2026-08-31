@@ -19,7 +19,8 @@
 use {
     super::{
         AnyResource, Attachment, CommandData, ExecutionAccess, ExecutionPipeline, Graph, LoadOp,
-        Node, NodeIndex, TimestampQueryData, TimestampQueryPlacement,
+        Node, NodeIndex, ResourceNode, ResourceSetAccess, TimestampQueryData,
+        TimestampQueryPlacement,
         cmd::{SubresourceAccess, SubresourceRange},
     },
     crate::{
@@ -38,10 +39,10 @@ use {
             format_aspect_mask,
             graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{
-                DenseMap, Image, ImageInfo, image_subresource_range_contains,
-                image_subresource_range_intersection,
+                DenseMap, Image, ImageAccessSet, ImageInfo, access_type_to_layout,
+                image_subresource_range_contains, image_subresource_range_intersection,
             },
-            initial_image_layout_access, is_read_access,
+            initial_image_layout_access, is_read_access, is_write_access,
             physical_device::Vulkan10Limits,
             pipeline_stage_access_flags,
             query_pool::{QueryPool, QueryPoolInfo},
@@ -50,6 +51,10 @@ use {
         lazy_str,
         node::AnyNode,
         pool::{Lease, Pool, SubmissionPool},
+        resource::{
+            ImageAccessType, PhysicalImageId, ResourceSet, ResourceSetAccessType, ResourceSetIndex,
+            ResourceSetMap,
+        },
     },
     ash::vk::{self, QueueFamilyProperties},
     fixedbitset::FixedBitSet,
@@ -61,7 +66,7 @@ use {
     std::{
         cell::RefCell,
         cmp::Reverse,
-        collections::{BTreeMap, BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry},
         iter::repeat_n,
         mem::take,
         ops::Range,
@@ -229,7 +234,7 @@ fn consume_pending_buffer_transfers(
 }
 
 fn consume_pending_image_transfers(
-    transfers: &mut Vec<ImageQueueOwnershipTransfer>,
+    transfers: &mut Vec<ImageOwnershipTransfer>,
     range: vk::ImageSubresourceRange,
 ) -> bool {
     transfers
@@ -254,15 +259,41 @@ const fn image_access_layout(access: AccessType) -> ImageLayout {
     }
 }
 
-fn image_barriers_from_transfers<'a>(
-    image: vk::Image,
-    prev_access: &'a AccessType,
-    next_access: &'a AccessType,
-    range: vk::ImageSubresourceRange,
-    transfers: &'a [ImageQueueOwnershipTransfer],
+fn image_access_set_layout(access_set: ImageAccessSet) -> ImageLayout {
+    access_set
+        .non_sampled_access()
+        .map_or(ImageLayout::Optimal, image_access_layout)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImageOwnershipLayouts {
+    old: vk::ImageLayout,
+    new: vk::ImageLayout,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TrackedImageBarrier {
+    previous_accesses: ImageAccessSet,
+    next_access: AccessType,
+    previous_layout: ImageLayout,
+    next_layout: ImageLayout,
+    ownership_layouts: Option<ImageOwnershipLayouts>,
     discard_contents: bool,
-) -> impl Iterator<Item = ImageBarrier<'a>> + 'a {
-    image_barrier_transfer_ranges(transfers, range).map(move |(range, transfer)| {
+    src_queue_family_index: u32,
+    dst_queue_family_index: u32,
+    image: vk::Image,
+    range: vk::ImageSubresourceRange,
+}
+
+impl TrackedImageBarrier {
+    fn new(
+        image: vk::Image,
+        prev_access: ImageAccessSet,
+        next_access: AccessType,
+        range: vk::ImageSubresourceRange,
+        transfer: Option<&ImageOwnershipTransfer>,
+        discard_contents: bool,
+    ) -> Self {
         trace!(
             "    image {:?} {:?} {:?}->{:?}",
             image,
@@ -271,11 +302,12 @@ fn image_barriers_from_transfers<'a>(
             next_access,
         );
 
-        ImageBarrier {
-            next_accesses: slice::from_ref(next_access),
-            next_layout: image_access_layout(*next_access),
-            previous_accesses: slice::from_ref(prev_access),
-            previous_layout: image_access_layout(*prev_access),
+        Self {
+            next_access,
+            next_layout: image_access_layout(next_access),
+            previous_accesses: prev_access,
+            previous_layout: image_access_set_layout(prev_access),
+            ownership_layouts: transfer.map(|transfer| transfer.layouts),
             discard_contents,
             src_queue_family_index: transfer.map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
                 transfer.src_queue_family_index
@@ -286,16 +318,102 @@ fn image_barriers_from_transfers<'a>(
             image,
             range,
         }
+    }
+}
+
+fn can_elide_sampled_read_barrier(barrier: TrackedImageBarrier) -> bool {
+    if !barrier.previous_accesses.is_sampled_read()
+        || !ImageAccessSet::from_access(barrier.next_access).is_sampled_read()
+        || !barrier
+            .previous_accesses
+            .contains_sampled_read(barrier.next_access)
+        || barrier.ownership_layouts.is_some()
+        || barrier.discard_contents
+    {
+        return false;
+    }
+
+    let (_, _, barrier) = get_tracked_image_memory_barrier(barrier);
+    barrier.old_layout == barrier.new_layout
+        && barrier.src_queue_family_index == barrier.dst_queue_family_index
+}
+
+fn get_tracked_image_memory_barrier(
+    barrier: TrackedImageBarrier,
+) -> (
+    vk::PipelineStageFlags,
+    vk::PipelineStageFlags,
+    vk::ImageMemoryBarrier<'static>,
+) {
+    let ownership_layouts = barrier.ownership_layouts;
+    let previous_accesses = barrier
+        .previous_accesses
+        .iter()
+        .collect::<SmallVec<[AccessType; 10]>>();
+    let next_accesses = [barrier.next_access];
+    let (mut src_stage_mask, dst_stage_mask, barrier) = get_image_memory_barrier(&ImageBarrier {
+        previous_accesses: previous_accesses.as_slice(),
+        next_accesses: &next_accesses,
+        previous_layout: barrier.previous_layout,
+        next_layout: barrier.next_layout,
+        discard_contents: barrier.discard_contents,
+        src_queue_family_index: barrier.src_queue_family_index,
+        dst_queue_family_index: barrier.dst_queue_family_index,
+        image: barrier.image,
+        range: barrier.range,
+    });
+
+    let mut barrier = vk::ImageMemoryBarrier {
+        src_access_mask: barrier.src_access_mask,
+        dst_access_mask: barrier.dst_access_mask,
+        old_layout: barrier.old_layout,
+        new_layout: barrier.new_layout,
+        src_queue_family_index: barrier.src_queue_family_index,
+        dst_queue_family_index: barrier.dst_queue_family_index,
+        image: barrier.image,
+        subresource_range: barrier.subresource_range,
+        ..Default::default()
+    };
+
+    if let Some(layouts) = ownership_layouts {
+        // The source scope of an acquire is ignored, but its stage must still be supported by the
+        // destination queue family. ALL_COMMANDS is valid for every queue capability.
+        src_stage_mask = vk::PipelineStageFlags::ALL_COMMANDS;
+        barrier.src_access_mask = vk::AccessFlags::empty();
+        barrier.old_layout = layouts.old;
+        barrier.new_layout = layouts.new;
+    }
+
+    (src_stage_mask, dst_stage_mask, barrier)
+}
+
+fn image_barriers_from_transfers<'a>(
+    image: vk::Image,
+    prev_access: ImageAccessSet,
+    next_access: AccessType,
+    range: vk::ImageSubresourceRange,
+    transfers: &'a [ImageOwnershipTransfer],
+    discard_contents: bool,
+) -> impl Iterator<Item = TrackedImageBarrier> + 'a {
+    image_barrier_transfer_ranges(transfers, range).map(move |(range, transfer)| {
+        TrackedImageBarrier::new(
+            image,
+            prev_access,
+            next_access,
+            range,
+            transfer,
+            discard_contents,
+        )
     })
 }
 
 fn image_barrier_transfer_ranges<'a>(
-    transfers: &'a [ImageQueueOwnershipTransfer],
+    transfers: &'a [ImageOwnershipTransfer],
     range: vk::ImageSubresourceRange,
 ) -> impl Iterator<
     Item = (
         vk::ImageSubresourceRange,
-        Option<&'a ImageQueueOwnershipTransfer>,
+        Option<&'a ImageOwnershipTransfer>,
     ),
 > + 'a {
     thread_local! {
@@ -311,7 +429,7 @@ fn image_barrier_transfer_ranges<'a>(
     }
 
     struct ImageBarrierTransferIter<'a> {
-        transfers: &'a [ImageQueueOwnershipTransfer],
+        transfers: &'a [ImageOwnershipTransfer],
         overlaps: Vec<(usize, vk::ImageSubresourceRange)>,
         aspect_cuts: Vec<u32>,
         layer_cuts: Vec<u32>,
@@ -327,7 +445,7 @@ fn image_barrier_transfer_ranges<'a>(
     impl<'a> Iterator for ImageBarrierTransferIter<'a> {
         type Item = (
             vk::ImageSubresourceRange,
-            Option<&'a ImageQueueOwnershipTransfer>,
+            Option<&'a ImageOwnershipTransfer>,
         );
 
         fn next(&mut self) -> Option<Self::Item> {
@@ -489,18 +607,33 @@ fn image_barrier_transfer_ranges<'a>(
     })
 }
 
-fn image_execution_discard_contents(prev_access: AccessType) -> bool {
-    prev_access == AccessType::Nothing
+fn image_execution_discard_contents(prev_access: ImageAccessSet) -> bool {
+    prev_access.is_nothing()
 }
 
 fn image_layout_transition_discard_contents(
-    prev_access: AccessType,
+    prev_access: ImageAccessSet,
     next_access: AccessType,
 ) -> bool {
     // Read/modify/write accesses must preserve the existing image contents
     // Check for "not-read" here because some accesses both read and write
     // Color Attachment Read/Write (blending) will prevent discarding contents
-    prev_access == AccessType::Nothing || !is_read_access(next_access)
+    prev_access.is_nothing() || !is_read_access(next_access)
+}
+
+fn image_ownership_layouts(
+    current_layout: Option<vk::ImageLayout>,
+    next_access: AccessType,
+    discard_contents: bool,
+) -> ImageOwnershipLayouts {
+    ImageOwnershipLayouts {
+        old: if discard_contents {
+            vk::ImageLayout::UNDEFINED
+        } else {
+            current_layout.unwrap_or(vk::ImageLayout::UNDEFINED)
+        },
+        new: access_type_to_layout(next_access).unwrap_or(vk::ImageLayout::UNDEFINED),
+    }
 }
 
 fn image_subresource_range_eq(
@@ -520,7 +653,7 @@ fn pipeline_barrier_from_iters<'a>(
     command_buffer: vk::CommandBuffer,
     global_barrier: Option<GlobalBarrier<'a>>,
     buffer_barriers: impl IntoIterator<Item = BufferBarrier<'a>>,
-    image_barriers: impl IntoIterator<Item = ImageBarrier<'a>>,
+    image_barriers: impl IntoIterator<Item = TrackedImageBarrier>,
 ) {
     #[derive(Default)]
     struct BarrierScratch {
@@ -542,12 +675,12 @@ fn pipeline_barrier_from_iters<'a>(
         let mut dst_stage_mask = vk::PipelineStageFlags::BOTTOM_OF_PIPE;
 
         if let Some(ref barrier) = global_barrier {
-            let (src_mask, dst_mask, barrier) = get_memory_barrier(barrier);
+            let (src_mask, dst_mask, memory_barrier) = get_memory_barrier(barrier);
             src_stage_mask |= src_mask;
             dst_stage_mask |= dst_mask;
             tls.memory_barriers.push(vk::MemoryBarrier {
-                src_access_mask: barrier.src_access_mask,
-                dst_access_mask: barrier.dst_access_mask,
+                src_access_mask: memory_barrier.src_access_mask,
+                dst_access_mask: memory_barrier.dst_access_mask,
                 ..Default::default()
             });
         }
@@ -569,20 +702,17 @@ fn pipeline_barrier_from_iters<'a>(
         }
 
         for image_barrier in image_barriers {
-            let (src_mask, dst_mask, barrier) = get_image_memory_barrier(&image_barrier);
+            let (src_mask, dst_mask, barrier) = get_tracked_image_memory_barrier(image_barrier);
             src_stage_mask |= src_mask;
             dst_stage_mask |= dst_mask;
-            tls.image_barriers.push(vk::ImageMemoryBarrier {
-                src_access_mask: barrier.src_access_mask,
-                dst_access_mask: barrier.dst_access_mask,
-                old_layout: barrier.old_layout,
-                new_layout: barrier.new_layout,
-                src_queue_family_index: barrier.src_queue_family_index,
-                dst_queue_family_index: barrier.dst_queue_family_index,
-                image: barrier.image,
-                subresource_range: barrier.subresource_range,
-                ..Default::default()
-            });
+            tls.image_barriers.push(barrier);
+        }
+
+        if tls.memory_barriers.is_empty()
+            && tls.buffer_barriers.is_empty()
+            && tls.image_barriers.is_empty()
+        {
+            return;
         }
 
         unsafe {
@@ -604,14 +734,19 @@ fn schedule_dependency_cmds_before_target_access(
     first_target_cmd_idx: usize,
     schedule: &mut Schedule,
 ) {
-    let required_prefixes = schedule
+    let required_node_prefixes = schedule
         .access_index
         .read_nodes_for_cmd(first_target_cmd_idx)
         .filter(|&node_idx| node_idx != target_node_idx)
         .map(|node_idx| (node_idx, first_target_cmd_idx))
         .collect::<SmallVec<[_; 8]>>();
+    let required_resource_set_prefixes = schedule
+        .access_index
+        .read_resource_sets_for_cmd(first_target_cmd_idx)
+        .map(|resource_set_idx| (resource_set_idx, first_target_cmd_idx))
+        .collect::<SmallVec<[_; 2]>>();
 
-    schedule.schedule_required_node_prefixes(required_prefixes);
+    schedule.schedule_required_prefixes(required_node_prefixes, required_resource_set_prefixes);
 }
 
 fn submit_stage_mask_legacy(stage_mask: vk::PipelineStageFlags2) -> vk::PipelineStageFlags {
@@ -632,6 +767,22 @@ fn submit_stage_mask_legacy(stage_mask: vk::PipelineStageFlags2) -> vk::Pipeline
 
 fn supports_timeline_semaphores(device: &Device) -> bool {
     device.physical.features_v1_2.timeline_semaphore
+}
+
+fn image_queue_ownership_release_barrier(
+    release: ImageQueueOwnershipRelease,
+    src_queue_family_index: u32,
+    dst_queue_family_index: u32,
+) -> vk::ImageMemoryBarrier<'static> {
+    vk::ImageMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+        .dst_access_mask(vk::AccessFlags::empty())
+        .old_layout(release.layouts.old)
+        .new_layout(release.layouts.new)
+        .src_queue_family_index(src_queue_family_index)
+        .dst_queue_family_index(dst_queue_family_index)
+        .image(release.image)
+        .subresource_range(release.range)
 }
 
 /// Builds and submits a release barrier command buffer for each release group, calling
@@ -713,19 +864,14 @@ where
                         },
                     ));
 
-                    tls.release_image_barriers.extend(group.images.iter().map(
-                        |&(handle, current_layout, subresource_range)| {
-                            vk::ImageMemoryBarrier::default()
-                                .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                                .dst_access_mask(vk::AccessFlags::empty())
-                                .old_layout(current_layout)
-                                .new_layout(current_layout)
-                                .src_queue_family_index(group.src_queue_family_index)
-                                .dst_queue_family_index(target_queue_family_index)
-                                .image(handle)
-                                .subresource_range(subresource_range)
-                        },
-                    ));
+                    tls.release_image_barriers
+                        .extend(group.images.iter().copied().map(|release| {
+                            image_queue_ownership_release_barrier(
+                                release,
+                                group.src_queue_family_index,
+                                target_queue_family_index,
+                            )
+                        }));
 
                     unsafe {
                         release_cmd.device.cmd_pipeline_barrier(
@@ -783,6 +929,8 @@ struct BufferQueueOwnershipTransfer {
 struct CommandAccessIndex {
     cmds_by_node: Vec<Vec<usize>>,
     accessed_nodes_by_cmd: Vec<Vec<usize>>,
+    cmds_by_resource_set: Vec<Vec<usize>>,
+    accessed_resource_sets_by_cmd: Vec<Vec<ResourceSetIndex>>,
 }
 
 impl CommandAccessIndex {
@@ -791,49 +939,112 @@ impl CommandAccessIndex {
         self.accessed_nodes_by_cmd[cmd_idx].iter().copied()
     }
 
-    fn update(&mut self, graph: &Graph, end_cmd_idx: usize) {
-        let binding_count = graph.resources.len();
-        let cmds = &graph.cmds[0..end_cmd_idx];
-        self.update_from_cmds(cmds, binding_count);
+    fn read_resource_sets_for_cmd(
+        &self,
+        cmd_idx: usize,
+    ) -> impl ExactSizeIterator<Item = ResourceSetIndex> + '_ {
+        self.accessed_resource_sets_by_cmd
+            .get(cmd_idx)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .copied()
     }
 
-    fn update_from_cmds(&mut self, cmds: &[CommandData], binding_count: usize) {
+    fn update(&mut self, graph: &Graph, end_cmd_idx: usize) {
+        let binding_count = graph.resources.len();
+        let resource_set_count = graph.resource_sets.len();
+        let cmds = &graph.cmds[0..end_cmd_idx];
+        self.update_from_cmds(cmds, binding_count, resource_set_count);
+    }
+
+    fn update_from_cmds(
+        &mut self,
+        cmds: &[CommandData],
+        binding_count: usize,
+        resource_set_count: usize,
+    ) {
         self.cmds_by_node.clear();
         self.cmds_by_node.resize_with(binding_count, Vec::new);
+
+        self.cmds_by_resource_set.clear();
+        self.cmds_by_resource_set
+            .resize_with(resource_set_count, Vec::new);
 
         self.accessed_nodes_by_cmd.clear();
         self.accessed_nodes_by_cmd.resize_with(cmds.len(), Vec::new);
 
+        self.accessed_resource_sets_by_cmd.clear();
+        self.accessed_resource_sets_by_cmd
+            .resize_with(cmds.len(), Vec::new);
+
         thread_local! {
-            static SEEN_NODES: RefCell<(FixedBitSet, FixedBitSet)> = Default::default();
+            static SEEN_RESOURCES: RefCell<(
+                FixedBitSet,
+                FixedBitSet,
+                FixedBitSet,
+                FixedBitSet,
+            )> = Default::default();
         }
 
-        SEEN_NODES.with_borrow_mut(|(seen_nodes, seen_accesses)| {
-            seen_nodes.clear();
-            seen_nodes.grow(binding_count);
-
-            seen_accesses.clear();
-            seen_accesses.grow(binding_count);
-
-            for (cmd_idx, cmd) in cmds.iter().enumerate() {
-                let accessed_nodes = &mut self.accessed_nodes_by_cmd[cmd_idx];
-
-                for (node_idx, _) in cmd.execs.iter().flat_map(|exec| exec.accesses.iter()) {
-                    if !seen_nodes.put(node_idx) {
-                        self.cmds_by_node[node_idx].push(cmd_idx);
-                    }
-
-                    if !seen_accesses.put(node_idx) {
-                        accessed_nodes.push(node_idx);
-                    }
-                }
-
+        SEEN_RESOURCES.with_borrow_mut(
+            |(seen_nodes, seen_accesses, seen_resource_sets, seen_resource_set_accesses)| {
                 seen_nodes.clear();
                 seen_nodes.grow(binding_count);
+
                 seen_accesses.clear();
                 seen_accesses.grow(binding_count);
-            }
-        });
+
+                seen_resource_sets.clear();
+                seen_resource_sets.grow(resource_set_count);
+
+                seen_resource_set_accesses.clear();
+                seen_resource_set_accesses.grow(resource_set_count);
+
+                for (cmd_idx, cmd) in cmds.iter().enumerate() {
+                    let accessed_nodes = &mut self.accessed_nodes_by_cmd[cmd_idx];
+
+                    for (node_idx, _) in cmd.execs.iter().flat_map(|exec| exec.accesses.iter()) {
+                        if !seen_nodes.put(node_idx) {
+                            self.cmds_by_node[node_idx].push(cmd_idx);
+                        }
+
+                        if !seen_accesses.put(node_idx) {
+                            accessed_nodes.push(node_idx);
+                        }
+                    }
+
+                    let accessed_resource_sets = &mut self.accessed_resource_sets_by_cmd[cmd_idx];
+                    for access in cmd
+                        .execs
+                        .iter()
+                        .flat_map(|exec| &exec.resource_set_accesses)
+                    {
+                        let resource_set_idx = access.resource_set_idx;
+                        let index = resource_set_idx.as_usize();
+                        debug_assert!(index < resource_set_count);
+
+                        if !seen_resource_sets.put(index) {
+                            self.cmds_by_resource_set[index].push(cmd_idx);
+                        }
+
+                        if !seen_resource_set_accesses.put(index) {
+                            accessed_resource_sets.push(resource_set_idx);
+                        }
+                    }
+
+                    seen_nodes.clear();
+                    seen_nodes.grow(binding_count);
+                    seen_accesses.clear();
+                    seen_accesses.grow(binding_count);
+
+                    seen_resource_sets.clear();
+                    seen_resource_sets.grow(resource_set_count);
+                    seen_resource_set_accesses.clear();
+                    seen_resource_set_accesses.grow(resource_set_count);
+                }
+            },
+        );
     }
 }
 
@@ -928,19 +1139,87 @@ impl SubmittedCommand {
     }
 }
 
+#[derive(Debug)]
+enum ImageOwnership {
+    Whole,
+    DualAspect(vk::ImageAspectFlags),
+    Dense(DenseMap<bool>),
+}
+
+impl ImageOwnership {
+    fn new(info: ImageInfo, range: vk::ImageSubresourceRange) -> Self {
+        if info.is_full_subresource_range(range) {
+            return Self::Whole;
+        }
+
+        let aspect_mask = format_aspect_mask(info.format);
+        if aspect_mask.as_raw().count_ones() == 2
+            && info.array_layer_count == 1
+            && info.mip_level_count == 1
+        {
+            return Self::DualAspect(range.aspect_mask);
+        }
+
+        let mut claimed = DenseMap::new(info, false);
+        claimed.swap(true, range).for_each(drop);
+
+        Self::Dense(claimed)
+    }
+
+    fn claim(
+        &mut self,
+        info: ImageInfo,
+        mut range: vk::ImageSubresourceRange,
+    ) -> SmallVec<[vk::ImageSubresourceRange; 4]> {
+        match self {
+            Self::Whole => SmallVec::new(),
+            Self::DualAspect(claimed) => {
+                let unclaimed = range.aspect_mask & !*claimed;
+                *claimed |= range.aspect_mask;
+                let whole = claimed.contains(format_aspect_mask(info.format));
+
+                if whole {
+                    *self = Self::Whole;
+                }
+
+                if unclaimed.is_empty() {
+                    return SmallVec::new();
+                }
+
+                range.aspect_mask = unclaimed;
+
+                SmallVec::from_slice(&[range])
+            }
+            Self::Dense(claimed) => {
+                let unclaimed = claimed
+                    .swap(true, range)
+                    .filter_map(|(claimed, range)| (!claimed).then_some(range))
+                    .collect();
+
+                if info.is_full_subresource_range(range) {
+                    *self = Self::Whole;
+                }
+
+                unclaimed
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
-struct ImageQueueOwnershipTransfer {
+struct ImageOwnershipTransfer {
     dst_queue_family_index: u32,
-    layout: vk::ImageLayout,
+    layouts: ImageOwnershipLayouts,
     range: vk::ImageSubresourceRange,
     src_queue_family_index: u32,
     src_queue_index: u32,
 }
 
-impl PartialEq for ImageQueueOwnershipTransfer {
+impl PartialEq for ImageOwnershipTransfer {
     fn eq(&self, other: &Self) -> bool {
         self.dst_queue_family_index == other.dst_queue_family_index
-            && self.layout == other.layout
+            && self.layouts.old == other.layouts.old
+            && self.layouts.new == other.layouts.new
             && self.src_queue_family_index == other.src_queue_family_index
             && self.src_queue_index == other.src_queue_index
             && image_subresource_range_eq(self.range, other.range)
@@ -1063,6 +1342,12 @@ where
         self.entries[node_idx].is_some()
     }
 
+    fn get(&self, node_idx: NodeIndex) -> Option<(H, &[T])> {
+        self.entries[node_idx]
+            .as_ref()
+            .map(|entry| (entry.handle, entry.transfers.as_slice()))
+    }
+
     fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
@@ -1151,9 +1436,16 @@ struct QueueOwnershipRelease {
 #[derive(Debug)]
 struct QueueOwnershipReleaseGroup {
     buffers: Vec<(vk::Buffer, BufferSubresourceRange)>,
-    images: Vec<(vk::Image, vk::ImageLayout, vk::ImageSubresourceRange)>,
+    images: Vec<ImageQueueOwnershipRelease>,
     src_queue_family_index: u32,
     src_queue_index: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImageQueueOwnershipRelease {
+    image: vk::Image,
+    layouts: ImageOwnershipLayouts,
+    range: vk::ImageSubresourceRange,
 }
 
 fn queue_ownership_release_group(
@@ -1363,6 +1655,39 @@ where
                     ranges.as_slice(),
                 );
             }
+        }
+
+        let queue = (queue_family_index, queue_index);
+        for resource_set_idx in state.submission.touched_image_sets.ones() {
+            let resource_set = state
+                .submission
+                .graph
+                .resource_sets
+                .get_image(ResourceSetIndex::new(resource_set_idx))
+                .expect("touched resource set is not an image set");
+            if resource_set.queue() == Some(queue) {
+                continue;
+            }
+
+            for member in resource_set.unique_members() {
+                if member.image().info.sharing_mode != vk::SharingMode::CONCURRENT {
+                    member.image().set_sharing_ranges(
+                        SharingMode::Exclusive(Some(queue)),
+                        slice::from_ref(&member.subresource()),
+                    );
+                }
+            }
+        }
+
+        // Member queue writes can invalidate overlapping set queues, so publish after all writes.
+        for resource_set_idx in state.submission.touched_image_sets.ones() {
+            state
+                .submission
+                .graph
+                .resource_sets
+                .get_image(ResourceSetIndex::new(resource_set_idx))
+                .expect("touched resource set is not an image set")
+                .publish_queue(queue);
         }
 
         state.submission.query_pool_results.take()
@@ -1594,11 +1919,10 @@ where
         self.submission.is_empty()
     }
 
-    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given node represents.
+    /// Returns a borrow of the resource or persistent resource set represented by the given node.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
-        N: Node,
+        N: ResourceNode,
     {
         self.submission.resource(resource_node)
     }
@@ -1669,7 +1993,8 @@ struct RecordingOwnership {
     // These ranges are effectively owned by this recording, but global ownership is not updated
     // until its command buffer is submitted successfully.
     buffers: HashMap<usize, Vec<BufferSubresourceRange>>,
-    images: HashMap<usize, DenseMap<bool>>,
+    images: HashMap<usize, ImageOwnership>,
+    image_set_images: HashMap<PhysicalImageId, ImageOwnership>,
 }
 
 impl RecordingOwnership {
@@ -1720,20 +2045,41 @@ impl RecordingOwnership {
         info: ImageInfo,
         range: vk::ImageSubresourceRange,
     ) -> SmallVec<[vk::ImageSubresourceRange; 4]> {
-        self.images
-            .entry(node_idx)
-            .or_insert_with(|| DenseMap::new(info, false))
-            .swap(true, range)
-            .filter_map(|(claimed, range)| (!claimed).then_some(range))
-            .collect()
+        let range = info.resolve_subresource_counts(range);
+
+        match self.images.entry(node_idx) {
+            Entry::Occupied(mut entry) => entry.get_mut().claim(info, range),
+            Entry::Vacant(entry) => {
+                entry.insert(ImageOwnership::new(info, range));
+
+                SmallVec::from_slice(&[range])
+            }
+        }
+    }
+
+    fn claim_image_set_image(
+        &mut self,
+        image_id: PhysicalImageId,
+        info: ImageInfo,
+        range: vk::ImageSubresourceRange,
+    ) -> SmallVec<[vk::ImageSubresourceRange; 4]> {
+        let range = info.resolve_subresource_counts(range);
+
+        match self.image_set_images.entry(image_id) {
+            Entry::Occupied(mut entry) => entry.get_mut().claim(info, range),
+            Entry::Vacant(entry) => {
+                entry.insert(ImageOwnership::new(info, range));
+
+                SmallVec::from_slice(&[range])
+            }
+        }
     }
 }
 
-#[derive(Default)]
-struct NodeScheduleScratch {
-    covered_node_prefixes: Vec<usize>,
-    pending_cmds: Vec<usize>,
-    selected_cmds: FixedBitSet,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResourceSetSynchronization {
+    DeferredToOuterBoundary,
+    Enabled,
 }
 
 #[derive(Default)]
@@ -1746,78 +2092,43 @@ struct Schedule {
     remaining_predecessors: Vec<usize>,
     ready: BTreeSet<(usize, Reverse<usize>)>,
     reordered: Vec<usize>,
-    node_schedule: NodeScheduleScratch,
+    node_schedule: ScheduleScratch,
 }
 
 impl Schedule {
-    fn schedule_required_node_prefixes(
-        &mut self,
-        required_prefixes: impl IntoIterator<Item = (usize, usize)>,
-    ) {
-        fn schedule_node_prefix(
-            access_index: &CommandAccessIndex,
-            schedule: &mut Vec<usize>,
-            scratch: &mut NodeScheduleScratch,
-            node_idx: usize,
-            end_cmd_idx: usize,
-        ) {
-            let node_cmds = &access_index.cmds_by_node[node_idx];
-            let end_prefix = node_cmds.partition_point(|&cmd_idx| cmd_idx < end_cmd_idx);
-            let start_prefix = scratch.covered_node_prefixes[node_idx];
-
-            if end_prefix <= start_prefix {
-                return;
-            }
-
-            scratch.covered_node_prefixes[node_idx] = end_prefix;
-
-            // Selecting any user of a resource requires the complete preceding resource prefix.
-            for &cmd_idx in &node_cmds[start_prefix..end_prefix] {
-                if !scratch.selected_cmds.put(cmd_idx) {
-                    schedule.push(cmd_idx);
-                    scratch.pending_cmds.push(cmd_idx);
-                }
-            }
-        }
-
-        self.cmds.clear();
-        self.node_schedule.covered_node_prefixes.clear();
-        self.node_schedule
-            .covered_node_prefixes
-            .resize(self.access_index.cmds_by_node.len(), 0);
-        self.node_schedule.pending_cmds.clear();
-        self.node_schedule.selected_cmds.clear();
-        self.node_schedule
-            .selected_cmds
-            .grow(self.access_index.accessed_nodes_by_cmd.len());
-
-        for (node_idx, end_cmd_idx) in required_prefixes {
-            schedule_node_prefix(
-                &self.access_index,
-                &mut self.cmds,
-                &mut self.node_schedule,
-                node_idx,
-                end_cmd_idx,
-            );
-        }
-
-        while let Some(cmd_idx) = self.node_schedule.pending_cmds.pop() {
-            for node_idx in self.access_index.read_nodes_for_cmd(cmd_idx) {
-                schedule_node_prefix(
-                    &self.access_index,
-                    &mut self.cmds,
-                    &mut self.node_schedule,
-                    node_idx,
-                    cmd_idx + 1,
-                );
-            }
-        }
-
-        self.cmds.sort_unstable();
-    }
-
     #[profiling::function]
     fn reorder_cmds(&mut self, end_cmd_idx: usize) {
+        #[inline(always)]
+        fn add_resource_chain(
+            resource_cmds: &[usize],
+            chain_count: usize,
+            local_of_global: &[usize],
+            successors: &mut [Vec<usize>],
+            predecessor_counts: &mut [usize],
+            omitted_predecessor_counts: &mut [usize],
+        ) {
+            let mut previous = Option::<usize>::None;
+            for &cmd_idx in resource_cmds {
+                let Some(&local_idx) = local_of_global.get(cmd_idx) else {
+                    continue;
+                };
+
+                if local_idx == usize::MAX {
+                    continue;
+                }
+
+                if let Some(previous_idx) = previous {
+                    successors[previous_idx].push(local_idx);
+                    predecessor_counts[local_idx] += chain_count;
+                    if chain_count > 1 {
+                        omitted_predecessor_counts[local_idx] += chain_count - 1;
+                    }
+                }
+
+                previous = Some(local_idx);
+            }
+        }
+
         if self.cmds.len() < 3 {
             return;
         }
@@ -1837,32 +2148,92 @@ impl Schedule {
         self.successors.resize_with(cmd_count, Vec::new);
         self.predecessor_counts.resize(cmd_count, 0);
         self.predecessor_counts.fill(0);
+        self.remaining_predecessors.resize(cmd_count, 0);
+
+        // A successful prior reorder consumes every stored incoming edge.
+        debug_assert!(self.remaining_predecessors.iter().all(|&count| count == 0));
 
         // Consecutive selected users of each resource form a dependency chain. This preserves the
         // original relative order for every shared-resource pair while still allowing unrelated
         // command chains to be grouped for locality.
-        for resource_cmds in &self.access_index.cmds_by_node {
-            let mut previous = Option::<usize>::None;
-            for &cmd_idx in resource_cmds {
-                let Some(&local_idx) = self.local_of_global.get(cmd_idx) else {
-                    continue;
-                };
-
-                if local_idx == usize::MAX {
-                    continue;
+        // Comparing whole use chains only pays off for resource-heavy schedules such as bindless
+        // arrays. Sparse schedules retain the original construction path.
+        let group_resource_chains =
+            self.access_index.cmds_by_node.len() >= cmd_count.saturating_mul(4);
+        if group_resource_chains {
+            let mut resource_idx = 0;
+            let mut compressed_resource_chains = false;
+            while resource_idx < self.access_index.cmds_by_node.len() {
+                let resource_cmds = &self.access_index.cmds_by_node[resource_idx];
+                let mut run_end = resource_idx + 1;
+                while self.access_index.cmds_by_node.get(run_end) == Some(resource_cmds) {
+                    run_end += 1;
                 }
+                let chain_count = run_end - resource_idx;
+                compressed_resource_chains |= chain_count > 1;
 
-                if let Some(previous_idx) = previous {
-                    self.successors[previous_idx].push(local_idx);
-                    self.predecessor_counts[local_idx] += 1;
-                }
-
-                previous = Some(local_idx);
+                add_resource_chain(
+                    resource_cmds,
+                    chain_count,
+                    &self.local_of_global,
+                    &mut self.successors,
+                    &mut self.predecessor_counts,
+                    &mut self.remaining_predecessors,
+                );
+                resource_idx = run_end;
             }
+
+            for resource_set_cmds in &self.access_index.cmds_by_resource_set {
+                add_resource_chain(
+                    resource_set_cmds,
+                    1,
+                    &self.local_of_global,
+                    &mut self.successors,
+                    &mut self.predecessor_counts,
+                    &mut self.remaining_predecessors,
+                );
+            }
+
+            if compressed_resource_chains {
+                for (remaining, &predecessor_count) in self
+                    .remaining_predecessors
+                    .iter_mut()
+                    .zip(&self.predecessor_counts)
+                {
+                    debug_assert!(*remaining <= predecessor_count);
+                    *remaining = predecessor_count - *remaining;
+                }
+            } else {
+                self.remaining_predecessors
+                    .clone_from(&self.predecessor_counts);
+            }
+        } else {
+            for resource_cmds in &self.access_index.cmds_by_node {
+                add_resource_chain(
+                    resource_cmds,
+                    1,
+                    &self.local_of_global,
+                    &mut self.successors,
+                    &mut self.predecessor_counts,
+                    &mut self.remaining_predecessors,
+                );
+            }
+
+            for resource_set_cmds in &self.access_index.cmds_by_resource_set {
+                add_resource_chain(
+                    resource_set_cmds,
+                    1,
+                    &self.local_of_global,
+                    &mut self.successors,
+                    &mut self.predecessor_counts,
+                    &mut self.remaining_predecessors,
+                );
+            }
+
+            self.remaining_predecessors
+                .clone_from(&self.predecessor_counts);
         }
 
-        self.remaining_predecessors
-            .clone_from(&self.predecessor_counts);
         self.ready.clear();
 
         for local_idx in self
@@ -1905,6 +2276,144 @@ impl Schedule {
         self.cmds.clear();
         self.cmds.append(&mut self.reordered);
     }
+
+    fn schedule_required_node_prefixes(
+        &mut self,
+        required_prefixes: impl IntoIterator<Item = (usize, usize)>,
+    ) {
+        self.schedule_required_prefixes(
+            required_prefixes,
+            std::iter::empty::<(ResourceSetIndex, usize)>(),
+        );
+    }
+
+    fn schedule_required_prefixes(
+        &mut self,
+        required_node_prefixes: impl IntoIterator<Item = (usize, usize)>,
+        required_resource_set_prefixes: impl IntoIterator<Item = (ResourceSetIndex, usize)>,
+    ) {
+        fn schedule_node_prefix(
+            access_index: &CommandAccessIndex,
+            schedule: &mut Vec<usize>,
+            scratch: &mut ScheduleScratch,
+            node_idx: usize,
+            end_cmd_idx: usize,
+        ) {
+            let node_cmds = &access_index.cmds_by_node[node_idx];
+            let end_prefix = node_cmds.partition_point(|&cmd_idx| cmd_idx < end_cmd_idx);
+            let start_prefix = scratch.covered_node_prefixes[node_idx];
+
+            if end_prefix <= start_prefix {
+                return;
+            }
+
+            scratch.covered_node_prefixes[node_idx] = end_prefix;
+
+            // Selecting any user of a resource requires the complete preceding resource prefix.
+            for &cmd_idx in &node_cmds[start_prefix..end_prefix] {
+                if !scratch.selected_cmds.put(cmd_idx) {
+                    schedule.push(cmd_idx);
+                    scratch.pending_cmds.push(cmd_idx);
+                }
+            }
+        }
+
+        fn schedule_resource_set_prefix(
+            access_index: &CommandAccessIndex,
+            schedule: &mut Vec<usize>,
+            scratch: &mut ScheduleScratch,
+            resource_set_idx: ResourceSetIndex,
+            end_cmd_idx: usize,
+        ) {
+            let index = resource_set_idx.as_usize();
+            let resource_set_cmds = &access_index.cmds_by_resource_set[index];
+            let end_prefix = resource_set_cmds.partition_point(|&cmd_idx| cmd_idx < end_cmd_idx);
+            let start_prefix = scratch.covered_resource_set_prefixes[index];
+
+            if end_prefix <= start_prefix {
+                return;
+            }
+
+            scratch.covered_resource_set_prefixes[index] = end_prefix;
+
+            for &cmd_idx in &resource_set_cmds[start_prefix..end_prefix] {
+                if !scratch.selected_cmds.put(cmd_idx) {
+                    schedule.push(cmd_idx);
+                    scratch.pending_cmds.push(cmd_idx);
+                }
+            }
+        }
+
+        self.cmds.clear();
+        self.node_schedule.covered_resource_set_prefixes.clear();
+        self.node_schedule
+            .covered_resource_set_prefixes
+            .resize(self.access_index.cmds_by_resource_set.len(), 0);
+        self.node_schedule.covered_node_prefixes.clear();
+        self.node_schedule
+            .covered_node_prefixes
+            .resize(self.access_index.cmds_by_node.len(), 0);
+        self.node_schedule.pending_cmds.clear();
+        self.node_schedule.selected_cmds.clear();
+        self.node_schedule.selected_cmds.grow(
+            self.access_index
+                .accessed_nodes_by_cmd
+                .len()
+                .max(self.access_index.accessed_resource_sets_by_cmd.len()),
+        );
+
+        for (node_idx, end_cmd_idx) in required_node_prefixes {
+            schedule_node_prefix(
+                &self.access_index,
+                &mut self.cmds,
+                &mut self.node_schedule,
+                node_idx,
+                end_cmd_idx,
+            );
+        }
+
+        for (resource_set_idx, end_cmd_idx) in required_resource_set_prefixes {
+            schedule_resource_set_prefix(
+                &self.access_index,
+                &mut self.cmds,
+                &mut self.node_schedule,
+                resource_set_idx,
+                end_cmd_idx,
+            );
+        }
+
+        while let Some(cmd_idx) = self.node_schedule.pending_cmds.pop() {
+            for node_idx in self.access_index.read_nodes_for_cmd(cmd_idx) {
+                schedule_node_prefix(
+                    &self.access_index,
+                    &mut self.cmds,
+                    &mut self.node_schedule,
+                    node_idx,
+                    cmd_idx + 1,
+                );
+            }
+
+            for resource_set_idx in self.access_index.read_resource_sets_for_cmd(cmd_idx) {
+                schedule_resource_set_prefix(
+                    &self.access_index,
+                    &mut self.cmds,
+                    &mut self.node_schedule,
+                    resource_set_idx,
+                    cmd_idx + 1,
+                );
+            }
+        }
+
+        self.cmds.sort_unstable();
+    }
+}
+
+#[derive(Default)]
+struct ScheduleScratch {
+    covered_resource_set_prefixes: Vec<usize>,
+    covered_node_prefixes: Vec<usize>,
+    pending_cmds: Vec<usize>,
+    selected_cmds: FixedBitSet,
 }
 
 /// Semaphore information used during submission.
@@ -1984,13 +2493,14 @@ pub struct Submission {
     graph: Graph,
     pending_buffer_transfer_nodes:
         Option<PendingTransferNodes<vk::Buffer, BufferQueueOwnershipTransfer>>,
-    pending_image_transfer_nodes:
-        Option<PendingTransferNodes<vk::Image, ImageQueueOwnershipTransfer>>,
+    pending_image_transfer_nodes: Option<PendingTransferNodes<vk::Image, ImageOwnershipTransfer>>,
+    pending_image_set_transfers: HashMap<PhysicalImageId, Vec<ImageOwnershipTransfer>>,
     queue_ownership_release_groups: Vec<QueueOwnershipReleaseGroup>,
     query_pool_results: Option<SubmittedTimestampQueries>,
     query_pool_reset: bool,
     recorded_commands: Vec<CommandRecordingResources>,
     submit_retained: Vec<SubmittedCommand>,
+    touched_image_sets: FixedBitSet,
 }
 
 impl Submission {
@@ -2011,6 +2521,7 @@ impl Submission {
 
     pub(super) fn new(graph: Graph) -> Self {
         let recorded_commands = Vec::with_capacity(graph.cmds.len());
+        let touched_image_sets = FixedBitSet::with_capacity(graph.resource_sets.len());
         Self {
             exclusive_buffer_ranges: HashMap::new(),
             exclusive_image_ranges: HashMap::new(),
@@ -2021,7 +2532,9 @@ impl Submission {
             query_pool_reset: false,
             recorded_commands,
             pending_image_transfer_nodes: None,
+            pending_image_set_transfers: HashMap::new(),
             submit_retained: Vec::new(),
+            touched_image_sets,
         }
     }
 
@@ -2108,10 +2621,19 @@ impl Submission {
                 .update(&self.graph, self.graph.cmds.len());
             schedule.cmds.clear();
             schedule.cmds.extend(0..self.graph.cmds.len());
-            self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index, &mut ownership);
+            self.track_pending_transfers(
+                schedule,
+                cmd_buf.info.queue_family_index,
+                &mut ownership,
+                ResourceSetSynchronization::DeferredToOuterBoundary,
+            );
         });
 
-        self.record_cmd_indices(cmd_buf, 0..self.graph.cmds.len())?;
+        self.record_cmd_indices(
+            cmd_buf,
+            0..self.graph.cmds.len(),
+            ResourceSetSynchronization::DeferredToOuterBoundary,
+        )?;
 
         Ok(())
     }
@@ -2507,6 +3029,19 @@ impl Submission {
         bindings[attachment.target]
             .as_image()
             .expect("invalid attachment target image")
+    }
+
+    fn for_each_first_resource_set_access<'a>(
+        accesses: impl IntoIterator<Item = &'a ResourceSetAccess>,
+        resource_set_count: usize,
+        acquired_resource_sets: &mut FixedBitSet,
+        mut visit: impl FnMut(&'a ResourceSetAccess),
+    ) {
+        for access in accesses {
+            if !acquired_resource_sets.put(access.acquisition_index(resource_set_count)) {
+                visit(access);
+            }
+        }
     }
 
     #[profiling::function]
@@ -3767,6 +4302,7 @@ impl Submission {
                     exec_offset += other.execs.len();
                     name.push_str(" + ");
                     name.push_str(other.name());
+                    cmd.tracking.extend(take(&mut other.tracking));
                     cmd.execs.append(&mut other.execs);
                 }
 
@@ -3995,7 +4531,7 @@ impl Submission {
             PendingTransferNodes<vk::Buffer, BufferQueueOwnershipTransfer>,
         >,
         pending_image_transfer_nodes: &mut Option<
-            PendingTransferNodes<vk::Image, ImageQueueOwnershipTransfer>,
+            PendingTransferNodes<vk::Image, ImageOwnershipTransfer>,
         >,
     ) {
         // We store a Barriers in TLS to save an alloc; contents are POD
@@ -4003,9 +4539,9 @@ impl Submission {
             static BARRIER: RefCell<BarrierScratch> = Default::default();
         }
 
-        struct AccessBarrier<T> {
+        struct AccessBarrier<T, A> {
             next_access: AccessType,
-            prev_access: AccessType,
+            prev_access: A,
             resource: T,
         }
 
@@ -4022,11 +4558,12 @@ impl Submission {
         #[derive(Default)]
         struct BarrierScratch {
             accel_struct_accesses: Vec<AccessType>,
-            buffers: Vec<AccessBarrier<BufferBarrierTarget>>,
-            images: Vec<AccessBarrier<ImageBarrierTarget>>,
+            buffers: Vec<AccessBarrier<BufferBarrierTarget, AccessType>>,
+            image_accesses: Vec<(AccessType, vk::ImageSubresourceRange, bool)>,
+            images: Vec<AccessBarrier<ImageBarrierTarget, ImageAccessSet>>,
             next_accesses: Vec<AccessType>,
-            pending_buffers: NodeIndexedScratch<AccessBarrier<BufferBarrierTarget>>,
-            pending_images: NodeIndexedScratch<AccessBarrier<ImageBarrierTarget>>,
+            pending_buffers: NodeIndexedScratch<AccessBarrier<BufferBarrierTarget, AccessType>>,
+            pending_images: NodeIndexedScratch<AccessBarrier<ImageBarrierTarget, ImageAccessSet>>,
             prev_accesses: Vec<AccessType>,
         }
 
@@ -4034,6 +4571,7 @@ impl Submission {
             // Initialize TLS from a previous call
             tls.accel_struct_accesses.clear();
             tls.buffers.clear();
+            tls.image_accesses.clear();
             tls.images.clear();
             tls.next_accesses.clear();
             tls.pending_buffers.clear();
@@ -4118,21 +4656,41 @@ impl Submission {
                         }
                     }
                     ResourceRef::Image(image) => {
-                        for (next_access, prev_access, range) in Image::swap_accesses(
-                            image,
-                            node_accesses.iter().map(
-                                |&SubresourceAccess {
-                                     access,
-                                     subresource,
-                                 }| {
-                                    let SubresourceRange::Image(range) = subresource else {
-                                        unreachable!()
-                                    };
+                        let transfers = pending_image_transfer_nodes
+                            .as_ref()
+                            .and_then(|pending| pending.get(node_idx))
+                            .map_or_else(Default::default, |(_, transfers)| transfers);
+                        let mut image_accesses = take(&mut tls.image_accesses);
+                        image_accesses.clear();
 
-                                    (access, range)
-                                },
-                            ),
-                        ) {
+                        for &SubresourceAccess {
+                            access,
+                            subresource,
+                        } in node_accesses
+                        {
+                            let SubresourceRange::Image(range) = subresource else {
+                                unreachable!()
+                            };
+                            let range = image.info.resolve_subresource_counts(range);
+
+                            image_accesses.extend(
+                                image_barrier_transfer_ranges(transfers, range).map(
+                                    move |(range, transfer)| {
+                                        (
+                                            access,
+                                            range,
+                                            transfer.is_none()
+                                                && ImageAccessSet::from_access(access)
+                                                    .is_sampled_read(),
+                                        )
+                                    },
+                                ),
+                            );
+                        }
+
+                        for (next_access, prev_access, range) in
+                            Image::swap_accesses(image, image_accesses.iter().copied())
+                        {
                             let barrier = AccessBarrier {
                                 next_access,
                                 prev_access,
@@ -4151,6 +4709,8 @@ impl Submission {
                                 tls.images.push(barrier);
                             }
                         }
+
+                        tls.image_accesses = image_accesses;
                     }
                 }
             }
@@ -4169,6 +4729,7 @@ impl Submission {
             } else {
                 None
             };
+
             let mut buffer_barriers = Vec::new();
             for AccessBarrier {
                 next_access,
@@ -4217,17 +4778,22 @@ impl Submission {
             {
                 let ImageBarrierTarget { image, range, .. } = *resource;
 
-                image_barriers.push(ImageBarrier {
-                    next_accesses: slice::from_ref(next_access),
-                    previous_accesses: slice::from_ref(prev_access),
+                let barrier = TrackedImageBarrier {
+                    next_access: *next_access,
+                    previous_accesses: *prev_access,
                     next_layout: image_access_layout(*next_access),
-                    previous_layout: image_access_layout(*prev_access),
+                    previous_layout: image_access_set_layout(*prev_access),
+                    ownership_layouts: None,
                     discard_contents: image_execution_discard_contents(*prev_access),
                     src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     image,
                     range,
-                });
+                };
+
+                if !can_elide_sampled_read_barrier(barrier) {
+                    image_barriers.push(barrier);
+                }
             }
 
             if let Some(pending_image_transfer_nodes) = pending_image_transfer_nodes.as_ref() {
@@ -4238,14 +4804,17 @@ impl Submission {
                         resource,
                     } in tls.pending_images.get(node_idx)
                     {
-                        image_barriers.extend(image_barriers_from_transfers(
-                            resource.image,
-                            prev_access,
-                            next_access,
-                            resource.range,
-                            transfers,
-                            image_execution_discard_contents(*prev_access),
-                        ));
+                        image_barriers.extend(
+                            image_barriers_from_transfers(
+                                resource.image,
+                                *prev_access,
+                                *next_access,
+                                resource.range,
+                                transfers,
+                                image_execution_discard_contents(*prev_access),
+                            )
+                            .filter(|barrier| !can_elide_sampled_read_barrier(*barrier)),
+                        );
                     }
                 }
             }
@@ -4305,22 +4874,22 @@ impl Submission {
             PendingTransferNodes<vk::Buffer, BufferQueueOwnershipTransfer>,
         >,
         pending_image_transfer_nodes: &mut Option<
-            PendingTransferNodes<vk::Image, ImageQueueOwnershipTransfer>,
+            PendingTransferNodes<vk::Image, ImageOwnershipTransfer>,
         >,
     ) {
-        struct ImageResourceBarrier {
-            image: vk::Image,
-            node_idx: NodeIndex,
-            next_access: AccessType,
-            prev_access: AccessType,
-            range: vk::ImageSubresourceRange,
-        }
-
         struct BufferResourceBarrier {
             buffer: vk::Buffer,
             next_access: AccessType,
             prev_access: AccessType,
             range: BufferSubresourceRange,
+        }
+
+        struct ImageResourceBarrier {
+            image: vk::Image,
+            node_idx: NodeIndex,
+            next_access: AccessType,
+            prev_access: ImageAccessSet,
+            range: vk::ImageSubresourceRange,
         }
 
         #[derive(Default)]
@@ -4451,10 +5020,10 @@ impl Submission {
                             for (is_initial_layout, layout_range) in
                                 first_layout_uses.swap(false, access_range)
                             {
-                                for (prev_access, range) in
-                                    Image::swap_access(image, access, layout_range)
-                                {
-                                    if is_initial_layout {
+                                if is_initial_layout {
+                                    for (prev_access, range) in
+                                        Image::replace_access(image, access, layout_range)
+                                    {
                                         let barrier = ImageResourceBarrier {
                                             image: image.handle,
                                             node_idx,
@@ -4472,6 +5041,8 @@ impl Submission {
                                             tls.images.push(barrier);
                                         }
                                     }
+                                } else {
+                                    Image::swap_access(image, access, layout_range).for_each(drop);
                                 }
                             }
                         }
@@ -4535,8 +5106,8 @@ impl Submission {
 
                 image_barriers.extend(image_barriers_from_transfers(
                     *image,
-                    prev_access,
-                    next_access,
+                    *prev_access,
+                    *next_access,
                     *range,
                     &[],
                     image_layout_transition_discard_contents(*prev_access, *next_access),
@@ -4555,8 +5126,8 @@ impl Submission {
                     {
                         image_barriers.extend(image_barriers_from_transfers(
                             *image,
-                            prev_access,
-                            next_access,
+                            *prev_access,
+                            *next_access,
                             *range,
                             transfers,
                             image_layout_transition_discard_contents(*prev_access, *next_access),
@@ -4632,16 +5203,289 @@ impl Submission {
         })
     }
 
+    #[profiling::function]
+    fn record_resource_set_acquisitions<'a>(
+        cmd_buf: &CommandBuffer,
+        resource_sets: &ResourceSetMap,
+        accesses: impl IntoIterator<Item = &'a ResourceSetAccess>,
+        acquired_resource_sets: &mut FixedBitSet,
+        pending_transfers: &mut HashMap<PhysicalImageId, Vec<ImageOwnershipTransfer>>,
+    ) {
+        #[derive(Default)]
+        struct ResourceSetBarrierScratch {
+            image_accesses: Vec<(AccessType, vk::ImageSubresourceRange, bool)>,
+            image_barriers: Vec<TrackedImageBarrier>,
+            next_acceleration_structure_accesses: Vec<AccessType>,
+            previous_acceleration_structure_accesses: Vec<AccessType>,
+        }
+
+        thread_local! {
+            static RESOURCE_SET_BARRIER: RefCell<ResourceSetBarrierScratch> = Default::default();
+        }
+
+        RESOURCE_SET_BARRIER.with_borrow_mut(|tls| {
+            tls.image_barriers.clear();
+            tls.next_acceleration_structure_accesses.clear();
+            tls.previous_acceleration_structure_accesses.clear();
+
+            Self::for_each_first_resource_set_access(
+                accesses,
+                resource_sets.len(),
+                acquired_resource_sets,
+                |access| match resource_sets.get(access.resource_set_idx) {
+                    ResourceSet::AccelerationStructure(resource_set) => {
+                        let ResourceSetAccessType::AccelerationStructure(_) = access.access_type
+                        else {
+                            unreachable!("acceleration structure set access type mismatch")
+                        };
+
+                        #[cfg(feature = "checked")]
+                        resource_set.assert_device(&cmd_buf.device);
+
+                        let next_access = access.access_type.access_type();
+                        if !resource_set.is_empty()
+                            && !tls
+                                .next_acceleration_structure_accesses
+                                .contains(&next_access)
+                        {
+                            tls.next_acceleration_structure_accesses.push(next_access);
+                        }
+
+                        for member in resource_set.unique_members() {
+                            for previous_access in AccelerationStructure::swap_accesses(
+                                member.acceleration_structure(),
+                                slice::from_ref(&next_access),
+                            ) {
+                                if !tls
+                                    .previous_acceleration_structure_accesses
+                                    .contains(&previous_access)
+                                {
+                                    tls.previous_acceleration_structure_accesses
+                                        .push(previous_access);
+                                }
+                            }
+                        }
+                    }
+                    ResourceSet::Image(resource_set) => {
+                        let ResourceSetAccessType::Image(_) = access.access_type else {
+                            unreachable!("image set access type mismatch")
+                        };
+
+                        #[cfg(feature = "checked")]
+                        resource_set.assert_device(&cmd_buf.device);
+
+                        let next_access = access.access_type.access_type();
+
+                        for member in resource_set.unique_members() {
+                            let image = member.image();
+                            let range = member.subresource();
+
+                            if pending_transfers.is_empty() {
+                                for (previous_accesses, range) in
+                                    Image::swap_access(image, next_access, range)
+                                {
+                                    let barrier = TrackedImageBarrier::new(
+                                        image.handle,
+                                        previous_accesses,
+                                        next_access,
+                                        range,
+                                        None,
+                                        image_execution_discard_contents(previous_accesses),
+                                    );
+                                    if !can_elide_sampled_read_barrier(barrier) {
+                                        tls.image_barriers.push(barrier);
+                                    }
+                                }
+
+                                continue;
+                            }
+
+                            let image_id = PhysicalImageId::of(image);
+                            let transfers = pending_transfers
+                                .get(&image_id)
+                                .map(Vec::as_slice)
+                                .unwrap_or_default();
+
+                            let mut image_accesses = take(&mut tls.image_accesses);
+                            image_accesses.clear();
+                            image_accesses.extend(
+                                image_barrier_transfer_ranges(transfers, range).map(
+                                    |(range, transfer)| (next_access, range, transfer.is_none()),
+                                ),
+                            );
+
+                            for (next_access, previous_accesses, range) in
+                                Image::swap_accesses(image, image_accesses.iter().copied())
+                            {
+                                tls.image_barriers.extend(
+                                    image_barriers_from_transfers(
+                                        image.handle,
+                                        previous_accesses,
+                                        next_access,
+                                        range,
+                                        transfers,
+                                        image_execution_discard_contents(previous_accesses),
+                                    )
+                                    .filter(|barrier| !can_elide_sampled_read_barrier(*barrier)),
+                                );
+                            }
+                            tls.image_accesses = image_accesses;
+
+                            let remove_transfers = pending_transfers
+                                .get_mut(&image_id)
+                                .is_some_and(|transfers| {
+                                    consume_pending_image_transfers(transfers, range)
+                                });
+                            if remove_transfers {
+                                pending_transfers.remove(&image_id);
+                            }
+                        }
+                    }
+                },
+            );
+
+            let global_barrier = if tls
+                .previous_acceleration_structure_accesses
+                .iter()
+                .copied()
+                .any(is_write_access)
+            {
+                Some(GlobalBarrier {
+                    previous_accesses: &tls.previous_acceleration_structure_accesses,
+                    next_accesses: &tls.next_acceleration_structure_accesses,
+                })
+            } else {
+                None
+            };
+
+            pipeline_barrier_from_iters(
+                &cmd_buf.device,
+                cmd_buf.handle,
+                global_barrier,
+                std::iter::empty(),
+                tls.image_barriers.drain(..),
+            );
+        });
+    }
+
+    #[profiling::function]
+    fn track_pending_image_set_transfers(
+        &mut self,
+        resource_set_idx: ResourceSetIndex,
+        queue_family_index: u32,
+        ownership: &mut RecordingOwnership,
+    ) {
+        let Some(resource_set) = self
+            .graph
+            .resource_sets
+            .get_image(resource_set_idx)
+            .cloned()
+        else {
+            return;
+        };
+        let next_access = ImageAccessType::SampledRead.access_type();
+        let exclusive_image_count = resource_set.exclusive_physical_image_count();
+
+        if exclusive_image_count == 0 {
+            return;
+        }
+
+        self.touched_image_sets.insert(resource_set_idx.as_usize());
+        if resource_set
+            .queue()
+            .is_some_and(|(family, _)| family == queue_family_index)
+        {
+            return;
+        }
+
+        for member in resource_set.unique_members() {
+            let image = member.image();
+            if image.info.sharing_mode == vk::SharingMode::CONCURRENT {
+                continue;
+            }
+
+            if ownership.image_set_images.is_empty() {
+                ownership.image_set_images.reserve(exclusive_image_count);
+            }
+            let image_id = PhysicalImageId::of(image);
+            let unclaimed =
+                ownership.claim_image_set_image(image_id, image.info, member.subresource());
+            if unclaimed.is_empty() {
+                continue;
+            }
+
+            for access_range in unclaimed {
+                for (subresource, sharing) in image.sync_info_with_sharing_range(access_range) {
+                    let Some(range) =
+                        image_subresource_range_intersection(subresource.range, access_range)
+                    else {
+                        continue;
+                    };
+                    let Some((src_queue_family_index, src_queue_index)) =
+                        exclusive_transfer_source(sharing, queue_family_index)
+                    else {
+                        continue;
+                    };
+                    let layouts = image_ownership_layouts(
+                        subresource.layout,
+                        next_access,
+                        subresource.layout.is_none(),
+                    );
+                    let transfer = ImageOwnershipTransfer {
+                        src_queue_family_index,
+                        src_queue_index,
+                        dst_queue_family_index: queue_family_index,
+                        layouts,
+                        range,
+                    };
+
+                    queue_ownership_release_group(
+                        &mut self.queue_ownership_release_groups,
+                        src_queue_family_index,
+                        src_queue_index,
+                    )
+                    .images
+                    .push(ImageQueueOwnershipRelease {
+                        image: image.handle,
+                        layouts,
+                        range,
+                    });
+                    self.pending_image_set_transfers
+                        .entry(image_id)
+                        .or_default()
+                        .push(transfer);
+                }
+            }
+        }
+    }
+
     fn track_pending_transfers(
         &mut self,
         schedule: &Schedule,
         queue_family_index: u32,
         ownership: &mut RecordingOwnership,
+        resource_set_synchronization: ResourceSetSynchronization,
     ) {
         let resource_count = self.graph.resources.len();
+        let mut seen_resource_sets = FixedBitSet::with_capacity(self.graph.resource_sets.len());
 
         for cmd_idx in schedule.cmds.iter().copied() {
             let cmd = &self.graph.cmds[cmd_idx];
+            let resource_set_indices =
+                if resource_set_synchronization == ResourceSetSynchronization::Enabled {
+                    cmd.execs
+                        .iter()
+                        .flat_map(|exec| &exec.resource_set_accesses)
+                        .map(|access| access.resource_set_idx)
+                        .collect::<SmallVec<[_; 2]>>()
+                } else {
+                    SmallVec::new()
+                };
+            let is_graphics = cmd
+                .execs
+                .first()
+                .and_then(|exec| exec.pipeline.as_ref())
+                .is_some_and(|pipeline| pipeline.is_graphics());
 
             for (node_idx, accesses) in cmd.execs.iter().flat_map(|exec| exec.accesses.iter()) {
                 if let Some(buffer) = self.graph.resources[node_idx].as_buffer() {
@@ -4736,12 +5580,23 @@ impl Submission {
                             else {
                                 continue;
                             };
-                            let layout = subresource.layout.unwrap_or(vk::ImageLayout::UNDEFINED);
-                            let transfer = ImageQueueOwnershipTransfer {
+                            let next_access = if is_graphics {
+                                initial_image_layout_access(access.access)
+                            } else {
+                                access.access
+                            };
+                            let discard_contents = subresource.layout.is_none()
+                                || is_graphics && !is_read_access(next_access);
+                            let layouts = image_ownership_layouts(
+                                subresource.layout,
+                                next_access,
+                                discard_contents,
+                            );
+                            let transfer = ImageOwnershipTransfer {
                                 src_queue_family_index,
                                 src_queue_index,
                                 dst_queue_family_index: queue_family_index,
-                                layout,
+                                layouts,
                                 range,
                             };
 
@@ -4751,13 +5606,29 @@ impl Submission {
                                 src_queue_index,
                             )
                             .images
-                            .push((image.handle, layout, range));
+                            .push(ImageQueueOwnershipRelease {
+                                image: image.handle,
+                                layouts,
+                                range,
+                            });
                             self.pending_image_transfer_nodes
                                 .get_or_insert_with(|| PendingTransferNodes::new(resource_count))
                                 .push_transfer(node_idx, image.handle, transfer);
                         }
                     }
                 }
+            }
+
+            for resource_set_idx in resource_set_indices {
+                if seen_resource_sets.put(resource_set_idx.as_usize()) {
+                    continue;
+                }
+
+                self.track_pending_image_set_transfers(
+                    resource_set_idx,
+                    queue_family_index,
+                    ownership,
+                );
             }
         }
     }
@@ -4766,9 +5637,13 @@ impl Submission {
         &mut self,
         cmd_buf: &CommandBuffer,
         cmd_indices: impl IntoIterator<Item = usize>,
+        resource_set_synchronization: ResourceSetSynchronization,
     ) -> Result<(), DriverError> {
         #[cfg(feature = "checked")]
         let graph_id = self.graph.graph_id();
+        let resource_set_count = self.graph.resource_sets.len();
+        let mut acquired_resource_sets =
+            FixedBitSet::with_capacity(resource_set_count * ResourceSetAccessType::COUNT);
         let query_pool = self
             .query_pool_results
             .as_ref()
@@ -4805,6 +5680,29 @@ impl Submission {
             }
 
             let (render_area, render_pass_label) = if is_graphics {
+                if resource_set_synchronization == ResourceSetSynchronization::Enabled
+                    && cmd
+                        .execs
+                        .iter()
+                        .flat_map(|exec| &exec.resource_set_accesses)
+                        .any(|&access| {
+                            !Self::resource_set_access_is_acquired(
+                                access,
+                                resource_set_count,
+                                &acquired_resource_sets,
+                            )
+                        })
+                {
+                    Self::record_resource_set_acquisitions(
+                        cmd_buf,
+                        &self.graph.resource_sets,
+                        cmd.execs
+                            .iter()
+                            .flat_map(|exec| &exec.resource_set_accesses),
+                        &mut acquired_resource_sets,
+                        &mut self.pending_image_set_transfers,
+                    );
+                }
                 Self::record_image_layout_transitions(
                     cmd_buf,
                     &mut self.graph.resources,
@@ -4912,6 +5810,23 @@ impl Submission {
                 }
 
                 if !is_graphics {
+                    if resource_set_synchronization == ResourceSetSynchronization::Enabled
+                        && exec.resource_set_accesses.iter().any(|&access| {
+                            !Self::resource_set_access_is_acquired(
+                                access,
+                                resource_set_count,
+                                &acquired_resource_sets,
+                            )
+                        })
+                    {
+                        Self::record_resource_set_acquisitions(
+                            cmd_buf,
+                            &self.graph.resource_sets,
+                            exec.resource_set_accesses.iter(),
+                            &mut acquired_resource_sets,
+                            &mut self.pending_image_set_transfers,
+                        );
+                    }
                     Self::record_execution_barriers(
                         cmd_buf,
                         &mut self.graph.resources,
@@ -4933,6 +5848,7 @@ impl Submission {
                     exec.func = exec_func.record(CommandRef::new(
                         cmd_buf,
                         &self.graph.resources,
+                        &self.graph.resource_sets,
                         exec,
                         #[cfg(feature = "checked")]
                         graph_id,
@@ -4993,7 +5909,12 @@ impl Submission {
         schedule.reorder_cmds(end_cmd_idx);
         self.merge_scheduled_cmds(&mut schedule.cmds);
         self.lease_scheduled_resources(pool, &schedule.cmds)?;
-        self.track_pending_transfers(schedule, cmd_buf.info.queue_family_index, ownership);
+        self.track_pending_transfers(
+            schedule,
+            cmd_buf.info.queue_family_index,
+            ownership,
+            ResourceSetSynchronization::Enabled,
+        );
 
         let has_pending_timestamp_queries = self
             .graph
@@ -5035,7 +5956,11 @@ impl Submission {
             }
         }
 
-        self.record_cmd_indices(cmd_buf, schedule.cmds.iter().copied())?;
+        self.record_cmd_indices(
+            cmd_buf,
+            schedule.cmds.iter().copied(),
+            ResourceSetSynchronization::Enabled,
+        )?;
 
         if include_final_timestamp_queries
             && let Some(timestamp_queries) =
@@ -5165,13 +6090,20 @@ impl Submission {
         vk::Extent2D { height, width }
     }
 
-    /// Returns a borrow of the original Vulkan resource (buffer, image or acceleration structure)
-    /// which the given node represents.
+    /// Returns a borrow of the resource or persistent resource set represented by the given node.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
-        N: Node,
+        N: ResourceNode,
     {
         self.graph.resource(resource_node)
+    }
+
+    fn resource_set_access_is_acquired(
+        access: ResourceSetAccess,
+        resource_set_count: usize,
+        acquired_resource_sets: &FixedBitSet,
+    ) -> bool {
+        acquired_resource_sets.contains(access.acquisition_index(resource_set_count))
     }
 
     /// Mutates a schedule of command indices that are required to be executed, in order, for the
@@ -6084,8 +7016,8 @@ struct TimestampQueryPoolInner {
 #[doc(hidden)]
 pub mod bench {
     use {
-        super::{CommandAccessIndex, Schedule},
-        crate::Graph,
+        super::{CommandAccessIndex, Schedule, Submission},
+        crate::{Graph, resource::ResourceSetIndex},
     };
 
     /// Synthetic workload description for scheduler benchmarks.
@@ -6160,14 +7092,14 @@ pub mod bench {
                 cmds.sort_unstable();
                 cmds.dedup();
 
-                while cmds.len() < uses {
-                    let next_cmd = (start + cmds.len() * stride + cmds.len()) % spec.cmd_count;
-                    if cmds.binary_search(&next_cmd).is_err() {
-                        cmds.push(next_cmd);
+                for next_cmd in 0..spec.cmd_count {
+                    if cmds.len() >= uses {
+                        break;
+                    }
+                    if let Err(idx) = cmds.binary_search(&next_cmd) {
+                        cmds.insert(idx, next_cmd);
                     }
                 }
-
-                cmds.sort_unstable();
 
                 for &cmd_idx in cmds.iter() {
                     accessed_nodes_by_cmd[cmd_idx].push(node_idx);
@@ -6186,6 +7118,7 @@ pub mod bench {
                     access_index: CommandAccessIndex {
                         cmds_by_node,
                         accessed_nodes_by_cmd,
+                        ..Default::default()
                     },
                     cmds: cmds.clone(),
                     ..Default::default()
@@ -6202,20 +7135,28 @@ pub mod bench {
 
             let base_cmd_count = graph.cmds.len();
             let base_resource_count = graph.resources.len();
+            let base_resource_set_count = graph.resource_sets.len();
             assert!(base_cmd_count > 0, "graph must contain commands");
-            assert!(base_resource_count > 0, "graph must contain resources");
+            assert!(
+                base_resource_count > 0 || base_resource_set_count > 0,
+                "graph must contain resources or resource sets"
+            );
 
             let mut base = CommandAccessIndex::default();
-            base.update_from_cmds(&graph.cmds, base_resource_count);
+            base.update_from_cmds(&graph.cmds, base_resource_count, base_resource_set_count);
 
             let cmd_count = base_cmd_count * repeat_count;
             let resource_count = base_resource_count * repeat_count;
+            let resource_set_count = base_resource_set_count * repeat_count;
             let mut cmds_by_node = Vec::with_capacity(resource_count);
+            let mut cmds_by_resource_set = Vec::with_capacity(resource_set_count);
             let mut accessed_nodes_by_cmd = Vec::with_capacity(cmd_count);
+            let mut accessed_resource_sets_by_cmd = Vec::with_capacity(cmd_count);
 
             for copy_idx in 0..repeat_count {
                 let cmd_offset = copy_idx * base_cmd_count;
                 let resource_offset = copy_idx * base_resource_count;
+                let resource_set_offset = copy_idx * base_resource_set_count;
 
                 cmds_by_node.extend(base.cmds_by_node.iter().map(|cmds| {
                     cmds.iter()
@@ -6228,6 +7169,25 @@ pub mod bench {
                         .map(|node_idx| resource_offset + node_idx)
                         .collect::<Vec<_>>()
                 }));
+                cmds_by_resource_set.extend(base.cmds_by_resource_set.iter().map(|cmds| {
+                    cmds.iter()
+                        .map(|cmd_idx| cmd_offset + cmd_idx)
+                        .collect::<Vec<_>>()
+                }));
+                accessed_resource_sets_by_cmd.extend(
+                    base.accessed_resource_sets_by_cmd
+                        .iter()
+                        .map(|resource_sets| {
+                            resource_sets
+                                .iter()
+                                .map(|resource_set_idx| {
+                                    ResourceSetIndex::new(
+                                        resource_set_offset + resource_set_idx.as_usize(),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        }),
+                );
             }
 
             let cmds = (0..cmd_count).collect::<Vec<_>>();
@@ -6236,6 +7196,8 @@ pub mod bench {
                     access_index: CommandAccessIndex {
                         cmds_by_node,
                         accessed_nodes_by_cmd,
+                        cmds_by_resource_set,
+                        accessed_resource_sets_by_cmd,
                     },
                     cmds: cmds.clone(),
                     ..Default::default()
@@ -6243,6 +7205,11 @@ pub mod bench {
                 original_cmds: cmds,
                 end_cmd_idx: cmd_count,
             }
+        }
+
+        /// Builds a harness from a finalized submission graph.
+        pub fn from_submission(submission: &Submission, repeat_count: usize) -> Self {
+            Self::from_graph(&submission.graph, repeat_count)
         }
 
         /// Returns the number of commands reordered by each benchmark iteration.
@@ -6380,6 +7347,7 @@ pub mod fuzz {
             CommandAccessIndex {
                 cmds_by_node,
                 accessed_nodes_by_cmd,
+                ..Default::default()
             },
             normalized_accesses,
         )
@@ -6457,9 +7425,10 @@ pub mod fuzz {
 mod test {
     use super::{
         BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData,
-        ExternalRenderPassAccessHistory, ImageQueueOwnershipTransfer, NodeIndex,
-        PipelineStageAccessFlags, QueueSubmitInfo, RecordSelection, RecordedSubmission,
-        RecordedSubmissionState, RecordingOwnership, Schedule, SemaphoreSubmitInfo, Submission,
+        ExternalRenderPassAccessHistory, ImageOwnership, ImageOwnershipLayouts,
+        ImageOwnershipTransfer, ImageQueueOwnershipRelease, NodeIndex, PipelineStageAccessFlags,
+        QueueSubmitInfo, RecordSelection, RecordedSubmission, RecordedSubmissionState,
+        RecordingOwnership, ResourceSetSynchronization, Schedule, SemaphoreSubmitInfo, Submission,
         SubresourceAccess, SubresourceRange, check_queue_submit_args, fuzz,
     };
     use crate::{
@@ -6476,11 +7445,15 @@ mod test {
             device::{Device, DeviceInfo},
             fence::Fence,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
-            image::{Image, ImageInfo, SampleCount},
+            image::{Image, ImageAccessSet, ImageInfo, SampleCount},
             render_pass::SubpassDependency,
         },
         node::{AnyNode, BufferNode},
         pool::{Pool, hash::HashPool},
+        resource::{
+            AccelerationStructureAccessType, AccelerationStructureSet, ImageAccessType, ImageSet,
+            PhysicalImageId, ResourceSetIndex,
+        },
     };
     use {
         ash::vk::Handle,
@@ -6522,13 +7495,14 @@ mod test {
     }
 
     #[cfg(test)]
-    fn sort_pending_image_transfers(transfers: &mut [ImageQueueOwnershipTransfer]) {
+    fn sort_pending_image_transfers(transfers: &mut [ImageOwnershipTransfer]) {
         transfers.sort_unstable_by_key(|transfer| {
             (
                 transfer.src_queue_family_index,
                 transfer.src_queue_index,
                 transfer.dst_queue_family_index,
-                transfer.layout.as_raw(),
+                transfer.layouts.old.as_raw(),
+                transfer.layouts.new.as_raw(),
                 transfer.range.aspect_mask.as_raw(),
                 transfer.range.base_array_layer,
                 transfer.range.layer_count,
@@ -6572,9 +7546,15 @@ mod test {
         queue_family_index: u32,
         ownership: &mut RecordingOwnership,
     ) {
-        submission.track_pending_transfers(schedule, queue_family_index, ownership);
+        submission.track_pending_transfers(
+            schedule,
+            queue_family_index,
+            ownership,
+            ResourceSetSynchronization::Enabled,
+        );
         submission.pending_buffer_transfer_nodes = None;
         submission.pending_image_transfer_nodes = None;
+        submission.pending_image_set_transfers.clear();
     }
 
     fn pending_timestamp_query_pool(query: TimestampQuery) -> super::TimestampQueryPool {
@@ -6811,16 +7791,22 @@ mod test {
         let consumed = color_subresource_range(0..1, 0..1);
         let kept = color_subresource_range(1..2, 0..1);
         let mut pending = vec![
-            ImageQueueOwnershipTransfer {
+            ImageOwnershipTransfer {
                 dst_queue_family_index: 0,
-                layout: vk::ImageLayout::GENERAL,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
                 range: consumed,
                 src_queue_family_index: 1,
                 src_queue_index: 0,
             },
-            ImageQueueOwnershipTransfer {
+            ImageOwnershipTransfer {
                 dst_queue_family_index: 0,
-                layout: vk::ImageLayout::GENERAL,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
                 range: kept,
                 src_queue_family_index: 1,
                 src_queue_index: 0,
@@ -6870,6 +7856,174 @@ mod test {
     }
 
     #[test]
+    fn recording_ownership_keeps_whole_image_claims_uniform() {
+        let mut ownership = RecordingOwnership::default();
+        let info =
+            ImageInfo::image_2d_array(1, 1, 3, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED)
+                .into_builder()
+                .mip_level_count(4)
+                .build();
+        let whole = color_subresource_range(0..3, 0..4);
+        let partial = color_subresource_range(1..2, 2..3);
+
+        let claimed = ownership.claim_image(0, info, whole);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], whole));
+        assert!(matches!(ownership.images[&0], ImageOwnership::Whole));
+
+        assert!(ownership.claim_image(0, info, whole).is_empty());
+        assert!(ownership.claim_image(0, info, partial).is_empty());
+    }
+
+    #[test]
+    fn recording_ownership_tracks_dual_aspects_without_dense_map() {
+        let mut ownership = RecordingOwnership::default();
+        let info = ImageInfo::image_2d(
+            1,
+            1,
+            vk::Format::D32_SFLOAT_S8_UINT,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        );
+        let depth = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::DEPTH,
+            base_array_layer: 0,
+            layer_count: 1,
+            base_mip_level: 0,
+            level_count: 1,
+        };
+        let stencil = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::STENCIL,
+            ..depth
+        };
+
+        let claimed = ownership.claim_image(0, info, depth);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], depth));
+        assert!(matches!(
+            ownership.images[&0],
+            ImageOwnership::DualAspect(mask) if mask == vk::ImageAspectFlags::DEPTH
+        ));
+
+        assert!(ownership.claim_image(0, info, depth).is_empty());
+        let claimed = ownership.claim_image(0, info, stencil);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], stencil));
+        assert!(matches!(ownership.images[&0], ImageOwnership::Whole));
+    }
+
+    #[test]
+    fn recording_ownership_promotes_dense_claims_to_whole() {
+        let mut ownership = RecordingOwnership::default();
+        let info =
+            ImageInfo::image_2d_array(1, 1, 3, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED);
+        let partial = color_subresource_range(0..2, 0..1);
+        let whole = color_subresource_range(0..3, 0..1);
+        let remaining = color_subresource_range(2..3, 0..1);
+
+        ownership.claim_image(0, info, partial);
+        assert!(matches!(ownership.images[&0], ImageOwnership::Dense(_)));
+
+        let claimed = ownership.claim_image(0, info, whole);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], remaining));
+        assert!(matches!(ownership.images[&0], ImageOwnership::Whole));
+        assert!(ownership.claim_image(0, info, partial).is_empty());
+    }
+
+    #[test]
+    fn recording_ownership_deduplicates_image_set_images_by_physical_identity() {
+        let mut ownership = RecordingOwnership::default();
+        let image = PhysicalImageId::from_parts(1, 2);
+        let aliased_handle = PhysicalImageId::from_parts(3, 2);
+        let info =
+            ImageInfo::image_2d_array(1, 1, 3, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED);
+        let partial = color_subresource_range(0..2, 0..1);
+        let whole = color_subresource_range(0..3, 0..1);
+
+        let claimed = ownership.claim_image_set_image(image, info, partial);
+        assert_eq!(claimed.len(), 1);
+        assert!(super::image_subresource_range_eq(claimed[0], partial));
+        assert!(
+            ownership
+                .claim_image_set_image(image, info, partial)
+                .is_empty()
+        );
+
+        let remaining = ownership.claim_image_set_image(image, info, whole);
+        assert_eq!(remaining.len(), 1);
+        assert!(super::image_subresource_range_eq(
+            remaining[0],
+            color_subresource_range(2..3, 0..1)
+        ));
+        let aliased = ownership.claim_image_set_image(aliased_handle, info, whole);
+        assert_eq!(aliased.len(), 1);
+        assert!(super::image_subresource_range_eq(aliased[0], whole));
+    }
+
+    #[test]
+    fn first_resource_set_access_is_visited_once_per_recording_batch() {
+        let accesses = [
+            crate::ResourceSetAccess {
+                resource_set_idx: ResourceSetIndex::new(0),
+                access_type: crate::resource::ResourceSetAccessType::AccelerationStructure(
+                    crate::resource::AccelerationStructureAccessType::BuildRead,
+                ),
+            },
+            crate::ResourceSetAccess {
+                resource_set_idx: ResourceSetIndex::new(1),
+                access_type: crate::resource::ResourceSetAccessType::Image(
+                    crate::resource::ImageAccessType::SampledRead,
+                ),
+            },
+            crate::ResourceSetAccess {
+                resource_set_idx: ResourceSetIndex::new(0),
+                access_type: crate::resource::ResourceSetAccessType::AccelerationStructure(
+                    crate::resource::AccelerationStructureAccessType::BuildRead,
+                ),
+            },
+            crate::ResourceSetAccess {
+                resource_set_idx: ResourceSetIndex::new(0),
+                access_type: crate::resource::ResourceSetAccessType::AccelerationStructure(
+                    crate::resource::AccelerationStructureAccessType::RayTracingRead,
+                ),
+            },
+        ];
+        let resource_set_count = 2;
+        let mut acquired = fixedbitset::FixedBitSet::with_capacity(
+            resource_set_count * crate::resource::ResourceSetAccessType::COUNT,
+        );
+        let mut visited = Vec::new();
+
+        Submission::for_each_first_resource_set_access(
+            &accesses,
+            resource_set_count,
+            &mut acquired,
+            |access| visited.push((access.resource_set_idx.as_usize(), access.access_type)),
+        );
+        assert_eq!(visited.len(), 3);
+        assert_eq!(visited[0], (0, accesses[0].access_type));
+        assert_eq!(visited[1], (1, accesses[1].access_type));
+        assert_eq!(visited[2], (0, accesses[3].access_type));
+
+        Submission::for_each_first_resource_set_access(
+            &accesses,
+            resource_set_count,
+            &mut acquired,
+            |_| panic!("resource set visited twice in one batch"),
+        );
+
+        acquired.clear();
+        acquired.grow(resource_set_count * crate::resource::ResourceSetAccessType::COUNT);
+        Submission::for_each_first_resource_set_access(
+            &accesses[..1],
+            resource_set_count,
+            &mut acquired,
+            |access| visited.push((access.resource_set_idx.as_usize(), access.access_type)),
+        );
+        assert_eq!(visited[3], (0, accesses[0].access_type));
+    }
+
+    #[test]
     fn dependency_selection_schedules_inputs_to_first_target_access() {
         let access_index = CommandAccessIndex {
             /*
@@ -6878,6 +8032,7 @@ mod test {
             */
             cmds_by_node: vec![vec![0, 1], vec![1]],
             accessed_nodes_by_cmd: vec![vec![0], vec![0, 1]],
+            ..Default::default()
         };
         let mut schedule = Schedule {
             access_index,
@@ -6887,6 +8042,54 @@ mod test {
         super::schedule_dependency_cmds_before_target_access(1, 1, &mut schedule);
 
         assert_eq!(schedule.cmds, vec![0]);
+    }
+
+    #[test]
+    fn dependency_selection_schedules_resource_set_prefix() {
+        let resource_set_idx = ResourceSetIndex::new(0);
+        let access_index = CommandAccessIndex {
+            // Cmd 0 first uses the set. Cmd 1 uses the set and accesses the target node.
+            cmds_by_node: vec![vec![1]],
+            accessed_nodes_by_cmd: vec![vec![], vec![0]],
+            cmds_by_resource_set: vec![vec![0, 1]],
+            accessed_resource_sets_by_cmd: vec![vec![resource_set_idx], vec![resource_set_idx]],
+        };
+        let mut schedule = Schedule {
+            access_index,
+            ..Default::default()
+        };
+
+        super::schedule_dependency_cmds_before_target_access(0, 1, &mut schedule);
+
+        assert_eq!(schedule.cmds, vec![0]);
+    }
+
+    #[test]
+    fn node_selection_follows_transitive_resource_set_prefix() {
+        let resource_set_idx = ResourceSetIndex::new(0);
+        let access_index = CommandAccessIndex {
+            /*
+            Cmd 0: set S
+            Cmd 1: set S, node A
+            Cmd 2: node A, target T
+            */
+            cmds_by_node: vec![vec![1, 2], vec![2]],
+            accessed_nodes_by_cmd: vec![vec![], vec![0], vec![0, 1]],
+            cmds_by_resource_set: vec![vec![0, 1]],
+            accessed_resource_sets_by_cmd: vec![
+                vec![resource_set_idx],
+                vec![resource_set_idx],
+                vec![],
+            ],
+        };
+        let mut schedule = Schedule {
+            access_index,
+            ..Default::default()
+        };
+
+        schedule.schedule_required_node_prefixes([(1, 3)]);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2]);
     }
 
     #[test]
@@ -6903,6 +8106,7 @@ mod test {
             */
             cmds_by_node: vec![vec![0, 1, 2], vec![0, 3], vec![2, 3], vec![3]],
             accessed_nodes_by_cmd: vec![vec![0, 1], vec![0], vec![0, 2], vec![1, 2, 3]],
+            ..Default::default()
         };
         let mut schedule = Schedule {
             access_index,
@@ -6950,15 +8154,16 @@ mod test {
                 .buffers
                 .sort_unstable_by_key(|(buffer, range)| (buffer.as_raw(), range.start, range.end));
 
-            group.images.sort_unstable_by_key(|(image, layout, range)| {
+            group.images.sort_unstable_by_key(|release| {
                 (
-                    image.as_raw(),
-                    layout.as_raw(),
-                    range.aspect_mask.as_raw(),
-                    range.base_array_layer,
-                    range.layer_count,
-                    range.base_mip_level,
-                    range.level_count,
+                    release.image.as_raw(),
+                    release.layouts.old.as_raw(),
+                    release.layouts.new.as_raw(),
+                    release.range.aspect_mask.as_raw(),
+                    release.range.base_array_layer,
+                    release.range.layer_count,
+                    release.range.base_mip_level,
+                    release.range.level_count,
                 )
             });
         }
@@ -7193,6 +8398,7 @@ mod test {
                     .iter()
                     .map(|nodes| nodes.to_vec())
                     .collect(),
+                ..Default::default()
             },
             cmds: cmds.to_vec(),
             ..Default::default()
@@ -7201,32 +8407,247 @@ mod test {
 
     #[test]
     fn image_execution_discard_only_when_previous_access_is_nothing() {
-        assert!(super::image_execution_discard_contents(AccessType::Nothing));
-        assert!(!super::image_execution_discard_contents(
+        let access_set = ImageAccessSet::from_access;
+
+        assert!(super::image_execution_discard_contents(access_set(
+            AccessType::Nothing
+        )));
+        assert!(!super::image_execution_discard_contents(access_set(
             AccessType::TransferRead
-        ));
-        assert!(!super::image_execution_discard_contents(
+        )));
+        assert!(!super::image_execution_discard_contents(access_set(
             AccessType::TransferWrite
-        ));
-        assert!(!super::image_execution_discard_contents(
+        )));
+        assert!(!super::image_execution_discard_contents(access_set(
             AccessType::ColorAttachmentReadWrite
-        ));
+        )));
     }
 
     #[test]
     fn image_layout_transition_discard_keeps_attachment_write_policy() {
+        let access_set = ImageAccessSet::from_access;
+
         assert!(super::image_layout_transition_discard_contents(
-            AccessType::Nothing,
+            access_set(AccessType::Nothing),
             AccessType::TransferWrite,
         ));
         assert!(super::image_layout_transition_discard_contents(
-            AccessType::TransferRead,
+            access_set(AccessType::TransferRead),
             AccessType::TransferWrite,
         ));
         assert!(!super::image_layout_transition_discard_contents(
-            AccessType::TransferWrite,
+            access_set(AccessType::TransferWrite),
             AccessType::ColorAttachmentReadWrite,
         ));
+    }
+
+    fn sampled_read_barrier(
+        previous_access: AccessType,
+        next_access: AccessType,
+    ) -> super::TrackedImageBarrier {
+        let previous_accesses = ImageAccessSet::from_access(previous_access);
+
+        super::TrackedImageBarrier {
+            previous_accesses,
+            next_access,
+            previous_layout: super::image_access_set_layout(previous_accesses),
+            next_layout: super::image_access_layout(next_access),
+            ownership_layouts: None,
+            discard_contents: false,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image: vk::Image::null(),
+            range: color_subresource_range(0..1, 0..1),
+        }
+    }
+
+    #[test]
+    fn sampled_read_barrier_elision_requires_existing_reader_stage() {
+        use AccessType as A;
+
+        let compute = A::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_tracing = A::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let broad = A::AnyShaderReadSampledImageOrUniformTexelBuffer;
+
+        for barrier in [
+            sampled_read_barrier(compute, compute),
+            sampled_read_barrier(broad, ray_tracing),
+        ] {
+            assert!(super::can_elide_sampled_read_barrier(barrier));
+        }
+
+        for barrier in [
+            sampled_read_barrier(compute, ray_tracing),
+            sampled_read_barrier(ray_tracing, compute),
+            sampled_read_barrier(compute, broad),
+        ] {
+            assert!(!super::can_elide_sampled_read_barrier(barrier));
+        }
+
+        let mut accumulated = sampled_read_barrier(compute, ray_tracing);
+        accumulated.previous_accesses = accumulated.previous_accesses.after_access(ray_tracing);
+        assert!(super::can_elide_sampled_read_barrier(accumulated));
+
+        assert!(!super::can_elide_sampled_read_barrier(
+            sampled_read_barrier(compute, A::ComputeShaderWrite)
+        ));
+
+        let mut layout_transition = sampled_read_barrier(compute, ray_tracing);
+        layout_transition.next_layout = vk_sync::ImageLayout::General;
+        assert!(!super::can_elide_sampled_read_barrier(layout_transition));
+
+        let mut ownership_transfer = sampled_read_barrier(compute, ray_tracing);
+        ownership_transfer.ownership_layouts = Some(super::ImageOwnershipLayouts {
+            old: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            new: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        });
+        ownership_transfer.src_queue_family_index = 1;
+        ownership_transfer.dst_queue_family_index = 2;
+        assert!(!super::can_elide_sampled_read_barrier(ownership_transfer));
+    }
+
+    #[test]
+    fn sampled_read_barrier_elision_preserves_ownership_split() {
+        use AccessType as A;
+
+        let transferred_range = color_subresource_range(0..1, 0..1);
+        let full_range = color_subresource_range(0..2, 0..1);
+        let transfer = ImageOwnershipTransfer {
+            dst_queue_family_index: 2,
+            layouts: ImageOwnershipLayouts {
+                old: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                new: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+            range: transferred_range,
+            src_queue_family_index: 1,
+            src_queue_index: 0,
+        };
+        let barriers = super::image_barriers_from_transfers(
+            vk::Image::null(),
+            ImageAccessSet::from_access(A::ComputeShaderReadSampledImageOrUniformTexelBuffer),
+            A::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+            full_range,
+            &[transfer],
+            false,
+        )
+        .collect::<Vec<_>>();
+
+        assert_eq!(barriers.len(), 2);
+        let retained = barriers
+            .iter()
+            .filter(|&&barrier| !super::can_elide_sampled_read_barrier(barrier))
+            .collect::<Vec<_>>();
+        let elided = barriers
+            .iter()
+            .filter(|&&barrier| super::can_elide_sampled_read_barrier(barrier))
+            .collect::<Vec<_>>();
+
+        assert_eq!(retained.len(), 1);
+        assert_eq!(elided.len(), 1);
+        assert!(retained[0].ownership_layouts.is_some());
+        assert!(super::image_subresource_range_eq(
+            retained[0].range,
+            transferred_range
+        ));
+        assert!(elided[0].ownership_layouts.is_none());
+        assert!(super::image_subresource_range_eq(
+            elided[0].range,
+            color_subresource_range(1..2, 0..1)
+        ));
+    }
+
+    #[test]
+    fn sampled_reader_barrier_uses_exact_source_stages() {
+        let previous_accesses = ImageAccessSet::from_access(
+            AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+        )
+        .after_access(AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer);
+        let (src_stage_mask, dst_stage_mask, barrier) =
+            super::get_tracked_image_memory_barrier(super::TrackedImageBarrier {
+                previous_accesses,
+                next_access: AccessType::ComputeShaderWrite,
+                previous_layout: super::image_access_set_layout(previous_accesses),
+                next_layout: super::image_access_layout(AccessType::ComputeShaderWrite),
+                ownership_layouts: None,
+                discard_contents: false,
+                src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                image: vk::Image::null(),
+                range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+            });
+
+        assert_eq!(
+            src_stage_mask,
+            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+        );
+        assert_eq!(dst_stage_mask, vk::PipelineStageFlags::COMPUTE_SHADER);
+        assert_eq!(barrier.src_access_mask, vk::AccessFlags::empty());
+        assert_eq!(barrier.dst_access_mask, vk::AccessFlags::SHADER_WRITE);
+        assert_eq!(
+            barrier.old_layout,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+        assert_eq!(barrier.new_layout, vk::ImageLayout::GENERAL);
+    }
+
+    #[test]
+    fn image_ownership_barriers_use_matching_layouts_and_queue_safe_source_stage() {
+        let range = color_subresource_range(0..1, 0..1);
+        let layouts = super::image_ownership_layouts(
+            Some(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            AccessType::ComputeShaderWrite,
+            false,
+        );
+        let release = super::image_queue_ownership_release_barrier(
+            ImageQueueOwnershipRelease {
+                image: vk::Image::null(),
+                layouts,
+                range,
+            },
+            1,
+            2,
+        );
+        let previous_accesses = ImageAccessSet::from_access(
+            AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+        );
+        let (src_stage_mask, dst_stage_mask, acquire) =
+            super::get_tracked_image_memory_barrier(super::TrackedImageBarrier {
+                previous_accesses,
+                next_access: AccessType::ComputeShaderWrite,
+                previous_layout: super::image_access_set_layout(previous_accesses),
+                next_layout: super::image_access_layout(AccessType::ComputeShaderWrite),
+                ownership_layouts: Some(layouts),
+                discard_contents: false,
+                src_queue_family_index: 1,
+                dst_queue_family_index: 2,
+                image: vk::Image::null(),
+                range,
+            });
+
+        assert_eq!(src_stage_mask, vk::PipelineStageFlags::ALL_COMMANDS);
+        assert_eq!(dst_stage_mask, vk::PipelineStageFlags::COMPUTE_SHADER);
+        assert_eq!(acquire.src_access_mask, vk::AccessFlags::empty());
+        assert_eq!(release.old_layout, acquire.old_layout);
+        assert_eq!(release.new_layout, acquire.new_layout);
+        assert_eq!(
+            acquire.old_layout,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+        assert_eq!(acquire.new_layout, vk::ImageLayout::GENERAL);
+
+        let discarded = super::image_ownership_layouts(
+            Some(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            AccessType::TransferWrite,
+            true,
+        );
+        assert_eq!(discarded.old, vk::ImageLayout::UNDEFINED);
+        assert_eq!(discarded.new, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
     }
 
     fn command_with_accesses(accesses: &[(usize, AccessType)]) -> CommandData {
@@ -7256,6 +8677,34 @@ mod test {
         }
     }
 
+    fn command_with_resource_set_accesses(executions: &[&[usize]]) -> CommandData {
+        let execs = executions
+            .iter()
+            .map(|resource_set_indices| {
+                let mut exec = Execution::default();
+                for &resource_set_idx in *resource_set_indices {
+                    exec.push_resource_set_access(crate::ResourceSetAccess {
+                        resource_set_idx: ResourceSetIndex::new(resource_set_idx),
+                        access_type: crate::resource::ResourceSetAccessType::Image(
+                            crate::resource::ImageAccessType::SampledRead,
+                        ),
+                    });
+                }
+                exec
+            })
+            .collect();
+
+        CommandData {
+            execs,
+
+            #[cfg(debug_assertions)]
+            name: None,
+
+            stream_scope_id: None,
+            tracking: Default::default(),
+        }
+    }
+
     #[test]
     fn command_access_index_includes_read_and_write_accesses() {
         let cmds = vec![
@@ -7266,7 +8715,7 @@ mod test {
         ];
         let mut access_index = CommandAccessIndex::default();
 
-        access_index.update_from_cmds(&cmds, 2);
+        access_index.update_from_cmds(&cmds, 2, 0);
 
         assert_eq!(access_index.cmds_by_node[0], vec![0]);
         assert_eq!(access_index.cmds_by_node[1], vec![1, 2, 3]);
@@ -7289,12 +8738,36 @@ mod test {
         ];
         let mut access_index = CommandAccessIndex::default();
 
-        access_index.update_from_cmds(&cmds, 2);
+        access_index.update_from_cmds(&cmds, 2, 0);
 
         assert_eq!(access_index.cmds_by_node[0], vec![0, 1]);
         assert_eq!(access_index.cmds_by_node[1], vec![0, 1]);
         assert_eq!(access_index.accessed_nodes_by_cmd[0], vec![0, 1]);
         assert_eq!(access_index.accessed_nodes_by_cmd[1], vec![0, 1]);
+    }
+
+    #[test]
+    fn command_access_index_dedupes_resource_sets_across_executions() {
+        let cmds = [
+            command_with_resource_set_accesses(&[&[0], &[0]]),
+            command_with_resource_set_accesses(&[&[0, 1]]),
+            command_with_resource_set_accesses(&[&[1]]),
+        ];
+        let mut access_index = CommandAccessIndex::default();
+
+        access_index.update_from_cmds(&cmds, 0, 2);
+
+        assert!(access_index.cmds_by_node.is_empty());
+        assert_eq!(access_index.cmds_by_resource_set[0], vec![0, 1]);
+        assert_eq!(access_index.cmds_by_resource_set[1], vec![1, 2]);
+        assert_eq!(
+            access_index.accessed_resource_sets_by_cmd,
+            [
+                vec![ResourceSetIndex::new(0)],
+                vec![ResourceSetIndex::new(0), ResourceSetIndex::new(1)],
+                vec![ResourceSetIndex::new(1)],
+            ]
+        );
     }
 
     #[test]
@@ -7306,6 +8779,7 @@ mod test {
             */
             cmds_by_node: vec![vec![0, 1], vec![1]],
             accessed_nodes_by_cmd: vec![vec![0], vec![0, 0, 1]],
+            ..Default::default()
         };
         let mut schedule = Schedule {
             access_index,
@@ -7327,7 +8801,7 @@ mod test {
             command_with_accesses(&[(0, AccessType::TransferRead)]),
         ];
         let mut access_index = CommandAccessIndex::default();
-        access_index.update_from_cmds(&cmds, 2);
+        access_index.update_from_cmds(&cmds, 2, 0);
         let mut schedule = Schedule {
             access_index,
             cmds: (0..cmds.len()).collect(),
@@ -7384,13 +8858,34 @@ mod test {
 
         queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 1, 2)
             .images
-            .push((image, vk::ImageLayout::GENERAL, range_a));
+            .push(ImageQueueOwnershipRelease {
+                image,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
+                range: range_a,
+            });
         queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 1, 2)
             .images
-            .push((image, vk::ImageLayout::GENERAL, range_b));
+            .push(ImageQueueOwnershipRelease {
+                image,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
+                range: range_b,
+            });
         queue_ownership_release_group(&mut submission.queue_ownership_release_groups, 4, 5)
             .images
-            .push((image, vk::ImageLayout::GENERAL, range_a));
+            .push(ImageQueueOwnershipRelease {
+                image,
+                layouts: ImageOwnershipLayouts {
+                    old: vk::ImageLayout::GENERAL,
+                    new: vk::ImageLayout::GENERAL,
+                },
+                range: range_a,
+            });
 
         let mut groups = submission.queue_ownership_release_groups;
         sort_queue_ownership_release_groups(&mut groups);
@@ -7398,8 +8893,11 @@ mod test {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].images.len(), 2);
         assert_eq!(groups[1].images.len(), 1);
-        assert_eq!(groups[0].images[0].0, image);
-        assert!(image_subresource_range_eq(groups[0].images[0].2, range_a));
+        assert_eq!(groups[0].images[0].image, image);
+        assert!(image_subresource_range_eq(
+            groups[0].images[0].range,
+            range_a
+        ));
     }
 
     #[test]
@@ -7408,11 +8906,14 @@ mod test {
 
         let range_a = color_subresource_range(0..1, 0..1);
         let range_b = color_subresource_range(1..2, 0..1);
-        let transfers = [ImageQueueOwnershipTransfer {
+        let transfers = [ImageOwnershipTransfer {
             src_queue_family_index: 1,
             src_queue_index: 2,
             dst_queue_family_index: 3,
-            layout: vk::ImageLayout::GENERAL,
+            layouts: ImageOwnershipLayouts {
+                old: vk::ImageLayout::GENERAL,
+                new: vk::ImageLayout::GENERAL,
+            },
             range: range_a,
         }];
 
@@ -7475,6 +8976,7 @@ mod test {
             },
             3,
             &mut ownership,
+            ResourceSetSynchronization::Enabled,
         );
 
         let (handle, transfers) = pending_transfer_for_node(
@@ -7507,6 +9009,131 @@ mod test {
         sort_image_subresource_ranges(&mut ranges);
         assert_eq!(ranges.len(), 1);
         assert!(super::image_subresource_range_eq(ranges[0], range_a));
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn image_set_transfer_discovery_claims_declared_range_once() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let image = Arc::new(Image::create(
+            &device,
+            ImageInfo::image_2d_array(1, 1, 2, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED),
+        )?);
+        let range_a = color_subresource_range(0..1, 0..1);
+        let range_b = color_subresource_range(1..2, 0..1);
+        image.set_sharing_ranges(SharingMode::Exclusive(Some((1, 0))), &[range_a]);
+        image.set_sharing_ranges(SharingMode::Exclusive(Some((2, 0))), &[range_b]);
+        image
+            .swap_access(AccessType::TransferRead, range_a)
+            .for_each(drop);
+        image
+            .swap_access(AccessType::TransferRead, range_b)
+            .for_each(drop);
+
+        let image_id = PhysicalImageId::of(&image);
+        let resource_set = ImageSet::new([(Arc::clone(&image), range_a)])?;
+        let mut graph = Graph::new();
+        let resource_set_node = graph.bind_resource(&resource_set);
+        graph
+            .begin_cmd()
+            .resource_access(resource_set_node, ImageAccessType::SampledRead)
+            .record_cmd(|_| {})
+            .end_cmd();
+
+        let mut submission = graph.finalize();
+        let schedule = Schedule {
+            cmds: vec![0],
+            ..Default::default()
+        };
+        let mut ownership = RecordingOwnership::default();
+        submission.track_pending_transfers(
+            &schedule,
+            3,
+            &mut ownership,
+            ResourceSetSynchronization::Enabled,
+        );
+
+        let transfers = &submission.pending_image_set_transfers[&image_id];
+        assert_eq!(transfers.len(), 1);
+        assert!(super::image_subresource_range_eq(
+            transfers[0].range,
+            range_a
+        ));
+        assert_eq!(transfers[0].src_queue_family_index, 1);
+        assert_eq!(transfers[0].dst_queue_family_index, 3);
+        assert!(
+            submission
+                .touched_image_sets
+                .contains(resource_set_node.index().as_usize())
+        );
+
+        submission.pending_image_set_transfers.clear();
+        submission.track_pending_transfers(
+            &schedule,
+            3,
+            &mut ownership,
+            ResourceSetSynchronization::Enabled,
+        );
+
+        assert!(submission.pending_image_set_transfers.is_empty());
+        assert_eq!(
+            submission
+                .queue_ownership_release_groups
+                .iter()
+                .flat_map(|group| &group.images)
+                .count(),
+            1
+        );
+        assert_eq!(ownership.image_set_images.len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn image_set_transfer_discovery_uses_same_family_cache() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let image = Arc::new(Image::create(
+            &device,
+            ImageInfo::image_2d(1, 1, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED),
+        )?);
+        let range = color_subresource_range(0..1, 0..1);
+        image.set_sharing_ranges(SharingMode::Exclusive(Some((3, 7))), &[range]);
+        let resource_set = ImageSet::new([Arc::clone(&image)])?;
+        resource_set.publish_queue((3, 7));
+        let mut graph = Graph::new();
+        let resource_set_node = graph.bind_resource(&resource_set);
+        graph
+            .begin_cmd()
+            .resource_access(resource_set_node, ImageAccessType::SampledRead)
+            .record_cmd(|_| {})
+            .end_cmd();
+
+        let mut submission = graph.finalize();
+        let mut ownership = RecordingOwnership::default();
+        submission.track_pending_transfers(
+            &Schedule {
+                cmds: vec![0],
+                ..Default::default()
+            },
+            3,
+            &mut ownership,
+            ResourceSetSynchronization::Enabled,
+        );
+
+        assert!(ownership.image_set_images.is_empty());
+        assert!(submission.pending_image_set_transfers.is_empty());
+        assert!(submission.queue_ownership_release_groups.is_empty());
+        assert!(
+            submission
+                .touched_image_sets
+                .contains(resource_set_node.index().as_usize())
+        );
+
+        image.set_sharing_ranges(SharingMode::Exclusive(Some((3, 7))), &[range]);
+        assert_eq!(resource_set.queue(), None);
 
         Ok(())
     }
@@ -7553,6 +9180,7 @@ mod test {
             },
             3,
             &mut ownership,
+            ResourceSetSynchronization::Enabled,
         );
 
         let (handle, transfers) = pending_transfer_for_node(
@@ -7743,7 +9371,7 @@ mod test {
             .queue_ownership_release_groups
             .iter()
             .flat_map(|group| group.images.iter())
-            .map(|(_, _, range)| *range)
+            .map(|release| release.range)
             .collect::<Vec<_>>();
         simulate_partial_transfer_discovery(&mut submission, &schedule, 3, &mut ownership);
 
@@ -7751,7 +9379,7 @@ mod test {
             .queue_ownership_release_groups
             .iter()
             .flat_map(|group| group.images.iter())
-            .map(|(_, _, range)| *range)
+            .map(|release| release.range)
             .collect::<Vec<_>>();
         assert_eq!(released_ranges.len(), first_released_ranges.len());
         assert!(
@@ -7806,6 +9434,7 @@ mod test {
             },
             3,
             &mut ownership,
+            ResourceSetSynchronization::Enabled,
         );
 
         let (handle, transfers) = pending_transfer_for_node(
@@ -7833,7 +9462,11 @@ mod test {
             transfers[0].range,
             range_a
         ));
-        assert_eq!(transfers[0].layout, vk::ImageLayout::UNDEFINED);
+        assert_eq!(transfers[0].layouts.old, vk::ImageLayout::UNDEFINED);
+        assert_eq!(
+            transfers[0].layouts.new,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        );
 
         let ranges = &submission.exclusive_image_ranges[&image.index()];
         let mut ranges = ranges.clone();
@@ -7901,6 +9534,50 @@ mod test {
         assert_eq!(subresources.len(), 2);
         assert_eq!(subresources[0].queue_family_index, Some(3));
         assert_eq!(subresources[1].queue_family_index, Some(2));
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn image_set_attachment_republishes_overlapping_sets() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let image = Arc::new(Image::create(
+            &device,
+            ImageInfo::image_2d(1, 1, vk::Format::R8_UINT, vk::ImageUsageFlags::SAMPLED),
+        )?);
+        let range = color_subresource_range(0..1, 0..1);
+        image.set_sharing_ranges(SharingMode::Exclusive(Some((0, 1))), &[range]);
+        let lhs = ImageSet::new([Arc::clone(&image)])?;
+        let rhs = ImageSet::new([Arc::clone(&image)])?;
+        lhs.publish_queue((0, 1));
+        rhs.publish_queue((0, 1));
+        let mut graph = Graph::new();
+        let lhs_node = graph.bind_resource(&lhs);
+        let rhs_node = graph.bind_resource(&rhs);
+        let mut submission = graph.finalize();
+        submission
+            .touched_image_sets
+            .insert(lhs_node.index().as_usize());
+        submission
+            .touched_image_sets
+            .insert(rhs_node.index().as_usize());
+        let cmd_buf = CommandBuffer::create(&device, CommandBufferInfo::new(0))?;
+        let mut state = RecordedSubmissionState {
+            submission,
+            _releases: Vec::new(),
+            executed: false,
+        };
+
+        RecordedSubmission::<CommandBuffer>::attach_locked(&mut state, &cmd_buf, 0);
+
+        assert_eq!(lhs.queue(), Some((0, 0)));
+        assert_eq!(rhs.queue(), Some((0, 0)));
+        assert!(
+            image
+                .sync_info_with_sharing_range(range)
+                .all(|(_, sharing)| sharing == SharingMode::Exclusive(Some((0, 0))))
+        );
 
         Ok(())
     }
@@ -7977,6 +9654,93 @@ mod test {
         schedule.reorder_cmds(5);
 
         assert_eq!(schedule.cmds, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_groups_duplicate_resource_chains() {
+        let resource_count = 12;
+        let mut schedule = Schedule {
+            access_index: CommandAccessIndex {
+                cmds_by_node: vec![vec![0, 1, 2]; resource_count],
+                accessed_nodes_by_cmd: vec![(0..resource_count).collect(); 3],
+                ..Default::default()
+            },
+            cmds: vec![0, 1, 2],
+            ..Default::default()
+        };
+
+        schedule.reorder_cmds(3);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2]);
+        assert_eq!(schedule.predecessor_counts, vec![0, 12, 12]);
+        assert_eq!(schedule.successors[0], vec![1]);
+        assert_eq!(schedule.successors[1], vec![2]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_uses_one_resource_set_chain() {
+        let resource_set_idx = ResourceSetIndex::new(0);
+        let mut schedule = Schedule {
+            access_index: CommandAccessIndex {
+                cmds_by_node: vec![],
+                accessed_nodes_by_cmd: vec![vec![]; 4],
+                cmds_by_resource_set: vec![vec![0, 1, 2, 3]],
+                accessed_resource_sets_by_cmd: vec![vec![resource_set_idx]; 4],
+            },
+            cmds: vec![0, 1, 2, 3],
+            ..Default::default()
+        };
+
+        schedule.reorder_cmds(4);
+
+        assert_eq!(schedule.cmds, vec![0, 1, 2, 3]);
+        assert_eq!(schedule.predecessor_counts, vec![0, 1, 1, 1]);
+        assert_eq!(schedule.successors[0], vec![1]);
+        assert_eq!(schedule.successors[1], vec![2]);
+        assert_eq!(schedule.successors[2], vec![3]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_keeps_node_and_set_namespaces_independent() {
+        let resource_set_idx = ResourceSetIndex::new(0);
+        let mut schedule = Schedule {
+            access_index: CommandAccessIndex {
+                cmds_by_node: vec![vec![0, 1, 2]],
+                accessed_nodes_by_cmd: vec![vec![0]; 3],
+                cmds_by_resource_set: vec![vec![0, 1, 2]],
+                accessed_resource_sets_by_cmd: vec![vec![resource_set_idx]; 3],
+            },
+            cmds: vec![0, 1, 2],
+            ..Default::default()
+        };
+
+        schedule.reorder_cmds(3);
+
+        assert_eq!(schedule.predecessor_counts, vec![0, 2, 2]);
+        assert_eq!(schedule.successors[0], vec![1, 1]);
+        assert_eq!(schedule.successors[1], vec![2, 2]);
+    }
+
+    #[test]
+    fn reorder_scheduled_cmds_combines_compressed_nodes_with_set_chain() {
+        let resource_count = 12;
+        let resource_set_idx = ResourceSetIndex::new(0);
+        let mut schedule = Schedule {
+            access_index: CommandAccessIndex {
+                cmds_by_node: vec![vec![0, 1, 2]; resource_count],
+                accessed_nodes_by_cmd: vec![(0..resource_count).collect(); 3],
+                cmds_by_resource_set: vec![vec![0, 1, 2]],
+                accessed_resource_sets_by_cmd: vec![vec![resource_set_idx]; 3],
+            },
+            cmds: vec![0, 1, 2],
+            ..Default::default()
+        };
+
+        schedule.reorder_cmds(3);
+
+        assert_eq!(schedule.predecessor_counts, vec![0, 13, 13]);
+        assert_eq!(schedule.successors[0], vec![1, 1]);
+        assert_eq!(schedule.successors[1], vec![2, 2]);
     }
 
     #[test]
@@ -8536,6 +10300,238 @@ mod test {
 
     #[test]
     #[ignore = "requires Vulkan device"]
+    fn submission_acquires_nonempty_acceleration_structure_set() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let acceleration_structure = Arc::new(AccelerationStructure::create(
+            &device,
+            AccelerationStructureInfo::blas(1),
+        )?);
+        let previous_accesses = acceleration_structure
+            .swap_access(AccessType::AccelerationStructureBuildWrite)
+            .collect::<Vec<_>>();
+        assert_eq!(previous_accesses, [AccessType::Nothing]);
+
+        let resource_set = AccelerationStructureSet::new([Arc::clone(&acceleration_structure)])?;
+        let mut graph = Graph::new();
+        let resource_set_node = graph.bind_resource(&resource_set);
+
+        graph
+            .begin_cmd()
+            .resource_access(
+                resource_set_node,
+                AccelerationStructureAccessType::BuildRead,
+            )
+            .record_cmd(|_| {})
+            .end_cmd();
+        graph
+            .begin_cmd()
+            .resource_access(
+                resource_set_node,
+                AccelerationStructureAccessType::RayTracingRead,
+            )
+            .record_cmd(|_| {})
+            .end_cmd();
+
+        let mut fence = graph
+            .finalize()
+            .queue_submit(&mut HashPool::new(&device), 0, 0)?;
+        fence.wait()?;
+
+        let sync_info = acceleration_structure.sync_info();
+        assert!(sync_info.stage_mask.contains(
+            vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                | vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+        ));
+        assert_eq!(
+            sync_info.access_mask,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
+                | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn submission_acquires_nonempty_image_set() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let image = Arc::new(Image::create(
+            &device,
+            ImageInfo::image_2d(
+                1,
+                1,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::SAMPLED,
+            ),
+        )?);
+        let resource_set = ImageSet::new([image])?;
+        let mut graph = Graph::new();
+        let resource_set_node = graph.bind_resource(&resource_set);
+
+        graph
+            .begin_cmd()
+            .resource_access(resource_set_node, ImageAccessType::SampledRead)
+            .record_cmd(|_| {})
+            .end_cmd();
+
+        let mut fence = graph
+            .finalize()
+            .queue_submit(&mut HashPool::new(&device), 0, 0)?;
+        fence.wait()?;
+        assert_eq!(resource_set.queue(), Some((0, 0)));
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan validation layers and distinct queue families; inspect output"]
+    fn image_set_submission_transfers_between_queue_families() -> Result<(), DriverError> {
+        init_validation_test_logging();
+        let device = test_debug_device()?;
+        let Some(destination_queue_family) = device
+            .physical
+            .queue_families
+            .iter()
+            .position(|family| {
+                family.queue_flags.contains(
+                    vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER,
+                )
+            })
+            .map(|index| index as u32)
+        else {
+            return Ok(());
+        };
+        let Some(source_queue_family) = device
+            .physical
+            .queue_families
+            .iter()
+            .enumerate()
+            .find(|(index, family)| {
+                *index != destination_queue_family as usize
+                    && family.queue_flags.contains(vk::QueueFlags::TRANSFER)
+            })
+            .map(|(index, _)| index as u32)
+        else {
+            return Ok(());
+        };
+        let mut pool = HashPool::new(&device);
+        let image = Arc::new(Image::create(
+            &device,
+            ImageInfo::image_2d(
+                1,
+                1,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            ),
+        )?);
+        let range = color_subresource_range(0..1, 0..1);
+
+        let mut source_graph = Graph::new();
+        let source_buffer = source_graph.bind_resource(Buffer::create(
+            &device,
+            BufferInfo::device_mem(4, vk::BufferUsageFlags::TRANSFER_SRC),
+        )?);
+        let source_image = source_graph.bind_resource(Arc::clone(&image));
+        source_graph.copy_buffer_to_image(source_buffer, source_image);
+        let mut source_fence = source_graph
+            .finalize()
+            .queue_submit(&mut pool, source_queue_family, 0)
+            .expect("submit source graph");
+        source_fence.wait().expect("wait for source graph");
+        assert!(
+            image
+                .sync_info_with_sharing_range(range)
+                .all(|(_, sharing)| {
+                    sharing == SharingMode::Exclusive(Some((source_queue_family, 0)))
+                })
+        );
+
+        let resource_set = ImageSet::new([Arc::clone(&image)])?;
+        let mut destination_graph = Graph::new();
+        let resource_set_node = destination_graph.bind_resource(&resource_set);
+        destination_graph
+            .begin_cmd()
+            .resource_access(resource_set_node, ImageAccessType::SampledRead)
+            .record_cmd(|_| {})
+            .end_cmd();
+        let mut destination_fence = destination_graph
+            .finalize()
+            .queue_submit(&mut pool, destination_queue_family, 0)
+            .expect("submit destination graph");
+        destination_fence
+            .wait()
+            .expect("wait for destination graph");
+
+        assert!(
+            image
+                .sync_info_with_sharing_range(range)
+                .all(|(_, sharing)| {
+                    sharing == SharingMode::Exclusive(Some((destination_queue_family, 0)))
+                })
+        );
+        assert_eq!(resource_set.queue(), Some((destination_queue_family, 0)));
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn partial_recording_acquires_image_set_for_each_selected_batch() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let mut pool = HashPool::new(&device);
+        let image = Arc::new(Image::create(
+            &device,
+            ImageInfo::image_2d(
+                1,
+                1,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::SAMPLED,
+            ),
+        )?);
+        let resource_set = ImageSet::new([image])?;
+        let mut graph = Graph::new();
+        let resource_set_node = graph.bind_resource(&resource_set);
+        let lhs = graph.bind_resource(Buffer::create(
+            &device,
+            BufferInfo::device_mem(4, vk::BufferUsageFlags::TRANSFER_DST),
+        )?);
+        let rhs = graph.bind_resource(Buffer::create(
+            &device,
+            BufferInfo::device_mem(4, vk::BufferUsageFlags::TRANSFER_DST),
+        )?);
+
+        for output in [lhs, rhs] {
+            graph
+                .begin_cmd()
+                .resource_access(output, AccessType::TransferWrite)
+                .resource_access(resource_set_node, ImageAccessType::SampledRead)
+                .record_cmd(|_| {})
+                .end_cmd();
+        }
+
+        let submission = graph.finalize();
+        let mut cmd_buf = pool.resource(CommandBufferInfo::new(0))?;
+        let mut fence = Fence::create(&device, false)?;
+        cmd_buf.begin(
+            &vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        )?;
+
+        let mut recording = submission.record(&mut pool, &mut cmd_buf, lhs)?;
+        assert!(!recording.is_empty());
+        recording.record(rhs)?;
+        assert!(recording.is_empty());
+
+        recording.cmd_buf.end()?;
+        let mut recorded = recording.finish()?;
+        recorded.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
+        fence.wait()?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
     fn submission_record_all_consumes_single_pass_graph() -> Result<(), DriverError> {
         let device = test_device()?;
         let mut pool = HashPool::new(&device);
@@ -8854,6 +10850,55 @@ mod test {
                 .contains(vk::AccessFlags::INPUT_ATTACHMENT_READ),
             "destination access should include input attachment reads"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn merged_graphics_commands_preserve_execution_tracking() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let pipeline = test_triangle_pipeline(&device)?;
+        let mut graph = Graph::new();
+        let image = graph.bind_resource(Image::create(
+            &device,
+            ImageInfo::image_2d(
+                4,
+                4,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            ),
+        )?);
+
+        let mut first = graph.begin_cmd();
+        let first_execution = first.track_execution();
+        first
+            .bind_pipeline(&pipeline)
+            .color_attachment_image(0, image, LoadOp::CLEAR_BLACK_ALPHA_ZERO, StoreOp::Store)
+            .record_cmd(|cmd| {
+                cmd.draw(3, 1, 0, 0);
+            });
+
+        let mut second = graph.begin_cmd();
+        let second_execution = second.track_execution();
+        second
+            .bind_pipeline(&pipeline)
+            .color_attachment_image(0, image, LoadOp::Load, StoreOp::Store)
+            .record_cmd(|cmd| {
+                cmd.draw(3, 1, 0, 0);
+            });
+
+        let mut submission = graph.finalize();
+        let mut schedule = vec![0, 1];
+        submission.merge_scheduled_cmds(&mut schedule);
+
+        assert_eq!(submission.graph.cmds.len(), 1);
+        assert_eq!(first_execution.has_executed(), Ok(false));
+        assert_eq!(second_execution.has_executed(), Ok(false));
+
+        submission.graph.cmds[0].tracking.signal_executed();
+        assert_eq!(first_execution.has_executed(), Ok(true));
+        assert_eq!(second_execution.has_executed(), Ok(true));
 
         Ok(())
     }
@@ -9386,6 +11431,32 @@ mod test {
                 AccessType::RayTracingShaderReadAccelerationStructure,
             ],
             "mixed acceleration-structure slices should preserve all accesses for next-state tracking"
+        );
+    }
+
+    #[test]
+    fn acceleration_structure_writes_have_source_and_destination_accesses() {
+        let (src_stage_mask, dst_stage_mask, barrier) =
+            vk_sync::get_memory_barrier(&vk_sync::GlobalBarrier {
+                previous_accesses: &[AccessType::AccelerationStructureBuildWrite],
+                next_accesses: &[AccessType::RayTracingShaderReadAccelerationStructure],
+            });
+
+        assert_eq!(
+            src_stage_mask,
+            vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+        );
+        assert_eq!(
+            barrier.src_access_mask,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
+        );
+        assert_eq!(
+            dst_stage_mask,
+            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+        );
+        assert_eq!(
+            barrier.dst_access_mask,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
         );
     }
 }

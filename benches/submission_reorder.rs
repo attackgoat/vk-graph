@@ -3,6 +3,10 @@ use {
     std::path::Path,
     vk_graph::{
         Graph,
+        resource::{
+            AccelerationStructureAccessType, AccelerationStructureSet,
+            AccelerationStructureSetMember, ImageAccessType, ImageSet, ImageSetMember,
+        },
         submission::bench::{ReorderBenchHarness, ReorderBenchSpec},
     },
 };
@@ -51,6 +55,36 @@ fn submission_reorder_bench(c: &mut Criterion) {
                 long_lived_uses: 220,
             },
         ),
+        (
+            "material_array",
+            ReorderBenchSpec {
+                cmd_count: 10,
+                resource_count: 2_048,
+                short_lived_uses: 1,
+                long_lived_resource_count: 2_048,
+                long_lived_uses: 10,
+            },
+        ),
+        (
+            "material_array_rr",
+            ReorderBenchSpec {
+                cmd_count: 11,
+                resource_count: 2_048,
+                short_lived_uses: 1,
+                long_lived_resource_count: 2_048,
+                long_lived_uses: 11,
+            },
+        ),
+        (
+            "material_array_max_bounces",
+            ReorderBenchSpec {
+                cmd_count: 25,
+                resource_count: 2_048,
+                short_lived_uses: 1,
+                long_lived_resource_count: 2_048,
+                long_lived_uses: 25,
+            },
+        ),
     ] {
         let mut harness = ReorderBenchHarness::new(spec);
         group.throughput(Throughput::Elements(spec.cmd_count as u64));
@@ -87,6 +121,60 @@ fn submission_reorder_bench(c: &mut Criterion) {
                 |b, _| b.iter(|| black_box(harness.reorder_once())),
             );
         }
+    }
+
+    // Alternate the two read profiles while retaining one aggregate scheduling token.
+    for cmd_count in [10, 11, 25] {
+        let resource_set =
+            AccelerationStructureSet::new(std::iter::empty::<AccelerationStructureSetMember>())
+                .expect("empty acceleration structure set");
+        let mut graph = Graph::new();
+        let resource_set_node = graph.bind_resource(&resource_set);
+        for cmd_idx in 0..cmd_count {
+            let access = if cmd_idx % 2 == 0 {
+                AccelerationStructureAccessType::BuildRead
+            } else {
+                AccelerationStructureAccessType::RayTracingRead
+            };
+            graph
+                .begin_cmd()
+                .resource_access(resource_set_node, access)
+                .record_cmd(|_| {})
+                .end_cmd();
+        }
+        let submission = graph.finalize();
+        let mut harness = ReorderBenchHarness::from_submission(&submission, 1);
+
+        group.throughput(Throughput::Elements(cmd_count));
+        group.bench_with_input(
+            BenchmarkId::new("acceleration_structure_set", format!("{cmd_count}c_empty")),
+            &cmd_count,
+            |b, _| b.iter(|| black_box(harness.reorder_once())),
+        );
+    }
+
+    // Reordering depends on the set token count, so an empty set isolates aggregate scheduling.
+    for cmd_count in [10, 11, 25] {
+        let resource_set =
+            ImageSet::new(std::iter::empty::<ImageSetMember>()).expect("empty image set");
+        let mut graph = Graph::new();
+        let resource_set_node = graph.bind_resource(&resource_set);
+        for _ in 0..cmd_count {
+            graph
+                .begin_cmd()
+                .resource_access(resource_set_node, ImageAccessType::SampledRead)
+                .record_cmd(|_| {})
+                .end_cmd();
+        }
+        let submission = graph.finalize();
+        let mut harness = ReorderBenchHarness::from_submission(&submission, 1);
+
+        group.throughput(Throughput::Elements(cmd_count));
+        group.bench_with_input(
+            BenchmarkId::new("material_image_set", format!("{cmd_count}c_empty")),
+            &cmd_count,
+            |b, _| b.iter(|| black_box(harness.reorder_once())),
+        );
     }
 
     group.finish();

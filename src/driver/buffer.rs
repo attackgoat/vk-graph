@@ -1,7 +1,9 @@
 //! Buffer resource types
 
 use {
-    super::{DriverError, SharingMode, device::Device, pipeline_stage_access_flags},
+    super::{
+        DriverError, SharingMode, device::Device, is_write_access, pipeline_stage_access_flags,
+    },
     ash::vk,
     derive_builder::Builder,
     gpu_allocator::{
@@ -29,6 +31,14 @@ use parking_lot::{Mutex, MutexGuard};
 use std::sync::{Mutex, MutexGuard};
 
 type AccessRuns = RunMap<AccessType>;
+
+const fn tracked_access_after(previous: AccessType, next: AccessType) -> AccessType {
+    if is_write_access(previous) && !is_write_access(next) {
+        AccessType::General
+    } else {
+        next
+    }
+}
 
 /// Smart pointer handle to a [buffer] object.
 ///
@@ -506,8 +516,10 @@ impl Buffer {
             fn next(&mut self) -> Option<Self::Item> {
                 loop {
                     if let Some((next_access, cursor)) = &mut self.current {
-                        if let Some((prev_access, range)) =
-                            cursor.next(&mut self.access_runs, *next_access)
+                        if let Some((prev_access, range)) = cursor
+                            .next_with(&mut self.access_runs, |prev_access| {
+                                tracked_access_after(prev_access, *next_access)
+                            })
                         {
                             return Some((*next_access, prev_access, range));
                         }
@@ -1321,6 +1333,17 @@ impl RunMapCursor {
     where
         V: Copy + PartialEq + Debug,
     {
+        self.next_with(map, |_| new_value)
+    }
+
+    fn next_with<V>(
+        &mut self,
+        map: &mut RunMap<V>,
+        new_value: impl FnOnce(V) -> V,
+    ) -> Option<(V, BufferSubresourceRange)>
+    where
+        V: Copy + PartialEq + Debug,
+    {
         debug_assert!(self.remaining_range.start <= self.remaining_range.end);
         debug_assert!(self.remaining_range.end <= map.size);
 
@@ -1331,6 +1354,7 @@ impl RunMapCursor {
         debug_assert!(map.runs.get(self.run_idx).is_some());
 
         let (old_value, old_start) = unsafe { *map.runs.get_unchecked(self.run_idx) };
+        let new_value = new_value(old_value);
         let old_end = map
             .runs
             .get(self.run_idx + 1)
@@ -1603,6 +1627,28 @@ mod test {
 
     fn assert_access_runs_eq(access_runs: &AccessRuns, expected: &[(AccessType, vk::DeviceSize)]) {
         assert_eq!(access_runs.runs.as_slice(), expected);
+    }
+
+    #[test]
+    fn tracked_access_preserves_write_and_later_read_dependencies() {
+        let write = AccessType::TransferWrite;
+
+        assert_eq!(
+            tracked_access_after(write, AccessType::ComputeShaderReadOther),
+            AccessType::General
+        );
+        assert_eq!(
+            tracked_access_after(AccessType::General, AccessType::TransferRead),
+            AccessType::General
+        );
+        assert_eq!(
+            tracked_access_after(write, AccessType::ComputeShaderWrite),
+            AccessType::ComputeShaderWrite
+        );
+        assert_eq!(
+            tracked_access_after(AccessType::ComputeShaderReadOther, AccessType::TransferRead),
+            AccessType::TransferRead
+        );
     }
 
     #[test]

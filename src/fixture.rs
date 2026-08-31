@@ -74,6 +74,7 @@ fn access_writes(access: AccessType) -> bool {
             | AccessType::RayTracingShaderReadAccelerationStructure
             | AccessType::RayTracingShaderReadOther
             | AccessType::AccelerationStructureBuildRead
+            | AccessType::AccelerationStructureBuildInputRead
     )
 }
 
@@ -356,7 +357,7 @@ impl Fixture {
                     }
 
                     let access_value = reader.u8()?;
-                    if access_value > 67 {
+                    if access_value > 69 {
                         return Err(invalid_data("invalid access type"));
                     }
 
@@ -723,6 +724,13 @@ impl Graph {
         binary_path: impl AsRef<Path>,
         markdown_path: impl AsRef<Path>,
     ) -> io::Result<()> {
+        if !self.resource_sets.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "resource sets are not supported by graph fixtures",
+            ));
+        }
+
         let commands = meaningful_commands(&self.cmds);
         let mut writer = FixtureWriter::default();
         writer.bytes(MAGIC);

@@ -1,7 +1,7 @@
 use {
     super::{
-        AccessType, Binding, Command, Graph, Node, Resource, Subresource, SubresourceRange,
-        ViewInfo,
+        AccessType, Binding, Command, Graph, Node, Resource, ResourceAccess, ResourceNode,
+        Subresource, SubresourceRange, ViewInfo,
     },
     crate::{
         ExecutionPipeline, TimestampQuery,
@@ -124,27 +124,6 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Mutable-borrow form of [`Self::bind_descriptor_set`].
-    pub fn set_descriptor_set(&mut self, descriptor_set: &DescriptorSet) -> &mut Self {
-        let set = descriptor_set.info().set;
-        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
-        let pipeline = exec.pipeline.as_ref().expect("missing command pipeline");
-        let layout = pipeline
-            .descriptor_info()
-            .layouts
-            .get(&set)
-            .unwrap_or_else(|| panic!("pipeline descriptor set {set} does not exist"));
-
-        assert!(
-            descriptor_set.is_compatible(set, layout),
-            "descriptor set {set} is incompatible with the bound pipeline"
-        );
-
-        exec.descriptor_sets.insert(set, descriptor_set.clone());
-
-        self
-    }
-
     /// Equivalent to [`Command::bind_pipeline`] for a command that already has a bound pipeline.
     pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
     where
@@ -174,7 +153,7 @@ impl<'c, T> PipelineCommand<'c, T> {
     /// Equivalent to [`Command::resource`] for a command that already has a bound pipeline.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
-        N: Node,
+        N: ResourceNode,
     {
         self.cmd.resource(resource_node)
     }
@@ -182,21 +161,40 @@ impl<'c, T> PipelineCommand<'c, T> {
     /// Informs the command that recorded work will read or write `resource_node` using `access`.
     ///
     /// An access function must be called for `resource_node` before it is used within a recording
-    /// function.
-    pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
+    /// function. The accepted access type is determined by the node.
+    pub fn resource_access<N>(mut self, resource_node: N, access: N::Access) -> Self
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
         self.cmd.set_resource_access(resource_node, access);
         self
     }
 
+    /// Mutable-borrow form of [`Self::bind_descriptor_set`].
+    pub fn set_descriptor_set(&mut self, descriptor_set: &DescriptorSet) -> &mut Self {
+        let set = descriptor_set.info().set;
+        let exec = self.cmd.cmd_mut().expect_last_exec_mut();
+        let pipeline = exec.pipeline.as_ref().expect("missing command pipeline");
+        let layout = pipeline
+            .descriptor_info()
+            .layouts
+            .get(&set)
+            .unwrap_or_else(|| panic!("pipeline descriptor set {set} does not exist"));
+
+        assert!(
+            descriptor_set.is_compatible(set, layout),
+            "descriptor set {set} is incompatible with the bound pipeline"
+        );
+
+        exec.descriptor_sets.insert(set, descriptor_set.clone());
+
+        self
+    }
+
     /// Mutable-borrow form of [`Self::resource_access`].
-    pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType) -> &mut Self
+    pub fn set_resource_access<N>(&mut self, resource_node: N, access: N::Access) -> &mut Self
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
         self.cmd.set_resource_access(resource_node, access);
         self

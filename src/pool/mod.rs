@@ -392,6 +392,14 @@ pub struct PoolConfig {
     )]
     pub buffer_capacity: usize,
 
+    /// The maximum number of cached descriptor-pool instances. The default value is
+    /// [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
+    #[builder(
+        default = "PoolConfig::DEFAULT_RESOURCE_CAPACITY",
+        setter(strip_option)
+    )]
+    pub descriptor_pool_capacity: usize,
+
     /// The maximum size of a single bucket of image resource instances. The default value is
     /// [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
     ///
@@ -431,16 +439,17 @@ impl PoolConfig {
         PoolConfigBuilder {
             accel_struct_capacity: Some(self.accel_struct_capacity),
             buffer_capacity: Some(self.buffer_capacity),
+            descriptor_pool_capacity: Some(self.descriptor_pool_capacity),
             image_capacity: Some(self.image_capacity),
         }
     }
 
-    /// Constructs a new `PoolConfig` with the given acceleration structure, buffer and image
-    /// resource capacity for any single bucket.
+    /// Constructs a new `PoolConfig` with the given resource capacity for any single bucket.
     pub const fn with_capacity(resource_capacity: usize) -> Self {
         Self {
             accel_struct_capacity: resource_capacity,
             buffer_capacity: resource_capacity,
+            descriptor_pool_capacity: resource_capacity,
             image_capacity: resource_capacity,
         }
     }
@@ -463,6 +472,7 @@ impl From<usize> for PoolConfig {
         Self {
             accel_struct_capacity: value,
             buffer_capacity: value,
+            descriptor_pool_capacity: value,
             image_capacity: value,
         }
     }
@@ -497,15 +507,25 @@ mod test {
         let info = Info {
             accel_struct_capacity: 1,
             buffer_capacity: 2,
-            image_capacity: 3,
+            descriptor_pool_capacity: 3,
+            image_capacity: 4,
         };
         let builder = Builder::default()
             .accel_struct_capacity(1)
             .buffer_capacity(2)
-            .image_capacity(3)
+            .descriptor_pool_capacity(3)
+            .image_capacity(4)
             .build();
 
         assert_eq!(info, builder);
+    }
+
+    #[test]
+    fn pool_capacity_conversion_includes_descriptor_pools() {
+        let info = Info::with_capacity(7);
+
+        assert_eq!(info.descriptor_pool_capacity, 7);
+        assert_eq!(Info::from(7), info);
     }
 
     #[test]
