@@ -4,16 +4,50 @@ use {
     super::{DriverError, device::Device},
     crate::submission::TimestampQueryPool,
     ash::vk,
-    log::{error, trace},
+    log::{error, trace, warn},
     std::{
+        any::Any,
         cell::{Cell, RefCell},
         fmt::Debug,
+        panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
         thread::panicking,
     },
 };
 
 pub(crate) trait FenceDroppable: Debug + Send {
     fn fence_signaled(&mut self, _fence: &Fence) {}
+}
+
+pub(crate) type FencePayloads = Vec<Box<dyn FenceDroppable + 'static>>;
+
+pub(crate) fn drop_fence_payloads(payloads: FencePayloads) -> bool {
+    let mut all_succeeded = true;
+
+    for payload in payloads {
+        if catch_unwind(AssertUnwindSafe(|| drop(payload))).is_err() {
+            all_succeeded = false;
+            error!("fence payload panicked while being dropped");
+        }
+    }
+
+    all_succeeded
+}
+
+fn run_all_catching_unwind<T>(
+    values: &mut [T],
+    mut operation: impl FnMut(&mut T),
+) -> Option<Box<dyn Any + Send>> {
+    let mut first_panic = None;
+
+    for value in values {
+        if let Err(panic) = catch_unwind(AssertUnwindSafe(|| operation(value)))
+            && first_panic.is_none()
+        {
+            first_panic = Some(panic);
+        }
+    }
+
+    first_panic
 }
 
 #[derive(Debug)]
@@ -39,8 +73,8 @@ pub struct Fence {
     #[readonly]
     pub handle: vk::Fence,
 
+    payloads: RefCell<FencePayloads>,
     pub(crate) queued: Cell<bool>,
-    droppables: RefCell<Vec<Box<dyn FenceDroppable + 'static>>>,
 
     /// Timestamp query results for queued work once this fence has signaled.
     ///
@@ -57,34 +91,58 @@ impl Fence {
         Ok(Self {
             device: device.clone(),
             handle: Device::create_fence(device, signaled)?,
+            payloads: Default::default(),
             queued: Cell::new(signaled),
-            droppables: Default::default(),
             timestamps: TimestampQueryPool::empty(),
         })
     }
 
     /// Drops an item after this fence signals.
     pub(crate) fn drop_when_signaled(&self, x: impl Debug + Send + 'static) {
-        self.droppables.borrow_mut().push(Box::new(DeferredDrop(x)));
+        self.payloads.borrow_mut().push(Box::new(DeferredDrop(x)));
     }
 
     pub(crate) fn drop_fence_droppable(&self, x: impl FenceDroppable + 'static) {
-        self.droppables.borrow_mut().push(Box::new(x));
+        self.payloads.borrow_mut().push(Box::new(x));
     }
 
     #[profiling::function]
     fn drop_signaled(&self) {
-        let mut droppables = self.droppables.borrow_mut();
+        if !Device::background_fence_cleanup_enabled(&self.device) {
+            let mut payloads = self.payloads.borrow_mut();
 
-        if !droppables.is_empty() {
-            trace!("dropping {} shared references", droppables.len());
+            if !payloads.is_empty() {
+                trace!("releasing {} fence payloads", payloads.len());
+            }
+
+            for payload in payloads.iter_mut() {
+                payload.fence_signaled(self);
+            }
+
+            payloads.clear();
+
+            return;
         }
 
-        for droppable in droppables.iter_mut() {
-            droppable.fence_signaled(self);
+        let mut payloads = self.payloads.take();
+
+        if !payloads.is_empty() {
+            trace!("releasing {} fence payloads", payloads.len());
+        } else {
+            return;
         }
 
-        droppables.clear();
+        let panic = run_all_catching_unwind(&mut payloads, |payload| {
+            payload.fence_signaled(self);
+        });
+
+        if let Err(payloads) = Device::try_enqueue_fence_cleanup(&self.device, payloads) {
+            drop_fence_payloads(payloads);
+        }
+
+        if let Some(panic) = panic {
+            resume_unwind(panic);
+        }
     }
 
     #[deprecated = "use status"]
@@ -99,7 +157,8 @@ impl Fence {
 
     /// Returns `true` if this fence is signaled.
     ///
-    /// Signaled deferred payloads are released before this returns `Ok(true)`.
+    /// Fence-payload completion hooks run before this returns `Ok(true)`. Payload destruction may
+    /// continue asynchronously when background fence cleanup is enabled on the device.
     ///
     /// See [`vkGetFenceStatus`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetFenceStatus.html).
     #[profiling::function]
@@ -139,8 +198,9 @@ impl Fence {
 
     /// Resets this fence to the unsignaled state.
     ///
-    /// If queued work has already signaled, deferred payloads are released before the fence is
-    /// reset.
+    /// If queued work has already signaled, fence-payload completion hooks run before the fence is
+    /// reset. Payload destruction may continue asynchronously when background fence cleanup is
+    /// enabled.
     ///
     /// See [`vkResetFences`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkResetFences.html).
     pub fn reset(&mut self) -> Result<&mut Self, DriverError> {
@@ -165,7 +225,10 @@ impl Fence {
         self.wait()
     }
 
-    /// Waits for this fence to signal, then releases deferred payloads.
+    /// Waits for this fence to signal, then runs fence-payload completion hooks.
+    ///
+    /// Payload destruction may continue asynchronously when background fence cleanup is enabled on
+    /// the device.
     ///
     /// See [`vkWaitForFences`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkWaitForFences.html).
     #[profiling::function]
@@ -189,12 +252,79 @@ impl Drop for Fence {
             return;
         }
 
-        if self.queued.get() && self.wait().is_err() {
+        if self.queued.get()
+            && let Err(err) = self.wait()
+        {
+            warn!("unable to wait for fence during drop: {err}");
+
             return;
         }
 
         unsafe {
             self.device.destroy_fence(self.handle, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{FenceDroppable, drop_fence_payloads, run_all_catching_unwind},
+        std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    #[derive(Debug)]
+    struct CountDrop(Arc<AtomicUsize>);
+
+    #[derive(Debug)]
+    struct PanicDrop;
+
+    impl FenceDroppable for CountDrop {}
+
+    impl Drop for CountDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl FenceDroppable for PanicDrop {}
+
+    impl Drop for PanicDrop {
+        fn drop(&mut self) {
+            panic!("expected test panic");
+        }
+    }
+
+    #[test]
+    fn payload_drop_isolates_each_panic() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let payloads: Vec<Box<dyn FenceDroppable>> = vec![
+            Box::new(PanicDrop),
+            Box::new(PanicDrop),
+            Box::new(CountDrop(Arc::clone(&dropped))),
+        ];
+
+        assert!(!drop_fence_payloads(payloads));
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn completion_hooks_continue_after_panic() {
+        let calls = AtomicUsize::new(0);
+        let mut should_panic = [true, false];
+
+        let panic = run_all_catching_unwind(&mut should_panic, |should_panic| {
+            calls.fetch_add(1, Ordering::Relaxed);
+
+            if *should_panic {
+                panic!("expected test panic");
+            }
+        });
+
+        assert!(panic.is_some());
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 }
