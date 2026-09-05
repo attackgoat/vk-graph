@@ -73,7 +73,7 @@ raw-window-handle = "0.6"
 read-only.workspace = true
 smallvec = "1.15"
 spirq = "1.2"
-vk-sync = { git = "https://github.com/attackgoat/vk-sync-rs", branch = "accel-struct-build", package = "vk-sync-fork" }
+vk-sync = { git = "https://github.com/attackgoat/vk-sync-rs", branch = "access-info-2", package = "vk-sync-fork" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ash-molten = { version = "0.20", optional = true }

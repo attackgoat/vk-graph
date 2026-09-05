@@ -110,6 +110,17 @@ impl RayTracingPipeline {
         }
 
         let info = info.into();
+        if info.opacity_micromap
+            && !device
+                .physical
+                .vk_ext_opacity_micromap
+                .as_ref()
+                .is_some_and(|extension| extension.features.micromap)
+        {
+            warn!("unsupported ray tracing pipeline creation: missing opacity micromaps");
+
+            return Err(DriverError::Unsupported);
+        }
         let shader_groups = shader_groups
             .into_iter()
             .map(|shader_group| shader_group.into())
@@ -219,6 +230,11 @@ impl RayTracingPipeline {
                 vk::DeferredOperationKHR::null(),
                 Device::pipeline_cache(device),
                 &[vk::RayTracingPipelineCreateInfoKHR::default()
+                    .flags(if info.opacity_micromap {
+                        vk::PipelineCreateFlags::RAY_TRACING_OPACITY_MICROMAP_EXT
+                    } else {
+                        vk::PipelineCreateFlags::empty()
+                    })
                     .stages(&shader_stages)
                     .groups(&shader_groups)
                     .max_pipeline_ray_recursion_depth(
@@ -480,6 +496,12 @@ pub struct RayTracingPipelineInfo {
     /// See [`VkRayTracingPipelineCreateInfoKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRayTracingPipelineCreateInfoKHR.html).
     #[builder(default = "16")]
     pub max_ray_recursion_depth: u32,
+
+    /// Allow this pipeline to trace acceleration structures which use opacity micromaps.
+    ///
+    /// This requires [`VK_EXT_opacity_micromap`](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_EXT_opacity_micromap.html).
+    #[builder(default)]
+    pub opacity_micromap: bool,
 }
 
 impl RayTracingPipelineInfo {
@@ -494,6 +516,7 @@ impl RayTracingPipelineInfo {
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
             dynamic_stack_size: Some(self.dynamic_stack_size),
             max_ray_recursion_depth: Some(self.max_ray_recursion_depth),
+            opacity_micromap: Some(self.opacity_micromap),
         }
     }
 }
@@ -504,6 +527,7 @@ impl Default for RayTracingPipelineInfo {
             bindless_descriptor_count: 8192,
             dynamic_stack_size: false,
             max_ray_recursion_depth: 16,
+            opacity_micromap: false,
         }
     }
 }

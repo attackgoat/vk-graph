@@ -45,12 +45,13 @@ use crate::{
         accel_struct::{AccelerationStructure, AccelerationStructureSyncInfo},
         buffer::{Buffer, BufferSyncInfo},
         image::{Image, ImageSyncInfo},
+        micromap::{Micromap, MicromapSyncInfo},
         swapchain::SwapchainImage,
     },
     pool::Lease,
     private,
     resource::{AccelerationStructureSet, ImageSet, ResourceSetIndex},
-    stream::{AccelerationStructureArg, BufferArg, ImageArg},
+    stream::{AccelerationStructureArg, BufferArg, ImageArg, MicromapArg},
 };
 
 #[cfg(feature = "checked")]
@@ -143,24 +144,6 @@ pub enum AnyAccelerationStructureNode {
     Pooled(AccelerationStructureLeaseNode),
 }
 
-impl From<AccelerationStructureNode> for AnyAccelerationStructureNode {
-    fn from(node: AccelerationStructureNode) -> Self {
-        Self::Owned(node)
-    }
-}
-
-impl From<AccelerationStructureArg> for AnyAccelerationStructureNode {
-    fn from(node: AccelerationStructureArg) -> Self {
-        Self::Arg(node)
-    }
-}
-
-impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
-    fn from(node: AccelerationStructureLeaseNode) -> Self {
-        Self::Pooled(node)
-    }
-}
-
 impl private::NodeSealed for AnyAccelerationStructureNode {
     fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
         resources[self.index()].expect_accel_struct()
@@ -193,6 +176,24 @@ impl Node for AnyAccelerationStructureNode {
     }
 }
 
+impl From<AccelerationStructureNode> for AnyAccelerationStructureNode {
+    fn from(node: AccelerationStructureNode) -> Self {
+        Self::Owned(node)
+    }
+}
+
+impl From<AccelerationStructureArg> for AnyAccelerationStructureNode {
+    fn from(node: AccelerationStructureArg) -> Self {
+        Self::Arg(node)
+    }
+}
+
+impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
+    fn from(node: AccelerationStructureLeaseNode) -> Self {
+        Self::Pooled(node)
+    }
+}
+
 /// Specifies either an owned buffer or one obtained from a pool.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyBufferNode {
@@ -204,24 +205,6 @@ pub enum AnyBufferNode {
 
     /// A buffer obtained from a pool.
     Pooled(BufferLeaseNode),
-}
-
-impl From<BufferNode> for AnyBufferNode {
-    fn from(node: BufferNode) -> Self {
-        Self::Owned(node)
-    }
-}
-
-impl From<BufferArg> for AnyBufferNode {
-    fn from(node: BufferArg) -> Self {
-        Self::Arg(node)
-    }
-}
-
-impl From<BufferLeaseNode> for AnyBufferNode {
-    fn from(node: BufferLeaseNode) -> Self {
-        Self::Pooled(node)
-    }
 }
 
 impl private::NodeSealed for AnyBufferNode {
@@ -256,6 +239,24 @@ impl Node for AnyBufferNode {
     }
 }
 
+impl From<BufferNode> for AnyBufferNode {
+    fn from(node: BufferNode) -> Self {
+        Self::Owned(node)
+    }
+}
+
+impl From<BufferArg> for AnyBufferNode {
+    fn from(node: BufferArg) -> Self {
+        Self::Arg(node)
+    }
+}
+
+impl From<BufferLeaseNode> for AnyBufferNode {
+    fn from(node: BufferLeaseNode) -> Self {
+        Self::Pooled(node)
+    }
+}
+
 /// Specifies either an owned image or one obtained from a pool.
 ///
 /// The image may also be a special swapchain type of image.
@@ -272,30 +273,6 @@ pub enum AnyImageNode {
 
     /// A special swapchain image.
     Swapchain(SwapchainImageNode),
-}
-
-impl From<ImageNode> for AnyImageNode {
-    fn from(node: ImageNode) -> Self {
-        Self::Owned(node)
-    }
-}
-
-impl From<ImageArg> for AnyImageNode {
-    fn from(node: ImageArg) -> Self {
-        Self::Arg(node)
-    }
-}
-
-impl From<ImageLeaseNode> for AnyImageNode {
-    fn from(node: ImageLeaseNode) -> Self {
-        Self::Pooled(node)
-    }
-}
-
-impl From<SwapchainImageNode> for AnyImageNode {
-    fn from(node: SwapchainImageNode) -> Self {
-        Self::Swapchain(node)
-    }
 }
 
 impl private::NodeSealed for AnyImageNode {
@@ -332,7 +309,94 @@ impl Node for AnyImageNode {
     }
 }
 
-/// A type-erased graph node for any buffer, image, or acceleration structure.
+impl From<ImageNode> for AnyImageNode {
+    fn from(node: ImageNode) -> Self {
+        Self::Owned(node)
+    }
+}
+
+impl From<ImageArg> for AnyImageNode {
+    fn from(node: ImageArg) -> Self {
+        Self::Arg(node)
+    }
+}
+
+impl From<ImageLeaseNode> for AnyImageNode {
+    fn from(node: ImageLeaseNode) -> Self {
+        Self::Pooled(node)
+    }
+}
+
+impl From<SwapchainImageNode> for AnyImageNode {
+    fn from(node: SwapchainImageNode) -> Self {
+        Self::Swapchain(node)
+    }
+}
+
+/// Specifies either an owned micromap or one obtained from a pool.
+#[derive(Clone, Copy, Debug)]
+pub enum AnyMicromapNode {
+    /// A micromap supplied as a command stream argument.
+    Arg(MicromapArg),
+
+    /// An owned micromap.
+    Owned(MicromapNode),
+
+    /// A micromap obtained from a pool.
+    Pooled(MicromapLeaseNode),
+}
+
+impl private::NodeSealed for AnyMicromapNode {
+    fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
+        resources[self.index()].expect_micromap()
+    }
+
+    fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
+        resources[index].expect_micromap()
+    }
+
+    #[cfg(feature = "checked")]
+    fn assert_owner(&self, graph_id: GraphId) {
+        match self {
+            Self::Arg(node) => node.assert_owner(graph_id),
+            Self::Owned(node) => node.assert_owner(graph_id),
+            Self::Pooled(node) => node.assert_owner(graph_id),
+        }
+    }
+}
+
+impl Node for AnyMicromapNode {
+    type Resource = Micromap;
+    type SyncInfo = MicromapSyncInfo;
+
+    fn index(&self) -> usize {
+        match self {
+            Self::Arg(node) => node.index(),
+            Self::Owned(node) => node.index(),
+            Self::Pooled(node) => node.index(),
+        }
+    }
+}
+
+impl From<MicromapArg> for AnyMicromapNode {
+    fn from(node: MicromapArg) -> Self {
+        Self::Arg(node)
+    }
+}
+
+impl From<MicromapNode> for AnyMicromapNode {
+    fn from(node: MicromapNode) -> Self {
+        Self::Owned(node)
+    }
+}
+
+impl From<MicromapLeaseNode> for AnyMicromapNode {
+    fn from(node: MicromapLeaseNode) -> Self {
+        Self::Pooled(node)
+    }
+}
+
+/// A type-erased graph node for any buffer, image, acceleration structure, or micromap.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyNode {
     /// An acceleration-structure node.
@@ -343,6 +407,9 @@ pub enum AnyNode {
 
     /// An image node, including swapchain image nodes.
     Image(AnyImageNode),
+
+    /// A micromap node.
+    Micromap(AnyMicromapNode),
 }
 
 macro_rules! any_node_from {
@@ -358,6 +425,7 @@ macro_rules! any_node_from {
 any_node_from!(AnyAccelerationStructureNode => AccelerationStructure);
 any_node_from!(AnyBufferNode => Buffer);
 any_node_from!(AnyImageNode => Image);
+any_node_from!(AnyMicromapNode => Micromap);
 
 any_node_from!(AccelerationStructureNode => AccelerationStructure);
 any_node_from!(AccelerationStructureLeaseNode => AccelerationStructure);
@@ -365,6 +433,8 @@ any_node_from!(BufferNode => Buffer);
 any_node_from!(BufferLeaseNode => Buffer);
 any_node_from!(ImageNode => Image);
 any_node_from!(ImageLeaseNode => Image);
+any_node_from!(MicromapNode => Micromap);
+any_node_from!(MicromapLeaseNode => Micromap);
 any_node_from!(SwapchainImageNode => Image);
 
 /// A graph-local handle for a persistent image set.
@@ -530,6 +600,13 @@ node!(Buffer, Arc<Buffer>, BufferSyncInfo, as_buffer);
 node!(BufferLease, Arc<Lease<Buffer>>, BufferSyncInfo, as_buffer);
 node!(Image, Arc<Image>, ImageSyncInfo, as_image);
 node!(ImageLease, Arc<Lease<Image>>, ImageSyncInfo, as_image);
+node!(Micromap, Arc<Micromap>, MicromapSyncInfo, as_micromap);
+node!(
+    MicromapLease,
+    Arc<Lease<Micromap>>,
+    MicromapSyncInfo,
+    as_micromap
+);
 node!(
     SwapchainImage,
     SwapchainImage,

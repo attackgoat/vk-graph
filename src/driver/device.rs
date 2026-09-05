@@ -408,6 +408,19 @@ impl Device {
         Ok(())
     }
 
+    /// Helper for times when you already know that opacity micromap support is enabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `VK_EXT_opacity_micromap` support was not enabled for this device.
+    #[allow(dead_code)]
+    pub(crate) fn expect_vk_ext_opacity_micromap(this: &Self) -> &ext::opacity_micromap::Device {
+        this.inner
+            .vk_ext_opacity_micromap
+            .as_ref()
+            .expect("missing VK_EXT_opacity_micromap")
+    }
+
     /// Helper for times when you already know that the device supports the acceleration
     /// structure extension.
     ///
@@ -959,6 +972,11 @@ impl Device {
                     })
             })
             .transpose()?;
+        let vk_ext_opacity_micromap = physical_device
+            .vk_ext_opacity_micromap
+            .as_ref()
+            .is_some_and(|ext| ext.features.micromap)
+            .then(|| ext::opacity_micromap::Device::new(&physical_device.instance, &device));
         let vk_khr_present_wait = physical_device
             .vk_khr_present_wait
             .is_some()
@@ -1001,6 +1019,7 @@ impl Device {
                     fence_cleanup: Mutex::new(BackgroundFenceCleanupState::default()),
                     fence_cleanup_enabled: AtomicBool::new(false),
                     vk_ext_debug_utils,
+                    vk_ext_opacity_micromap,
                     vk_ext_private_data,
                     vk_khr_acceleration_structure,
                     vk_khr_present_wait,
@@ -1346,6 +1365,7 @@ struct DeviceInner {
     fence_cleanup: Mutex<BackgroundFenceCleanupState>,
     fence_cleanup_enabled: AtomicBool,
     vk_ext_debug_utils: Option<ext::debug_utils::Device>,
+    vk_ext_opacity_micromap: Option<ext::opacity_micromap::Device>,
     vk_ext_private_data: Option<ext::private_data::Device>,
     vk_khr_acceleration_structure: Option<khr::acceleration_structure::Device>,
     vk_khr_present_wait: Option<khr::present_wait::Device>,

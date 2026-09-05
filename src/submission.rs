@@ -43,6 +43,7 @@ use {
                 image_subresource_range_contains, image_subresource_range_intersection,
             },
             initial_image_layout_access, is_read_access, is_write_access,
+            micromap::{Micromap, micromap_sync_flags_for_access},
             physical_device::Vulkan10Limits,
             pipeline_stage_access_flags,
             query_pool::{QueryPool, QueryPoolInfo},
@@ -648,22 +649,118 @@ fn image_subresource_range_eq(
 }
 
 // Added because vk-sync requires allocation to record barriers, see that impl for reference
-fn pipeline_barrier_from_iters<'a>(
+fn pipeline_barrier_from_slices<'a>(
     device: &Device,
     command_buffer: vk::CommandBuffer,
     global_barrier: Option<GlobalBarrier<'a>>,
-    buffer_barriers: impl IntoIterator<Item = BufferBarrier<'a>>,
-    image_barriers: impl IntoIterator<Item = TrackedImageBarrier>,
+    micromap_barrier: Option<GlobalBarrier<'a>>,
+    buffer_barriers: &[BufferBarrier<'a>],
+    image_barriers: &[TrackedImageBarrier],
 ) {
+    let requires_sync2 = barriers_require_sync2(
+        global_barrier.as_ref(),
+        micromap_barrier.as_ref(),
+        buffer_barriers,
+        image_barriers,
+    );
+
+    if requires_sync2 {
+        thread_local! {
+            static BARRIER: RefCell<BarrierScratch<
+                vk::MemoryBarrier2<'static>,
+                vk::BufferMemoryBarrier2<'static>,
+                vk::ImageMemoryBarrier2<'static>,
+            >> = Default::default();
+        }
+
+        BARRIER.with_borrow_mut(|tls| {
+            tls.memory_barriers.clear();
+            tls.buffer_barriers.clear();
+            tls.image_barriers.clear();
+
+            tls.memory_barriers.extend(
+                global_barrier
+                    .into_iter()
+                    .chain(micromap_barrier)
+                    .map(memory_barrier2),
+            );
+            tls.buffer_barriers
+                .extend(buffer_barriers.iter().map(|barrier| {
+                    let sync = memory_barrier2(GlobalBarrier {
+                        previous_accesses: barrier.previous_accesses,
+                        next_accesses: barrier.next_accesses,
+                    });
+                    vk::BufferMemoryBarrier2::default()
+                        .src_stage_mask(sync.src_stage_mask)
+                        .src_access_mask(sync.src_access_mask)
+                        .dst_stage_mask(sync.dst_stage_mask)
+                        .dst_access_mask(sync.dst_access_mask)
+                        .src_queue_family_index(barrier.src_queue_family_index)
+                        .dst_queue_family_index(barrier.dst_queue_family_index)
+                        .buffer(barrier.buffer)
+                        .offset(barrier.offset as _)
+                        .size(barrier.size as _)
+                }));
+            tls.image_barriers
+                .extend(image_barriers.iter().copied().map(|barrier| {
+                    let previous_accesses = barrier
+                        .previous_accesses
+                        .iter()
+                        .collect::<SmallVec<[AccessType; 10]>>();
+                    let next_accesses = [barrier.next_access];
+                    let sync = memory_barrier2(GlobalBarrier {
+                        previous_accesses: &previous_accesses,
+                        next_accesses: &next_accesses,
+                    });
+                    let ownership_acquire = barrier.ownership_layouts.is_some();
+                    let (_, _, barrier) = get_tracked_image_memory_barrier(barrier);
+                    vk::ImageMemoryBarrier2::default()
+                        .src_stage_mask(if ownership_acquire {
+                            vk::PipelineStageFlags2::ALL_COMMANDS
+                        } else {
+                            sync.src_stage_mask
+                        })
+                        .src_access_mask(if ownership_acquire {
+                            vk::AccessFlags2::empty()
+                        } else {
+                            sync.src_access_mask
+                        })
+                        .dst_stage_mask(sync.dst_stage_mask)
+                        .dst_access_mask(sync.dst_access_mask)
+                        .old_layout(barrier.old_layout)
+                        .new_layout(barrier.new_layout)
+                        .src_queue_family_index(barrier.src_queue_family_index)
+                        .dst_queue_family_index(barrier.dst_queue_family_index)
+                        .image(barrier.image)
+                        .subresource_range(barrier.subresource_range)
+                }));
+
+            Device::cmd_pipeline_barrier2(
+                device,
+                command_buffer,
+                &vk::DependencyInfo::default()
+                    .memory_barriers(&tls.memory_barriers)
+                    .buffer_memory_barriers(&tls.buffer_barriers)
+                    .image_memory_barriers(&tls.image_barriers),
+            );
+        });
+
+        return;
+    }
+
     #[derive(Default)]
-    struct BarrierScratch {
-        memory_barriers: Vec<vk::MemoryBarrier<'static>>,
-        buffer_barriers: Vec<vk::BufferMemoryBarrier<'static>>,
-        image_barriers: Vec<vk::ImageMemoryBarrier<'static>>,
+    struct BarrierScratch<M, B, I> {
+        memory_barriers: Vec<M>,
+        buffer_barriers: Vec<B>,
+        image_barriers: Vec<I>,
     }
 
     thread_local! {
-        static BARRIER: RefCell<BarrierScratch> = Default::default();
+        static BARRIER: RefCell<BarrierScratch<
+            vk::MemoryBarrier<'static>,
+            vk::BufferMemoryBarrier<'static>,
+            vk::ImageMemoryBarrier<'static>,
+        >> = Default::default();
     }
 
     BARRIER.with_borrow_mut(|tls| {
@@ -686,7 +783,7 @@ fn pipeline_barrier_from_iters<'a>(
         }
 
         for buffer_barrier in buffer_barriers {
-            let (src_mask, dst_mask, barrier) = get_buffer_memory_barrier(&buffer_barrier);
+            let (src_mask, dst_mask, barrier) = get_buffer_memory_barrier(buffer_barrier);
             src_stage_mask |= src_mask;
             dst_stage_mask |= dst_mask;
             tls.buffer_barriers.push(vk::BufferMemoryBarrier {
@@ -701,7 +798,7 @@ fn pipeline_barrier_from_iters<'a>(
             });
         }
 
-        for image_barrier in image_barriers {
+        for &image_barrier in image_barriers {
             let (src_mask, dst_mask, barrier) = get_tracked_image_memory_barrier(image_barrier);
             src_stage_mask |= src_mask;
             dst_stage_mask |= dst_mask;
@@ -727,6 +824,71 @@ fn pipeline_barrier_from_iters<'a>(
             );
         }
     });
+}
+
+fn barriers_require_sync2(
+    global_barrier: Option<&GlobalBarrier<'_>>,
+    micromap_barrier: Option<&GlobalBarrier<'_>>,
+    buffer_barriers: &[BufferBarrier<'_>],
+    image_barriers: &[TrackedImageBarrier],
+) -> bool {
+    micromap_barrier.is_some()
+        || global_barrier.is_some_and(|barrier| {
+            barrier
+                .previous_accesses
+                .iter()
+                .chain(barrier.next_accesses)
+                .copied()
+                .any(is_micromap_access)
+        })
+        || buffer_barriers.iter().any(|barrier| {
+            barrier
+                .previous_accesses
+                .iter()
+                .chain(barrier.next_accesses)
+                .copied()
+                .any(is_micromap_access)
+        })
+        || image_barriers.iter().any(|barrier| {
+            is_micromap_access(barrier.next_access)
+                || barrier.previous_accesses.iter().any(is_micromap_access)
+        })
+}
+
+fn is_micromap_access(access: AccessType) -> bool {
+    matches!(
+        access,
+        AccessType::MicromapBuildRead
+            | AccessType::MicromapBuildWrite
+            | AccessType::MicromapBuildInputRead
+            | AccessType::MicromapBuildScratchReadWrite
+            | AccessType::MicromapBuildBufferRead
+            | AccessType::MicromapBuildBufferWrite
+            | AccessType::AccelerationStructureBuildMicromapRead
+    )
+}
+
+fn memory_barrier2(barrier: GlobalBarrier<'_>) -> vk::MemoryBarrier2<'static> {
+    let (mut src_stage_mask, mut src_access_mask) =
+        (vk::PipelineStageFlags2::empty(), vk::AccessFlags2::empty());
+    let (mut dst_stage_mask, mut dst_access_mask) =
+        (vk::PipelineStageFlags2::empty(), vk::AccessFlags2::empty());
+    for access in barrier.previous_accesses {
+        let (stages, accesses) = micromap_sync_flags_for_access(*access);
+        src_stage_mask |= stages;
+        src_access_mask |= accesses;
+    }
+    for access in barrier.next_accesses {
+        let (stages, accesses) = micromap_sync_flags_for_access(*access);
+        dst_stage_mask |= stages;
+        dst_access_mask |= accesses;
+    }
+
+    vk::MemoryBarrier2::default()
+        .src_stage_mask(src_stage_mask)
+        .src_access_mask(src_access_mask)
+        .dst_stage_mask(dst_stage_mask)
+        .dst_access_mask(dst_access_mask)
 }
 
 fn schedule_dependency_cmds_before_target_access(
@@ -1611,12 +1773,15 @@ macro_rules! record_selection_from_node {
 record_selection_from_node!(crate::node::AnyAccelerationStructureNode);
 record_selection_from_node!(crate::node::AnyBufferNode);
 record_selection_from_node!(crate::node::AnyImageNode);
+record_selection_from_node!(crate::node::AnyMicromapNode);
 record_selection_from_node!(crate::node::AccelerationStructureNode);
 record_selection_from_node!(crate::node::AccelerationStructureLeaseNode);
 record_selection_from_node!(crate::node::BufferNode);
 record_selection_from_node!(crate::node::BufferLeaseNode);
 record_selection_from_node!(crate::node::ImageNode);
 record_selection_from_node!(crate::node::ImageLeaseNode);
+record_selection_from_node!(crate::node::MicromapNode);
+record_selection_from_node!(crate::node::MicromapLeaseNode);
 record_selection_from_node!(crate::node::SwapchainImageNode);
 
 /// Graph-side recorded payload for a command buffer that has already been recorded.
@@ -2956,7 +3121,7 @@ impl Submission {
         }
     }
 
-    fn accel_struct_canonical_accesses<'a>(
+    fn whole_resource_canonical_accesses<'a>(
         accesses: &'a [SubresourceAccess],
         scratch: &'a mut Vec<AccessType>,
     ) -> &'a [AccessType] {
@@ -4480,6 +4645,9 @@ impl Submission {
             AnyNode::Image(node) => {
                 self.record_resource_impl(resource_pool, cmd_buf, node, ownership)
             }
+            AnyNode::Micromap(node) => {
+                self.record_resource_impl(resource_pool, cmd_buf, node, ownership)
+            }
         }
     }
 
@@ -4506,6 +4674,9 @@ impl Submission {
                     self.record_resource_dependencies_impl(resource_pool, cmd_buf, node, ownership)
                 }
                 AnyNode::Image(node) => {
+                    self.record_resource_dependencies_impl(resource_pool, cmd_buf, node, ownership)
+                }
+                AnyNode::Micromap(node) => {
                     self.record_resource_dependencies_impl(resource_pool, cmd_buf, node, ownership)
                 }
             },
@@ -4562,9 +4733,12 @@ impl Submission {
             image_accesses: Vec<(AccessType, vk::ImageSubresourceRange, bool)>,
             images: Vec<AccessBarrier<ImageBarrierTarget, ImageAccessSet>>,
             next_accesses: Vec<AccessType>,
+            micromap_accesses: Vec<AccessType>,
+            next_micromap_accesses: Vec<AccessType>,
             pending_buffers: NodeIndexedScratch<AccessBarrier<BufferBarrierTarget, AccessType>>,
             pending_images: NodeIndexedScratch<AccessBarrier<ImageBarrierTarget, ImageAccessSet>>,
             prev_accesses: Vec<AccessType>,
+            prev_micromap_accesses: Vec<AccessType>,
         }
 
         BARRIER.with_borrow_mut(|tls| {
@@ -4574,9 +4748,12 @@ impl Submission {
             tls.image_accesses.clear();
             tls.images.clear();
             tls.next_accesses.clear();
+            tls.micromap_accesses.clear();
+            tls.next_micromap_accesses.clear();
             tls.pending_buffers.clear();
             tls.pending_images.clear();
             tls.prev_accesses.clear();
+            tls.prev_micromap_accesses.clear();
 
             // Map remaining accesses into vk_sync barriers (some accesses may have been removed by
             // the render pass request function)
@@ -4586,6 +4763,7 @@ impl Submission {
                     AccelerationStructure(&'a AccelerationStructure),
                     Buffer(&'a Buffer),
                     Image(&'a Image),
+                    Micromap(&'a Micromap),
                 }
 
                 let resource = match &resources[node_idx] {
@@ -4604,12 +4782,17 @@ impl Submission {
                     AnyResource::Image(resource) => ResourceRef::Image(resource),
                     AnyResource::ImageArg(_) => panic!("unbound command stream image argument"),
                     AnyResource::ImageLease(resource) => ResourceRef::Image(resource),
+                    AnyResource::Micromap(resource) => ResourceRef::Micromap(resource),
+                    AnyResource::MicromapArg(_) => {
+                        panic!("unbound command stream micromap argument")
+                    }
+                    AnyResource::MicromapLease(resource) => ResourceRef::Micromap(resource),
                     AnyResource::SwapchainImage(resource) => ResourceRef::Image(resource),
                 };
 
                 match resource {
                     ResourceRef::AccelerationStructure(accel_struct) => {
-                        let canonical_accesses = Self::accel_struct_canonical_accesses(
+                        let canonical_accesses = Self::whole_resource_canonical_accesses(
                             node_accesses,
                             &mut tls.accel_struct_accesses,
                         );
@@ -4712,6 +4895,20 @@ impl Submission {
 
                         tls.image_accesses = image_accesses;
                     }
+                    ResourceRef::Micromap(micromap) => {
+                        debug_assert!(node_accesses.iter().all(|access| matches!(
+                            access.subresource,
+                            SubresourceRange::Micromap
+                        )));
+                        let canonical_accesses = Self::whole_resource_canonical_accesses(
+                            node_accesses,
+                            &mut tls.micromap_accesses,
+                        );
+                        tls.next_micromap_accesses
+                            .extend(canonical_accesses.iter().copied());
+                        tls.prev_micromap_accesses
+                            .extend(Micromap::swap_accesses(micromap, canonical_accesses));
+                    }
                 }
             }
 
@@ -4729,6 +4926,11 @@ impl Submission {
             } else {
                 None
             };
+            let micromap_barrier =
+                (!tls.next_micromap_accesses.is_empty()).then_some(GlobalBarrier {
+                    next_accesses: tls.next_micromap_accesses.as_slice(),
+                    previous_accesses: tls.prev_micromap_accesses.as_slice(),
+                });
 
             let mut buffer_barriers = Vec::new();
             for AccessBarrier {
@@ -4819,12 +5021,13 @@ impl Submission {
                 }
             }
 
-            pipeline_barrier_from_iters(
+            pipeline_barrier_from_slices(
                 &cmd_buf.device,
                 cmd_buf.handle,
                 global_barrier,
-                buffer_barriers.into_iter(),
-                image_barriers.into_iter(),
+                micromap_barrier,
+                &buffer_barriers,
+                &image_barriers,
             );
 
             if let Some(pending) = pending_buffer_transfer_nodes.as_mut() {
@@ -4926,6 +5129,7 @@ impl Submission {
                     AccelerationStructure(&'a AccelerationStructure),
                     Buffer(&'a Buffer),
                     Image(&'a Image),
+                    Micromap(&'a Micromap),
                 }
 
                 let resource = match resource {
@@ -4944,6 +5148,11 @@ impl Submission {
                     AnyResource::Image(resource) => ResourceRef::Image(resource),
                     AnyResource::ImageArg(_) => panic!("unbound command stream image argument"),
                     AnyResource::ImageLease(resource) => ResourceRef::Image(resource),
+                    AnyResource::Micromap(resource) => ResourceRef::Micromap(resource),
+                    AnyResource::MicromapArg(_) => {
+                        panic!("unbound command stream micromap argument")
+                    }
+                    AnyResource::MicromapLease(resource) => ResourceRef::Micromap(resource),
                     AnyResource::SwapchainImage(resource) => ResourceRef::Image(resource),
                 };
 
@@ -5047,6 +5256,13 @@ impl Submission {
                             }
                         }
                     }
+                    ResourceRef::Micromap(micromap) => {
+                        debug_assert!(accesses.iter().all(|access| matches!(
+                            access.subresource,
+                            SubresourceRange::Micromap
+                        )));
+                        Micromap::swap_access(micromap, AccessType::Nothing).for_each(drop);
+                    }
                 }
             }
 
@@ -5136,12 +5352,13 @@ impl Submission {
                 }
             }
 
-            pipeline_barrier_from_iters(
+            pipeline_barrier_from_slices(
                 &cmd_buf.device,
                 cmd_buf.handle,
                 None,
-                buffer_barriers.into_iter(),
-                image_barriers.into_iter(),
+                None,
+                &buffer_barriers,
+                &image_barriers,
             );
 
             if let Some(pending) = pending_buffer_transfer_nodes.as_mut() {
@@ -5358,12 +5575,13 @@ impl Submission {
                 None
             };
 
-            pipeline_barrier_from_iters(
+            pipeline_barrier_from_slices(
                 &cmd_buf.device,
                 cmd_buf.handle,
                 global_barrier,
-                std::iter::empty(),
-                tls.image_barriers.drain(..),
+                None,
+                &[],
+                &tls.image_barriers,
             );
         });
     }
@@ -7429,7 +7647,8 @@ mod test {
         ImageOwnershipTransfer, ImageQueueOwnershipRelease, NodeIndex, PipelineStageAccessFlags,
         QueueSubmitInfo, RecordSelection, RecordedSubmission, RecordedSubmissionState,
         RecordingOwnership, ResourceSetSynchronization, Schedule, SemaphoreSubmitInfo, Submission,
-        SubresourceAccess, SubresourceRange, check_queue_submit_args, fuzz,
+        SubresourceAccess, SubresourceRange, barriers_require_sync2, check_queue_submit_args, fuzz,
+        is_micromap_access, memory_barrier2,
     };
     use crate::{
         AnyResource, Attachment, DepthStencilAttachment, Execution, Graph, LoadOp, Node, StoreOp,
@@ -7465,7 +7684,7 @@ mod test {
             time::Duration,
         },
         vk_shader_macros::glsl,
-        vk_sync::AccessType,
+        vk_sync::{AccessType, BufferBarrier, GlobalBarrier},
     };
 
     fn color_subresource_range(
@@ -11411,7 +11630,7 @@ mod test {
     }
 
     #[test]
-    fn accel_struct_canonical_accesses_preserves_mixed_slice_accesses() {
+    fn whole_resource_canonical_accesses_preserves_mixed_slice_accesses() {
         let accesses = [
             SubresourceAccess {
                 access: AccessType::AccelerationStructureBuildRead,
@@ -11425,7 +11644,7 @@ mod test {
 
         let mut scratch = Vec::new();
         assert_eq!(
-            Submission::accel_struct_canonical_accesses(&accesses, &mut scratch),
+            Submission::whole_resource_canonical_accesses(&accesses, &mut scratch),
             &[
                 AccessType::AccelerationStructureBuildRead,
                 AccessType::RayTracingShaderReadAccelerationStructure,
@@ -11458,5 +11677,60 @@ mod test {
             barrier.dst_access_mask,
             vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
         );
+    }
+
+    #[test]
+    fn micromap_barrier_preserves_sync2_only_bits() {
+        let barrier = memory_barrier2(GlobalBarrier {
+            previous_accesses: &[AccessType::MicromapBuildWrite],
+            next_accesses: &[AccessType::AccelerationStructureBuildMicromapRead],
+        });
+
+        assert_eq!(
+            barrier.src_stage_mask,
+            vk::PipelineStageFlags2::MICROMAP_BUILD_EXT
+        );
+        assert_eq!(
+            barrier.src_access_mask,
+            vk::AccessFlags2::MICROMAP_WRITE_EXT
+        );
+        assert_eq!(
+            barrier.dst_stage_mask,
+            vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR
+        );
+        assert_eq!(barrier.dst_access_mask, vk::AccessFlags2::MICROMAP_READ_EXT);
+    }
+
+    #[test]
+    fn micromap_buffer_only_barriers_require_sync2() {
+        for access in [
+            AccessType::MicromapBuildInputRead,
+            AccessType::MicromapBuildScratchReadWrite,
+            AccessType::MicromapBuildBufferRead,
+            AccessType::MicromapBuildBufferWrite,
+        ] {
+            let next_accesses = [access];
+            let barriers = [BufferBarrier {
+                previous_accesses: &[AccessType::TransferWrite],
+                next_accesses: &next_accesses,
+                ..Default::default()
+            }];
+            assert!(barriers_require_sync2(None, None, &barriers, &[]));
+        }
+    }
+
+    #[test]
+    fn every_micromap_access_is_sync2_only() {
+        for access in [
+            AccessType::MicromapBuildInputRead,
+            AccessType::MicromapBuildScratchReadWrite,
+            AccessType::MicromapBuildRead,
+            AccessType::MicromapBuildWrite,
+            AccessType::MicromapBuildBufferRead,
+            AccessType::MicromapBuildBufferWrite,
+            AccessType::AccelerationStructureBuildMicromapRead,
+        ] {
+            assert!(is_micromap_access(access));
+        }
     }
 }

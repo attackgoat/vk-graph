@@ -1,7 +1,8 @@
 //! Resource pooling, requesting, and caching types.
 //!
-//! Resource pools provide caching for buffer, image, and acceleration structure resources. Pooled
-//! resources may be requested from a pool using their corresponding information structure.
+//! Resource pools provide caching for buffer, image, acceleration structure, and micromap
+//! resources. Pooled resources may be requested from a pool using their corresponding information
+//! structure.
 //!
 //! Leased resources may be bound directly to a [`Graph`](crate::Graph) and used in the same manner
 //! as regular resources. After execution has completed pooled resources are automatically returned
@@ -87,8 +88,8 @@
 //!
 //! Wrapping a built-in pool using [`garbage_collector::GarbageCollector::new`] records successful
 //! resource requests. Calling [`garbage_collector::GarbageCollector::collect_resources`] retains
-//! only cached acceleration structures, buffers, and images that support requests made since the
-//! previous collection.
+//! only cached acceleration structures, buffers, images, and micromaps that support requests made
+//! since the previous collection.
 
 pub mod cache;
 pub mod fifo;
@@ -105,6 +106,7 @@ use {
         buffer::{Buffer, BufferInfo, BufferInfoBuilder},
         descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         image::{Image, ImageInfo, ImageInfoBuilder},
+        micromap::{Micromap, MicromapInfo, MicromapInfoBuilder},
         render_pass::{RenderPass, RenderPassInfo},
     },
     derive_builder::{Builder, UninitializedFieldError},
@@ -172,6 +174,12 @@ fn compatible_image_info(item_info: &ImageInfo, requested_info: &ImageInfo) -> b
         && item_info.usage.contains(requested_info.usage)
 }
 
+fn compatible_micromap_info(item_info: &MicromapInfo, requested_info: &MicromapInfo) -> bool {
+    item_info.host_visible == requested_info.host_visible
+        && item_info.micromap_type == requested_info.micromap_type
+        && item_info.size >= requested_info.size
+}
+
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
 
@@ -228,6 +236,15 @@ impl Lease<Buffer> {
 
 impl Lease<Image> {
     /// Sets the debugging name assigned to this image.
+    pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
+        self.set_debug_name(name);
+
+        self
+    }
+}
+
+impl Lease<Micromap> {
+    /// Sets the debugging name assigned to this micromap.
     pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
         self.set_debug_name(name);
 
@@ -354,6 +371,7 @@ macro_rules! lease_builder {
 lease_builder!(AccelerationStructureInfo => AccelerationStructure);
 lease_builder!(BufferInfo => Buffer);
 lease_builder!(ImageInfo => Image);
+lease_builder!(MicromapInfo => Micromap);
 
 /// Information used to create a [`FifoPool`](self::fifo::FifoPool),
 /// [`HashPool`](self::hash::HashPool) or [`LazyPool`](self::lazy::LazyPool) instance.
@@ -413,6 +431,14 @@ pub struct PoolConfig {
         setter(strip_option)
     )]
     pub image_capacity: usize,
+
+    /// The maximum size of a single bucket of micromap resource instances. The default value is
+    /// [`PoolConfig::DEFAULT_RESOURCE_CAPACITY`].
+    #[builder(
+        default = "PoolConfig::DEFAULT_RESOURCE_CAPACITY",
+        setter(strip_option)
+    )]
+    pub micromap_capacity: usize,
 }
 
 impl PoolConfig {
@@ -441,6 +467,7 @@ impl PoolConfig {
             buffer_capacity: Some(self.buffer_capacity),
             descriptor_pool_capacity: Some(self.descriptor_pool_capacity),
             image_capacity: Some(self.image_capacity),
+            micromap_capacity: Some(self.micromap_capacity),
         }
     }
 
@@ -451,6 +478,7 @@ impl PoolConfig {
             buffer_capacity: resource_capacity,
             descriptor_pool_capacity: resource_capacity,
             image_capacity: resource_capacity,
+            micromap_capacity: resource_capacity,
         }
     }
 }
@@ -474,6 +502,7 @@ impl From<usize> for PoolConfig {
             buffer_capacity: value,
             descriptor_pool_capacity: value,
             image_capacity: value,
+            micromap_capacity: value,
         }
     }
 }
@@ -509,12 +538,14 @@ mod test {
             buffer_capacity: 2,
             descriptor_pool_capacity: 3,
             image_capacity: 4,
+            micromap_capacity: 5,
         };
         let builder = Builder::default()
             .accel_struct_capacity(1)
             .buffer_capacity(2)
             .descriptor_pool_capacity(3)
             .image_capacity(4)
+            .micromap_capacity(5)
             .build();
 
         assert_eq!(info, builder);
@@ -525,7 +556,26 @@ mod test {
         let info = Info::with_capacity(7);
 
         assert_eq!(info.descriptor_pool_capacity, 7);
+        assert_eq!(info.micromap_capacity, 7);
         assert_eq!(Info::from(7), info);
+    }
+
+    #[test]
+    fn micromap_info_compatibility_requires_matching_type_and_memory() {
+        let info = MicromapInfo::device_mem(64);
+
+        assert!(compatible_micromap_info(
+            &MicromapInfo::device_mem(128),
+            &info
+        ));
+        assert!(!compatible_micromap_info(
+            &MicromapInfo::host_mem(128),
+            &info
+        ));
+        assert!(!compatible_micromap_info(
+            &MicromapInfo::device_mem(32),
+            &info
+        ));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use {
         instance::{ApiVersion, Instance},
     },
     crate::driver::device::Device,
-    ash::{ext, khr as ash_khr, vk},
+    ash::{ext as ash_ext, khr as ash_khr, vk},
     log::{debug, error, warn},
     std::{
         collections::HashSet,
@@ -309,6 +309,69 @@ pub mod khr {
     }
 }
 
+/// Physical-device support types for `VK_EXT_*` extensions.
+pub mod ext {
+    use ash::vk;
+
+    /// Features of the physical device for opacity micromaps.
+    ///
+    /// See [`VkPhysicalDeviceOpacityMicromapFeaturesEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceOpacityMicromapFeaturesEXT.html).
+    #[derive(Clone, Copy, Debug)]
+    pub struct OpacityMicromapFeatures {
+        /// Indicates whether the implementation supports opacity micromap functionality.
+        pub micromap: bool,
+
+        /// Indicates whether opacity micromap capture and replay is supported.
+        pub micromap_capture_replay: bool,
+
+        /// Indicates whether opacity micromaps can be built on the host.
+        pub micromap_host_commands: bool,
+    }
+
+    impl From<vk::PhysicalDeviceOpacityMicromapFeaturesEXT<'_>> for OpacityMicromapFeatures {
+        fn from(features: vk::PhysicalDeviceOpacityMicromapFeaturesEXT<'_>) -> Self {
+            Self {
+                micromap: features.micromap == vk::TRUE,
+                micromap_capture_replay: features.micromap_capture_replay == vk::TRUE,
+                micromap_host_commands: features.micromap_host_commands == vk::TRUE,
+            }
+        }
+    }
+
+    /// Properties of the physical device for opacity micromaps.
+    ///
+    /// See [`VkPhysicalDeviceOpacityMicromapPropertiesEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceOpacityMicromapPropertiesEXT.html).
+    #[derive(Clone, Copy, Debug)]
+    pub struct OpacityMicromapProperties {
+        /// The maximum supported subdivision level for two-state opacity micromaps.
+        pub max_opacity2_state_subdivision_level: u32,
+
+        /// The maximum supported subdivision level for four-state opacity micromaps.
+        pub max_opacity4_state_subdivision_level: u32,
+    }
+
+    impl From<vk::PhysicalDeviceOpacityMicromapPropertiesEXT<'_>> for OpacityMicromapProperties {
+        fn from(properties: vk::PhysicalDeviceOpacityMicromapPropertiesEXT<'_>) -> Self {
+            Self {
+                max_opacity2_state_subdivision_level: properties
+                    .max_opacity2_state_subdivision_level,
+                max_opacity4_state_subdivision_level: properties
+                    .max_opacity4_state_subdivision_level,
+            }
+        }
+    }
+
+    /// Features and properties advertised by `VK_EXT_opacity_micromap`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct OpacityMicromap {
+        /// Features advertised by `VK_EXT_opacity_micromap`.
+        pub features: OpacityMicromapFeatures,
+
+        /// Properties advertised by `VK_EXT_opacity_micromap`.
+        pub properties: OpacityMicromapProperties,
+    }
+}
+
 /// Structure describing depth/stencil resolve properties that can be supported by an
 /// implementation.
 ///
@@ -443,6 +506,11 @@ pub struct PhysicalDevice {
     /// _Note:_ This field is read-only.
     pub vk_ext_index_type_uint8: bool,
 
+    /// `VK_EXT_opacity_micromap` features and properties, when supported with its dependencies.
+    ///
+    /// _Note:_ This field is read-only.
+    pub vk_ext_opacity_micromap: Option<ext::OpacityMicromap>,
+
     /// Whether `VK_EXT_private_data` support is available.
     ///
     /// _Note:_ This field is read-only.
@@ -499,7 +567,7 @@ impl PhysicalDevice {
     where
         F: FnOnce(vk::DeviceCreateInfo) -> ash::prelude::VkResult<ash::Device>,
     {
-        let mut enabled_ext_names = Vec::with_capacity(11);
+        let mut enabled_ext_names = Vec::with_capacity(12);
 
         if self.vk_khr_acceleration_structure.is_some() {
             enabled_ext_names.push(ash_khr::acceleration_structure::NAME.as_ptr());
@@ -507,7 +575,15 @@ impl PhysicalDevice {
         }
 
         if self.vk_ext_index_type_uint8 {
-            enabled_ext_names.push(ext::index_type_uint8::NAME.as_ptr());
+            enabled_ext_names.push(ash_ext::index_type_uint8::NAME.as_ptr());
+        }
+
+        if self
+            .vk_ext_opacity_micromap
+            .as_ref()
+            .is_some_and(|ext| ext.features.micromap)
+        {
+            enabled_ext_names.push(ash_ext::opacity_micromap::NAME.as_ptr());
         }
 
         if self.vk_khr_present_id.is_some() {
@@ -523,7 +599,7 @@ impl PhysicalDevice {
         }
 
         if self.vk_ext_private_data {
-            enabled_ext_names.push(ext::private_data::NAME.as_ptr());
+            enabled_ext_names.push(ash_ext::private_data::NAME.as_ptr());
         }
 
         if self.vk_khr_ray_query {
@@ -585,6 +661,7 @@ impl PhysicalDevice {
         let mut acceleration_structure_features =
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut index_type_uint8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
+        let mut opacity_micromap_features = vk::PhysicalDeviceOpacityMicromapFeaturesEXT::default();
         let mut present_id_features = vk::PhysicalDevicePresentIdFeaturesKHR::default();
         let mut present_wait_features = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
         let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
@@ -602,6 +679,14 @@ impl PhysicalDevice {
 
         if self.vk_ext_index_type_uint8 {
             features = features.push_next(&mut index_type_uint8_features);
+        }
+
+        if self
+            .vk_ext_opacity_micromap
+            .as_ref()
+            .is_some_and(|ext| ext.features.micromap)
+        {
+            features = features.push_next(&mut opacity_micromap_features);
         }
 
         if self.vk_khr_present_id.is_some() {
@@ -770,9 +855,9 @@ impl PhysicalDevice {
             .contains(vk_extension_name(ash_khr::acceleration_structure::NAME))
             && extension_names.contains(vk_extension_name(ash_khr::deferred_host_operations::NAME));
         let mut vk_ext_index_type_uint8 =
-            extension_names.contains(vk_extension_name(ext::index_type_uint8::NAME));
+            extension_names.contains(vk_extension_name(ash_ext::index_type_uint8::NAME));
         let mut vk_ext_private_data =
-            extension_names.contains(vk_extension_name(ext::private_data::NAME));
+            extension_names.contains(vk_extension_name(ash_ext::private_data::NAME));
         let mut vk_khr_present_id =
             extension_names.contains(vk_extension_name(ash_khr::present_id::NAME));
         let mut vk_khr_present_wait =
@@ -786,6 +871,10 @@ impl PhysicalDevice {
         let mut vk_khr_synchronization2 = extension_names
             .contains(vk_extension_name(ash_khr::synchronization2::NAME))
             || instance.info.api_version >= ApiVersion::Vulkan13;
+        let mut vk_ext_opacity_micromap = extension_names
+            .contains(vk_extension_name(ash_ext::opacity_micromap::NAME))
+            && vk_khr_acceleration_structure
+            && vk_khr_synchronization2;
 
         // Gather advertised features of the physical device
         let mut features_v1_1 = vk::PhysicalDeviceVulkan11Features::default();
@@ -793,6 +882,7 @@ impl PhysicalDevice {
         let mut acceleration_structure_features =
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut index_type_u8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::default();
+        let mut opacity_micromap_features = vk::PhysicalDeviceOpacityMicromapFeaturesEXT::default();
         let mut present_id_features = vk::PhysicalDevicePresentIdFeaturesKHR::default();
         let mut present_wait_features = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
         let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
@@ -810,6 +900,10 @@ impl PhysicalDevice {
 
         if vk_ext_index_type_uint8 {
             features = features.push_next(&mut index_type_u8_features);
+        }
+
+        if vk_ext_opacity_micromap {
+            features = features.push_next(&mut opacity_micromap_features);
         }
 
         if vk_ext_private_data {
@@ -847,6 +941,7 @@ impl PhysicalDevice {
         vk_khr_present_wait &= present_wait_features.present_wait == vk::TRUE && vk_khr_present_id;
         vk_khr_ray_query &= ray_query_features.ray_query == vk::TRUE;
         vk_khr_synchronization2 &= synchronization2_features.synchronization2 == vk::TRUE;
+        vk_ext_opacity_micromap &= vk_khr_synchronization2;
         vk_ext_private_data &= private_data_features.private_data == vk::TRUE;
 
         // Gather advertised properties of the physical device
@@ -856,6 +951,8 @@ impl PhysicalDevice {
             vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
         let mut depth_stencil_resolve_properties =
             vk::PhysicalDeviceDepthStencilResolveProperties::default();
+        let mut opacity_micromap_properties =
+            vk::PhysicalDeviceOpacityMicromapPropertiesEXT::default();
         let mut ray_tracing_pipeline_properties =
             vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
         let mut sampler_filter_minmax_properties =
@@ -867,15 +964,24 @@ impl PhysicalDevice {
             .push_next(&mut depth_stencil_resolve_properties)
             .push_next(&mut ray_tracing_pipeline_properties)
             .push_next(&mut sampler_filter_minmax_properties);
+        if vk_ext_opacity_micromap {
+            properties = properties.push_next(&mut opacity_micromap_properties);
+        }
+
         unsafe {
             get_physical_device_properties2(physical_device, &mut properties);
         }
+
         let properties_v1_0: Vulkan10Properties = properties.properties.into();
         let properties_v1_1 = properties_v1_1.into();
         let properties_v1_2 = properties_v1_2.into();
         let depth_stencil_resolve_properties = depth_stencil_resolve_properties.into();
         let sampler_filter_minmax_properties = sampler_filter_minmax_properties.into();
 
+        let vk_ext_opacity_micromap = vk_ext_opacity_micromap.then(|| ext::OpacityMicromap {
+            features: opacity_micromap_features.into(),
+            properties: opacity_micromap_properties.into(),
+        });
         let vk_khr_acceleration_structure =
             vk_khr_acceleration_structure.then(|| khr::AccelerationStructure {
                 features: acceleration_structure_features.into(),
@@ -908,6 +1014,7 @@ impl PhysicalDevice {
             queue_family_indices,
             sampler_filter_minmax_properties,
             vk_ext_index_type_uint8,
+            vk_ext_opacity_micromap,
             vk_ext_private_data,
             vk_khr_acceleration_structure,
             vk_khr_present_id,
@@ -3161,6 +3268,30 @@ mod test {
 
     fn c_chars(bytes: &[u8]) -> Vec<c_char> {
         bytes.iter().map(|&byte| byte as c_char).collect()
+    }
+
+    #[test]
+    fn opacity_micromap_features_convert_bool32_values() {
+        let features = vk::PhysicalDeviceOpacityMicromapFeaturesEXT::default()
+            .micromap(true)
+            .micromap_capture_replay(false)
+            .micromap_host_commands(true);
+        let features: ext::OpacityMicromapFeatures = features.into();
+
+        assert!(features.micromap);
+        assert!(!features.micromap_capture_replay);
+        assert!(features.micromap_host_commands);
+    }
+
+    #[test]
+    fn opacity_micromap_properties_preserve_limits() {
+        let properties = vk::PhysicalDeviceOpacityMicromapPropertiesEXT::default()
+            .max_opacity2_state_subdivision_level(11)
+            .max_opacity4_state_subdivision_level(7);
+        let properties: ext::OpacityMicromapProperties = properties.into();
+
+        assert_eq!(properties.max_opacity2_state_subdivision_level, 11);
+        assert_eq!(properties.max_opacity4_state_subdivision_level, 7);
     }
 
     #[test]

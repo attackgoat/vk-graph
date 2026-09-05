@@ -8,6 +8,7 @@ use {
             buffer::{BufferInfo, BufferSubresourceRange},
             image::{ImageInfo, SampleCount},
             is_read_access,
+            micromap::MicromapInfo,
         },
     },
     ash::vk,
@@ -75,6 +76,10 @@ fn access_writes(access: AccessType) -> bool {
             | AccessType::RayTracingShaderReadOther
             | AccessType::AccelerationStructureBuildRead
             | AccessType::AccelerationStructureBuildInputRead
+            | AccessType::MicromapBuildInputRead
+            | AccessType::MicromapBuildRead
+            | AccessType::MicromapBuildBufferRead
+            | AccessType::AccelerationStructureBuildMicromapRead
     )
 }
 
@@ -294,6 +299,9 @@ impl Fixture {
                 FixtureResource::Image(info) => {
                     graph.bind_stream_arg_resource(AnyResource::ImageArg(info))
                 }
+                FixtureResource::Micromap(info) => {
+                    graph.bind_stream_arg_resource(AnyResource::MicromapArg(info))
+                }
             };
             debug_assert_eq!(node_idx, expected_idx);
         }
@@ -357,7 +365,7 @@ impl Fixture {
                     }
 
                     let access_value = reader.u8()?;
-                    if access_value > 69 {
+                    if access_value > 76 {
                         return Err(invalid_data("invalid access type"));
                     }
 
@@ -413,6 +421,7 @@ enum FixtureResource {
     AccelerationStructure(AccelerationStructureInfo),
     Buffer(BufferInfo),
     Image(ImageInfo),
+    Micromap(MicromapInfo),
 }
 
 impl FixtureResource {
@@ -457,6 +466,7 @@ impl FixtureResource {
 
                 Ok(())
             }
+            (Self::Micromap(_), SubresourceRange::Micromap) => Ok(()),
             _ => Err(invalid_data("subresource kind does not match resource")),
         }
     }
@@ -563,6 +573,11 @@ impl<'a> FixtureReader<'a> {
                 usage: vk::ImageUsageFlags::from_raw(self.u32()?),
                 width: self.u32()?,
             })),
+            3 => Ok(FixtureResource::Micromap(MicromapInfo {
+                host_visible: self.bool()?,
+                micromap_type: vk::MicromapTypeEXT::from_raw(self.i32()?),
+                size: self.u64()?,
+            })),
             _ => Err(invalid_data("invalid resource kind")),
         }
     }
@@ -581,6 +596,7 @@ impl<'a> FixtureReader<'a> {
                 base_array_layer: self.u32()?,
                 layer_count: self.u32()?,
             })),
+            3 => Ok(SubresourceRange::Micromap),
             _ => Err(invalid_data("invalid subresource kind")),
         }
     }
@@ -652,6 +668,9 @@ impl FixtureWriter {
             | AnyResource::ImageArg(_)
             | AnyResource::ImageLease(_)
             | AnyResource::SwapchainImage(_) => 2,
+            AnyResource::Micromap(_)
+            | AnyResource::MicromapArg(_)
+            | AnyResource::MicromapLease(_) => 3,
         };
         self.u8(kind);
         match kind {
@@ -688,6 +707,12 @@ impl FixtureWriter {
                 self.u32(info.usage.as_raw());
                 self.u32(info.width);
             }
+            3 => {
+                let info = resource.expect_micromap_info();
+                self.bool(info.host_visible);
+                self.i32(info.micromap_type.as_raw());
+                self.u64(info.size);
+            }
             _ => unreachable!(),
         }
     }
@@ -708,6 +733,7 @@ impl FixtureWriter {
                 self.u32(range.base_array_layer);
                 self.u32(range.layer_count);
             }
+            SubresourceRange::Micromap => self.u8(3),
         }
     }
 }
@@ -802,8 +828,14 @@ mod test {
         super::*,
         crate::driver::{
             accel_struct::AccelerationStructureInfo, buffer::BufferInfo, image::ImageInfo,
+            micromap::MicromapInfo,
         },
     };
+
+    #[test]
+    fn micromap_build_input_is_read_only() {
+        assert!(!access_writes(AccessType::MicromapBuildInputRead));
+    }
 
     fn fixture_paths(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         let stamp = std::time::SystemTime::now()
@@ -833,6 +865,8 @@ mod test {
         let accel_struct = graph.bind_stream_arg_resource(AnyResource::AccelerationStructureArg(
             AccelerationStructureInfo::blas(256),
         ));
+        let micromap =
+            graph.bind_stream_arg_resource(AnyResource::MicromapArg(MicromapInfo::device_mem(128)));
 
         let mut command = graph.begin_cmd();
         command.push_subresource_access_index(
@@ -874,6 +908,29 @@ mod test {
         command.record_cmd_mut(|_| {});
         command.end_cmd();
 
+        let mut command = graph.begin_cmd();
+        command.push_subresource_access_index(
+            micromap,
+            SubresourceRange::Micromap,
+            AccessType::MicromapBuildRead,
+        );
+        command.record_cmd_mut(|_| {});
+        command.end_cmd();
+
+        let mut command = graph.begin_cmd();
+        command.push_subresource_access_index(
+            buffer,
+            SubresourceRange::Buffer(BufferSubresourceRange { start: 0, end: 32 }),
+            AccessType::MicromapBuildBufferRead,
+        );
+        command.push_subresource_access_index(
+            buffer,
+            SubresourceRange::Buffer(BufferSubresourceRange { start: 32, end: 64 }),
+            AccessType::MicromapBuildBufferWrite,
+        );
+        command.record_cmd_mut(|_| {});
+        command.end_cmd();
+
         graph
     }
 
@@ -908,13 +965,13 @@ mod test {
             .expect("unable to export fixture");
 
         let fixture = Fixture::read(&binary_path).expect("unable to read fixture");
-        assert_eq!(fixture.resource_count(), 3);
-        assert_eq!(fixture.command_count(), 2);
-        assert_eq!(fixture.access_count(), 4);
+        assert_eq!(fixture.resource_count(), 4);
+        assert_eq!(fixture.command_count(), 4);
+        assert_eq!(fixture.access_count(), 7);
 
         let rebuilt = fixture.into_graph();
-        assert_eq!(rebuilt.resources.len(), 3);
-        assert_eq!(rebuilt.cmds.len(), 2);
+        assert_eq!(rebuilt.resources.len(), 4);
+        assert_eq!(rebuilt.cmds.len(), 4);
         assert_eq!(
             rebuilt
                 .cmds
@@ -923,9 +980,9 @@ mod test {
                 .flat_map(|exec| exec.accesses.iter())
                 .map(|(_, accesses)| accesses.len())
                 .sum::<usize>(),
-            4
+            7
         );
-        assert_eq!(rebuilt.finalize().graph().cmds.len(), 2);
+        assert_eq!(rebuilt.finalize().graph().cmds.len(), 4);
 
         let markdown = std::fs::read_to_string(&markdown_path).expect("missing Markdown fixture");
         assert!(markdown.contains("Command Dependencies"));

@@ -18,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `AccelerationStructureSet`, `AccelerationStructureSetMember`, and `AccelerationStructureSetNode`
   optimization for persistent sets of acceleration-structure resources which declare aggregate
   `AccelerationStructureAccessType` graph access.
+- `VK_EXT_opacity_micromap` support with `Micromap` resources: device build, copy, serialization,
+  deserialization, and property-query commands, synchronous host operations, opacity attachments for
+  triangle BLAS geometry, and a headless build example.
 
 ## [0.14.8] - 2026-09-14
 

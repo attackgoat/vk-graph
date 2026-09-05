@@ -26,8 +26,11 @@ mod ray_tracing;
 pub use {
     self::{
         cmd_ref::{
-            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo, CommandRef,
+            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo,
+            BuildMicromapInfo, CommandRef, CopyMicromapInfo, DeserializeMicromapInfo,
+            MicromapCopyMode, MicromapQueryType, SerializeMicromapInfo,
             UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
+            WriteMicromapsPropertiesInfo,
         },
         compute::ComputeCommandRef,
         graphics::{ClearColorValue, GraphicsCommandRef},
@@ -40,10 +43,11 @@ pub use {
 use {
     super::{
         AccelerationStructureLeaseNode, AccelerationStructureNode, AccelerationStructureSetNode,
-        AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, AnyResource, BufferLeaseNode,
-        BufferNode, CommandData, CommandExecution, CommandFunction, Execution, Graph,
-        ImageLeaseNode, ImageNode, ImageSetNode, Node, Resource, ResourceNode, ResourceSetAccess,
-        SwapchainImageNode, TimestampQuery, TimestampQueryPlacement,
+        AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, AnyMicromapNode, AnyResource,
+        BufferLeaseNode, BufferNode, CommandData, CommandExecution, CommandFunction, Execution,
+        Graph, ImageLeaseNode, ImageNode, ImageSetNode, MicromapLeaseNode, MicromapNode, Node,
+        Resource, ResourceNode, ResourceSetAccess, SwapchainImageNode, TimestampQuery,
+        TimestampQueryPlacement,
     },
     crate::{
         NodeIndex,
@@ -55,7 +59,7 @@ use {
             AccelerationStructureAccessType, ImageAccessType, ResourceSetAccessType,
             ResourceSetIndex,
         },
-        stream::{AccelerationStructureArg, BufferArg, ImageArg},
+        stream::{AccelerationStructureArg, BufferArg, ImageArg, MicromapArg},
     },
     ash::vk,
     std::{ops::Range, sync::Arc},
@@ -1072,6 +1076,37 @@ view_accel_struct!(AccelerationStructureArg);
 view_accel_struct!(AccelerationStructureLeaseNode);
 view_accel_struct!(AccelerationStructureNode);
 
+macro_rules! view_micromap {
+    ($name:ty) => {
+        impl Subresource for $name {
+            type Info = MicromapSubresourceRange;
+            type Range = MicromapSubresourceRange;
+        }
+
+        impl private::SubresourceSealed for $name {
+            fn info(&self, resources: &[AnyResource]) -> <Self as Subresource>::Info
+            where
+                Self: Node + Subresource,
+            {
+                self.range(resources)
+            }
+
+            fn range(&self, resources: &[AnyResource]) -> <Self as Subresource>::Range
+            where
+                Self: Node + Subresource,
+            {
+                resources[self.index()].expect_micromap_info();
+                MicromapSubresourceRange
+            }
+        }
+    };
+}
+
+view_micromap!(AnyMicromapNode);
+view_micromap!(MicromapArg);
+view_micromap!(MicromapLeaseNode);
+view_micromap!(MicromapNode);
+
 macro_rules! view_buffer {
     ($name:ty) => {
         impl Subresource for $name {
@@ -1147,6 +1182,9 @@ pub(crate) enum SubresourceRange {
 
     /// Buffers may be partially bound.
     Buffer(BufferSubresourceRange),
+
+    /// Micromaps are bound whole.
+    Micromap,
 }
 
 impl SubresourceRange {
@@ -1181,11 +1219,21 @@ impl From<ImageViewInfo> for SubresourceRange {
     }
 }
 
+impl From<MicromapSubresourceRange> for SubresourceRange {
+    fn from(_: MicromapSubresourceRange) -> Self {
+        Self::Micromap
+    }
+}
+
 impl From<vk::ImageSubresourceRange> for SubresourceRange {
     fn from(subresource: vk::ImageSubresourceRange) -> Self {
         Self::Image(subresource)
     }
 }
+
+/// The whole-object subresource range of a micromap.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct MicromapSubresourceRange;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SubresourceAccess {

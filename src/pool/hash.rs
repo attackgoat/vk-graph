@@ -13,6 +13,7 @@ use {
         descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         device::Device,
         image::{Image, ImageInfo},
+        micromap::{Micromap, MicromapInfo},
         render_pass::{RenderPass, RenderPassInfo},
     },
     log::debug,
@@ -25,88 +26,6 @@ use parking_lot::Mutex;
 
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
-
-/// A high-performance resource allocator.
-///
-/// # Bucket Strategy
-///
-/// The information for each resource request is the key for a `HashMap` of buckets. If no bucket
-/// exists with the exact information provided a new bucket is created.
-///
-/// In practice this means that for a [`PoolConfig::image_capacity`] of `4`, requests for a
-/// 1024x1024 image with certain attributes will store a maximum of `4` such images. Requests for
-/// any image having a different size or attributes will store an additional maximum of `4` images.
-///
-/// # Memory Management
-///
-/// If requests for varying resources are common [`HashPool::clear_images_by_info`] and other
-/// memory management functions are necessary in order to avoid using all available device memory.
-#[derive(Debug)]
-#[read_only::cast]
-pub struct HashPool {
-    acceleration_structure_cache: HashMap<AccelerationStructureInfo, Cache<AccelerationStructure>>,
-    buffer_cache: HashMap<BufferInfo, Cache<Buffer>>,
-    command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
-    descriptor_pool_cache: HashMap<DescriptorPoolInfo, Cache<DescriptorPool>>,
-
-    /// The device which owns this pool.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub device: Device,
-
-    image_cache: HashMap<ImageInfo, Cache<Image>>,
-
-    /// Information used to create this pool.
-    ///
-    /// _Note:_ This field is read-only.
-    #[readonly]
-    pub info: PoolConfig,
-
-    render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
-}
-
-impl HashPool {
-    /// Constructs a new `HashPool`.
-    pub fn new(device: &Device) -> Self {
-        Self::with_capacity(device, PoolConfig::default())
-    }
-
-    /// Constructs a new `HashPool` with the given capacity information.
-    pub fn with_capacity(device: &Device, info: impl Into<PoolConfig>) -> Self {
-        let info: PoolConfig = info.into();
-        let device = device.clone();
-
-        Self {
-            acceleration_structure_cache: Default::default(),
-            buffer_cache: Default::default(),
-            command_buffer_cache: Default::default(),
-            descriptor_pool_cache: Default::default(),
-            device,
-            image_cache: Default::default(),
-            info,
-            render_pass_cache: Default::default(),
-        }
-    }
-
-    /// Clears the pool, removing all resources.
-    pub fn clear(&mut self) {
-        self.clear_accel_structs();
-        self.clear_buffers();
-        self.clear_images();
-    }
-}
-
-impl CollectResources for HashPool {
-    fn collect_resources(&mut self, requests: &ResourceRequests) {
-        self.acceleration_structure_cache
-            .retain(|info, _| requests.accel_structs.contains(info));
-        self.buffer_cache
-            .retain(|info, _| requests.buffers.contains(info));
-        self.image_cache
-            .retain(|info, _| requests.images.contains(info));
-    }
-}
 
 macro_rules! resource_mgmt_fns {
     ($fn_plural:literal, $doc_singular:literal, $ty:ty, $field:ident) => {
@@ -146,6 +65,80 @@ information."]
     };
 }
 
+/// A high-performance resource allocator.
+///
+/// # Bucket Strategy
+///
+/// The information for each resource request is the key for a `HashMap` of buckets. If no bucket
+/// exists with the exact information provided a new bucket is created.
+///
+/// In practice this means that for a [`PoolConfig::image_capacity`] of `4`, requests for a
+/// 1024x1024 image with certain attributes will store a maximum of `4` such images. Requests for
+/// any image having a different size or attributes will store an additional maximum of `4` images.
+///
+/// # Memory Management
+///
+/// If requests for varying resources are common [`HashPool::clear_images_by_info`] and other
+/// memory management functions are necessary in order to avoid using all available device memory.
+#[derive(Debug)]
+#[read_only::cast]
+pub struct HashPool {
+    acceleration_structure_cache: HashMap<AccelerationStructureInfo, Cache<AccelerationStructure>>,
+    buffer_cache: HashMap<BufferInfo, Cache<Buffer>>,
+    command_buffer_cache: HashMap<u32, Cache<CommandBuffer>>,
+    descriptor_pool_cache: HashMap<DescriptorPoolInfo, Cache<DescriptorPool>>,
+
+    /// The device which owns this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub device: Device,
+
+    image_cache: HashMap<ImageInfo, Cache<Image>>,
+
+    /// Information used to create this pool.
+    ///
+    /// _Note:_ This field is read-only.
+    #[readonly]
+    pub info: PoolConfig,
+
+    micromap_cache: HashMap<MicromapInfo, Cache<Micromap>>,
+    render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
+}
+
+impl HashPool {
+    /// Constructs a new `HashPool`.
+    pub fn new(device: &Device) -> Self {
+        Self::with_capacity(device, PoolConfig::default())
+    }
+
+    /// Constructs a new `HashPool` with the given capacity information.
+    pub fn with_capacity(device: &Device, info: impl Into<PoolConfig>) -> Self {
+        let info: PoolConfig = info.into();
+        let device = device.clone();
+
+        Self {
+            acceleration_structure_cache: Default::default(),
+            buffer_cache: Default::default(),
+            command_buffer_cache: Default::default(),
+            descriptor_pool_cache: Default::default(),
+            device,
+            image_cache: Default::default(),
+            info,
+            micromap_cache: Default::default(),
+            render_pass_cache: Default::default(),
+        }
+    }
+
+    /// Clears the pool, removing all resources.
+    pub fn clear(&mut self) {
+        self.clear_accel_structs();
+        self.clear_buffers();
+        self.clear_images();
+        self.clear_micromaps();
+    }
+}
+
 resource_mgmt_fns!(
     "accel_structs",
     "acceleration structure",
@@ -154,6 +147,20 @@ resource_mgmt_fns!(
 );
 resource_mgmt_fns!("buffers", "buffer", BufferInfo, buffer_cache);
 resource_mgmt_fns!("images", "image", ImageInfo, image_cache);
+resource_mgmt_fns!("micromaps", "micromap", MicromapInfo, micromap_cache);
+
+impl CollectResources for HashPool {
+    fn collect_resources(&mut self, requests: &ResourceRequests) {
+        self.acceleration_structure_cache
+            .retain(|info, _| requests.accel_structs.contains(info));
+        self.buffer_cache
+            .retain(|info, _| requests.buffers.contains(info));
+        self.image_cache
+            .retain(|info, _| requests.images.contains(info));
+        self.micromap_cache
+            .retain(|info, _| requests.micromaps.contains(info));
+    }
+}
 
 impl Pool<CommandBufferInfo, CommandBuffer> for HashPool {
     #[profiling::function]
@@ -280,6 +287,7 @@ macro_rules! lease {
 lease!(AccelerationStructureInfo => AccelerationStructure, accel_struct_capacity);
 lease!(BufferInfo => Buffer, buffer_capacity);
 lease!(ImageInfo => Image, image_capacity);
+lease!(MicromapInfo => Micromap, micromap_capacity);
 
 #[cfg(test)]
 mod test {

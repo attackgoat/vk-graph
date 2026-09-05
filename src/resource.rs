@@ -11,6 +11,7 @@ use {
             device::Device,
             format_aspect_mask,
             image::{Image, ImageInfo, ImageSetQueue},
+            micromap::Micromap,
         },
         pool::Lease,
     },
@@ -581,6 +582,26 @@ impl PhysicalImageId {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PhysicalMicromapId {
+    device: usize,
+    handle: u64,
+}
+
+impl PhysicalMicromapId {
+    #[cfg(test)]
+    pub(crate) const fn from_parts(device: usize, handle: u64) -> Self {
+        Self { device, handle }
+    }
+
+    pub(crate) fn of(micromap: &Micromap) -> Self {
+        Self {
+            device: Device::identity(&micromap.buffer.device),
+            handle: micromap.handle.as_raw(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ResourceSet {
     AccelerationStructure(AccelerationStructureSet),
@@ -1011,6 +1032,15 @@ mod test {
         assert_eq!(image, PhysicalImageId::from_parts(1, 2));
         assert_ne!(image, PhysicalImageId::from_parts(2, 2));
         assert_ne!(image, PhysicalImageId::from_parts(1, 3));
+    }
+
+    #[test]
+    fn physical_micromap_id_includes_device_and_handle() {
+        let micromap = PhysicalMicromapId::from_parts(1, 2);
+
+        assert_eq!(micromap, PhysicalMicromapId::from_parts(1, 2));
+        assert_ne!(micromap, PhysicalMicromapId::from_parts(2, 2));
+        assert_ne!(micromap, PhysicalMicromapId::from_parts(1, 3));
     }
 
     #[test]

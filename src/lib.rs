@@ -36,8 +36,8 @@ use {
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
             AccelerationStructureSetNode, AnyAccelerationStructureNode, AnyBufferNode,
-            AnyImageNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode, ImageSetNode,
-            SwapchainImageNode,
+            AnyImageNode, AnyMicromapNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode,
+            ImageSetNode, MicromapLeaseNode, MicromapNode, SwapchainImageNode,
         },
         resource::{
             AccelerationStructureSet, ImageSet, ResourceSetAccessType, ResourceSetIndex,
@@ -55,6 +55,7 @@ use {
             format_aspect_mask,
             graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{ImageInfo, ImageViewInfo, SampleCount},
+            micromap::{Micromap, MicromapInfo},
             ray_tracing::RayTracingPipeline,
             render_pass::ResolveMode,
             shader::PipelineDescriptorInfo,
@@ -85,7 +86,9 @@ use {
 };
 
 #[cfg(feature = "checked")]
-use self::resource::{PhysicalAccelerationStructureId, PhysicalImageId, ResourceSet};
+use self::resource::{
+    PhysicalAccelerationStructureId, PhysicalImageId, PhysicalMicromapId, ResourceSet,
+};
 
 #[cfg(feature = "checked")]
 use std::collections::HashSet;
@@ -260,53 +263,11 @@ enum AnyResource {
     Image(Arc<Image>),
     ImageArg(ImageInfo),
     ImageLease(Arc<Lease<Image>>),
+    Micromap(Arc<Micromap>),
+    MicromapArg(MicromapInfo),
+    MicromapLease(Arc<Lease<Micromap>>),
     SwapchainImage(Box<SwapchainImage>),
 }
-
-impl Clone for AnyResource {
-    fn clone(&self) -> Self {
-        match self {
-            Self::AccelerationStructure(resource) => {
-                Self::AccelerationStructure(Arc::clone(resource))
-            }
-            Self::AccelerationStructureArg(info) => Self::AccelerationStructureArg(*info),
-            Self::AccelerationStructureLease(resource) => {
-                Self::AccelerationStructureLease(Arc::clone(resource))
-            }
-            Self::Buffer(resource) => Self::Buffer(Arc::clone(resource)),
-            Self::BufferArg(info) => Self::BufferArg(*info),
-            Self::BufferLease(resource) => Self::BufferLease(Arc::clone(resource)),
-            Self::Image(resource) => Self::Image(Arc::clone(resource)),
-            Self::ImageArg(info) => Self::ImageArg(*info),
-            Self::ImageLease(resource) => Self::ImageLease(Arc::clone(resource)),
-            Self::SwapchainImage(resource) => {
-                Self::SwapchainImage(Box::new(unsafe { resource.to_detached() }))
-            }
-        }
-    }
-}
-
-macro_rules! any_resource_from_arc {
-    ($name:ident) => {
-        paste::paste! {
-            impl From<Arc<$name>> for AnyResource {
-                fn from(resource: Arc<$name>) -> Self {
-                    Self::$name(resource)
-                }
-            }
-
-            impl From<Arc<Lease<$name>>> for AnyResource {
-                fn from(resource: Arc<Lease<$name>>) -> Self {
-                    Self::[<$name Lease>](resource)
-                }
-            }
-        }
-    };
-}
-
-any_resource_from_arc!(AccelerationStructure);
-any_resource_from_arc!(Buffer);
-any_resource_from_arc!(Image);
 
 impl AnyResource {
     fn as_accel_struct(&self) -> Option<&AccelerationStructure> {
@@ -330,6 +291,14 @@ impl AnyResource {
             Self::Image(resource) => resource,
             Self::ImageLease(resource) => resource,
             Self::SwapchainImage(resource) => resource,
+            _ => return None,
+        })
+    }
+
+    fn as_micromap(&self) -> Option<&Micromap> {
+        Some(match self {
+            Self::Micromap(resource) => resource,
+            Self::MicromapLease(resource) => resource,
             _ => return None,
         })
     }
@@ -376,7 +345,69 @@ impl AnyResource {
             _ => panic!("missing image resource"),
         }
     }
+
+    fn expect_micromap(&self) -> &Micromap {
+        self.as_micromap().expect("missing micromap resource")
+    }
+
+    pub(crate) fn expect_micromap_info(&self) -> MicromapInfo {
+        match self {
+            Self::Micromap(resource) => resource.info,
+            Self::MicromapArg(info) => *info,
+            Self::MicromapLease(resource) => resource.info,
+            _ => panic!("missing micromap resource"),
+        }
+    }
 }
+
+impl Clone for AnyResource {
+    fn clone(&self) -> Self {
+        match self {
+            Self::AccelerationStructure(resource) => {
+                Self::AccelerationStructure(Arc::clone(resource))
+            }
+            Self::AccelerationStructureArg(info) => Self::AccelerationStructureArg(*info),
+            Self::AccelerationStructureLease(resource) => {
+                Self::AccelerationStructureLease(Arc::clone(resource))
+            }
+            Self::Buffer(resource) => Self::Buffer(Arc::clone(resource)),
+            Self::BufferArg(info) => Self::BufferArg(*info),
+            Self::BufferLease(resource) => Self::BufferLease(Arc::clone(resource)),
+            Self::Image(resource) => Self::Image(Arc::clone(resource)),
+            Self::ImageArg(info) => Self::ImageArg(*info),
+            Self::ImageLease(resource) => Self::ImageLease(Arc::clone(resource)),
+            Self::Micromap(resource) => Self::Micromap(Arc::clone(resource)),
+            Self::MicromapArg(info) => Self::MicromapArg(*info),
+            Self::MicromapLease(resource) => Self::MicromapLease(Arc::clone(resource)),
+            Self::SwapchainImage(resource) => {
+                Self::SwapchainImage(Box::new(unsafe { resource.to_detached() }))
+            }
+        }
+    }
+}
+
+macro_rules! any_resource_from_arc {
+    ($name:ident) => {
+        paste::paste! {
+            impl From<Arc<$name>> for AnyResource {
+                fn from(resource: Arc<$name>) -> Self {
+                    Self::$name(resource)
+                }
+            }
+
+            impl From<Arc<Lease<$name>>> for AnyResource {
+                fn from(resource: Arc<Lease<$name>>) -> Self {
+                    Self::[<$name Lease>](resource)
+                }
+            }
+        }
+    };
+}
+
+any_resource_from_arc!(AccelerationStructure);
+any_resource_from_arc!(Buffer);
+any_resource_from_arc!(Image);
+any_resource_from_arc!(Micromap);
 
 #[derive(Clone, Copy, Debug)]
 struct Attachment {
@@ -1033,153 +1064,9 @@ pub struct Graph {
 
     #[cfg(feature = "checked")]
     prepared_stream_image_accesses: HashSet<PhysicalImageId>,
-}
 
-/// Builder for incrementally constructing a [`Graph`].
-pub struct GraphBuilder {
-    graph: Graph,
-}
-
-impl GraphBuilder {
-    /// Creates an empty graph builder.
-    pub fn new() -> Self {
-        Self {
-            graph: Graph::new(),
-        }
-    }
-
-    /// Builds the graph.
-    pub fn build(self) -> Graph {
-        self.graph
-    }
-
-    /// Binds a Vulkan resource or persistent resource set to this graph.
-    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
-    where
-        R: Resource,
-    {
-        self.graph.bind_resource(resource)
-    }
-
-    /// Copies an image, potentially performing format conversion.
-    pub fn blit_image(
-        mut self,
-        src: impl Into<AnyImageNode>,
-        dst: impl Into<AnyImageNode>,
-        filter: vk::Filter,
-    ) -> Self {
-        self.graph.blit_image(src, dst, filter);
-        self
-    }
-
-    /// Clears a color image.
-    pub fn clear_color_image(
-        mut self,
-        image: impl Into<AnyImageNode>,
-        color: impl Into<ClearColorValue>,
-    ) -> Self {
-        self.graph.clear_color_image(image, color);
-        self
-    }
-
-    /// Clears a depth/stencil image.
-    pub fn clear_depth_stencil_image(
-        mut self,
-        image: impl Into<AnyImageNode>,
-        depth: f32,
-        stencil: u32,
-    ) -> Self {
-        self.graph.clear_depth_stencil_image(image, depth, stencil);
-        self
-    }
-
-    /// Copies data between buffers.
-    pub fn copy_buffer(
-        mut self,
-        src: impl Into<AnyBufferNode>,
-        dst: impl Into<AnyBufferNode>,
-    ) -> Self {
-        self.graph.copy_buffer(src, dst);
-        self
-    }
-
-    /// Copies data from a buffer into an image.
-    pub fn copy_buffer_to_image(
-        mut self,
-        src: impl Into<AnyBufferNode>,
-        dst: impl Into<AnyImageNode>,
-    ) -> Self {
-        self.graph.copy_buffer_to_image(src, dst);
-        self
-    }
-
-    /// Copies all layers of a source image to a destination image.
-    pub fn copy_image(
-        mut self,
-        src: impl Into<AnyImageNode>,
-        dst: impl Into<AnyImageNode>,
-    ) -> Self {
-        self.graph.copy_image(src, dst);
-        self
-    }
-
-    /// Copies image data into a buffer.
-    pub fn copy_image_to_buffer(
-        mut self,
-        src: impl Into<AnyImageNode>,
-        dst: impl Into<AnyBufferNode>,
-    ) -> Self {
-        self.graph.copy_image_to_buffer(src, dst);
-        self
-    }
-
-    /// Fills a region of a buffer with a fixed value.
-    pub fn fill_buffer(
-        mut self,
-        buffer: impl Into<AnyBufferNode>,
-        region: Range<vk::DeviceSize>,
-        data: u32,
-    ) -> Self {
-        self.graph.fill_buffer(buffer, region, data);
-        self
-    }
-
-    /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html) command.
-    pub fn update_buffer(
-        mut self,
-        buffer: impl Into<AnyBufferNode>,
-        offset: vk::DeviceSize,
-        data: impl AsRef<[u8]> + 'static + Send,
-    ) -> Self {
-        self.graph.update_buffer(buffer, offset, data);
-        self
-    }
-}
-
-impl Default for GraphBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Default for Graph {
-    fn default() -> Self {
-        Self {
-            cmds: Default::default(),
-            resource_sets: Default::default(),
-            resources: Default::default(),
-            timestamp_queries: Default::default(),
-
-            #[cfg(feature = "checked")]
-            graph_id: GraphId::next(),
-
-            #[cfg(feature = "checked")]
-            prepared_stream_acceleration_structure_accesses: Default::default(),
-
-            #[cfg(feature = "checked")]
-            prepared_stream_image_accesses: Default::default(),
-        }
-    }
+    #[cfg(feature = "checked")]
+    prepared_stream_micromap_accesses: HashSet<PhysicalMicromapId>,
 }
 
 impl Graph {
@@ -1909,6 +1796,156 @@ impl Graph {
     }
 }
 
+impl Default for Graph {
+    fn default() -> Self {
+        Self {
+            cmds: Default::default(),
+            resource_sets: Default::default(),
+            resources: Default::default(),
+            timestamp_queries: Default::default(),
+
+            #[cfg(feature = "checked")]
+            graph_id: GraphId::next(),
+
+            #[cfg(feature = "checked")]
+            prepared_stream_acceleration_structure_accesses: Default::default(),
+
+            #[cfg(feature = "checked")]
+            prepared_stream_image_accesses: Default::default(),
+
+            #[cfg(feature = "checked")]
+            prepared_stream_micromap_accesses: Default::default(),
+        }
+    }
+}
+
+/// Builder for incrementally constructing a [`Graph`].
+pub struct GraphBuilder {
+    graph: Graph,
+}
+
+impl GraphBuilder {
+    /// Creates an empty graph builder.
+    pub fn new() -> Self {
+        Self {
+            graph: Graph::new(),
+        }
+    }
+
+    /// Builds the graph.
+    pub fn build(self) -> Graph {
+        self.graph
+    }
+
+    /// Binds a Vulkan resource or persistent resource set to this graph.
+    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
+    where
+        R: Resource,
+    {
+        self.graph.bind_resource(resource)
+    }
+
+    /// Copies an image, potentially performing format conversion.
+    pub fn blit_image(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
+        filter: vk::Filter,
+    ) -> Self {
+        self.graph.blit_image(src, dst, filter);
+        self
+    }
+
+    /// Clears a color image.
+    pub fn clear_color_image(
+        mut self,
+        image: impl Into<AnyImageNode>,
+        color: impl Into<ClearColorValue>,
+    ) -> Self {
+        self.graph.clear_color_image(image, color);
+        self
+    }
+
+    /// Clears a depth/stencil image.
+    pub fn clear_depth_stencil_image(
+        mut self,
+        image: impl Into<AnyImageNode>,
+        depth: f32,
+        stencil: u32,
+    ) -> Self {
+        self.graph.clear_depth_stencil_image(image, depth, stencil);
+        self
+    }
+
+    /// Copies data between buffers.
+    pub fn copy_buffer(
+        mut self,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyBufferNode>,
+    ) -> Self {
+        self.graph.copy_buffer(src, dst);
+        self
+    }
+
+    /// Copies data from a buffer into an image.
+    pub fn copy_buffer_to_image(
+        mut self,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyImageNode>,
+    ) -> Self {
+        self.graph.copy_buffer_to_image(src, dst);
+        self
+    }
+
+    /// Copies all layers of a source image to a destination image.
+    pub fn copy_image(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
+    ) -> Self {
+        self.graph.copy_image(src, dst);
+        self
+    }
+
+    /// Copies image data into a buffer.
+    pub fn copy_image_to_buffer(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyBufferNode>,
+    ) -> Self {
+        self.graph.copy_image_to_buffer(src, dst);
+        self
+    }
+
+    /// Fills a region of a buffer with a fixed value.
+    pub fn fill_buffer(
+        mut self,
+        buffer: impl Into<AnyBufferNode>,
+        region: Range<vk::DeviceSize>,
+        data: u32,
+    ) -> Self {
+        self.graph.fill_buffer(buffer, region, data);
+        self
+    }
+
+    /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html) command.
+    pub fn update_buffer(
+        mut self,
+        buffer: impl Into<AnyBufferNode>,
+        offset: vk::DeviceSize,
+        data: impl AsRef<[u8]> + 'static + Send,
+    ) -> Self {
+        self.graph.update_buffer(buffer, offset, data);
+        self
+    }
+}
+
+impl Default for GraphBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Specifies the state of a color or combined depth and stencil attachment image during graphics
 /// render pass framebuffer load operations.
 ///
@@ -2230,6 +2267,7 @@ macro_rules! resource {
 resource!(AccelerationStructure);
 resource!(Image);
 resource!(Buffer);
+resource!(Micromap);
 
 #[derive(Debug, Default)]
 struct ResourceMap {

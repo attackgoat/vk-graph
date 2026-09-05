@@ -3,12 +3,14 @@
 use {
     super::{
         BufferHostMappingCompatibility, Lease, Pool, compatible_buffer_info, compatible_image_info,
+        compatible_micromap_info,
     },
     crate::driver::{
         DriverError,
         accel_struct::{AccelerationStructure, AccelerationStructureInfo},
         buffer::{Buffer, BufferInfo},
         image::{Image, ImageInfo},
+        micromap::{Micromap, MicromapInfo},
     },
     log::debug,
     std::{
@@ -27,6 +29,7 @@ struct AliasSet {
     )>,
     buffers: Vec<(BufferInfo, Weak<Lease<Buffer>>)>,
     images: Vec<(ImageInfo, Weak<Lease<Image>>)>,
+    micromaps: Vec<(MicromapInfo, Weak<Lease<Micromap>>)>,
 }
 
 /// A memory-efficient resource cache for any [`Pool`] type.
@@ -61,10 +64,39 @@ pub struct Cache<T, Tag = ()> {
     pool: T,
 }
 
-/// A tag-scoped cache view.
-pub struct TaggedCache<'a, T, Tag> {
-    cache: &'a mut Cache<T, Tag>,
-    tag: Tag,
+impl<T> Cache<T, ()>
+where
+    T: Pool<AccelerationStructureInfo, AccelerationStructure>
+        + Pool<BufferInfo, Buffer>
+        + Pool<ImageInfo, Image>,
+{
+    /// Alias an acceleration structure using the default tag.
+    pub fn accel_struct(
+        &mut self,
+        info: AccelerationStructureInfo,
+    ) -> Result<Arc<Lease<AccelerationStructure>>, DriverError> {
+        self.resource_accel_struct_tagged((), info)
+    }
+
+    /// Alias a buffer using the default tag.
+    pub fn buffer(&mut self, info: BufferInfo) -> Result<Arc<Lease<Buffer>>, DriverError> {
+        self.resource_buffer_tagged((), info)
+    }
+
+    /// Alias an image using the default tag.
+    pub fn image(&mut self, info: ImageInfo) -> Result<Arc<Lease<Image>>, DriverError> {
+        self.resource_image_tagged((), info)
+    }
+}
+
+impl<T> Cache<T, ()>
+where
+    T: Pool<MicromapInfo, Micromap>,
+{
+    /// Alias a micromap using the default tag.
+    pub fn micromap(&mut self, info: MicromapInfo) -> Result<Arc<Lease<Micromap>>, DriverError> {
+        self.resource_micromap_tagged((), info)
+    }
 }
 
 impl<T, Tag> Cache<T, Tag>
@@ -213,31 +245,67 @@ where
 
         Ok(item)
     }
+
+    fn resource_micromap_tagged(
+        &mut self,
+        tag: Tag,
+        info: MicromapInfo,
+    ) -> Result<Arc<Lease<Micromap>>, DriverError>
+    where
+        Tag: Clone,
+        T: Pool<MicromapInfo, Micromap>,
+    {
+        let mut result = None;
+
+        {
+            let state = self.alias_set(tag.clone());
+            state.micromaps.retain(|(_, item)| item.strong_count() > 0);
+
+            profiling::scope!("check aliases");
+
+            for (item_info, item) in &state.micromaps {
+                if compatible_micromap_info(item_info, &info)
+                    && let Some(item) = item.upgrade()
+                {
+                    result = Some(item);
+                    break;
+                }
+            }
+        }
+
+        if let Some(item) = result {
+            return Ok(item);
+        }
+
+        debug!("Leasing new {}", stringify!(Micromap));
+
+        let item = Arc::new(self.pool.resource(info)?);
+        self.alias_set(tag)
+            .micromaps
+            .push((info, Arc::downgrade(&item)));
+
+        Ok(item)
+    }
 }
 
-impl<T> Cache<T, ()>
-where
-    T: Pool<AccelerationStructureInfo, AccelerationStructure>
-        + Pool<BufferInfo, Buffer>
-        + Pool<ImageInfo, Image>,
-{
-    /// Alias an acceleration structure using the default tag.
-    pub fn accel_struct(
-        &mut self,
-        info: AccelerationStructureInfo,
-    ) -> Result<Arc<Lease<AccelerationStructure>>, DriverError> {
-        self.resource_accel_struct_tagged((), info)
-    }
+impl<T, Tag> Deref for Cache<T, Tag> {
+    type Target = T;
 
-    /// Alias a buffer using the default tag.
-    pub fn buffer(&mut self, info: BufferInfo) -> Result<Arc<Lease<Buffer>>, DriverError> {
-        self.resource_buffer_tagged((), info)
+    fn deref(&self) -> &Self::Target {
+        &self.pool
     }
+}
 
-    /// Alias an image using the default tag.
-    pub fn image(&mut self, info: ImageInfo) -> Result<Arc<Lease<Image>>, DriverError> {
-        self.resource_image_tagged((), info)
+impl<T, Tag> DerefMut for Cache<T, Tag> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.pool
     }
+}
+
+/// A tag-scoped cache view.
+pub struct TaggedCache<'a, T, Tag> {
+    cache: &'a mut Cache<T, Tag>,
+    tag: Tag,
 }
 
 impl<'a, T, Tag> TaggedCache<'a, T, Tag>
@@ -275,10 +343,6 @@ mod cache_private {
 
 impl cache_private::TaggedCacheResourceSealed for AccelerationStructureInfo {}
 
-impl cache_private::TaggedCacheResourceSealed for BufferInfo {}
-
-impl cache_private::TaggedCacheResourceSealed for ImageInfo {}
-
 impl<Tag> TaggedCacheResource<Tag> for AccelerationStructureInfo
 where
     Tag: Eq + Hash + Clone,
@@ -296,6 +360,8 @@ where
         cache.resource_accel_struct_tagged(tag, info)
     }
 }
+
+impl cache_private::TaggedCacheResourceSealed for BufferInfo {}
 
 impl<Tag> TaggedCacheResource<Tag> for BufferInfo
 where
@@ -315,6 +381,8 @@ where
     }
 }
 
+impl cache_private::TaggedCacheResourceSealed for ImageInfo {}
+
 impl<Tag> TaggedCacheResource<Tag> for ImageInfo
 where
     Tag: Eq + Hash + Clone,
@@ -333,16 +401,60 @@ where
     }
 }
 
-impl<T, Tag> Deref for Cache<T, Tag> {
-    type Target = T;
+impl cache_private::TaggedCacheResourceSealed for MicromapInfo {}
 
-    fn deref(&self) -> &Self::Target {
-        &self.pool
+impl<Tag> TaggedCacheResource<Tag> for MicromapInfo
+where
+    Tag: Eq + Hash + Clone,
+{
+    type Item = Micromap;
+
+    fn resource<T>(
+        cache: &mut Cache<T, Tag>,
+        tag: Tag,
+        info: Self,
+    ) -> Result<Arc<Lease<Self::Item>>, DriverError>
+    where
+        T: Pool<Self, Self::Item>,
+    {
+        cache.resource_micromap_tagged(tag, info)
     }
 }
 
-impl<T, Tag> DerefMut for Cache<T, Tag> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.pool
+#[cfg(test)]
+mod test {
+    use super::{
+        AccelerationStructure, AccelerationStructureInfo, Buffer, BufferInfo, Cache, DriverError,
+        Image, ImageInfo, Lease, Pool,
+    };
+
+    struct FailingPool;
+
+    impl Pool<AccelerationStructureInfo, AccelerationStructure> for FailingPool {
+        fn resource(
+            &mut self,
+            _: AccelerationStructureInfo,
+        ) -> Result<Lease<AccelerationStructure>, DriverError> {
+            Err(DriverError::Unsupported)
+        }
+    }
+
+    impl Pool<BufferInfo, Buffer> for FailingPool {
+        fn resource(&mut self, _: BufferInfo) -> Result<Lease<Buffer>, DriverError> {
+            Err(DriverError::Unsupported)
+        }
+    }
+
+    impl Pool<ImageInfo, Image> for FailingPool {
+        fn resource(&mut self, _: ImageInfo) -> Result<Lease<Image>, DriverError> {
+            Err(DriverError::Unsupported)
+        }
+    }
+
+    #[test]
+    fn existing_convenience_methods_do_not_require_micromap_pool() {
+        let _ = Cache::<FailingPool>::accel_struct;
+        let _ = Cache::<FailingPool>::buffer;
+        let _ = Cache::<FailingPool>::image;
     }
 }

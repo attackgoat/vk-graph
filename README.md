@@ -37,10 +37,10 @@ fn main() -> Result<(), WindowError> {
 
 ## Usage
 
-_vk-graph_ centers frame work around a `Graph`. Bind Vulkan smart-pointer resources such as
-buffers, images, acceleration structures, and swapchain images into the graph to get statically typed
-node handles. Commands then reference those nodes instead of raw Vulkan handles. When recording is
-complete, finalize the graph into a `Submission` and submit it with a pool.
+_vk-graph_ centers frame work around a `Graph`. Bind Vulkan smart-pointer resources such as buffers,
+images, micromaps, acceleration structures, and swapchain images into the graph to get statically
+typed node handles. Commands then reference those nodes instead of raw Vulkan handles. When
+recording is complete, finalize the graph into a `Submission` and submit it with a pool.
 
 The normal flow is:
 
@@ -170,6 +170,8 @@ Included are some examples you might find helpful:
 - [`hello_world.rs`](crates/vk-graph-window/examples/hello_world.rs) — Displays a window on the
   screen. Please start here.
 - [`triangle.rs`](examples/triangle.rs) — Shaders and full setup of index/vertex buffers; < 100 LOC.
+- [`opacity_micromap.rs`](examples/opacity_micromap.rs) — Headless, synchronized construction of a
+  two-state opacity micromap and attached BLAS; exits cleanly when unsupported.
 - [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass Shadertoy using the original
   shader code.
 

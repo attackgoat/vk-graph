@@ -72,13 +72,14 @@ use {
             compute::ComputePipeline,
             graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{Image, ImageInfo, ImageInfoBuilder, ImageViewInfo},
+            micromap::{Micromap, MicromapInfo, MicromapInfoBuilder},
             ray_tracing::RayTracingPipeline,
         },
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
             AccelerationStructureSetNode, AnyAccelerationStructureNode, AnyBufferNode,
-            AnyImageNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode, ImageSetNode,
-            SwapchainImageNode,
+            AnyImageNode, AnyMicromapNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode,
+            ImageSetNode, MicromapLeaseNode, MicromapNode, SwapchainImageNode,
         },
         pool::SubmissionPool,
         submission::Submission,
@@ -152,14 +153,6 @@ pub struct StreamArg<T> {
 
     __: PhantomData<fn() -> T>,
 }
-
-impl<T> Clone for StreamArg<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for StreamArg<T> {}
 
 impl<T> StreamArg<T> {
     pub(crate) fn new(
@@ -264,6 +257,42 @@ impl Node for StreamArg<Image> {
     }
 }
 
+impl NodeSealed for StreamArg<Micromap> {
+    fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
+        resources[self.index].expect_micromap()
+    }
+
+    fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
+        resources[index].expect_micromap()
+    }
+
+    #[cfg(feature = "checked")]
+    fn assert_owner(&self, _graph_id: GraphId) {
+        #[cfg(feature = "checked")]
+        assert!(
+            self.graph_id == _graph_id,
+            "node belongs to a different graph"
+        );
+    }
+}
+
+impl Node for StreamArg<Micromap> {
+    type Resource = Micromap;
+    type SyncInfo = crate::driver::micromap::MicromapSyncInfo;
+
+    fn index(&self) -> usize {
+        self.index
+    }
+}
+
+impl<T> Clone for StreamArg<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for StreamArg<T> {}
+
 /// A stream argument for an acceleration structure.
 ///
 /// ```no_run
@@ -311,11 +340,15 @@ pub type BufferArg = StreamArg<Buffer>;
 /// ```
 pub type ImageArg = StreamArg<Image>;
 
+/// A stream argument for a micromap.
+pub type MicromapArg = StreamArg<Micromap>;
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum StreamArgData {
     AccelerationStructure(AccelerationStructureInfo),
     Buffer(BufferInfo),
     Image(ImageInfo),
+    Micromap(MicromapInfo),
 }
 
 #[derive(Debug)]
@@ -330,124 +363,6 @@ pub(crate) struct CommandStreamInner {
 
     #[cfg(feature = "checked")]
     pub(crate) graph_id: GraphId,
-}
-
-/// A reusable command stream.
-///
-/// Prepared streams reduce repeated CPU-side graph construction and preparation work by caching an
-/// optimized schedule and static recording resources. Unprepared streams keep finalization cheaper
-/// up front, but each insertion still has to reconcile arguments, dependencies, scheduling, and
-/// recording with the parent graph.
-///
-/// Inserting or concatenating many tiny streams is not free. Profile release builds before designing
-/// around heavy stream composition.
-///
-/// ```no_run
-/// # use vk_graph::{Graph, pool::hash::HashPool, stream::CommandStream};
-/// # let mut pool: HashPool = todo!();
-/// let stream = CommandStream::prepare(&mut pool, |stream| {
-///     stream.begin_cmd().debug_name("cached commands").record_cmd(|_| {});
-/// })?;
-///
-/// let mut graph = Graph::new();
-/// graph.insert_cmd_stream(&stream).finish();
-/// # Ok::<(), vk_graph::driver::DriverError>(())
-/// ```
-#[derive(Clone, Debug)]
-pub struct CommandStream<A = ()> {
-    /// Typed handles returned by the preparation callback.
-    pub args: A,
-    pub(crate) inner: Arc<CommandStreamInner>,
-}
-
-/// A finalized command stream definition that can be prepared later.
-///
-/// Drafts are useful when construction should happen separately from preparation. Convert a draft
-/// with [`CommandStreamDraft::into_stream`] for unprepared insertion or
-/// [`CommandStreamDraft::prepare`] to cache preparation work.
-///
-/// ```no_run
-/// # use vk_graph::{Graph, pool::hash::HashPool, stream::CommandStream};
-/// # let mut pool: HashPool = todo!();
-/// let draft = CommandStream::finalize(|stream| {
-///     stream.begin_cmd().record_cmd(|_| {});
-/// });
-///
-/// let prepared = draft.prepare(&mut pool)?;
-/// let mut graph = Graph::new();
-/// graph.insert_cmd_stream(&prepared).finish();
-/// # Ok::<(), vk_graph::driver::DriverError>(())
-/// ```
-#[derive(Debug)]
-pub struct CommandStreamDraft<A = ()> {
-    /// Typed handles returned by the finalization callback.
-    pub args: A,
-    inner: CommandStreamInner,
-}
-
-/// A mutable graph-like command stream being prepared.
-///
-/// `CommandStreamMut` is passed to [`CommandStream::finalize`] and [`CommandStream::prepare`]
-/// callbacks. It provides graph-like methods plus [`CommandStreamMut::arg`] for typed stream
-/// inputs.
-///
-/// ```no_run
-/// # use ash::vk;
-/// # use vk_graph::{driver::buffer::BufferInfo, stream::CommandStream};
-/// let stream = CommandStream::finalize(|stream| {
-///     let staging = stream.arg(BufferInfo::host_mem(
-///         1024,
-///         vk::BufferUsageFlags::TRANSFER_SRC,
-///     ));
-///     stream.begin_cmd().resource_access(staging, vk_sync::AccessType::TransferRead);
-///     staging
-/// })
-/// .into_stream();
-/// ```
-pub struct CommandStreamMut {
-    pub(crate) arg_nodes: Vec<usize>,
-    pub(crate) args: Vec<StreamArgData>,
-    pub(crate) graph: Graph,
-    #[cfg(feature = "checked")]
-    pub(crate) stream_id: CommandStreamId,
-}
-
-/// A command being recorded into a [`CommandStreamMut`].
-///
-/// ```no_run
-/// # use vk_graph::stream::CommandStream;
-/// let stream = CommandStream::finalize(|stream| {
-///     stream
-///         .begin_cmd()
-///         .debug_name("stream command")
-///         .record_cmd(|cmd| {
-///             let _ = cmd;
-///         });
-/// })
-/// .into_stream();
-/// ```
-pub struct StreamCommand<'a> {
-    inner: Command<'a>,
-}
-
-/// A stream command with a bound pipeline.
-///
-/// ```no_run
-/// # use vk_graph::stream::CommandStream;
-/// # use vk_graph::driver::compute::ComputePipeline;
-/// # let pipeline: ComputePipeline = todo!();
-/// let stream = CommandStream::finalize(|stream| {
-///     stream
-///         .begin_cmd()
-///         .bind_pipeline(&pipeline)
-///         .record_cmd(|cmd| {
-///             cmd.dispatch(1, 1, 1);
-///         });
-/// })
-/// .into_stream();
-/// ```
-pub struct StreamPipelineCommand<'a, T> {
-    inner: PipelineCommand<'a, T>,
 }
 
 /// A pipeline that can be bound to a stream command.
@@ -491,6 +406,24 @@ macro_rules! stream_pipeline {
 stream_pipeline!(ComputePipeline);
 stream_pipeline!(GraphicsPipeline);
 stream_pipeline!(RayTracingPipeline);
+
+/// A command being recorded into a [`CommandStreamMut`].
+///
+/// ```no_run
+/// # use vk_graph::stream::CommandStream;
+/// let stream = CommandStream::finalize(|stream| {
+///     stream
+///         .begin_cmd()
+///         .debug_name("stream command")
+///         .record_cmd(|cmd| {
+///             let _ = cmd;
+///         });
+/// })
+/// .into_stream();
+/// ```
+pub struct StreamCommand<'a> {
+    inner: Command<'a>,
+}
 
 #[allow(private_bounds)]
 impl<'a> StreamCommand<'a> {
@@ -558,34 +491,24 @@ impl<'a> StreamCommand<'a> {
     }
 }
 
-#[allow(private_bounds)]
-impl<'a, T> StreamPipelineCommand<'a, T> {
-    /// Stream equivalent of [`PipelineCommand::bind_resource`].
-    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
-    where
-        R: Resource,
-        R::Node: StreamResourceNode,
-    {
-        self.inner.bind_resource(resource)
-    }
-
-    /// Stream equivalent of [`PipelineCommand::resource_access`].
-    pub fn resource_access<N>(mut self, resource_node: N, access: N::Access) -> Self
-    where
-        N: ResourceAccess,
-    {
-        self.inner.set_resource_access(resource_node, access);
-        self
-    }
-
-    /// Mutable-borrow stream equivalent of [`PipelineCommand::resource_access`].
-    pub fn set_resource_access<N>(&mut self, resource_node: N, access: N::Access) -> &mut Self
-    where
-        N: ResourceAccess,
-    {
-        self.inner.set_resource_access(resource_node, access);
-        self
-    }
+/// A stream command with a bound pipeline.
+///
+/// ```no_run
+/// # use vk_graph::stream::CommandStream;
+/// # use vk_graph::driver::compute::ComputePipeline;
+/// # let pipeline: ComputePipeline = todo!();
+/// let stream = CommandStream::finalize(|stream| {
+///     stream
+///         .begin_cmd()
+///         .bind_pipeline(&pipeline)
+///         .record_cmd(|cmd| {
+///             cmd.dispatch(1, 1, 1);
+///         });
+/// })
+/// .into_stream();
+/// ```
+pub struct StreamPipelineCommand<'a, T> {
+    inner: PipelineCommand<'a, T>,
 }
 
 impl StreamPipelineCommand<'_, ComputePipeline> {
@@ -711,6 +634,63 @@ impl StreamPipelineCommand<'_, RayTracingPipeline> {
     ) {
         self.inner.record_stream_mut(func);
     }
+}
+
+#[allow(private_bounds)]
+impl<'a, T> StreamPipelineCommand<'a, T> {
+    /// Stream equivalent of [`PipelineCommand::bind_resource`].
+    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
+    where
+        R: Resource,
+        R::Node: StreamResourceNode,
+    {
+        self.inner.bind_resource(resource)
+    }
+
+    /// Stream equivalent of [`PipelineCommand::resource_access`].
+    pub fn resource_access<N>(mut self, resource_node: N, access: N::Access) -> Self
+    where
+        N: ResourceAccess,
+    {
+        self.inner.set_resource_access(resource_node, access);
+        self
+    }
+
+    /// Mutable-borrow stream equivalent of [`PipelineCommand::resource_access`].
+    pub fn set_resource_access<N>(&mut self, resource_node: N, access: N::Access) -> &mut Self
+    where
+        N: ResourceAccess,
+    {
+        self.inner.set_resource_access(resource_node, access);
+        self
+    }
+}
+
+/// A mutable graph-like command stream being prepared.
+///
+/// `CommandStreamMut` is passed to [`CommandStream::finalize`] and [`CommandStream::prepare`]
+/// callbacks. It provides graph-like methods plus [`CommandStreamMut::arg`] for typed stream
+/// inputs.
+///
+/// ```no_run
+/// # use ash::vk;
+/// # use vk_graph::{driver::buffer::BufferInfo, stream::CommandStream};
+/// let stream = CommandStream::finalize(|stream| {
+///     let staging = stream.arg(BufferInfo::host_mem(
+///         1024,
+///         vk::BufferUsageFlags::TRANSFER_SRC,
+///     ));
+///     stream.begin_cmd().resource_access(staging, vk_sync::AccessType::TransferRead);
+///     staging
+/// })
+/// .into_stream();
+/// ```
+pub struct CommandStreamMut {
+    pub(crate) arg_nodes: Vec<usize>,
+    pub(crate) args: Vec<StreamArgData>,
+    pub(crate) graph: Graph,
+    #[cfg(feature = "checked")]
+    pub(crate) stream_id: CommandStreamId,
 }
 
 impl CommandStreamMut {
@@ -939,10 +919,39 @@ impl CommandStreamMut {
             }
             StreamArgData::Buffer(info) => AnyResource::BufferArg(info),
             StreamArgData::Image(info) => AnyResource::ImageArg(info),
+            StreamArgData::Micromap(info) => AnyResource::MicromapArg(info),
         };
 
         self.graph.bind_stream_arg_resource(resource)
     }
+}
+
+/// A reusable command stream.
+///
+/// Prepared streams reduce repeated CPU-side graph construction and preparation work by caching an
+/// optimized schedule and static recording resources. Unprepared streams keep finalization cheaper
+/// up front, but each insertion still has to reconcile arguments, dependencies, scheduling, and
+/// recording with the parent graph.
+///
+/// Inserting or concatenating many tiny streams is not free. Profile release builds before designing
+/// around heavy stream composition.
+///
+/// ```no_run
+/// # use vk_graph::{Graph, pool::hash::HashPool, stream::CommandStream};
+/// # let mut pool: HashPool = todo!();
+/// let stream = CommandStream::prepare(&mut pool, |stream| {
+///     stream.begin_cmd().debug_name("cached commands").record_cmd(|_| {});
+/// })?;
+///
+/// let mut graph = Graph::new();
+/// graph.insert_cmd_stream(&stream).finish();
+/// # Ok::<(), vk_graph::driver::DriverError>(())
+/// ```
+#[derive(Clone, Debug)]
+pub struct CommandStream<A = ()> {
+    /// Typed handles returned by the preparation callback.
+    pub args: A,
+    pub(crate) inner: Arc<CommandStreamInner>,
 }
 
 impl CommandStream<()> {
@@ -996,6 +1005,31 @@ impl CommandStream<()> {
     {
         Self::finalize(build).prepare(pool)
     }
+}
+
+/// A finalized command stream definition that can be prepared later.
+///
+/// Drafts are useful when construction should happen separately from preparation. Convert a draft
+/// with [`CommandStreamDraft::into_stream`] for unprepared insertion or
+/// [`CommandStreamDraft::prepare`] to cache preparation work.
+///
+/// ```no_run
+/// # use vk_graph::{Graph, pool::hash::HashPool, stream::CommandStream};
+/// # let mut pool: HashPool = todo!();
+/// let draft = CommandStream::finalize(|stream| {
+///     stream.begin_cmd().record_cmd(|_| {});
+/// });
+///
+/// let prepared = draft.prepare(&mut pool)?;
+/// let mut graph = Graph::new();
+/// graph.insert_cmd_stream(&prepared).finish();
+/// # Ok::<(), vk_graph::driver::DriverError>(())
+/// ```
+#[derive(Debug)]
+pub struct CommandStreamDraft<A = ()> {
+    /// Typed handles returned by the finalization callback.
+    pub args: A,
+    inner: CommandStreamInner,
 }
 
 impl<A> CommandStreamDraft<A> {
@@ -1160,6 +1194,12 @@ impl Graph {
             );
             self.prepared_stream_image_accesses
                 .extend(stream_graph.prepared_stream_image_accesses.iter().copied());
+            self.prepared_stream_micromap_accesses.extend(
+                stream_graph
+                    .prepared_stream_micromap_accesses
+                    .iter()
+                    .copied(),
+            );
         }
 
         for (arg_idx, &node_idx) in stream.inner.arg_nodes.iter().enumerate() {
@@ -1219,6 +1259,12 @@ impl Graph {
             );
             self.prepared_stream_image_accesses
                 .extend(stream_graph.prepared_stream_image_accesses.iter().copied());
+            self.prepared_stream_micromap_accesses.extend(
+                stream_graph
+                    .prepared_stream_micromap_accesses
+                    .iter()
+                    .copied(),
+            );
         }
 
         for (arg_idx, &node_idx) in stream.inner.arg_nodes.iter().enumerate() {
@@ -1247,6 +1293,11 @@ impl Graph {
             if let Some(image) = stream_graph.resources[node_idx].as_image() {
                 self.prepared_stream_image_accesses
                     .insert(crate::resource::PhysicalImageId::of(image));
+            }
+
+            if let Some(micromap) = stream_graph.resources[node_idx].as_micromap() {
+                self.prepared_stream_micromap_accesses
+                    .insert(crate::resource::PhysicalMicromapId::of(micromap));
             }
         }
 
@@ -1404,6 +1455,7 @@ stream_arg_info!(
 );
 stream_arg_info!(BufferInfo, BufferInfoBuilder, Buffer, BufferArg);
 stream_arg_info!(ImageInfo, ImageInfoBuilder, Image, ImageArg);
+stream_arg_info!(MicromapInfo, MicromapInfoBuilder, Micromap, MicromapArg);
 
 macro_rules! stream_arg_bindable {
     ($resource:ty => $($node:ty),+ $(,)?) => {
@@ -1423,6 +1475,7 @@ stream_arg_bindable!(
 );
 stream_arg_bindable!(Buffer => BufferNode, BufferLeaseNode);
 stream_arg_bindable!(Image => ImageNode, ImageLeaseNode, SwapchainImageNode);
+stream_arg_bindable!(Micromap => MicromapNode, MicromapLeaseNode);
 
 impl stream_private::StreamArgBindableSealed<AccelerationStructure>
     for AnyAccelerationStructureNode
@@ -1460,6 +1513,17 @@ impl StreamArgBindable<Image> for AnyImageNode {
     }
 }
 
+impl stream_private::StreamArgBindableSealed<Micromap> for AnyMicromapNode {}
+
+impl StreamArgBindable<Micromap> for AnyMicromapNode {
+    fn assert_parent_node(&self) {
+        assert!(
+            !matches!(self, Self::Arg(_)),
+            "stream argument cannot be supplied as a parent graph node"
+        );
+    }
+}
+
 macro_rules! stream_resource_node {
     ($($node:ty),+ $(,)?) => {
         $(
@@ -1478,6 +1542,8 @@ stream_resource_node!(
     ImageNode,
     ImageLeaseNode,
     ImageSetNode,
+    MicromapNode,
+    MicromapLeaseNode,
     SwapchainImageNode,
 );
 
@@ -1494,8 +1560,8 @@ mod test {
         resource::{
             AccelerationStructureAccessType, AccelerationStructureSet,
             AccelerationStructureSetMember, ImageAccessType, ImageSet, ImageSetMember,
-            PhysicalAccelerationStructureId, PhysicalImageId, ResourceSetAccessType,
-            ResourceSetIndex,
+            PhysicalAccelerationStructureId, PhysicalImageId, PhysicalMicromapId,
+            ResourceSetAccessType, ResourceSetIndex,
         },
     };
 
@@ -1708,6 +1774,27 @@ mod test {
     }
 
     #[test]
+    fn micromap_arg_can_declare_resource_access() {
+        let stream = CommandStream::finalize(|stream| {
+            let micromap = stream.arg(MicromapInfo::device_mem(64));
+
+            stream
+                .begin_cmd()
+                .resource_access(micromap, vk_sync::AccessType::MicromapBuildRead)
+                .record_cmd(|_| {});
+
+            micromap
+        })
+        .into_stream();
+
+        assert_eq!(stream.inner.args.len(), 1);
+        assert!(matches!(
+            AnyMicromapNode::from(stream.args),
+            AnyMicromapNode::Arg(_)
+        ));
+    }
+
+    #[test]
     #[should_panic(expected = "missing command stream argument")]
     fn missing_arg_panics_at_finish() {
         let stream = CommandStream::finalize(|stream| {
@@ -1908,6 +1995,7 @@ mod test {
     fn nested_prepared_stream_propagates_direct_resource_accesses() {
         let acceleration_structure = PhysicalAccelerationStructureId::from_parts(1, 2);
         let image = PhysicalImageId::from_parts(3, 4);
+        let micromap = PhysicalMicromapId::from_parts(5, 6);
         let mut pool = NoopPool;
         let inner = CommandStream::prepare(&mut pool, |stream| {
             stream
@@ -1915,6 +2003,10 @@ mod test {
                 .prepared_stream_acceleration_structure_accesses
                 .insert(acceleration_structure);
             stream.graph.prepared_stream_image_accesses.insert(image);
+            stream
+                .graph
+                .prepared_stream_micromap_accesses
+                .insert(micromap);
             stream.begin_cmd().record_cmd(|_| {});
         })
         .expect("prepare inner stream");
@@ -1932,6 +2024,7 @@ mod test {
                 .contains(&acceleration_structure)
         );
         assert!(graph.prepared_stream_image_accesses.contains(&image));
+        assert!(graph.prepared_stream_micromap_accesses.contains(&micromap));
     }
 
     #[cfg(feature = "checked")]
@@ -1939,6 +2032,7 @@ mod test {
     fn nested_unprepared_stream_propagates_direct_resource_accesses() {
         let acceleration_structure = PhysicalAccelerationStructureId::from_parts(1, 2);
         let image = PhysicalImageId::from_parts(3, 4);
+        let micromap = PhysicalMicromapId::from_parts(5, 6);
         let mut pool = NoopPool;
         let inner = CommandStream::prepare(&mut pool, |stream| {
             stream
@@ -1946,6 +2040,10 @@ mod test {
                 .prepared_stream_acceleration_structure_accesses
                 .insert(acceleration_structure);
             stream.graph.prepared_stream_image_accesses.insert(image);
+            stream
+                .graph
+                .prepared_stream_micromap_accesses
+                .insert(micromap);
             stream.begin_cmd().record_cmd(|_| {});
         })
         .expect("prepare inner stream");
@@ -1963,6 +2061,7 @@ mod test {
                 .contains(&acceleration_structure)
         );
         assert!(graph.prepared_stream_image_accesses.contains(&image));
+        assert!(graph.prepared_stream_micromap_accesses.contains(&micromap));
     }
 
     #[cfg(feature = "checked")]

@@ -309,53 +309,39 @@ impl AccelerationStructure {
     /// # Ok(()) }
     /// ```
     #[profiling::function]
-    pub fn size_of(
+    pub fn size_of<D: Clone + Into<AccelerationStructureGeometryDataExt>>(
         device: &Device,
-        info: &AccelerationStructureGeometryInfo<impl AsRef<AccelerationStructureGeometry>>,
+        info: &AccelerationStructureGeometryInfo<impl AsRef<AccelerationStructureGeometry<D>>>,
     ) -> AccelerationStructureSize {
-        use std::cell::RefCell;
+        let geometries =
+            AccelerationStructureGeometryMarshaler::new(info.geometries.iter().map(AsRef::as_ref));
+        let max_primitive_counts = info
+            .geometries
+            .iter()
+            .map(|geometry| geometry.as_ref().max_primitive_count)
+            .collect::<Vec<_>>();
 
-        #[derive(Default)]
-        struct Tls {
-            geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
-            max_primitive_counts: Vec<u32>,
+        let vk_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+            .ty(info.acceleration_structure_type)
+            .flags(info.flags)
+            .geometries(geometries.geometries());
+        let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        let khr_acceleration_structure = Device::expect_vk_khr_acceleration_structure(device);
+
+        unsafe {
+            khr_acceleration_structure.get_acceleration_structure_build_sizes(
+                vk::AccelerationStructureBuildTypeKHR::HOST_OR_DEVICE,
+                &vk_info,
+                &max_primitive_counts,
+                &mut sizes,
+            );
         }
 
-        thread_local! {
-            static TLS: RefCell<Tls> = Default::default();
+        AccelerationStructureSize {
+            build_size: sizes.build_scratch_size,
+            create_size: sizes.acceleration_structure_size,
+            update_size: sizes.update_scratch_size,
         }
-
-        TLS.with_borrow_mut(|tls| {
-            tls.geometries.clear();
-            tls.max_primitive_counts.clear();
-
-            for info in info.geometries.iter().map(AsRef::as_ref) {
-                tls.geometries.push(info.into());
-                tls.max_primitive_counts.push(info.max_primitive_count);
-            }
-
-            let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                .ty(info.acceleration_structure_type)
-                .flags(info.flags)
-                .geometries(&tls.geometries);
-            let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-            let khr_acceleration_structure = Device::expect_vk_khr_acceleration_structure(device);
-
-            unsafe {
-                khr_acceleration_structure.get_acceleration_structure_build_sizes(
-                    vk::AccelerationStructureBuildTypeKHR::HOST_OR_DEVICE,
-                    &info,
-                    &tls.max_primitive_counts,
-                    &mut sizes,
-                );
-            }
-
-            AccelerationStructureSize {
-                create_size: sizes.acceleration_structure_size,
-                build_size: sizes.build_scratch_size,
-                update_size: sizes.update_scratch_size,
-            }
-        })
     }
 
     /// Keeps track of a `next_access` which affects this object.
@@ -374,7 +360,7 @@ impl AccelerationStructure {
         &self,
         next_accesses: &[AccessType],
     ) -> impl Iterator<Item = AccessType> + '_ {
-        AccessIter::new(self.lock_accesses(), next_accesses)
+        AccessIter::many(self.lock_accesses(), next_accesses)
     }
 
     /// Returns synchronization information for the acceleration structure's current accesses.
@@ -438,34 +424,37 @@ impl PartialEq for AccelerationStructure {
 
 /// Structure specifying geometries to be built into an acceleration structure.
 ///
+/// The default data type preserves the legacy `Copy` geometry API. Use
+/// [`AccelerationStructureGeometryDataExt`] to mix legacy and micromap geometry.
+///
 /// See [`VkAccelerationStructureGeometryKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkAccelerationStructureGeometryKHR.html).
 #[derive(Clone, Copy, Debug)]
-pub struct AccelerationStructureGeometry {
-    /// The number of primitives built into each geometry.
-    pub max_primitive_count: u32,
-
+pub struct AccelerationStructureGeometry<D = AccelerationStructureGeometryData> {
     /// Describes additional properties of how the geometry should be built.
     pub flags: vk::GeometryFlagsKHR,
 
     /// Specifies acceleration structure geometry data.
-    pub geometry: AccelerationStructureGeometryData,
+    pub geometry: D,
+
+    /// The number of primitives built into each geometry.
+    pub max_primitive_count: u32,
 }
 
-impl AccelerationStructureGeometry {
+impl<D> AccelerationStructureGeometry<D> {
     /// Creates a new acceleration structure geometry instance.
-    pub fn new(max_primitive_count: u32, geometry: AccelerationStructureGeometryData) -> Self {
+    pub fn new(max_primitive_count: u32, geometry: D) -> Self {
         let flags = Default::default();
 
         Self {
-            max_primitive_count,
             flags,
             geometry,
+            max_primitive_count,
         }
     }
 
     /// Creates a new acceleration structure geometry instance with the
     /// [vk::GeometryFlagsKHR::OPAQUE] flag set.
-    pub fn opaque(max_primitive_count: u32, geometry: AccelerationStructureGeometryData) -> Self {
+    pub fn opaque(max_primitive_count: u32, geometry: D) -> Self {
         Self::new(max_primitive_count, geometry).flags(vk::GeometryFlagsKHR::OPAQUE)
     }
 
@@ -477,8 +466,8 @@ impl AccelerationStructureGeometry {
     }
 }
 
-impl<T> AsRef<AccelerationStructureGeometry> for (AccelerationStructureGeometry, T) {
-    fn as_ref(&self) -> &AccelerationStructureGeometry {
+impl<D, T> AsRef<AccelerationStructureGeometry<D>> for (AccelerationStructureGeometry<D>, T) {
+    fn as_ref(&self) -> &AccelerationStructureGeometry<D> {
         &self.0
     }
 }
@@ -623,6 +612,39 @@ impl AccelerationStructureGeometryData {
             vertex_stride,
         }
     }
+
+    /// Attaches an opacity micromap when this value contains triangle geometry.
+    ///
+    /// # Panics
+    /// Panics when called on non-triangle geometry.
+    pub fn opacity_micromap(
+        self,
+        opacity_micromap: AccelerationStructureOpacityMicromap,
+    ) -> AccelerationStructureGeometryDataExt {
+        match self {
+            Self::Triangles {
+                index_addr,
+                index_type,
+                max_vertex,
+                transform_addr,
+                vertex_addr,
+                vertex_format,
+                vertex_stride,
+            } => AccelerationStructureGeometryDataExt::Triangles(
+                AccelerationStructureTriangles::new(
+                    index_addr,
+                    index_type,
+                    max_vertex,
+                    transform_addr,
+                    vertex_addr,
+                    vertex_format,
+                    vertex_stride,
+                )
+                .opacity_micromap(opacity_micromap),
+            ),
+            _ => panic!("opacity micromaps can only be attached to triangle geometry"),
+        }
+    }
 }
 
 impl From<AccelerationStructureGeometryData> for vk::GeometryTypeKHR {
@@ -670,6 +692,281 @@ impl From<AccelerationStructureGeometryData> for vk::AccelerationStructureGeomet
                     .vertex_stride(vertex_stride),
             },
         }
+    }
+}
+
+/// Geometry data supporting extensions without changing the legacy geometry variants.
+///
+/// Convert legacy data with [`Into::into`] to mix it with micromap triangles in one build.
+#[derive(Clone, Debug)]
+pub enum AccelerationStructureGeometryDataExt {
+    /// Geometry without an extension attachment.
+    Geometry(AccelerationStructureGeometryData),
+
+    /// Triangle geometry with an optional opacity micromap attachment.
+    Triangles(AccelerationStructureTriangles),
+}
+
+impl From<AccelerationStructureGeometryData> for AccelerationStructureGeometryDataExt {
+    fn from(value: AccelerationStructureGeometryData) -> Self {
+        Self::Geometry(value)
+    }
+}
+
+impl From<AccelerationStructureTriangles> for AccelerationStructureGeometryDataExt {
+    fn from(value: AccelerationStructureTriangles) -> Self {
+        Self::Triangles(value)
+    }
+}
+
+/// Triangle geometry and its optional opacity micromap attachment.
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureTriangles {
+    /// A device or host address to memory containing index data for this geometry.
+    pub index_addr: DeviceOrHostAddress,
+
+    /// The [`VkIndexType`] of each index element.
+    ///
+    /// [`VkIndexType`]: https://registry.khronos.org/vulkan/specs/latest/man/html/VkIndexType.html
+    pub index_type: vk::IndexType,
+
+    /// The highest index of a vertex that will be addressed by a build command using this
+    /// structure.
+    pub max_vertex: u32,
+
+    /// Optional opacity micromap attachment.
+    pub opacity_micromap: Option<AccelerationStructureOpacityMicromap>,
+
+    /// A device or host address to memory containing an optional reference to a
+    /// [`VkTransformMatrixKHR`] structure describing a transformation from the space in which
+    /// the vertices in this geometry are described to the space in which the acceleration
+    /// structure is defined.
+    ///
+    /// [`VkTransformMatrixKHR`]: https://registry.khronos.org/vulkan/specs/latest/man/html/VkTransformMatrixKHR.html
+    pub transform_addr: Option<DeviceOrHostAddress>,
+
+    /// A device or host address to memory containing vertex data for this geometry.
+    pub vertex_addr: DeviceOrHostAddress,
+
+    /// The [`VkFormat`] of each vertex element.
+    ///
+    /// [`VkFormat`]: https://registry.khronos.org/vulkan/specs/latest/man/html/VkFormat.html
+    pub vertex_format: vk::Format,
+
+    /// The stride in bytes between each vertex.
+    pub vertex_stride: vk::DeviceSize,
+}
+
+impl AccelerationStructureTriangles {
+    /// Creates triangle geometry without an opacity micromap attachment.
+    pub fn new(
+        index_addr: impl Into<DeviceOrHostAddress>,
+        index_type: vk::IndexType,
+        max_vertex: u32,
+        transform_addr: impl Into<Option<DeviceOrHostAddress>>,
+        vertex_addr: impl Into<DeviceOrHostAddress>,
+        vertex_format: vk::Format,
+        vertex_stride: vk::DeviceSize,
+    ) -> Self {
+        Self {
+            index_addr: index_addr.into(),
+            index_type,
+            max_vertex,
+            opacity_micromap: None,
+            transform_addr: transform_addr.into(),
+            vertex_addr: vertex_addr.into(),
+            vertex_format,
+            vertex_stride,
+        }
+    }
+
+    /// Attaches an opacity micromap to this triangle geometry.
+    pub fn opacity_micromap(
+        mut self,
+        opacity_micromap: AccelerationStructureOpacityMicromap,
+    ) -> Self {
+        self.opacity_micromap = Some(opacity_micromap);
+        self
+    }
+}
+
+/// Opacity micromap data attached to acceleration-structure triangles.
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureOpacityMicromap {
+    /// Offset added to non-special micromap indices. With `index_type` set to `NONE_KHR`,
+    /// triangle `i` uses micromap triangle `base_triangle + i`.
+    pub base_triangle: u32,
+
+    /// Address containing micromap indices for the triangles.
+    pub index_addr: DeviceOrHostAddress,
+
+    /// Byte stride between micromap indices.
+    pub index_stride: vk::DeviceSize,
+
+    /// Type of each micromap index.
+    pub index_type: vk::IndexType,
+
+    /// Native opacity micromap handle.
+    pub micromap: vk::MicromapEXT,
+    usage_counts: Box<[vk::MicromapUsageEXT]>,
+}
+
+impl AccelerationStructureOpacityMicromap {
+    /// Creates an opacity micromap attachment with owned usage counts.
+    pub fn new<I>(micromap: vk::MicromapEXT, usage_counts: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<vk::MicromapUsageEXT>,
+    {
+        Self {
+            base_triangle: 0,
+            index_addr: DeviceOrHostAddress::DeviceAddress(0),
+            index_stride: 0,
+            index_type: vk::IndexType::NONE_KHR,
+            micromap,
+            usage_counts: usage_counts.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// Sets the micromap-index buffer address.
+    pub fn index_addr(mut self, index_addr: impl Into<DeviceOrHostAddress>) -> Self {
+        self.index_addr = index_addr.into();
+        self
+    }
+
+    /// Sets the micromap-index element type.
+    pub fn index_type(mut self, index_type: vk::IndexType) -> Self {
+        self.index_type = index_type;
+        self
+    }
+
+    /// Sets the byte stride between micromap-index elements.
+    pub fn index_stride(mut self, index_stride: vk::DeviceSize) -> Self {
+        self.index_stride = index_stride;
+        self
+    }
+
+    /// Sets the offset added to non-special micromap indices (or the implicit triangle index
+    /// when `index_type` is `NONE_KHR`).
+    pub fn base_triangle(mut self, base_triangle: u32) -> Self {
+        self.base_triangle = base_triangle;
+        self
+    }
+
+    /// Returns the Vulkan usage records owned by this attachment.
+    pub fn usage_counts(&self) -> &[vk::MicromapUsageEXT] {
+        &self.usage_counts
+    }
+}
+
+/// Owns Vulkan geometry and extension records for the duration of one Vulkan call.
+pub(crate) struct AccelerationStructureGeometryMarshaler {
+    _opacity_micromaps: Vec<vk::AccelerationStructureTrianglesOpacityMicromapEXT<'static>>,
+    _source: Vec<AccelerationStructureGeometry<AccelerationStructureGeometryDataExt>>,
+    geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
+}
+
+impl AccelerationStructureGeometryMarshaler {
+    pub(crate) fn new<'a, D: Clone + Into<AccelerationStructureGeometryDataExt> + 'a>(
+        geometries: impl IntoIterator<Item = &'a AccelerationStructureGeometry<D>>,
+    ) -> Self {
+        let source = geometries
+            .into_iter()
+            .map(|geometry| AccelerationStructureGeometry {
+                flags: geometry.flags,
+                geometry: geometry.geometry.clone().into(),
+                max_primitive_count: geometry.max_primitive_count,
+            })
+            .collect::<Vec<_>>();
+        let extension_count = source
+            .iter()
+            .filter(|geometry| {
+                matches!(
+                    &geometry.geometry,
+                    AccelerationStructureGeometryDataExt::Triangles(triangles)
+                        if triangles.opacity_micromap.is_some()
+                )
+            })
+            .count();
+        let mut opacity_micromaps = Vec::with_capacity(extension_count);
+
+        for geometry in &source {
+            if let AccelerationStructureGeometryDataExt::Triangles(triangles) = &geometry.geometry
+                && let Some(attachment) = &triangles.opacity_micromap
+            {
+                // Usage arrays are boxed and owned by `source`; both allocations stay alive
+                // until the Vulkan call completes, even if the marshaler is moved.
+                opacity_micromaps.push(vk::AccelerationStructureTrianglesOpacityMicromapEXT {
+                    usage_counts_count: attachment
+                        .usage_counts
+                        .len()
+                        .try_into()
+                        .expect("micromap usage count exceeds u32::MAX"),
+                    p_usage_counts: attachment.usage_counts.as_ptr(),
+                    ..vk::AccelerationStructureTrianglesOpacityMicromapEXT::default()
+                        .index_type(attachment.index_type)
+                        .index_buffer(attachment.index_addr.into())
+                        .index_stride(attachment.index_stride)
+                        .base_triangle(attachment.base_triangle)
+                        .micromap(attachment.micromap)
+                });
+            }
+        }
+
+        let mut geometries_out = Vec::with_capacity(source.len());
+        let mut extension_index = 0;
+        for geometry in &source {
+            let (geometry_type, geometry_data) = match &geometry.geometry {
+                AccelerationStructureGeometryDataExt::Geometry(data) => {
+                    ((*data).into(), (*data).into())
+                }
+                AccelerationStructureGeometryDataExt::Triangles(triangles) => {
+                    let mut vk_triangles =
+                        vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+                            .index_data(triangles.index_addr.into())
+                            .index_type(triangles.index_type)
+                            .max_vertex(triangles.max_vertex)
+                            .transform_data(
+                                triangles.transform_addr.map(Into::into).unwrap_or_default(),
+                            )
+                            .vertex_data(triangles.vertex_addr.into())
+                            .vertex_format(triangles.vertex_format)
+                            .vertex_stride(triangles.vertex_stride);
+
+                    if triangles.opacity_micromap.is_some() {
+                        vk_triangles.p_next = (&opacity_micromaps[extension_index]
+                            as *const vk::AccelerationStructureTrianglesOpacityMicromapEXT<'_>)
+                            .cast();
+                        extension_index += 1;
+                    }
+
+                    (
+                        vk::GeometryTypeKHR::TRIANGLES,
+                        vk::AccelerationStructureGeometryDataKHR {
+                            triangles: vk_triangles,
+                        },
+                    )
+                }
+            };
+
+            geometries_out.push(
+                vk::AccelerationStructureGeometryKHR::default()
+                    .flags(geometry.flags)
+                    .geometry_type(geometry_type)
+                    .geometry(geometry_data),
+            );
+        }
+
+        debug_assert_eq!(opacity_micromaps.len(), extension_count);
+        Self {
+            _opacity_micromaps: opacity_micromaps,
+            _source: source,
+            geometries: geometries_out,
+        }
+    }
+
+    pub(crate) fn geometries(&self) -> &[vk::AccelerationStructureGeometryKHR<'_>] {
+        &self.geometries
     }
 }
 
@@ -810,14 +1107,14 @@ pub struct AccelerationStructureSize {
 /// Synchronization information for an acceleration structure.
 #[derive(Clone, Copy, Debug)]
 pub struct AccelerationStructureSyncInfo {
-    /// Pipeline stages that access the acceleration structure.
-    pub stage_mask: vk::PipelineStageFlags,
-
     /// Access types performed by those stages.
     pub access_mask: vk::AccessFlags,
 
     /// Current exclusive queue-family ownership, when relevant.
     pub queue_family_index: Option<u32>,
+
+    /// Pipeline stages that access the acceleration structure.
+    pub stage_mask: vk::PipelineStageFlags,
 }
 
 impl AccelerationStructureSyncInfo {
@@ -832,9 +1129,9 @@ impl AccelerationStructureSyncInfo {
         }
 
         Self {
-            stage_mask,
             access_mask,
             queue_family_index: None,
+            stage_mask,
         }
     }
 }
@@ -857,7 +1154,7 @@ impl<'a> AccessIter<'a> {
         }
     }
 
-    fn new(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_accesses: &[AccessType]) -> Self {
+    fn many(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_accesses: &[AccessType]) -> Self {
         if next_accesses.is_empty() {
             let previous_len = accesses.len();
             accesses.push(AccessType::Nothing);
@@ -993,6 +1290,7 @@ impl From<DeviceOrHostAddress> for vk::DeviceOrHostAddressKHR {
 #[cfg(test)]
 mod test {
     use super::*;
+    use ash::vk::Handle;
 
     type Info = AccelerationStructureInfo;
     type Builder = AccelerationStructureInfoBuilder;
@@ -1008,8 +1306,8 @@ mod test {
     #[test]
     pub fn accel_struct_info_builder() {
         let info = Info {
-            size: 32,
             acceleration_structure_type: vk::AccelerationStructureTypeKHR::GENERIC,
+            size: 32,
         };
         let builder = Builder::default().size(32).build();
 
@@ -1019,11 +1317,195 @@ mod test {
     #[test]
     pub fn accel_struct_info_builder_default_size() {
         let info = Info {
-            size: 0,
             acceleration_structure_type: vk::AccelerationStructureTypeKHR::GENERIC,
+            size: 0,
         };
 
         assert_eq!(Builder::default().build(), info);
+    }
+
+    fn triangles() -> AccelerationStructureGeometryData {
+        AccelerationStructureGeometryData::triangles(
+            1,
+            vk::IndexType::UINT32,
+            3,
+            None,
+            2,
+            vk::Format::R32G32B32_SFLOAT,
+            12,
+        )
+    }
+
+    #[test]
+    fn legacy_geometry_api() {
+        fn copy<T: Copy>() {}
+        fn value_traits<T: Copy + Eq + std::hash::Hash>() {}
+        copy::<AccelerationStructureGeometry>();
+        value_traits::<AccelerationStructureGeometryData>();
+
+        let data = AccelerationStructureGeometryData::Triangles {
+            index_addr: 1.into(),
+            index_type: vk::IndexType::UINT32,
+            max_vertex: 3,
+            transform_addr: None,
+            vertex_addr: 2.into(),
+            vertex_format: vk::Format::R32G32B32_SFLOAT,
+            vertex_stride: 12,
+        };
+        assert_eq!(data, triangles());
+        let geometry: AccelerationStructureGeometry = AccelerationStructureGeometry {
+            flags: vk::GeometryFlagsKHR::OPAQUE,
+            geometry: data,
+            max_primitive_count: 1,
+        };
+        let expected_type = match data {
+            AccelerationStructureGeometryData::AABBs { .. } => vk::GeometryTypeKHR::AABBS,
+            AccelerationStructureGeometryData::Instances { .. } => vk::GeometryTypeKHR::INSTANCES,
+            AccelerationStructureGeometryData::Triangles { .. } => vk::GeometryTypeKHR::TRIANGLES,
+        };
+        let ty: vk::GeometryTypeKHR = data.into();
+        let raw_data: vk::AccelerationStructureGeometryDataKHR<'_> = data.into();
+        let raw: vk::AccelerationStructureGeometryKHR<'_> = geometry.into();
+        let borrowed: vk::AccelerationStructureGeometryKHR<'_> = (&geometry).into();
+        assert_eq!(ty, expected_type);
+        assert_eq!(raw.geometry_type, ty);
+        assert_eq!(borrowed.flags, geometry.flags);
+        assert_eq!(unsafe { raw_data.triangles.vertex_stride }, 12);
+        let tuple = (
+            geometry,
+            vk::AccelerationStructureBuildRangeInfoKHR::default(),
+        );
+        let reference: &AccelerationStructureGeometry = tuple.as_ref();
+        assert_eq!(reference.geometry, data);
+
+        // Compile the original generic size-query contract and all command signatures without a GPU.
+        fn size<G: AsRef<AccelerationStructureGeometry>>(
+            device: &Device,
+            info: &AccelerationStructureGeometryInfo<G>,
+        ) -> AccelerationStructureSize {
+            AccelerationStructure::size_of(device, info)
+        }
+        fn record(
+            cmd: &crate::cmd::CommandRef<'_>,
+            build: &[crate::cmd::BuildAccelerationStructureInfo],
+            build_indirect: &[crate::cmd::BuildAccelerationStructureIndirectInfo],
+            update: &[crate::cmd::UpdateAccelerationStructureInfo],
+            update_indirect: &[crate::cmd::UpdateAccelerationStructureIndirectInfo],
+        ) {
+            cmd.build_accel_struct(build)
+                .build_accel_struct_indirect(build_indirect)
+                .update_accel_struct(update)
+                .update_accel_struct_indirect(update_indirect);
+        }
+        let _ = size::<(AccelerationStructureGeometry, ())>;
+        let _ = record;
+    }
+
+    #[test]
+    fn geometry_marshaler_emits_triangles_without_extension() {
+        let geometry = AccelerationStructureGeometry::new(1, triangles());
+        let marshaled = AccelerationStructureGeometryMarshaler::new([&geometry]);
+
+        assert!(marshaled._opacity_micromaps.is_empty());
+        assert_eq!(marshaled.geometries.len(), 1);
+        let triangles = unsafe { marshaled.geometries[0].geometry.triangles };
+        assert!(triangles.p_next.is_null());
+        assert_eq!(triangles.max_vertex, 3);
+    }
+
+    #[test]
+    fn geometry_marshaler_emits_opacity_micromap_extension() {
+        let usage = vk::MicromapUsageEXT::default()
+            .count(5)
+            .subdivision_level(2)
+            .format(vk::OpacityMicromapFormatEXT::TYPE_4_STATE.as_raw() as u32);
+        let attachment =
+            AccelerationStructureOpacityMicromap::new(vk::MicromapEXT::from_raw(7), [usage])
+                .index_addr(3)
+                .index_type(vk::IndexType::UINT16)
+                .index_stride(2)
+                .base_triangle(11);
+        let geometry =
+            AccelerationStructureGeometry::new(1, triangles().opacity_micromap(attachment));
+        let marshaled = AccelerationStructureGeometryMarshaler::new([&geometry]);
+        drop(geometry);
+        let marshaled = Box::new(marshaled);
+        let triangles = unsafe { marshaled.geometries[0].geometry.triangles };
+        let extension = unsafe {
+            &*triangles
+                .p_next
+                .cast::<vk::AccelerationStructureTrianglesOpacityMicromapEXT<'_>>()
+        };
+
+        assert_eq!(extension as *const _, marshaled._opacity_micromaps.as_ptr());
+        assert_eq!(unsafe { (*extension.p_usage_counts).count }, 5);
+        assert_eq!(extension.usage_counts_count, 1);
+        assert_eq!(extension.index_type, vk::IndexType::UINT16);
+        assert_eq!(extension.index_stride, 2);
+        assert_eq!(extension.base_triangle, 11);
+        assert_eq!(extension.micromap, vk::MicromapEXT::from_raw(7));
+    }
+
+    #[test]
+    fn geometry_marshaler_keeps_all_extension_pointers_stable() {
+        let geometries = (0..64)
+            .map(|index| {
+                let attachment = AccelerationStructureOpacityMicromap::new(
+                    vk::MicromapEXT::from_raw(index + 1),
+                    [vk::MicromapUsageEXT::default().count(1)],
+                );
+                AccelerationStructureGeometry::new(1, triangles().opacity_micromap(attachment))
+            })
+            .collect::<Vec<_>>();
+        let marshaled = AccelerationStructureGeometryMarshaler::new(&geometries);
+
+        for (index, geometry) in marshaled.geometries.iter().enumerate() {
+            let triangles = unsafe { geometry.geometry.triangles };
+            assert_eq!(
+                triangles.p_next,
+                (&marshaled._opacity_micromaps[index]
+                    as *const vk::AccelerationStructureTrianglesOpacityMicromapEXT<'_>)
+                    .cast()
+            );
+        }
+    }
+
+    #[test]
+    fn geometry_marshaler_mixes_legacy_and_micromap_geometry() {
+        let geometries = [
+            AccelerationStructureGeometry::opaque(1, triangles().into()),
+            AccelerationStructureGeometry::new(
+                1,
+                triangles().opacity_micromap(AccelerationStructureOpacityMicromap::new(
+                    vk::MicromapEXT::from_raw(7),
+                    [vk::MicromapUsageEXT::default().count(1)],
+                )),
+            ),
+            AccelerationStructureGeometry::new(
+                1,
+                AccelerationStructureGeometryData::aabbs(8, 24).into(),
+            ),
+            AccelerationStructureGeometry::new(
+                1,
+                AccelerationStructureGeometryData::instances(16).into(),
+            ),
+        ];
+        let marshaled = AccelerationStructureGeometryMarshaler::new(&geometries);
+        assert_eq!(marshaled._opacity_micromaps.len(), 1);
+        assert_eq!(marshaled.geometries[0].flags, vk::GeometryFlagsKHR::OPAQUE);
+        unsafe {
+            assert!(marshaled.geometries[0].geometry.triangles.p_next.is_null());
+            assert!(!marshaled.geometries[1].geometry.triangles.p_next.is_null());
+            assert_eq!(marshaled.geometries[2].geometry.aabbs.stride, 24);
+            assert_eq!(
+                marshaled.geometries[3]
+                    .geometry
+                    .instances
+                    .data
+                    .device_address,
+                16
+            );
+        }
     }
 
     fn lock_accesses(accesses: &Mutex<Vec<AccessType>>) -> MutexGuard<'_, Vec<AccessType>> {
@@ -1039,7 +1521,7 @@ mod test {
         accesses: &Mutex<Vec<AccessType>>,
         next_accesses: &[AccessType],
     ) -> Vec<AccessType> {
-        AccessIter::new(lock_accesses(accesses), next_accesses).collect()
+        AccessIter::many(lock_accesses(accesses), next_accesses).collect()
     }
 
     #[test]

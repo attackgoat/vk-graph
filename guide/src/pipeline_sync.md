@@ -23,6 +23,13 @@ Type|Usage
 `AccessType::General`|Covers any access - useful for debug, generally avoid for performance reasons
 `AccessType::ColorAttachmentWrite`|Written as a color attachment during rendering
 `AccessType::ComputeShaderReadUniformBuffer`|Read as a uniform buffer in a compute shader
+`AccessType::MicromapBuildInputRead`|Read encoded opacity or triangle metadata during a micromap build
+`AccessType::MicromapBuildScratchReadWrite`|Read and write micromap build scratch storage
+`AccessType::MicromapBuildWrite`|Write a micromap during build, copy, or deserialization
+`AccessType::MicromapBuildRead`|Read a micromap during copy, serialization, or property query
+`AccessType::MicromapBuildBufferRead`|Read a serialized buffer during micromap deserialization
+`AccessType::MicromapBuildBufferWrite`|Write a serialized buffer during micromap serialization
+`AccessType::AccelerationStructureBuildMicromapRead`|Read a completed micromap during a BLAS build
 
 ([_Full list_](https://docs.rs/vk-graph/latest/vk_graph/driver/sync/enum.AccessType.html))
 
@@ -84,6 +91,12 @@ graph
     });
 # Ok(()) }
 ```
+
+Micromap commands are a case where complete declarations are especially important. Vulkan build
+structures contain device addresses, but the graph cannot infer resources from those numbers. Bind
+and declare the encoded-data, triangle-array, scratch, optional index, destination micromap, and BLAS
+resources. Put `build_micromaps` and the consuming BLAS build in separate recordings so the graph can
+insert the `MicromapBuildWrite` to `AccelerationStructureBuildMicromapRead` dependency.
 
 ## Shader Resource Access
 

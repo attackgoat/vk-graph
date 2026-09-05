@@ -3,6 +3,7 @@
 use {
     super::{
         BufferHostMappingCompatibility, Cache, Lease, Pool, PoolConfig, compatible_buffer_info,
+        compatible_micromap_info,
         garbage_collector::{CollectResources, ResourceRequests},
         with_cache,
     },
@@ -14,6 +15,7 @@ use {
         descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         device::Device,
         image::{Image, ImageInfo},
+        micromap::{Micromap, MicromapInfo},
         render_pass::{RenderPass, RenderPassInfo},
     },
     log::debug,
@@ -92,6 +94,7 @@ pub struct FifoPool {
     #[readonly]
     pub info: PoolConfig,
 
+    micromap_cache: Cache<Micromap>,
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
 
@@ -114,6 +117,7 @@ impl FifoPool {
             device,
             image_cache: PoolConfig::explicit_cache(info.image_capacity),
             info,
+            micromap_cache: PoolConfig::explicit_cache(info.micromap_capacity),
             render_pass_cache: Default::default(),
         }
     }
@@ -123,6 +127,7 @@ impl FifoPool {
         self.clear_accel_structs();
         self.clear_buffers();
         self.clear_images();
+        self.clear_micromaps();
     }
 
     /// Clears the pool of acceleration structure resources.
@@ -138,6 +143,11 @@ impl FifoPool {
     /// Clears the pool of image resources.
     pub fn clear_images(&mut self) {
         self.image_cache = PoolConfig::explicit_cache(self.info.image_capacity);
+    }
+
+    /// Clears the pool of micromap resources.
+    pub fn clear_micromaps(&mut self) {
+        self.micromap_cache = PoolConfig::explicit_cache(self.info.micromap_capacity);
     }
 }
 
@@ -181,6 +191,19 @@ impl CollectResources for FifoPool {
                         .images
                         .iter()
                         .any(|info| compatible_fifo_image_info(&item.info, info))
+                });
+            });
+        }
+
+        if requests.micromaps.is_empty() {
+            self.clear_micromaps();
+        } else {
+            with_cache(&self.micromap_cache, |cache| {
+                cache.retain(|item| {
+                    requests
+                        .micromaps
+                        .iter()
+                        .any(|info| compatible_micromap_info(&item.info, info))
                 });
             });
         }
@@ -361,6 +384,38 @@ impl Pool<ImageInfo, Image> for FifoPool {
         debug!("Creating new {}", stringify!(Image));
 
         let item = Image::create(&self.device, info)?;
+
+        Ok(Lease::new(cache_ref, item))
+    }
+}
+
+impl Pool<MicromapInfo, Micromap> for FifoPool {
+    #[profiling::function]
+    fn resource(&mut self, info: MicromapInfo) -> Result<Lease<Micromap>, DriverError> {
+        let cache_ref = Arc::downgrade(&self.micromap_cache);
+
+        {
+            profiling::scope!("check cache");
+
+            if let Some(item) = with_cache(&self.micromap_cache, |cache| {
+                for idx in 0..cache.len() {
+                    let item = unsafe { cache.get_unchecked(idx) };
+                    if compatible_micromap_info(&item.info, &info) {
+                        let item = cache.swap_remove(idx);
+
+                        return Some(Lease::new(cache_ref.clone(), item));
+                    }
+                }
+
+                None
+            }) {
+                return Ok(item);
+            }
+        }
+
+        debug!("Creating new {}", stringify!(Micromap));
+
+        let item = Micromap::create(&self.device, info)?;
 
         Ok(Lease::new(cache_ref, item))
     }

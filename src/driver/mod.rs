@@ -57,6 +57,7 @@ pub mod fence;
 pub mod graphics;
 pub mod image;
 pub mod instance;
+pub mod micromap;
 pub mod physical_device;
 pub mod ray_tracing;
 pub mod render_pass;
@@ -211,6 +212,13 @@ access_type_u8_map! {
     67 => TaskShaderWrite,
     68 => AccelerationStructureBuildInputRead,
     69 => AccelerationStructureBuildScratchReadWrite,
+    70 => MicromapBuildInputRead,
+    71 => MicromapBuildScratchReadWrite,
+    72 => MicromapBuildWrite,
+    73 => MicromapBuildRead,
+    74 => AccelerationStructureBuildMicromapRead,
+    75 => MicromapBuildBufferRead,
+    76 => MicromapBuildBufferWrite,
 }
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
@@ -800,6 +808,8 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | TransferWrite
         | HostWrite
         | AccelerationStructureBuildWrite
+        | MicromapBuildWrite
+        | MicromapBuildBufferWrite
         | MeshShaderWrite
         | TaskShaderWrite => false,
         CommandBufferReadNVX
@@ -844,6 +854,11 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | AccelerationStructureBufferWrite
         | AccelerationStructureBuildInputRead
         | AccelerationStructureBuildScratchReadWrite
+        | MicromapBuildInputRead
+        | MicromapBuildScratchReadWrite
+        | MicromapBuildRead
+        | MicromapBuildBufferRead
+        | AccelerationStructureBuildMicromapRead
         | MeshShaderReadUniformBuffer
         | MeshShaderReadSampledImageOrUniformTexelBuffer
         | MeshShaderReadOther
@@ -884,6 +899,9 @@ pub(super) const fn is_write_access(ty: self::sync::AccessType) -> bool {
             | AccelerationStructureBuildWrite
             | AccelerationStructureBufferWrite
             | AccelerationStructureBuildScratchReadWrite
+            | MicromapBuildScratchReadWrite
+            | MicromapBuildWrite
+            | MicromapBuildBufferWrite
             | MeshShaderWrite
             | TaskShaderWrite
     )
@@ -1182,6 +1200,21 @@ pub(super) const fn pipeline_stage_access_flags(
         ty::AccelerationStructureBuildInputRead => {
             (stage::ACCELERATION_STRUCTURE_BUILD_KHR, access::SHADER_READ)
         }
+        // Micromap stage/access bits exist only in synchronization2. These conservative legacy
+        // values are used by buffer tracking; MicromapSyncInfo exposes the exact 64-bit masks.
+        ty::MicromapBuildInputRead | ty::MicromapBuildRead | ty::MicromapBuildBufferRead => {
+            (stage::ALL_COMMANDS, access::MEMORY_READ)
+        }
+        ty::MicromapBuildScratchReadWrite => (
+            stage::ALL_COMMANDS,
+            access::from_raw(access::MEMORY_READ.as_raw() | access::MEMORY_WRITE.as_raw()),
+        ),
+        ty::MicromapBuildWrite | ty::MicromapBuildBufferWrite => {
+            (stage::ALL_COMMANDS, access::MEMORY_WRITE)
+        }
+        ty::AccelerationStructureBuildMicromapRead => {
+            (stage::ACCELERATION_STRUCTURE_BUILD_KHR, access::MEMORY_READ)
+        }
         ty::MeshShaderReadUniformBuffer => (stage::MESH_SHADER_EXT, access::SHADER_READ),
         ty::MeshShaderReadSampledImageOrUniformTexelBuffer => {
             (stage::MESH_SHADER_EXT, access::SHADER_READ)
@@ -1321,6 +1354,21 @@ mod test {
         assert!(is_read_access(legacy));
         assert!(is_write_access(legacy));
         assert_eq!(pipeline_stage_access_flags(legacy), expected_scratch);
+    }
+
+    #[test]
+    fn micromap_buffer_access_ids_are_append_only_and_classified() {
+        let read = AccessType::MicromapBuildBufferRead;
+        assert_eq!(access_type_into_u8(read), 75);
+        assert_eq!(access_type_from_u8(75), read);
+        assert!(is_read_access(read));
+        assert!(!is_write_access(read));
+
+        let write = AccessType::MicromapBuildBufferWrite;
+        assert_eq!(access_type_into_u8(write), 76);
+        assert_eq!(access_type_from_u8(76), write);
+        assert!(!is_read_access(write));
+        assert!(is_write_access(write));
     }
 
     macro_rules! assert_pcr_eq {

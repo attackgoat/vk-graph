@@ -16,19 +16,15 @@
 let buffer: Buffer = todo!();
 
 // Some sample geometry to put into a BLAS:
-let geometry = AccelerationStructureGeometryData::Triangles {
-    index_addr: DeviceOrHostAddress::DeviceAddress(
-        buffer.device_address()
-    ),
-    index_type: vk::IndexType::UINT16,
-    max_vertex: 100,
-    transform_addr: None,
-    vertex_addr: DeviceOrHostAddress::DeviceAddress(
-        buffer.device_address() + 2_048
-    ),
-    vertex_format: vk::Format::R32G32B32_SFLOAT,
-    vertex_stride: 12,
-};
+let geometry = AccelerationStructureGeometryData::triangles(
+    DeviceOrHostAddress::DeviceAddress(buffer.device_address()),
+    vk::IndexType::UINT16,
+    100,
+    None,
+    DeviceOrHostAddress::DeviceAddress(buffer.device_address() + 2_048),
+    vk::Format::R32G32B32_SFLOAT,
+    12,
+);
 let geom = AccelerationStructureGeometry {
     max_primitive_count: 120,
     flags: vk::GeometryFlagsKHR::OPAQUE,
@@ -89,3 +85,13 @@ assert_ne!(blas.handle, vk::AccelerationStructureKHR::null());
 // Acceleration structures have no "subresources" and are bound whole
 # Ok(()) }
 ```
+
+## Opacity Micromap Attachments
+
+An opacity micromap is built before the BLAS that consumes it. Attach it only to triangle geometry
+and declare the micromap as `AccessType::AccelerationStructureBuildMicromapRead` for the BLAS build.
+Any optional micromap-index buffer is a separate acceleration-structure build input and must also
+be graph-bound. See [Opacity Micromaps](resource_micromap.md) for usage counts, lifetime requirements,
+and opacity flags, or the headless
+[`opacity_micromap.rs`](https://github.com/attackgoat/vk-graph/blob/main/examples/opacity_micromap.rs)
+example for the complete build flow.

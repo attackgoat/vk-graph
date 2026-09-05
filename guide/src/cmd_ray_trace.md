@@ -2,10 +2,12 @@
 
 Ray tracing work in `vk-graph` usually has two phases:
 
-- Build or update acceleration structures with a general command buffer
-- Bind a `RayTracingPipeline` and issue `trace_rays` or `trace_rays_indirect`
+1. Build or update acceleration structures with a general command buffer, building any opacity
+   micromaps before the BLAS builds that consume them.
+2. Bind a `RayTracingPipeline` and issue `trace_rays` or `trace_rays_indirect`.
 
-API docs: [`RayTracingCommandRef::build_accel_struct`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.build_accel_struct),
+API docs: [`CommandRef::build_accel_struct`](https://docs.rs/vk-graph/latest/vk_graph/cmd/struct.CommandRef.html#method.build_accel_struct),
+[`CommandRef::build_micromaps`](https://docs.rs/vk-graph/latest/vk_graph/cmd/struct.CommandRef.html#method.build_micromaps),
 [`RayTracingCommandRef::trace_rays`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.trace_rays),
 [`RayTracingCommandRef::trace_rays_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.trace_rays_indirect),
 [`RayTracingCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/ray_trace/struct.RayTracingCommandRef.html#method.push_constants).
@@ -16,6 +18,10 @@ Command | Typical use
 -|-
 `build_accel_struct` | Build BLAS or TLAS from CPU-provided build ranges
 `build_accel_struct_indirect` | Build acceleration structures using device-provided ranges
+`build_micromaps` | Build opacity micromaps from encoded opacity and triangle metadata
+`copy_micromap` | Clone or compact a micromap
+`serialize_micromap` / `deserialize_micromap` | Move a compatible serialized representation to or from a device address
+`write_micromaps_properties` | Write compacted or serialization sizes to a caller-owned query pool
 `set_stack_size` | Override stack size when the pipeline enables dynamic stack sizing
 `trace_rays` | Launch rays with CPU-provided dimensions
 `trace_rays_indirect` | Launch rays with dimensions read from device memory
@@ -72,6 +78,12 @@ graph
 
 The indirect form is the same idea, but the range data lives on the device. That is useful when a
 previous GPU pass writes primitive counts or build ranges.
+
+For opacity micromaps, record the unsafe `CommandRef::build_micromaps` call before the consuming
+BLAS build in separate graph executions. See [Opacity Micromaps](resource_micromap.md#device-operations)
+for access declarations, lifetimes, and safety contracts, and the headless
+[`opacity_micromap.rs`](https://github.com/attackgoat/vk-graph/blob/main/examples/opacity_micromap.rs)
+example for the complete build flow.
 
 ## Tracing Rays
 
@@ -254,3 +266,4 @@ graph
 - `trace_rays_indirect` is the better fit when a GPU pass writes the ray count or image extent.
 - `update_accel_struct` and `update_accel_struct_indirect` are for refit-style workloads where the
   topology is stable but transforms or vertex positions change.
+- For opacity micromap traversal, follow the [pipeline opt-in and opacity-flag requirements](resource_micromap.md#blas-attachment).

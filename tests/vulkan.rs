@@ -40,3 +40,9 @@ fn run_example(target_name: &str, extra_args: &[&str]) {
 fn vulkan_cpu_readback() {
     run_example("cpu_readback", &[]);
 }
+
+#[test]
+#[ignore = "requires Vulkan opacity micromap support"]
+fn vulkan_opacity_micromap() {
+    run_example("opacity_micromap", &[]);
+}
