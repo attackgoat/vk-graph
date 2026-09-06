@@ -143,10 +143,13 @@ impl Buffer {
         } else {
             AllocationScheme::GpuAllocatorManaged
         };
-        let location = if info.host_writable {
-            MemoryLocation::CpuToGpu
-        } else if info.host_readable {
+
+        // Read/write buffers need the cached host-memory preference too. CpuToGpu
+        // prefers uncached device-local mappings, where CPU memcpy can be very slow.
+        let location = if info.host_readable {
             MemoryLocation::GpuToCpu
+        } else if info.host_writable {
+            MemoryLocation::CpuToGpu
         } else {
             MemoryLocation::GpuOnly
         };
@@ -273,6 +276,17 @@ impl Buffer {
     /// ```
     #[profiling::function]
     pub fn copy_from_slice(&mut self, offset: vk::DeviceSize, data: &[u8]) {
+        profiling::scope!(
+            "Mapped Upload",
+            format!(
+                "bytes={} buffer={} allocation={} flags={:?}",
+                data.len(),
+                self.info.size,
+                self.allocation.size(),
+                self.allocation.memory_properties()
+            )
+            .as_str()
+        );
         let range = offset as _..offset as usize + data.len();
         let mapped_data = self.mapped_slice_mut();
 
@@ -797,7 +811,9 @@ impl BufferInfo {
 
     /// Specifies a mappable buffer with the given `size` and `usage` values.
     ///
-    /// Host-local memory (located in CPU-accessible RAM) is used.
+    /// Cached, coherent host-visible memory is preferred. Coherent host-visible memory
+    /// is used when cached memory is unavailable. For upload-only device-local memory
+    /// preference, use the builder with `host_writable(true)` and `host_readable(false)`.
     ///
     /// # Note
     ///
@@ -1610,6 +1626,36 @@ mod test {
     type Builder = BufferInfoBuilder;
 
     const FUZZ_COUNT: usize = 100_000;
+
+    #[test]
+    #[ignore = "requires a Vulkan device"]
+    fn mapped_upload_payloads() {
+        let device = Device::create(crate::driver::device::DeviceInfo::default()).unwrap();
+        let info = BufferInfo::host_mem(65536, vk::BufferUsageFlags::STORAGE_BUFFER);
+        let readback = Buffer::create(&device, info.into_builder().host_writable(false)).unwrap();
+        let mut buf = Buffer::create(&device, info).unwrap();
+
+        assert_eq!(
+            buf.allocation.memory_properties(),
+            readback.allocation.memory_properties()
+        );
+        assert!(
+            buf.allocation
+                .memory_properties()
+                .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+        );
+
+        for (size, offset) in [(0, 65536), (384, 0), (33792, 0), (34560, 16)] {
+            let data = (0..size).map(|idx| (idx % 251) as u8).collect::<Vec<_>>();
+            buf.mapped_slice_mut().fill(0xa5);
+            buf.copy_from_slice(offset as u64, &data);
+            let mapped = buf.mapped_slice();
+
+            assert_eq!(&mapped[offset..offset + size], data);
+            assert!(mapped[..offset].iter().all(|byte| *byte == 0xa5));
+            assert!(mapped[offset + size..].iter().all(|byte| *byte == 0xa5));
+        }
+    }
 
     fn buffer_sync_info(range: Range<vk::DeviceSize>) -> BufferSubresourceSyncInfo {
         BufferSubresourceSyncInfo {
