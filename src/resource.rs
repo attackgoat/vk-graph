@@ -3,6 +3,9 @@
 //! Sets declare synchronization only; descriptor sets and recorded Vulkan commands remain separate.
 //! Every resource used by those operations must also be present in the corresponding manifest.
 
+#[cfg(feature = "checked")]
+use crate::driver::micromap::Micromap;
+
 use {
     crate::{
         driver::{
@@ -11,7 +14,6 @@ use {
             device::Device,
             format_aspect_mask,
             image::{Image, ImageInfo, ImageSetQueue},
-            micromap::Micromap,
         },
         pool::Lease,
     },
@@ -47,14 +49,59 @@ impl AccelerationStructureAccessType {
 ///
 /// Exact duplicate members are retained once. Cloning a set is constant-time and preserves its
 /// identity when bound to a [`Graph`](crate::Graph). A graph that accesses a set cannot directly
-/// access one of its members. The default `checked` feature validates this restriction; without it,
-/// the caller must uphold the restriction.
+/// access any of its members. The opt-in `checked` feature validates this restriction; callers
+/// must uphold it even without `checked`.
 #[derive(Clone, Debug)]
 pub struct AccelerationStructureSet {
     inner: Arc<AccelerationStructureSetInner>,
 }
 
 impl AccelerationStructureSet {
+    /// Creates a persistent read-only acceleration structure set.
+    ///
+    /// Exact duplicate shared resources are deduplicated. Every member must belong to the same
+    /// logical device.
+    pub fn new<I, M>(members: I) -> Result<Self, DriverError>
+    where
+        I: IntoIterator<Item = M>,
+        M: Into<AccelerationStructureSetMember>,
+    {
+        let members = members.into_iter();
+        let mut device_identity = None;
+        let mut member_addrs = HashSet::with_capacity(members.size_hint().0);
+        #[cfg(feature = "checked")]
+        let mut physical_acceleration_structures = HashSet::with_capacity(members.size_hint().0);
+        let mut unique_members = Vec::with_capacity(members.size_hint().0);
+
+        for member in members {
+            let member = member.into();
+            let acceleration_structure = member.acceleration_structure();
+            merge_device_identity(
+                &mut device_identity,
+                Device::identity(&acceleration_structure.buffer.device),
+            )?;
+            if member_addrs.insert(member.addr()) {
+                #[cfg(feature = "checked")]
+                physical_acceleration_structures
+                    .insert(PhysicalAccelerationStructureId::of(acceleration_structure));
+                unique_members.push(member);
+            }
+        }
+
+        let fingerprint = membership_fingerprint(unique_members.iter().map(|member| member.addr()));
+
+        Ok(Self {
+            inner: Arc::new(AccelerationStructureSetInner {
+                #[cfg(feature = "checked")]
+                device_identity,
+                fingerprint,
+                #[cfg(feature = "checked")]
+                physical_acceleration_structure_count: physical_acceleration_structures.len(),
+                unique_members: unique_members.into_boxed_slice(),
+            }),
+        })
+    }
+
     pub(crate) fn addr(&self) -> usize {
         Arc::as_ptr(&self.inner) as usize
     }
@@ -87,48 +134,7 @@ impl AccelerationStructureSet {
         self.inner.unique_members.len()
     }
 
-    /// Creates a persistent read-only acceleration structure set.
-    ///
-    /// Exact duplicate shared resources are deduplicated. Every member must belong to the same
-    /// logical device.
-    pub fn new<I, M>(members: I) -> Result<Self, DriverError>
-    where
-        I: IntoIterator<Item = M>,
-        M: Into<AccelerationStructureSetMember>,
-    {
-        let members = members.into_iter();
-        let mut device_identity = None;
-        let mut member_addrs = HashSet::with_capacity(members.size_hint().0);
-        let mut physical_acceleration_structures = HashSet::with_capacity(members.size_hint().0);
-        let mut unique_members = Vec::with_capacity(members.size_hint().0);
-
-        for member in members {
-            let member = member.into();
-            let acceleration_structure = member.acceleration_structure();
-            merge_device_identity(
-                &mut device_identity,
-                Device::identity(&acceleration_structure.buffer.device),
-            )?;
-            if member_addrs.insert(member.addr()) {
-                physical_acceleration_structures
-                    .insert(PhysicalAccelerationStructureId::of(acceleration_structure));
-                unique_members.push(member);
-            }
-        }
-
-        let fingerprint = membership_fingerprint(unique_members.iter().map(|member| member.addr()));
-
-        Ok(Self {
-            inner: Arc::new(AccelerationStructureSetInner {
-                #[cfg(feature = "checked")]
-                device_identity,
-                fingerprint,
-                physical_acceleration_structure_count: physical_acceleration_structures.len(),
-                unique_members: unique_members.into_boxed_slice(),
-            }),
-        })
-    }
-
+    #[cfg(feature = "checked")]
     pub(crate) fn physical_acceleration_structure_count(&self) -> usize {
         self.inner.physical_acceleration_structure_count
     }
@@ -144,6 +150,7 @@ struct AccelerationStructureSetInner {
     #[cfg(feature = "checked")]
     device_identity: Option<usize>,
     fingerprint: u64,
+    #[cfg(feature = "checked")]
     physical_acceleration_structure_count: usize,
     unique_members: Box<[AccelerationStructureSetMember]>,
 }
@@ -205,6 +212,8 @@ enum AccelerationStructureSetResource {
     Pooled(Arc<Lease<AccelerationStructure>>),
 }
 
+type Deduplicated<T> = (Box<[T]>, Box<[u32]>);
+
 /// The access performed through an [`ImageSet`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ImageAccessType {
@@ -225,14 +234,72 @@ impl ImageAccessType {
 /// Logical descriptor slots retain their original order while duplicate image and subresource
 /// pairs share one unique synchronization member. Cloning a set is constant-time and preserves its
 /// identity when bound to a [`Graph`](crate::Graph). A graph that accesses a set cannot directly
-/// access one of its members. The default `checked` feature validates this restriction; without it,
-/// the caller must uphold the restriction.
+/// access any of its members. The opt-in `checked` feature validates this restriction; callers
+/// must uphold it even without `checked`.
 #[derive(Clone, Debug)]
 pub struct ImageSet {
     inner: Arc<ImageSetInner>,
 }
 
 impl ImageSet {
+    /// Creates a persistent sampled read-only image set.
+    ///
+    /// Each input item defines one logical descriptor slot. Remaining mip-level and array-layer
+    /// counts are resolved before exact duplicate `Image` and subresource-range pairs are
+    /// deduplicated. Every member must belong to the same logical device.
+    pub fn new<I, M>(slots: I) -> Result<Self, DriverError>
+    where
+        I: IntoIterator<Item = M>,
+        M: Into<ImageSetMember>,
+    {
+        let slots = slots.into_iter();
+        let mut normalized_slots = Vec::with_capacity(slots.size_hint().0);
+        let mut device_identity = None;
+
+        for slot in slots {
+            let mut member: ImageSetMember = slot.into();
+            merge_device_identity(
+                &mut device_identity,
+                Device::identity(&member.image().device),
+            )?;
+            member.subresource =
+                ImageSetMember::normalize_subresource(member.image().info, member.subresource)?;
+            normalized_slots.push(member);
+        }
+
+        let (unique_members, slot_to_member) =
+            deduplicate(normalized_slots, ImageSetMemberKey::from_member)?;
+        let fingerprint = ImageSetInner::membership_fingerprint(&unique_members, &slot_to_member);
+        let queue = Arc::new(ImageSetQueue::new());
+        #[cfg(feature = "checked")]
+        let mut physical_images = HashSet::with_capacity(unique_members.len());
+        let mut exclusive_physical_images = HashSet::with_capacity(unique_members.len());
+        for member in &unique_members {
+            let image = member.image();
+            let image_id = PhysicalImageId::of(image);
+            #[cfg(feature = "checked")]
+            physical_images.insert(image_id);
+            if image.info.sharing_mode != vk::SharingMode::CONCURRENT {
+                exclusive_physical_images.insert(image_id);
+                image.register_image_set_queue(&queue);
+            }
+        }
+
+        Ok(Self {
+            inner: Arc::new(ImageSetInner {
+                #[cfg(feature = "checked")]
+                device_identity,
+                exclusive_physical_image_count: exclusive_physical_images.len(),
+                fingerprint,
+                #[cfg(feature = "checked")]
+                physical_image_count: physical_images.len(),
+                queue,
+                slot_to_member,
+                unique_members,
+            }),
+        })
+    }
+
     pub(crate) fn addr(&self) -> usize {
         Arc::as_ptr(&self.inner) as usize
     }
@@ -270,61 +337,7 @@ impl ImageSet {
         self.inner.slot_to_member.len()
     }
 
-    /// Creates a persistent sampled read-only image set.
-    ///
-    /// Each input item defines one logical descriptor slot. Remaining mip-level and array-layer
-    /// counts are resolved before exact duplicate `Image` and subresource-range pairs are
-    /// deduplicated. Every member must belong to the same logical device.
-    pub fn new<I, M>(slots: I) -> Result<Self, DriverError>
-    where
-        I: IntoIterator<Item = M>,
-        M: Into<ImageSetMember>,
-    {
-        let slots = slots.into_iter();
-        let mut normalized_slots = Vec::with_capacity(slots.size_hint().0);
-        let mut device_identity = None;
-
-        for slot in slots {
-            let mut member: ImageSetMember = slot.into();
-            merge_device_identity(
-                &mut device_identity,
-                Device::identity(&member.image().device),
-            )?;
-            member.subresource =
-                ImageSetMember::normalize_subresource(member.image().info, member.subresource)?;
-            normalized_slots.push(member);
-        }
-
-        let (unique_members, slot_to_member) =
-            deduplicate(normalized_slots, ImageSetMemberKey::from_member)?;
-        let fingerprint = ImageSetInner::membership_fingerprint(&unique_members, &slot_to_member);
-        let queue = Arc::new(ImageSetQueue::new());
-        let mut physical_images = HashSet::with_capacity(unique_members.len());
-        let mut exclusive_physical_images = HashSet::with_capacity(unique_members.len());
-        for member in &unique_members {
-            let image = member.image();
-            let image_id = PhysicalImageId::of(image);
-            physical_images.insert(image_id);
-            if image.info.sharing_mode != vk::SharingMode::CONCURRENT {
-                exclusive_physical_images.insert(image_id);
-                image.register_image_set_queue(&queue);
-            }
-        }
-
-        Ok(Self {
-            inner: Arc::new(ImageSetInner {
-                #[cfg(feature = "checked")]
-                device_identity,
-                exclusive_physical_image_count: exclusive_physical_images.len(),
-                fingerprint,
-                physical_image_count: physical_images.len(),
-                queue,
-                slot_to_member,
-                unique_members,
-            }),
-        })
-    }
-
+    #[cfg(feature = "checked")]
     pub(crate) fn physical_image_count(&self) -> usize {
         self.inner.physical_image_count
     }
@@ -362,6 +375,7 @@ struct ImageSetInner {
     device_identity: Option<usize>,
     exclusive_physical_image_count: usize,
     fingerprint: u64,
+    #[cfg(feature = "checked")]
     physical_image_count: usize,
     queue: Arc<ImageSetQueue>,
     slot_to_member: Box<[u32]>,
@@ -392,14 +406,6 @@ pub struct ImageSetMember {
 }
 
 impl ImageSetMember {
-    /// Returns the retained image.
-    pub fn image(&self) -> &Image {
-        match &self.resource {
-            ImageSetResource::Owned(resource) => resource,
-            ImageSetResource::Pooled(resource) => resource,
-        }
-    }
-
     /// Creates a set member for an image subresource range.
     ///
     /// Remaining mip-level and array-layer counts are resolved when the member is added to a
@@ -415,6 +421,14 @@ impl ImageSetMember {
         match &self.resource {
             ImageSetResource::Owned(resource) => Arc::as_ptr(resource) as usize,
             ImageSetResource::Pooled(resource) => Arc::as_ptr(resource) as usize,
+        }
+    }
+
+    /// Returns the retained image.
+    pub fn image(&self) -> &Image {
+        match &self.resource {
+            ImageSetResource::Owned(resource) => resource,
+            ImageSetResource::Pooled(resource) => resource,
         }
     }
 
@@ -456,6 +470,7 @@ impl ImageSetMember {
 impl From<Arc<Image>> for ImageSetMember {
     fn from(image: Arc<Image>) -> Self {
         let subresource = image.info.into();
+
         Self::new(image, subresource)
     }
 }
@@ -481,6 +496,7 @@ impl From<(&Arc<Image>, vk::ImageSubresourceRange)> for ImageSetMember {
 impl From<Arc<Lease<Image>>> for ImageSetMember {
     fn from(resource: Arc<Lease<Image>>) -> Self {
         let subresource = resource.info.into();
+
         Self {
             resource: ImageSetResource::Pooled(resource),
             subresource,
@@ -509,12 +525,6 @@ impl From<(&Arc<Lease<Image>>, vk::ImageSubresourceRange)> for ImageSetMember {
     }
 }
 
-#[derive(Clone, Debug)]
-enum ImageSetResource {
-    Owned(Arc<Image>),
-    Pooled(Arc<Lease<Image>>),
-}
-
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 struct ImageSetMemberKey {
     aspect_mask: u32,
@@ -526,10 +536,6 @@ struct ImageSetMemberKey {
 }
 
 impl ImageSetMemberKey {
-    fn from_member(member: &ImageSetMember) -> Self {
-        Self::new(member.addr(), member.subresource)
-    }
-
     fn new(image_addr: usize, subresource: vk::ImageSubresourceRange) -> Self {
         Self {
             aspect_mask: subresource.aspect_mask.as_raw(),
@@ -540,14 +546,26 @@ impl ImageSetMemberKey {
             level_count: subresource.level_count,
         }
     }
+
+    fn from_member(member: &ImageSetMember) -> Self {
+        Self::new(member.addr(), member.subresource)
+    }
 }
 
+#[derive(Clone, Debug)]
+enum ImageSetResource {
+    Owned(Arc<Image>),
+    Pooled(Arc<Lease<Image>>),
+}
+
+#[cfg(feature = "checked")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PhysicalAccelerationStructureId {
     device: usize,
     handle: u64,
 }
 
+#[cfg(feature = "checked")]
 impl PhysicalAccelerationStructureId {
     #[cfg(test)]
     pub(crate) const fn from_parts(device: usize, handle: u64) -> Self {
@@ -582,12 +600,14 @@ impl PhysicalImageId {
     }
 }
 
+#[cfg(feature = "checked")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PhysicalMicromapId {
     device: usize,
     handle: u64,
 }
 
+#[cfg(feature = "checked")]
 impl PhysicalMicromapId {
     #[cfg(test)]
     pub(crate) const fn from_parts(device: usize, handle: u64) -> Self {
@@ -637,12 +657,12 @@ impl ResourceSetAccessType {
 pub(crate) struct ResourceSetIndex(usize);
 
 impl ResourceSetIndex {
-    pub(crate) const fn as_usize(self) -> usize {
-        self.0
-    }
-
     pub(crate) const fn new(index: usize) -> Self {
         Self(index)
+    }
+
+    pub(crate) const fn as_usize(self) -> usize {
+        self.0
     }
 }
 
@@ -676,6 +696,7 @@ impl ResourceSetMap {
             let index = ResourceSetIndex::new(self.sets.len());
             self.sets
                 .push(ResourceSet::AccelerationStructure(set.clone()));
+
             index
         })
     }
@@ -686,6 +707,7 @@ impl ResourceSetMap {
         *self.addr_index.entry(key).or_insert_with(|| {
             let index = ResourceSetIndex::new(self.sets.len());
             self.sets.push(ResourceSet::Image(set.clone()));
+
             index
         })
     }
@@ -726,8 +748,6 @@ impl ResourceSetMap {
     }
 }
 
-type Deduplicated<T> = (Box<[T]>, Box<[u32]>);
-
 fn deduplicate<T, K>(
     slots: impl IntoIterator<Item = T>,
     mut key: impl FnMut(&T) -> K,
@@ -749,6 +769,7 @@ where
                 u32::try_from(unique_members.len()).map_err(|_| DriverError::InvalidData)?;
             member_indices.insert(key, member_idx);
             unique_members.push(member);
+
             member_idx
         };
         slot_to_member.push(member_idx);
@@ -760,10 +781,17 @@ where
     ))
 }
 
-fn valid_subresource_count(base: u32, count: u32, total: u32, remaining: u32) -> bool {
-    base < total
-        && (count == remaining
-            || count > 0 && base.checked_add(count).is_some_and(|end| end <= total))
+fn membership_fingerprint<K>(keys: impl ExactSizeIterator<Item = K>) -> u64
+where
+    K: Hash,
+{
+    let mut hasher = DefaultHasher::new();
+    keys.len().hash(&mut hasher);
+    for key in keys {
+        key.hash(&mut hasher);
+    }
+
+    hasher.finish()
 }
 
 fn merge_device_identity(
@@ -779,16 +807,10 @@ fn merge_device_identity(
     Ok(())
 }
 
-fn membership_fingerprint<K>(keys: impl ExactSizeIterator<Item = K>) -> u64
-where
-    K: Hash,
-{
-    let mut hasher = DefaultHasher::new();
-    keys.len().hash(&mut hasher);
-    for key in keys {
-        key.hash(&mut hasher);
-    }
-    hasher.finish()
+fn valid_subresource_count(base: u32, count: u32, total: u32, remaining: u32) -> bool {
+    base < total
+        && (count == remaining
+            || count > 0 && base.checked_add(count).is_some_and(|end| end <= total))
 }
 
 #[cfg(test)]
@@ -823,6 +845,7 @@ mod test {
         AccelerationStructureSet::new(std::iter::empty::<AccelerationStructureSetMember>()).unwrap()
     }
 
+    #[cfg(feature = "checked")]
     fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         if let Some(message) = payload.downcast_ref::<&str>() {
             message
@@ -946,6 +969,7 @@ mod test {
 
         let mut invalid_array_layer = range(0, 1);
         invalid_array_layer.base_array_layer = 1;
+
         assert!(matches!(
             ImageSetMember::normalize_subresource(sampled_info, invalid_array_layer),
             Err(DriverError::InvalidData)
@@ -953,6 +977,7 @@ mod test {
 
         let mut remaining_array_layers = range(0, 1);
         remaining_array_layers.layer_count = vk::REMAINING_ARRAY_LAYERS;
+
         assert_eq!(
             ImageSetMember::normalize_subresource(sampled_info, remaining_array_layers)
                 .unwrap()
@@ -966,6 +991,7 @@ mod test {
             vk::Format::R8G8B8A8_UNORM,
             vk::ImageUsageFlags::STORAGE,
         );
+
         assert!(matches!(
             ImageSetMember::normalize_subresource(storage_info, range(0, 1)),
             Err(DriverError::InvalidData)
@@ -1007,6 +1033,7 @@ mod test {
         );
     }
 
+    #[cfg(feature = "checked")]
     #[test]
     fn physical_acceleration_structure_id_includes_device_and_handle() {
         let acceleration_structure = PhysicalAccelerationStructureId::from_parts(1, 2);
@@ -1034,6 +1061,7 @@ mod test {
         assert_ne!(image, PhysicalImageId::from_parts(1, 3));
     }
 
+    #[cfg(feature = "checked")]
     #[test]
     fn physical_micromap_id_includes_device_and_handle() {
         let micromap = PhysicalMicromapId::from_parts(1, 2);
@@ -1115,6 +1143,7 @@ mod test {
         assert_eq!(set.slots().len(), 0);
 
         let submission = graph.finalize();
+
         assert_eq!(submission.resource(node).addr(), set.addr());
     }
 
@@ -1190,6 +1219,7 @@ mod test {
         assert_eq!(accesses[1].resource_set_idx, lhs.index());
     }
 
+    #[cfg(feature = "checked")]
     #[test]
     #[ignore = "requires Vulkan device"]
     fn acceleration_structure_set_rejects_direct_member_access() {
@@ -1218,12 +1248,14 @@ mod test {
 
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| graph.finalize()))
             .expect_err("direct member access should be rejected");
+
         assert!(
             panic_message(panic.as_ref())
                 .contains("acceleration structure set member cannot also be accessed directly")
         );
     }
 
+    #[cfg(feature = "checked")]
     #[test]
     #[ignore = "requires Vulkan device"]
     fn image_set_rejects_direct_member_access() {
@@ -1257,12 +1289,14 @@ mod test {
 
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| graph.finalize()))
             .expect_err("direct member access should be rejected");
+
         assert!(
             panic_message(panic.as_ref())
                 .contains("image set member cannot also be accessed directly")
         );
     }
 
+    #[cfg(feature = "checked")]
     #[test]
     #[ignore = "requires Vulkan device"]
     fn image_set_rejects_distinct_wrappers_for_one_physical_image() {
@@ -1279,7 +1313,9 @@ mod test {
             )
             .unwrap(),
         );
+
         let alias = Arc::new(unsafe { Image::from_raw(&device, image.handle, image.info) });
+
         let lhs = ImageSet::new([Arc::clone(&image)]).unwrap();
         let rhs = ImageSet::new([Arc::clone(&alias)]).unwrap();
         let mut graph = Graph::new();
@@ -1295,6 +1331,7 @@ mod test {
 
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| graph.finalize()))
             .expect_err("distinct image wrappers should be rejected");
+
         assert!(
             panic_message(panic.as_ref()).contains("image sets contain incompatible image aliases")
         );

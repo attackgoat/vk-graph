@@ -121,6 +121,7 @@ impl RayTracingPipeline {
 
             return Err(DriverError::Unsupported);
         }
+
         let shader_groups = shader_groups
             .into_iter()
             .map(|shader_group| shader_group.into())

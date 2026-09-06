@@ -18,23 +18,6 @@ use {
     },
 };
 
-#[derive(Default)]
-pub(super) struct ResourceRequests {
-    pub(super) accel_structs: HashSet<AccelerationStructureInfo>,
-    pub(super) buffers: HashSet<BufferInfo>,
-    pub(super) images: HashSet<ImageInfo>,
-    pub(super) micromaps: HashSet<MicromapInfo>,
-}
-
-impl ResourceRequests {
-    fn clear(&mut self) {
-        self.accel_structs.clear();
-        self.buffers.clear();
-        self.images.clear();
-        self.micromaps.clear();
-    }
-}
-
 pub(super) trait CollectResources {
     fn collect_resources(&mut self, requests: &ResourceRequests);
 }
@@ -154,6 +137,23 @@ impl<T> Deref for GarbageCollector<T> {
 impl<T> DerefMut for GarbageCollector<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.pool
+    }
+}
+
+#[derive(Default)]
+pub(super) struct ResourceRequests {
+    pub(super) accel_structs: HashSet<AccelerationStructureInfo>,
+    pub(super) buffers: HashSet<BufferInfo>,
+    pub(super) images: HashSet<ImageInfo>,
+    pub(super) micromaps: HashSet<MicromapInfo>,
+}
+
+impl ResourceRequests {
+    fn clear(&mut self) {
+        self.accel_structs.clear();
+        self.buffers.clear();
+        self.images.clear();
+        self.micromaps.clear();
     }
 }
 

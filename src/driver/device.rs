@@ -23,9 +23,9 @@ use {
         ops::Deref,
         panic::{AssertUnwindSafe, catch_unwind},
         slice,
-        sync::atomic::{AtomicBool, AtomicU64, Ordering},
         sync::{
             Arc,
+            atomic::{AtomicBool, AtomicU64, Ordering},
             mpsc::{self, Receiver, SyncSender, TrySendError},
         },
         thread::{self, JoinHandle, ThreadId, panicking},
@@ -40,6 +40,58 @@ use parking_lot::Mutex;
 use std::sync::Mutex;
 
 const DROP_WORKER_QUEUE_CAPACITY: usize = 64;
+
+fn run_drop_worker<T>(queue_rx: Receiver<DropWorkerMessage<T>>, drop_value: fn(T) -> bool) {
+    profiling::register_thread!();
+
+    let mut had_failure = false;
+
+    while let Ok(message) = queue_rx.recv() {
+        match message {
+            DropWorkerMessage::Drop(value) => {
+                profiling::scope!("drop fence payloads");
+
+                match catch_unwind(AssertUnwindSafe(|| drop_value(value))) {
+                    Ok(true) => {}
+                    Ok(false) => had_failure = true,
+                    Err(_) => {
+                        had_failure = true;
+
+                        error!("fence payload batch panicked while being dropped");
+                    }
+                }
+            }
+            DropWorkerMessage::Barrier(reply_tx) => {
+                profiling::scope!("wait for fence cleanup");
+
+                let _ = reply_tx.send(!had_failure);
+                had_failure = false;
+            }
+        }
+    }
+}
+
+fn select_physical_device(
+    instance: &Instance,
+    mut index: usize,
+) -> Result<PhysicalDevice, DriverError> {
+    let mut physical_devices = Instance::physical_devices(instance)?
+        .into_iter()
+        .collect::<Vec<_>>();
+    if physical_devices.is_empty() {
+        warn!("unable to find physical devices");
+
+        return Err(DriverError::Unsupported);
+    }
+
+    if index >= physical_devices.len() {
+        index = 0;
+    }
+
+    let physical_device = physical_devices.remove(index);
+
+    Ok(physical_device)
+}
 
 /// Keeps background cleanup of completed fence payloads enabled for a device.
 ///
@@ -83,28 +135,6 @@ struct BackgroundFenceCleanupState {
     worker: Option<DropWorker<FencePayloads>>,
 }
 
-fn select_physical_device(
-    instance: &Instance,
-    mut index: usize,
-) -> Result<PhysicalDevice, DriverError> {
-    let mut physical_devices = Instance::physical_devices(instance)?
-        .into_iter()
-        .collect::<Vec<_>>();
-    if physical_devices.is_empty() {
-        warn!("unable to find physical devices");
-
-        return Err(DriverError::Unsupported);
-    }
-
-    if index >= physical_devices.len() {
-        index = 0;
-    }
-
-    let physical_device = physical_devices.remove(index);
-
-    Ok(physical_device)
-}
-
 /// Opaque handle to a device object.
 #[read_only::embed]
 #[derive(Clone)]
@@ -125,6 +155,68 @@ pub struct Device {
 }
 
 impl Device {
+    /// Constructs a new device using the given configuration.
+    ///
+    /// Intended for headless or manually managed setups. Does not infer or enable platform-specific
+    /// surface extensions. Use [`Self::try_from_display`] if you need to create surfaces later.
+    #[profiling::function]
+    pub fn create(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
+        let DeviceInfo {
+            debug,
+            physical_device_index,
+        } = info.into();
+        let instance_info = InstanceInfoBuilder::default().debug(debug);
+        let instance = Instance::create(instance_info)?;
+        let physical_device = select_physical_device(&instance, physical_device_index)?;
+
+        Self::try_from_physical_device(physical_device)
+    }
+
+    /// Creates a device with the given configuration, enabling the display's required surface
+    /// extensions on its instance.
+    #[profiling::function]
+    pub fn try_from_display(
+        display: impl HasDisplayHandle,
+        info: impl Into<DeviceInfo>,
+    ) -> Result<Self, DriverError> {
+        let DeviceInfo {
+            debug,
+            physical_device_index,
+        } = info.into();
+        let instance_info = InstanceInfoBuilder::default().debug(debug);
+        let instance = Instance::try_from_display(display, instance_info)?;
+        let physical_device = select_physical_device(&instance, physical_device_index)?;
+
+        Self::try_from_physical_device(physical_device)
+    }
+
+    /// Constructs a new device using the given physical device.
+    #[profiling::function]
+    pub fn try_from_physical_device(physical_device: PhysicalDevice) -> Result<Self, DriverError> {
+        let device = unsafe {
+            physical_device.create_ash_device(|device_create_info| {
+                physical_device.instance.create_device(
+                    physical_device.handle,
+                    &device_create_info,
+                    None,
+                )
+            })
+        }
+        .map_err(|err| {
+            error!("unable to create device: {err}");
+
+            DriverError::Unsupported
+        })?;
+
+        info!("created {}", physical_device.properties_v1_0.device_name);
+
+        unsafe { Self::try_from_ash(device, physical_device) }
+    }
+
+    pub(crate) fn background_fence_cleanup_enabled(this: &Self) -> bool {
+        this.inner.fence_cleanup_enabled.load(Ordering::Acquire)
+    }
+
     /// Begins recording a command buffer on this device.
     ///
     /// This is a thin wrapper around [`ash::Device::begin_command_buffer`] that maps Vulkan errors
@@ -262,24 +354,6 @@ impl Device {
                 khr_synchronization2.cmd_pipeline_barrier2(command_buffer, dependency_info);
             }
         }
-    }
-
-    /// Constructs a new device using the given configuration.
-    ///
-    /// This constructor is intended for headless or manually managed setups. It does not infer or
-    /// enable display platform surface extensions. Use [`Self::try_from_display`] when the
-    /// resulting device must be capable of later surface creation.
-    #[profiling::function]
-    pub fn create(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
-        let DeviceInfo {
-            debug,
-            physical_device_index,
-        } = info.into();
-        let instance_info = InstanceInfoBuilder::default().debug(debug);
-        let instance = Instance::create(instance_info)?;
-        let physical_device = select_physical_device(&instance, physical_device_index)?;
-
-        Self::try_from_physical_device(physical_device)
     }
 
     /// Creates a Vulkan fence on this device.
@@ -498,6 +572,15 @@ impl Device {
             .vk_khr_swapchain
             .as_ref()
             .expect("missing VK_KHR_swapchain")
+    }
+
+    fn fence_cleanup_worker_handle(this: &Self) -> Option<DropWorkerHandle<FencePayloads>> {
+        let fence_cleanup = this.inner.fence_cleanup.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let fence_cleanup = fence_cleanup.expect("poisoned fence cleanup lock");
+
+        fence_cleanup.worker.as_ref().and_then(DropWorker::handle)
     }
 
     /// Removes local Vulkan private-data metadata without touching the Vulkan object.
@@ -734,21 +817,6 @@ impl Device {
         }
     }
 
-    #[profiling::function]
-    pub(crate) fn try_enqueue_fence_cleanup(
-        this: &Self,
-        payloads: FencePayloads,
-    ) -> Result<(), FencePayloads> {
-        if !Self::background_fence_cleanup_enabled(this) {
-            return Err(payloads);
-        }
-
-        match Self::fence_cleanup_worker_handle(this) {
-            Some(worker) => worker.try_enqueue(payloads),
-            None => Err(payloads),
-        }
-    }
-
     /// Assigns a Vulkan debug-utils name to `handle` when debug labeling is enabled.
     ///
     /// Returns without doing any work if debug mode is `false`.
@@ -877,17 +945,19 @@ impl Device {
         Ok(())
     }
 
-    pub(crate) fn background_fence_cleanup_enabled(this: &Self) -> bool {
-        this.inner.fence_cleanup_enabled.load(Ordering::Acquire)
-    }
+    #[profiling::function]
+    pub(crate) fn try_enqueue_fence_cleanup(
+        this: &Self,
+        payloads: FencePayloads,
+    ) -> Result<(), FencePayloads> {
+        if !Self::background_fence_cleanup_enabled(this) {
+            return Err(payloads);
+        }
 
-    fn fence_cleanup_worker_handle(this: &Self) -> Option<DropWorkerHandle<FencePayloads>> {
-        let fence_cleanup = this.inner.fence_cleanup.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let fence_cleanup = fence_cleanup.expect("poisoned fence cleanup lock");
-
-        fence_cleanup.worker.as_ref().and_then(DropWorker::handle)
+        match Self::fence_cleanup_worker_handle(this) {
+            Some(worker) => worker.try_enqueue(payloads),
+            None => Err(payloads),
+        }
     }
 
     /// Loads an existing `ash` Vulkan device that may have been created by other means.
@@ -1034,46 +1104,6 @@ impl Device {
                 physical: Box::new(physical_device),
             },
         })
-    }
-
-    /// Constructs a new device using the given configuration.
-    #[profiling::function]
-    pub fn try_from_display(
-        display: impl HasDisplayHandle,
-        info: impl Into<DeviceInfo>,
-    ) -> Result<Self, DriverError> {
-        let DeviceInfo {
-            debug,
-            physical_device_index,
-        } = info.into();
-        let instance_info = InstanceInfoBuilder::default().debug(debug);
-        let instance = Instance::try_from_display(display, instance_info)?;
-        let physical_device = select_physical_device(&instance, physical_device_index)?;
-
-        Self::try_from_physical_device(physical_device)
-    }
-
-    /// Constructs a new device using the given physical device.
-    #[profiling::function]
-    pub fn try_from_physical_device(physical_device: PhysicalDevice) -> Result<Self, DriverError> {
-        let device = unsafe {
-            physical_device.create_ash_device(|device_create_info| {
-                physical_device.instance.create_device(
-                    physical_device.handle,
-                    &device_create_info,
-                    None,
-                )
-            })
-        }
-        .map_err(|err| {
-            error!("unable to create device: {err}");
-
-            DriverError::Unsupported
-        })?;
-
-        info!("created {}", physical_device.properties_v1_0.device_name);
-
-        unsafe { Self::try_from_ash(device, physical_device) }
     }
 
     pub(crate) fn try_clear_private_data_object_name<T>(
@@ -1227,10 +1257,12 @@ impl Device {
         this: &Self,
         f: impl FnOnce(&mut PrivateDataMetadata) -> R,
     ) -> R {
-        let mut metadata = this.inner.private_data_metadata.lock();
+        let metadata = this.inner.private_data_metadata.lock();
 
         #[cfg(not(feature = "parking_lot"))]
-        let mut metadata = metadata.expect("poisoned private data metadata");
+        let metadata = metadata.expect("poisoned private data metadata");
+
+        let mut metadata = metadata;
 
         f(&mut metadata)
     }
@@ -1436,31 +1468,34 @@ impl Drop for DeviceInner {
     }
 }
 
-#[doc(hidden)]
-impl Clone for ReadOnlyDevice {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            physical: self.physical.clone(),
-        }
-    }
-}
-
-#[doc(hidden)]
-impl Deref for ReadOnlyDevice {
-    type Target = ash::Device;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner.device
-    }
-}
-
 struct DropWorker<T: Send + 'static> {
     queue_tx: Option<SyncSender<DropWorkerMessage<T>>>,
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl<T: Send + 'static> DropWorker<T> {
+    #[cfg(test)]
+    #[profiling::function]
+    fn spawn_dropping(name: &str) -> std::io::Result<Self> {
+        Self::spawn_with(name, |value| {
+            drop(value);
+
+            true
+        })
+    }
+
+    fn spawn_with(name: &str, drop_value: fn(T) -> bool) -> std::io::Result<Self> {
+        let (queue_tx, queue_rx) = mpsc::sync_channel(DROP_WORKER_QUEUE_CAPACITY);
+        let join_handle = thread::Builder::new()
+            .name(name.into())
+            .spawn(move || run_drop_worker(queue_rx, drop_value))?;
+
+        Ok(Self {
+            queue_tx: Some(queue_tx),
+            join_handle: Some(join_handle),
+        })
+    }
+
     fn close_and_detach(&mut self) {
         self.queue_tx.take();
         self.join_handle.take();
@@ -1487,28 +1522,6 @@ impl<T: Send + 'static> DropWorker<T> {
         Some(DropWorkerHandle {
             queue_tx: self.queue_tx.as_ref()?.clone(),
             worker_id: self.join_handle.as_ref()?.thread().id(),
-        })
-    }
-
-    #[cfg(test)]
-    #[profiling::function]
-    fn spawn_dropping(name: &str) -> std::io::Result<Self> {
-        Self::spawn_with(name, |value| {
-            drop(value);
-
-            true
-        })
-    }
-
-    fn spawn_with(name: &str, drop_value: fn(T) -> bool) -> std::io::Result<Self> {
-        let (queue_tx, queue_rx) = mpsc::sync_channel(DROP_WORKER_QUEUE_CAPACITY);
-        let join_handle = thread::Builder::new()
-            .name(name.into())
-            .spawn(move || run_drop_worker(queue_rx, drop_value))?;
-
-        Ok(Self {
-            queue_tx: Some(queue_tx),
-            join_handle: Some(join_handle),
         })
     }
 }
@@ -1569,39 +1582,29 @@ enum DropWorkerMessage<T> {
     Barrier(SyncSender<bool>),
 }
 
-fn run_drop_worker<T>(queue_rx: Receiver<DropWorkerMessage<T>>, drop_value: fn(T) -> bool) {
-    profiling::register_thread!();
-
-    let mut had_failure = false;
-
-    while let Ok(message) = queue_rx.recv() {
-        match message {
-            DropWorkerMessage::Drop(value) => {
-                profiling::scope!("drop fence payloads");
-
-                match catch_unwind(AssertUnwindSafe(|| drop_value(value))) {
-                    Ok(true) => {}
-                    Ok(false) => had_failure = true,
-                    Err(_) => {
-                        had_failure = true;
-                        error!("fence payload batch panicked while being dropped");
-                    }
-                }
-            }
-            DropWorkerMessage::Barrier(reply_tx) => {
-                profiling::scope!("wait for fence cleanup");
-
-                let _ = reply_tx.send(!had_failure);
-                had_failure = false;
-            }
-        }
-    }
-}
-
 #[derive(Default)]
 struct PrivateDataMetadata {
     object_metadata_ids: HashMap<(vk::ObjectType, u64), u64>,
     names: HashMap<u64, String>,
+}
+
+#[doc(hidden)]
+impl Clone for ReadOnlyDevice {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            physical: self.physical.clone(),
+        }
+    }
+}
+
+#[doc(hidden)]
+impl Deref for ReadOnlyDevice {
+    type Target = ash::Device;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner.device
+    }
 }
 
 #[cfg(test)]
@@ -1860,6 +1863,7 @@ mod test {
             for _ in 0..DROP_WORKER_QUEUE_CAPACITY {
                 assert!(handle.try_enqueue(BlockingDropProbe::Immediate).is_ok());
             }
+
             assert!(handle.try_enqueue(BlockingDropProbe::Immediate).is_err());
 
             release_tx.send(()).unwrap();

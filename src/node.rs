@@ -76,18 +76,6 @@ pub struct AccelerationStructureSetNode {
 }
 
 impl AccelerationStructureSetNode {
-    #[cfg(feature = "checked")]
-    pub(crate) fn assert_owner(self, graph_id: GraphId) {
-        assert!(
-            self.graph_id == graph_id,
-            "node belongs to a different graph"
-        );
-    }
-
-    pub(crate) fn index(self) -> ResourceSetIndex {
-        self.index
-    }
-
     pub(crate) fn new(
         index: ResourceSetIndex,
         #[cfg(feature = "checked")] graph_id: GraphId,
@@ -98,6 +86,18 @@ impl AccelerationStructureSetNode {
             #[cfg(feature = "checked")]
             graph_id,
         }
+    }
+
+    #[cfg(feature = "checked")]
+    pub(crate) fn assert_owner(self, graph_id: GraphId) {
+        assert!(
+            self.graph_id == graph_id,
+            "node belongs to a different graph"
+        );
+    }
+
+    pub(crate) fn index(self) -> ResourceSetIndex {
+        self.index
     }
 }
 
@@ -455,18 +455,6 @@ pub struct ImageSetNode {
 }
 
 impl ImageSetNode {
-    #[cfg(feature = "checked")]
-    pub(crate) fn assert_owner(self, graph_id: GraphId) {
-        assert!(
-            self.graph_id == graph_id,
-            "node belongs to a different graph"
-        );
-    }
-
-    pub(crate) fn index(self) -> ResourceSetIndex {
-        self.index
-    }
-
     pub(crate) fn new(
         index: ResourceSetIndex,
         #[cfg(feature = "checked")] graph_id: GraphId,
@@ -477,6 +465,18 @@ impl ImageSetNode {
             #[cfg(feature = "checked")]
             graph_id,
         }
+    }
+
+    #[cfg(feature = "checked")]
+    pub(crate) fn assert_owner(self, graph_id: GraphId) {
+        assert!(
+            self.graph_id == graph_id,
+            "node belongs to a different graph"
+        );
+    }
+
+    pub(crate) fn index(self) -> ResourceSetIndex {
+        self.index
     }
 }
 

@@ -26,11 +26,9 @@ mod ray_tracing;
 pub use {
     self::{
         cmd_ref::{
-            BuildAccelerationStructureIndirectInfo, BuildAccelerationStructureInfo,
-            BuildMicromapInfo, CommandRef, CopyMicromapInfo, DeserializeMicromapInfo,
-            MicromapCopyMode, MicromapQueryType, SerializeMicromapInfo,
-            UpdateAccelerationStructureIndirectInfo, UpdateAccelerationStructureInfo,
-            WriteMicromapsPropertiesInfo,
+            AccelerationStructureBuildGeometryInfo, CommandRef, CopyMicromapInfo,
+            DeserializeMicromapInfo, MicromapBuildInfo, MicromapCopyMode, MicromapQueryType,
+            SerializeMicromapInfo, WriteMicromapsPropertiesInfo,
         },
         compute::ComputeCommandRef,
         graphics::{ClearColorValue, GraphicsCommandRef},
@@ -982,6 +980,10 @@ impl From<(DescriptorSetIndex, BindingIndex, [BindingOffset; 1])> for Binding {
     }
 }
 
+/// The whole-object subresource range of a micromap.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct MicromapSubresourceRange;
+
 /// A node that can declare a whole-resource command access.
 ///
 /// Ordinary resource nodes use [`AccessType`]. Resource-set nodes use their corresponding
@@ -1076,37 +1078,6 @@ view_accel_struct!(AccelerationStructureArg);
 view_accel_struct!(AccelerationStructureLeaseNode);
 view_accel_struct!(AccelerationStructureNode);
 
-macro_rules! view_micromap {
-    ($name:ty) => {
-        impl Subresource for $name {
-            type Info = MicromapSubresourceRange;
-            type Range = MicromapSubresourceRange;
-        }
-
-        impl private::SubresourceSealed for $name {
-            fn info(&self, resources: &[AnyResource]) -> <Self as Subresource>::Info
-            where
-                Self: Node + Subresource,
-            {
-                self.range(resources)
-            }
-
-            fn range(&self, resources: &[AnyResource]) -> <Self as Subresource>::Range
-            where
-                Self: Node + Subresource,
-            {
-                resources[self.index()].expect_micromap_info();
-                MicromapSubresourceRange
-            }
-        }
-    };
-}
-
-view_micromap!(AnyMicromapNode);
-view_micromap!(MicromapArg);
-view_micromap!(MicromapLeaseNode);
-view_micromap!(MicromapNode);
-
 macro_rules! view_buffer {
     ($name:ty) => {
         impl Subresource for $name {
@@ -1172,6 +1143,38 @@ view_image!(ImageLeaseNode);
 view_image!(ImageNode);
 view_image!(SwapchainImageNode);
 
+macro_rules! view_micromap {
+    ($name:ty) => {
+        impl Subresource for $name {
+            type Info = MicromapSubresourceRange;
+            type Range = MicromapSubresourceRange;
+        }
+
+        impl private::SubresourceSealed for $name {
+            fn info(&self, resources: &[AnyResource]) -> <Self as Subresource>::Info
+            where
+                Self: Node + Subresource,
+            {
+                self.range(resources)
+            }
+
+            fn range(&self, resources: &[AnyResource]) -> <Self as Subresource>::Range
+            where
+                Self: Node + Subresource,
+            {
+                resources[self.index()].expect_micromap_info();
+
+                MicromapSubresourceRange
+            }
+        }
+    };
+}
+
+view_micromap!(AnyMicromapNode);
+view_micromap!(MicromapArg);
+view_micromap!(MicromapLeaseNode);
+view_micromap!(MicromapNode);
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SubresourceRange {
     /// Acceleration structures are bound whole.
@@ -1230,10 +1233,6 @@ impl From<vk::ImageSubresourceRange> for SubresourceRange {
         Self::Image(subresource)
     }
 }
-
-/// The whole-object subresource range of a micromap.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct MicromapSubresourceRange;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SubresourceAccess {

@@ -28,12 +28,12 @@ use {
     rand::{Rng, rng, seq::IndexedRandom},
     std::mem::size_of,
     vk_graph::{
-        cmd::{BuildAccelerationStructureInfo, LoadOp, StoreOp},
+        cmd::{AccelerationStructureBuildGeometryInfo, LoadOp, StoreOp},
         driver::{
             accel_struct::{
                 AccelerationStructure, AccelerationStructureGeometry,
-                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
-                AccelerationStructureInfo, DeviceOrHostAddress,
+                AccelerationStructureGeometryData, AccelerationStructureInfo,
+                AccelerationStructureTriangles,
             },
             buffer::{Buffer, BufferInfo},
             compute::{ComputePipeline, ComputePipelineInfo},
@@ -50,8 +50,6 @@ use {
     vk_shader_macros::glsl,
     vk_sync::AccessType,
 };
-
-type Operation = fn(&mut FrameContext, &mut HashPool);
 
 static OPERATIONS: &[Operation] = &[
     record_pipeline_array_bind,
@@ -71,6 +69,69 @@ static OPERATIONS: &[Operation] = &[
     record_transfer_graphic_multipass,
 ];
 
+fn compute_pipeline(
+    key: &'static str,
+    device: &Device,
+    info: impl Into<ComputePipelineInfo>,
+    shader: ShaderBuilder,
+) -> ComputePipeline {
+    use std::{cell::RefCell, collections::HashMap};
+
+    thread_local! {
+        static TLS: RefCell<HashMap<&'static str, ComputePipeline>> = Default::default();
+    }
+
+    TLS.with(|tls| {
+        tls.borrow_mut()
+            .entry(key)
+            .or_insert_with(|| ComputePipeline::create(device, info, shader).unwrap())
+            .clone()
+    })
+}
+
+fn graphic_vert_frag_pipeline(
+    device: &Device,
+    info: impl Into<GraphicsPipelineInfo>,
+    vert_source: &'static [u32],
+    frag_source: &'static [u32],
+) -> GraphicsPipeline {
+    use std::{cell::RefCell, collections::HashMap};
+
+    #[derive(Eq, Hash, PartialEq)]
+    struct Key {
+        info: GraphicsPipelineInfo,
+        vert_source: &'static [u32],
+        frag_source: &'static [u32],
+    }
+
+    thread_local! {
+        static TLS: RefCell<HashMap<Key, GraphicsPipeline>> = Default::default();
+    }
+
+    let info = info.into();
+
+    TLS.with(|tls| {
+        tls.borrow_mut()
+            .entry(Key {
+                info,
+                vert_source,
+                frag_source,
+            })
+            .or_insert_with(move || {
+                GraphicsPipeline::create(
+                    device,
+                    info,
+                    [
+                        Shader::new_vertex(vert_source),
+                        Shader::new_fragment(frag_source),
+                    ],
+                )
+                .unwrap()
+            })
+            .clone()
+    })
+}
+
 fn main() -> Result<(), WindowError> {
     pretty_env_logger::init();
     profile_with_puffin::init();
@@ -87,6 +148,7 @@ fn main() -> Result<(), WindowError> {
     vk_graph.run(|mut frame| {
         if frame_count == args.frame_count {
             *frame.will_exit = true;
+
             return;
         }
 
@@ -168,24 +230,36 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         buf
     };
 
-    let blas_geometry_info = AccelerationStructureGeometryInfo::blas([(
-        AccelerationStructureGeometry {
-            max_primitive_count: 1,
-            flags: vk::GeometryFlagsKHR::OPAQUE,
-            geometry: AccelerationStructureGeometryData::Triangles {
-                index_addr: DeviceOrHostAddress::DeviceAddress(index_buf.device_address()),
-                index_type: vk::IndexType::UINT16,
-                max_vertex: 3,
-                transform_addr: None,
-                vertex_addr: DeviceOrHostAddress::DeviceAddress(vertex_buf.device_address()),
-                vertex_format: vk::Format::R32G32B32_SFLOAT,
-                vertex_stride: 12,
-            },
-        },
-        vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
-    )]);
-    let blas_size = AccelerationStructure::size_of(frame.device, &blas_geometry_info);
-    let blas_info = AccelerationStructureInfo::blas(blas_size.create_size);
+    let blas_geometries = [AccelerationStructureGeometry {
+        flags: vk::GeometryFlagsKHR::OPAQUE,
+        geometry: AccelerationStructureGeometryData::Triangles(AccelerationStructureTriangles {
+            index_data: index_buf.device_address(),
+            index_type: vk::IndexType::UINT16,
+            max_vertex: 3,
+            opacity_micromap: None,
+            transform_data: 0,
+            vertex_data: vertex_buf.device_address(),
+            vertex_format: vk::Format::R32G32B32_SFLOAT,
+            vertex_stride: 12,
+        }),
+    }];
+    let blas_max_counts = [1];
+    let blas_ranges = [vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1)];
+    let flags = vk::BuildAccelerationStructureFlagsKHR::empty();
+
+    // Safety: Valid triangle metadata and primitive limits; no micromap handles are attached.
+    let blas_size = unsafe {
+        AccelerationStructure::build_sizes(
+            frame.device,
+            vk::AccelerationStructureBuildTypeKHR::DEVICE,
+            vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            flags,
+            &blas_geometries,
+            &blas_max_counts,
+        )
+    };
+
+    let blas_info = AccelerationStructureInfo::blas(blas_size.acceleration_structure_size);
 
     let instance_len = size_of::<vk::AccelerationStructureInstanceKHR>() as vk::DeviceSize;
     let mut instance_buf = Buffer::create(
@@ -208,8 +282,9 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         .min_accel_struct_scratch_offset_alignment
         as vk::DeviceSize;
 
-    // Lease and bind a bunch of bottom-level acceleration structures and add to instance buffer
+    // Lease and bind bottom-level acceleration structures and write their instances to the buffer.
     let mut blas_nodes = Vec::with_capacity(BLAS_COUNT as _);
+
     for idx in 0..BLAS_COUNT {
         let blas = pool.resource(blas_info).unwrap();
 
@@ -238,7 +313,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         let scratch_buf = frame.graph.bind_resource(
             pool.resource(
                 BufferInfo::device_mem(
-                    blas_size.build_size,
+                    blas_size.build_scratch_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
@@ -248,31 +323,43 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
             .unwrap(),
         );
 
-        blas_nodes.push((blas_node, scratch_buf, blas_geometry_info.clone()));
+        blas_nodes.push((blas_node, scratch_buf));
     }
 
     // Lease and bind a single top-level acceleration structure
-    let tlas_geometry_info = AccelerationStructureGeometryInfo::tlas([(
-        AccelerationStructureGeometry {
-            max_primitive_count: 1,
-            flags: vk::GeometryFlagsKHR::OPAQUE,
-            geometry: AccelerationStructureGeometryData::Instances {
-                array_of_pointers: false,
-                addr: DeviceOrHostAddress::DeviceAddress(instance_buf.device_address()),
-            },
+    let tlas_geometries = [AccelerationStructureGeometry {
+        flags: vk::GeometryFlagsKHR::OPAQUE,
+        geometry: AccelerationStructureGeometryData::Instances {
+            array_of_pointers: false,
+            data: instance_buf.device_address(),
         },
-        vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
-    )]);
+    }];
+    let tlas_max_counts = [1];
+    let tlas_ranges = [vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1)];
     let instance_buf = frame.graph.bind_resource(instance_buf);
-    let tlas_size = AccelerationStructure::size_of(frame.device, &tlas_geometry_info);
+
+    // Safety: Valid instance metadata and primitive limits; no micromap handles are attached.
+    let tlas_size = unsafe {
+        AccelerationStructure::build_sizes(
+            frame.device,
+            vk::AccelerationStructureBuildTypeKHR::DEVICE,
+            vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            flags,
+            &tlas_geometries,
+            &tlas_max_counts,
+        )
+    };
+
     let tlas = pool
-        .resource(AccelerationStructureInfo::tlas(tlas_size.create_size))
+        .resource(AccelerationStructureInfo::tlas(
+            tlas_size.acceleration_structure_size,
+        ))
         .unwrap();
     let tlas_node = frame.graph.bind_resource(tlas);
     let tlas_scratch_buf = frame.graph.bind_resource(
         pool.resource(
             BufferInfo::device_mem(
-                tlas_size.build_size,
+                tlas_size.build_scratch_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             )
             .into_builder()
@@ -292,7 +379,7 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
     cmd.set_resource_access(index_node, AccessType::AccelerationStructureBuildInputRead);
     cmd.set_resource_access(vertex_node, AccessType::AccelerationStructureBuildInputRead);
 
-    for (blas_node, scratch_buf, _) in &blas_nodes {
+    for (blas_node, scratch_buf) in &blas_nodes {
         cmd.set_resource_access(*blas_node, AccessType::AccelerationStructureBuildWrite);
         cmd.set_resource_access(
             *scratch_buf,
@@ -300,22 +387,31 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         );
     }
 
-    // Ugly copy of the nodes that I want to figure out a way around while not being confusing
+    // Keep the BLAS nodes for TLAS access declarations after moving the build data into the callback.
     let blas_nodes_copy = blas_nodes
         .iter()
-        .map(|(blas_node, _, _)| *blas_node)
+        .map(|(blas_node, _)| *blas_node)
         .collect::<Vec<_>>();
 
     let mut cmd = cmd.record_cmd(move |cmd| {
-        for (blas_node, scratch_buf, build_data) in blas_nodes {
+        for (blas_node, scratch_buf) in blas_nodes {
             let scratch_buf = cmd.resource(scratch_buf);
             let scratch_addr = scratch_buf.device_address();
 
-            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
-                blas_node,
-                scratch_addr,
-                build_data,
-            )]);
+            // Safety: The graph retains and synchronizes the triangle inputs and each distinct
+            // destination/scratch allocation; scratch is aligned and sized for this build.
+            unsafe {
+                cmd.build_acceleration_structures(
+                    &[AccelerationStructureBuildGeometryInfo::build(
+                        vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+                        flags,
+                        blas_node,
+                        &blas_geometries,
+                        scratch_addr,
+                    )],
+                    &[&blas_ranges],
+                );
+            }
         }
     });
 
@@ -336,191 +432,21 @@ fn record_accel_struct_builds(frame: &mut FrameContext, pool: &mut HashPool) {
         let scratch_buf = cmd.resource(tlas_scratch_buf);
         let scratch_addr = scratch_buf.device_address();
 
-        cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
-            tlas_node,
-            scratch_addr,
-            tlas_geometry_info,
-        )]);
+        // Safety: The graph retains and synchronizes the instance input, built BLASes,
+        // destination, and separate aligned scratch; sizes match the single-instance range.
+        unsafe {
+            cmd.build_acceleration_structures(
+                &[AccelerationStructureBuildGeometryInfo::build(
+                    vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+                    flags,
+                    tlas_node,
+                    &tlas_geometries,
+                    scratch_addr,
+                )],
+                &[&tlas_ranges],
+            );
+        }
     });
-}
-
-fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
-    let pipeline = compute_pipeline(
-        "array_bind",
-        frame.device,
-        ComputePipelineInfo::default(),
-        Shader::from_spirv(
-            glsl!(
-                r#"
-                #version 460 core
-                #pragma shader_stage(compute)
-
-                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-
-                layout(constant_id = 0) const uint LAYER_COUNT = 1;
-
-                layout(push_constant) uniform PushConstants {
-                    layout(offset = 0) float offset;
-                } push_const;
-
-                layout(set = 0, binding = 0) uniform sampler2D
-                    layer_images_sampler_llr[LAYER_COUNT];
-
-                void main() {
-                }
-                "#
-            )
-            .as_slice(),
-        )
-        .specialization(SpecializationMap::new(5u32.to_ne_bytes()).constant(0, 0, 4)),
-    );
-
-    let image_info = ImageInfo::image_2d(
-        64,
-        64,
-        vk::Format::R8G8B8A8_UNORM,
-        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-    );
-    let images = [
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-    ];
-
-    frame
-        .graph
-        .clear_color_image(images[0], [0f32; 4])
-        .clear_color_image(images[1], [0f32; 4])
-        .clear_color_image(images[2], [0f32; 4])
-        .clear_color_image(images[3], [0f32; 4])
-        .clear_color_image(images[4], [0f32; 4])
-        .begin_cmd()
-        .debug_name("array-bind")
-        .bind_pipeline(&pipeline)
-        .shader_resource_access((0, [0]), images[0], AccessType::ComputeShaderReadOther)
-        .shader_resource_access((0, [1]), images[1], AccessType::ComputeShaderReadOther)
-        .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderReadOther)
-        .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderReadOther)
-        .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderReadOther)
-        .record_cmd(|cmd| {
-            cmd.push_constants(0, &0f32.to_ne_bytes())
-                .dispatch(64, 64, 1);
-        });
-}
-
-fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
-    let pipeline = compute_pipeline(
-        "bindless",
-        frame.device,
-        ComputePipelineInfo::default(),
-        Shader::new_compute(
-            glsl!(
-                r#"
-                #version 460 core
-                #extension GL_EXT_nonuniform_qualifier : require
-                #pragma shader_stage(compute)
-
-                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-
-                layout(push_constant) uniform PushConstants {
-                    layout(offset = 0) uint count;
-                } push_const;
-
-                layout(set = 0, binding = 0, rgba8) writeonly uniform image2D dst[];
-
-                void main() {
-                    for (uint idx = 0; idx < push_const.count; idx++) {
-                        imageStore(
-                            dst[idx],
-                            ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y),
-                            vec4(0)
-                        );
-                    }
-                }
-                "#
-            )
-            .as_slice(),
-        ),
-    );
-
-    let image_info = ImageInfo::image_2d(
-        64,
-        64,
-        vk::Format::R8G8B8A8_UNORM,
-        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
-    );
-    let images = [
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-        frame
-            .graph
-            .bind_resource(pool.resource(image_info).unwrap()),
-    ];
-
-    frame
-        .graph
-        .begin_cmd()
-        .debug_name("compute-bindless")
-        .bind_pipeline(&pipeline)
-        .shader_resource_access((0, [0]), images[0], AccessType::ComputeShaderWrite)
-        .shader_resource_access((0, [1]), images[1], AccessType::ComputeShaderWrite)
-        .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderWrite)
-        .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderWrite)
-        .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderWrite)
-        .record_cmd(|cmd| {
-            cmd.push_constants(0, &5u32.to_ne_bytes())
-                .dispatch(64, 64, 1);
-        });
-}
-
-fn record_pipeline_no_op(frame: &mut FrameContext, _: &mut HashPool) {
-    let pipeline = compute_pipeline(
-        "no_op",
-        frame.device,
-        ComputePipelineInfo::default(),
-        Shader::new_compute(
-            glsl!(
-                r#"
-                #version 460 core
-                #pragma shader_stage(compute)
-
-                void main() {
-                }
-                "#
-            )
-            .as_slice(),
-        ),
-    );
-    frame
-        .graph
-        .begin_cmd()
-        .debug_name("no-op")
-        .bind_pipeline(&pipeline)
-        .record_cmd(|cmd| {
-            cmd.dispatch(1, 1, 1);
-        });
 }
 
 fn record_graphic_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
@@ -704,6 +630,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
     };
     let depth_stencil_format = {
         let mut best_format = None;
+
         for format in [
             vk::Format::D24_UNORM_S8_UINT,
             vk::Format::D16_UNORM_S8_UINT,
@@ -728,6 +655,7 @@ fn record_graphic_msaa_depth_stencil(frame: &mut FrameContext, pool: &mut HashPo
     };
     let depth_resolve_mode = {
         let mut best_mode = None;
+
         for (resolve_flags, resolve_mode) in [
             (vk::ResolveModeFlags::AVERAGE, ResolveMode::Average),
             (vk::ResolveModeFlags::SAMPLE_ZERO, ResolveMode::SampleZero),
@@ -1476,6 +1404,185 @@ fn record_graphic_wont_merge(frame: &mut FrameContext, pool: &mut HashPool) {
         });
 }
 
+fn record_pipeline_array_bind(frame: &mut FrameContext, pool: &mut HashPool) {
+    let pipeline = compute_pipeline(
+        "array_bind",
+        frame.device,
+        ComputePipelineInfo::default(),
+        Shader::from_spirv(
+            glsl!(
+                r#"
+                #version 460 core
+                #pragma shader_stage(compute)
+
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                layout(constant_id = 0) const uint LAYER_COUNT = 1;
+
+                layout(push_constant) uniform PushConstants {
+                    layout(offset = 0) float offset;
+                } push_const;
+
+                layout(set = 0, binding = 0) uniform sampler2D
+                    layer_images_sampler_llr[LAYER_COUNT];
+
+                void main() {
+                }
+                "#
+            )
+            .as_slice(),
+        )
+        .specialization(SpecializationMap::new(5u32.to_ne_bytes()).constant(0, 0, 4)),
+    );
+
+    let image_info = ImageInfo::image_2d(
+        64,
+        64,
+        vk::Format::R8G8B8A8_UNORM,
+        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+    );
+    let images = [
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+    ];
+
+    frame
+        .graph
+        .clear_color_image(images[0], [0f32; 4])
+        .clear_color_image(images[1], [0f32; 4])
+        .clear_color_image(images[2], [0f32; 4])
+        .clear_color_image(images[3], [0f32; 4])
+        .clear_color_image(images[4], [0f32; 4])
+        .begin_cmd()
+        .debug_name("array-bind")
+        .bind_pipeline(&pipeline)
+        .shader_resource_access((0, [0]), images[0], AccessType::ComputeShaderReadOther)
+        .shader_resource_access((0, [1]), images[1], AccessType::ComputeShaderReadOther)
+        .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderReadOther)
+        .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderReadOther)
+        .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderReadOther)
+        .record_cmd(|cmd| {
+            cmd.push_constants(0, &0f32.to_ne_bytes())
+                .dispatch(64, 64, 1);
+        });
+}
+
+fn record_pipeline_bindless(frame: &mut FrameContext, pool: &mut HashPool) {
+    let pipeline = compute_pipeline(
+        "bindless",
+        frame.device,
+        ComputePipelineInfo::default(),
+        Shader::new_compute(
+            glsl!(
+                r#"
+                #version 460 core
+                #extension GL_EXT_nonuniform_qualifier : require
+                #pragma shader_stage(compute)
+
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                layout(push_constant) uniform PushConstants {
+                    layout(offset = 0) uint count;
+                } push_const;
+
+                layout(set = 0, binding = 0, rgba8) writeonly uniform image2D dst[];
+
+                void main() {
+                    for (uint idx = 0; idx < push_const.count; idx++) {
+                        imageStore(
+                            dst[idx],
+                            ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y),
+                            vec4(0)
+                        );
+                    }
+                }
+                "#
+            )
+            .as_slice(),
+        ),
+    );
+
+    let image_info = ImageInfo::image_2d(
+        64,
+        64,
+        vk::Format::R8G8B8A8_UNORM,
+        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+    );
+    let images = [
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+        frame
+            .graph
+            .bind_resource(pool.resource(image_info).unwrap()),
+    ];
+
+    frame
+        .graph
+        .begin_cmd()
+        .debug_name("compute-bindless")
+        .bind_pipeline(&pipeline)
+        .shader_resource_access((0, [0]), images[0], AccessType::ComputeShaderWrite)
+        .shader_resource_access((0, [1]), images[1], AccessType::ComputeShaderWrite)
+        .shader_resource_access((0, [2]), images[2], AccessType::ComputeShaderWrite)
+        .shader_resource_access((0, [3]), images[3], AccessType::ComputeShaderWrite)
+        .shader_resource_access((0, [4]), images[4], AccessType::ComputeShaderWrite)
+        .record_cmd(|cmd| {
+            cmd.push_constants(0, &5u32.to_ne_bytes())
+                .dispatch(64, 64, 1);
+        });
+}
+
+fn record_pipeline_no_op(frame: &mut FrameContext, _: &mut HashPool) {
+    let pipeline = compute_pipeline(
+        "no_op",
+        frame.device,
+        ComputePipelineInfo::default(),
+        Shader::new_compute(
+            glsl!(
+                r#"
+                #version 460 core
+                #pragma shader_stage(compute)
+
+                void main() {
+                }
+                "#
+            )
+            .as_slice(),
+        ),
+    );
+    frame
+        .graph
+        .begin_cmd()
+        .debug_name("no-op")
+        .bind_pipeline(&pipeline)
+        .record_cmd(|cmd| {
+            cmd.dispatch(1, 1, 1);
+        });
+}
+
 fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPool) {
     let pipeline = graphic_vert_frag_pipeline(
         frame.device,
@@ -1567,71 +1674,6 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
         });
 }
 
-// Below are convenience functions used to create test data
-
-fn compute_pipeline(
-    key: &'static str,
-    device: &Device,
-    info: impl Into<ComputePipelineInfo>,
-    shader: ShaderBuilder,
-) -> ComputePipeline {
-    use std::{cell::RefCell, collections::HashMap};
-
-    thread_local! {
-        static TLS: RefCell<HashMap<&'static str, ComputePipeline>> = Default::default();
-    }
-
-    TLS.with(|tls| {
-        tls.borrow_mut()
-            .entry(key)
-            .or_insert_with(|| ComputePipeline::create(device, info, shader).unwrap())
-            .clone()
-    })
-}
-
-fn graphic_vert_frag_pipeline(
-    device: &Device,
-    info: impl Into<GraphicsPipelineInfo>,
-    vert_source: &'static [u32],
-    frag_source: &'static [u32],
-) -> GraphicsPipeline {
-    use std::{cell::RefCell, collections::HashMap};
-
-    #[derive(Eq, Hash, PartialEq)]
-    struct Key {
-        info: GraphicsPipelineInfo,
-        vert_source: &'static [u32],
-        frag_source: &'static [u32],
-    }
-
-    thread_local! {
-        static TLS: RefCell<HashMap<Key, GraphicsPipeline>> = Default::default();
-    }
-
-    let info = info.into();
-
-    TLS.with(|tls| {
-        tls.borrow_mut()
-            .entry(Key {
-                info,
-                vert_source,
-                frag_source,
-            })
-            .or_insert_with(move || {
-                GraphicsPipeline::create(
-                    device,
-                    info,
-                    [
-                        Shader::new_vertex(vert_source),
-                        Shader::new_fragment(frag_source),
-                    ],
-                )
-                .unwrap()
-            })
-            .clone()
-    })
-}
-
 #[derive(Parser)]
 struct Args {
     /// Count of fuzzing frames
@@ -1642,3 +1684,5 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     ops_per_frame: usize,
 }
+
+type Operation = fn(&mut FrameContext, &mut HashPool);

@@ -209,6 +209,7 @@ impl LazyPool {
     /// Clears the pool of micromap resources matching the given information.
     pub fn clear_micromaps_by_info(&mut self, info: impl Into<MicromapInfo>) {
         let info = info.into();
+
         self.micromap_cache
             .remove(&(info.host_visible, info.micromap_type));
     }
@@ -524,6 +525,7 @@ impl Pool<MicromapInfo, Micromap> for LazyPool {
 
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
+
                 if compatible_micromap_info(&item.info, &info) {
                     let item = cache.swap_remove(idx);
 

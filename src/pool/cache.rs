@@ -111,11 +111,6 @@ where
         }
     }
 
-    /// Returns a tag-scoped cache view.
-    pub fn tag(&mut self, tag: Tag) -> TaggedCache<'_, T, Tag> {
-        TaggedCache { cache: self, tag }
-    }
-
     fn alias_set(&mut self, tag: Tag) -> &mut AliasSet {
         self.aliases.entry(tag).or_default()
     }
@@ -285,6 +280,11 @@ where
             .push((info, Arc::downgrade(&item)));
 
         Ok(item)
+    }
+
+    /// Returns a tag-scoped cache view.
+    pub fn tag(&mut self, tag: Tag) -> TaggedCache<'_, T, Tag> {
+        TaggedCache { cache: self, tag }
     }
 }
 

@@ -5,7 +5,6 @@
 
 use {
     super::{Buffer, BufferInfo, DriverError, device::Device},
-    crate::driver::accel_struct::DeviceOrHostAddress,
     ash::vk,
     derive_builder::Builder,
     log::warn,
@@ -26,13 +25,6 @@ use std::sync::{Mutex, MutexGuard};
 
 const SERIALIZATION_ALIGNMENT: usize = 16;
 
-pub(crate) fn micromap_sync_flags_for_access(
-    access: AccessType,
-) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
-    let info = vk_sync::get_access_info2(access);
-    (info.stage_mask, info.access_mask)
-}
-
 fn map_vk_result(result: vk::Result) -> Result<(), DriverError> {
     match result {
         vk::Result::SUCCESS | vk::Result::OPERATION_NOT_DEFERRED_KHR => Ok(()),
@@ -43,6 +35,47 @@ fn map_vk_result(result: vk::Result) -> Result<(), DriverError> {
             Err(DriverError::InvalidData)
         }
         _ => Err(DriverError::Unsupported),
+    }
+}
+
+pub(crate) fn micromap_sync_flags_for_access(
+    access: AccessType,
+) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
+    let info = vk_sync::get_access_info2(access);
+
+    (info.stage_mask, info.access_mask)
+}
+
+/// Borrowed parameters for a synchronous host opacity micromap build.
+///
+/// Raw pointers do not track allocation lifetimes; see [`Micromap::build_host`] for safety
+/// requirements.
+#[derive(Clone, Copy, Debug)]
+pub struct HostMicromapBuildInfo<'a> {
+    /// Host pointer to encoded opacity data.
+    pub data: *const c_void,
+
+    /// Additional build behavior.
+    pub flags: vk::BuildMicromapFlagsEXT,
+
+    /// Writable host scratch pointer; may be null only when the required size is zero.
+    pub scratch_data: *mut c_void,
+
+    /// Host pointer to the micromap triangle array.
+    pub triangle_array: *const c_void,
+
+    /// Byte stride between triangle entries.
+    pub triangle_array_stride: vk::DeviceSize,
+
+    /// Triangle counts grouped by opacity format and subdivision level.
+    pub usage_counts: &'a [OpacityMicromapUsage],
+}
+
+impl HostMicromapBuildInfo<'_> {
+    fn has_host_addresses(&self, allow_null_scratch: bool) -> bool {
+        !self.data.is_null()
+            && !self.triangle_array.is_null()
+            && (allow_null_scratch || !self.scratch_data.is_null())
     }
 }
 
@@ -109,57 +142,21 @@ impl Micromap {
         })
     }
 
-    /// Returns the storage and scratch sizes required for a build.
-    #[profiling::function]
-    pub fn size_of(device: &Device, info: &OpacityMicromapBuildInfo) -> MicromapSize {
-        Self::size_of_build_type(
-            device,
-            info,
-            vk::AccelerationStructureBuildTypeKHR::HOST_OR_DEVICE,
-        )
-    }
-
-    pub(crate) fn size_of_build_type(
-        device: &Device,
-        info: &OpacityMicromapBuildInfo,
-        build_type: vk::AccelerationStructureBuildTypeKHR,
-    ) -> MicromapSize {
-        let build_info = info.to_vk(vk::MicromapEXT::null());
-        let mut size_info = vk::MicromapBuildSizesInfoEXT::default();
-
-        let ext = Device::expect_vk_ext_opacity_micromap(device);
-
-        unsafe {
-            (ext.fp().get_micromap_build_sizes_ext)(
-                ext.device(),
-                build_type,
-                &build_info,
-                &mut size_info,
-            );
-        }
-
-        MicromapSize {
-            build_size: size_info.build_scratch_size,
-            create_size: size_info.micromap_size,
-            discardable: size_info.discardable == vk::TRUE,
-        }
-    }
-
     /// Builds this opacity micromap synchronously on the host.
     ///
     /// There is no micromap update mode; this always uses [`vk::BuildMicromapModeEXT::BUILD`].
     ///
     /// # Safety
     ///
-    /// All addresses in `info` must be host pointers with Vulkan-required alignment, valid for the
+    /// All pointers in `info` must have Vulkan-required alignment and be valid for the
     /// complete call. The triangle range must cover every strided entry described by the usage
     /// counts; each entry's format, subdivision level and data offset must reference initialized
     /// opacity data wholly within the readable input range. Usage counts must match the triangles'
-    /// formats and subdivision levels. Scratch must be writable for the build
-    /// size, and this micromap's backing storage must cover the create size, from a matching host or
-    /// host-or-device size query for these flags and usage counts. Null scratch is allowed only when
-    /// the required scratch size is zero. Scratch, destination storage and input ranges must not
-    /// overlap, except that read-only inputs may alias each other.
+    /// formats and subdivision levels. Scratch must be writable for `build_scratch_size` bytes,
+    /// and this micromap's backing storage must cover `micromap_size` bytes, as returned by
+    /// [`Self::build_sizes`] with `HOST` or `HOST_OR_DEVICE` and matching flags and usage counts.
+    /// Null scratch is allowed only when the required scratch size is zero. Scratch, destination
+    /// storage and input ranges must not overlap, except that read-only inputs may alias each other.
     ///
     /// All memory must remain alive and bound for the call. This micromap must not be in GPU use;
     /// synchronize prior host/device accesses (including mapped-memory flushes/invalidations as
@@ -168,16 +165,21 @@ impl Micromap {
     /// all `vkBuildMicromapsEXT` validity requirements and device limits.
     pub unsafe fn build_host(
         &mut self,
-        info: &OpacityMicromapBuildInfo,
+        info: &HostMicromapBuildInfo<'_>,
     ) -> Result<(), DriverError> {
         self.require_host_commands()?;
-        let allow_null_scratch = matches!(info.scratch_data, DeviceOrHostAddress::HostAddress(address) if address.is_null())
-            && Self::size_of_build_type(
+        if u32::try_from(info.usage_counts.len()).is_err() {
+            return Err(DriverError::InvalidData);
+        }
+
+        let allow_null_scratch = info.scratch_data.is_null()
+            && Self::build_sizes(
                 &self.buffer.device,
-                info,
                 vk::AccelerationStructureBuildTypeKHR::HOST,
+                info.flags,
+                info.usage_counts,
             )
-            .build_size
+            .build_scratch_size
                 == 0;
         if self.info.micromap_type != vk::MicromapTypeEXT::OPACITY_MICROMAP
             || !info.has_host_addresses(allow_null_scratch)
@@ -185,7 +187,24 @@ impl Micromap {
             return Err(DriverError::InvalidData);
         }
 
-        let build_info = info.to_vk(self.handle);
+        let usage_counts: Vec<vk::MicromapUsageEXT> =
+            info.usage_counts.iter().copied().map(Into::into).collect();
+        let build_info = vk::MicromapBuildInfoEXT::default()
+            .ty(vk::MicromapTypeEXT::OPACITY_MICROMAP)
+            .flags(info.flags)
+            .mode(vk::BuildMicromapModeEXT::BUILD)
+            .dst_micromap(self.handle)
+            .usage_counts(&usage_counts)
+            .data(vk::DeviceOrHostAddressConstKHR {
+                host_address: info.data,
+            })
+            .triangle_array(vk::DeviceOrHostAddressConstKHR {
+                host_address: info.triangle_array,
+            })
+            .triangle_array_stride(info.triangle_array_stride)
+            .scratch_data(vk::DeviceOrHostAddressKHR {
+                host_address: info.scratch_data,
+            });
 
         let ext = Device::expect_vk_ext_opacity_micromap(&self.buffer.device);
 
@@ -199,6 +218,49 @@ impl Micromap {
         };
 
         self.finish_host_write(result, "build micromap")
+    }
+
+    /// Returns the storage and scratch sizes required for a build.
+    ///
+    /// Use the same build type, flags and usage counts as the intended build.
+    /// No input or scratch addresses or destination allocation are required.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the usage-count slice length exceeds `u32::MAX`.
+    #[profiling::function]
+    pub fn build_sizes(
+        device: &Device,
+        build_type: vk::AccelerationStructureBuildTypeKHR,
+        flags: vk::BuildMicromapFlagsEXT,
+        usage_counts: &[OpacityMicromapUsage],
+    ) -> MicromapBuildSizes {
+        u32::try_from(usage_counts.len()).expect("too many micromap usage counts");
+        let usage_counts: Vec<vk::MicromapUsageEXT> =
+            usage_counts.iter().copied().map(Into::into).collect();
+        let build_info = vk::MicromapBuildInfoEXT::default()
+            .ty(vk::MicromapTypeEXT::OPACITY_MICROMAP)
+            .flags(flags)
+            .mode(vk::BuildMicromapModeEXT::BUILD)
+            .usage_counts(&usage_counts);
+        let mut size_info = vk::MicromapBuildSizesInfoEXT::default();
+
+        let ext = Device::expect_vk_ext_opacity_micromap(device);
+
+        unsafe {
+            (ext.fp().get_micromap_build_sizes_ext)(
+                ext.device(),
+                build_type,
+                &build_info,
+                &mut size_info,
+            );
+        }
+
+        MicromapBuildSizes {
+            build_scratch_size: size_info.build_scratch_size,
+            discardable: size_info.discardable == vk::TRUE,
+            micromap_size: size_info.micromap_size,
+        }
     }
 
     /// Clones `source` into this micromap synchronously on the host.
@@ -231,6 +293,38 @@ impl Micromap {
         unsafe { self.copy_from_host(source, vk::CopyMicromapModeEXT::COMPACT) }
     }
 
+    /// Returns this micromap's compacted size in bytes; requires a build with compaction enabled.
+    ///
+    /// # Safety
+    ///
+    /// This micromap must have been successfully built with
+    /// [`vk::BuildMicromapFlagsEXT::ALLOW_COMPACTION`] and must not be in device use.
+    /// Its storage must remain alive and bound, prior writes must be made visible to the host, and
+    /// concurrent host writes must be prevented for the call, as required by [`Self::property`].
+    pub unsafe fn compacted_size(&self) -> Result<vk::DeviceSize, DriverError> {
+        unsafe { self.property(vk::QueryType::MICROMAP_COMPACTED_SIZE_EXT) }
+    }
+
+    /// Reports whether serialized micromap version data is compatible with this device.
+    pub fn compatibility(
+        device: &Device,
+        version_data: &[u8; vk::UUID_SIZE * 2],
+    ) -> vk::AccelerationStructureCompatibilityKHR {
+        let info = vk::MicromapVersionInfoEXT::default().version_data(version_data);
+        let ext = Device::expect_vk_ext_opacity_micromap(device);
+        let mut compatibility = vk::AccelerationStructureCompatibilityKHR::default();
+
+        unsafe {
+            (ext.fp().get_device_micromap_compatibility_ext)(
+                ext.device(),
+                &info,
+                &mut compatibility,
+            );
+        }
+
+        compatibility
+    }
+
     unsafe fn copy_from_host(
         &mut self,
         source: &Self,
@@ -260,53 +354,6 @@ impl Micromap {
             .swap_access(AccessType::MicromapBuildRead)
             .for_each(drop);
         self.swap_access(AccessType::MicromapBuildWrite)
-            .for_each(drop);
-
-        Ok(())
-    }
-
-    /// Serializes this micromap into host memory.
-    ///
-    /// `destination` must be at least [`Self::serialization_size`] bytes and its address must be
-    /// aligned to 16 bytes as required by Vulkan.
-    ///
-    /// # Safety
-    ///
-    /// This micromap must have been successfully constructed and must not be in use by a device
-    /// operation.
-    /// Its bound storage must remain alive and must not overlap `destination`. Synchronize prior
-    /// host/device writes, including mapped-memory cache maintenance, and prevent concurrent writes
-    /// to this micromap or accesses to `destination` during the call. Synchronize subsequent device
-    /// use of the output. All `vkCopyMicromapToMemoryEXT` validity requirements must be satisfied.
-    pub unsafe fn serialize_host(&self, destination: &mut [u8]) -> Result<(), DriverError> {
-        self.require_host_commands()?;
-        let required = usize::try_from(unsafe { self.serialization_size()? })
-            .map_err(|_| DriverError::OutOfMemory)?;
-        if destination.len() < required
-            || !(destination.as_ptr() as usize).is_multiple_of(SERIALIZATION_ALIGNMENT)
-        {
-            return Err(DriverError::InvalidData);
-        }
-
-        let info = vk::CopyMicromapToMemoryInfoEXT::default()
-            .src(self.handle)
-            .dst(vk::DeviceOrHostAddressKHR {
-                host_address: destination.as_mut_ptr().cast::<c_void>(),
-            })
-            .mode(vk::CopyMicromapModeEXT::SERIALIZE);
-
-        let ext = Device::expect_vk_ext_opacity_micromap(&self.buffer.device);
-
-        let result = unsafe {
-            (ext.fp().copy_micromap_to_memory_ext)(
-                ext.device(),
-                vk::DeferredOperationKHR::null(),
-                &info,
-            )
-        };
-
-        map_vk_result(result).inspect_err(|err| warn!("unable to serialize micromap: {err}"))?;
-        self.swap_access(AccessType::MicromapBuildRead)
             .for_each(drop);
 
         Ok(())
@@ -352,27 +399,21 @@ impl Micromap {
         self.finish_host_write(result, "deserialize micromap")
     }
 
-    /// Returns the serialized representation size in bytes.
-    ///
-    /// # Safety
-    ///
-    /// This micromap must have been successfully constructed and must not be in device use.
-    /// Its storage must remain alive and bound, prior writes must be made visible to the host, and
-    /// concurrent host writes must be prevented for the call, as required by [`Self::property`].
-    pub unsafe fn serialization_size(&self) -> Result<vk::DeviceSize, DriverError> {
-        unsafe { self.property(vk::QueryType::MICROMAP_SERIALIZATION_SIZE_EXT) }
+    fn finish_host_write(&self, result: vk::Result, operation: &str) -> Result<(), DriverError> {
+        map_vk_result(result).inspect_err(|err| warn!("unable to {operation}: {err}"))?;
+        self.swap_access(AccessType::MicromapBuildWrite)
+            .for_each(drop);
+
+        Ok(())
     }
 
-    /// Returns the compacted micromap size in bytes for a source built with compaction enabled.
-    ///
-    /// # Safety
-    ///
-    /// This micromap must have been successfully built with
-    /// [`vk::BuildMicromapFlagsEXT::ALLOW_COMPACTION`] and must not be in device use.
-    /// Its storage must remain alive and bound, prior writes must be made visible to the host, and
-    /// concurrent host writes must be prevented for the call, as required by [`Self::property`].
-    pub unsafe fn compacted_size(&self) -> Result<vk::DeviceSize, DriverError> {
-        unsafe { self.property(vk::QueryType::MICROMAP_COMPACTED_SIZE_EXT) }
+    fn lock_accesses(&self) -> MutexGuard<'_, Vec<AccessType>> {
+        let accesses = self.accesses.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let accesses = accesses.expect("poisoned micromap access lock");
+
+        accesses
     }
 
     /// Writes one 64-bit micromap property synchronously on the host.
@@ -398,6 +439,7 @@ impl Micromap {
 
         let mut value = 0_u64;
         let ext = Device::expect_vk_ext_opacity_micromap(&self.buffer.device);
+
         let result = unsafe {
             (ext.fp().write_micromaps_properties_ext)(
                 ext.device(),
@@ -418,33 +460,6 @@ impl Micromap {
         Ok(value)
     }
 
-    /// Reports whether serialized micromap version data is compatible with this device.
-    pub fn compatibility(
-        device: &Device,
-        version_data: &[u8; vk::UUID_SIZE * 2],
-    ) -> vk::AccelerationStructureCompatibilityKHR {
-        let info = vk::MicromapVersionInfoEXT::default().version_data(version_data);
-        let ext = Device::expect_vk_ext_opacity_micromap(device);
-        let mut compatibility = vk::AccelerationStructureCompatibilityKHR::default();
-
-        unsafe {
-            (ext.fp().get_device_micromap_compatibility_ext)(
-                ext.device(),
-                &info,
-                &mut compatibility,
-            );
-        }
-
-        compatibility
-    }
-
-    fn finish_host_write(&self, result: vk::Result, operation: &str) -> Result<(), DriverError> {
-        map_vk_result(result).inspect_err(|err| warn!("unable to {operation}: {err}"))?;
-        self.swap_access(AccessType::MicromapBuildWrite)
-            .for_each(drop);
-        Ok(())
-    }
-
     fn require_host_commands(&self) -> Result<(), DriverError> {
         if !self.info.host_visible {
             return Err(DriverError::InvalidData);
@@ -461,13 +476,74 @@ impl Micromap {
         supported.then_some(()).ok_or(DriverError::Unsupported)
     }
 
-    fn lock_accesses(&self) -> MutexGuard<'_, Vec<AccessType>> {
-        let accesses = self.accesses.lock();
+    /// Returns the serialized representation size in bytes.
+    ///
+    /// # Safety
+    ///
+    /// This micromap must have been successfully constructed and must not be in device use.
+    /// Its storage must remain alive and bound, prior writes must be made visible to the host, and
+    /// concurrent host writes must be prevented for the call, as required by [`Self::property`].
+    pub unsafe fn serialization_size(&self) -> Result<vk::DeviceSize, DriverError> {
+        unsafe { self.property(vk::QueryType::MICROMAP_SERIALIZATION_SIZE_EXT) }
+    }
 
-        #[cfg(not(feature = "parking_lot"))]
-        let accesses = accesses.expect("poisoned micromap access lock");
+    /// Serializes this micromap into host memory.
+    ///
+    /// `destination` must contain at least the number of bytes returned by
+    /// [`Self::serialization_size`] and have a 16-byte-aligned address, as required by Vulkan.
+    ///
+    /// # Safety
+    ///
+    /// This micromap must have been successfully constructed and must not be in device use.
+    /// Its bound storage must remain alive and must not overlap `destination`. Synchronize prior
+    /// host/device writes, including mapped-memory cache maintenance, and prevent concurrent writes
+    /// to this micromap or accesses to `destination` during the call. Synchronize subsequent device
+    /// use of the output. All `vkCopyMicromapToMemoryEXT` validity requirements must be satisfied.
+    pub unsafe fn serialize_host(&self, destination: &mut [u8]) -> Result<(), DriverError> {
+        self.require_host_commands()?;
 
-        accesses
+        let required = usize::try_from(unsafe { self.serialization_size()? })
+            .map_err(|_| DriverError::OutOfMemory)?;
+
+        if destination.len() < required
+            || !(destination.as_ptr() as usize).is_multiple_of(SERIALIZATION_ALIGNMENT)
+        {
+            return Err(DriverError::InvalidData);
+        }
+
+        let info = vk::CopyMicromapToMemoryInfoEXT::default()
+            .src(self.handle)
+            .dst(vk::DeviceOrHostAddressKHR {
+                host_address: destination.as_mut_ptr().cast::<c_void>(),
+            })
+            .mode(vk::CopyMicromapModeEXT::SERIALIZE);
+
+        let ext = Device::expect_vk_ext_opacity_micromap(&self.buffer.device);
+
+        let result = unsafe {
+            (ext.fp().copy_micromap_to_memory_ext)(
+                ext.device(),
+                vk::DeferredOperationKHR::null(),
+                &info,
+            )
+        };
+
+        map_vk_result(result).inspect_err(|err| warn!("unable to serialize micromap: {err}"))?;
+        self.swap_access(AccessType::MicromapBuildRead)
+            .for_each(drop);
+
+        Ok(())
+    }
+
+    /// Sets the debugging name assigned to this micromap.
+    pub fn set_debug_name(&self, name: impl AsRef<str>) {
+        Device::try_set_debug_utils_object_name(&self.buffer.device, self.handle, &name);
+        Device::try_set_private_data_object_name(
+            &self.buffer.device,
+            vk::ObjectType::MICROMAP_EXT,
+            self.handle,
+            &name,
+        );
     }
 
     /// Records `next_access` and returns accesses requiring synchronization before it.
@@ -491,20 +567,10 @@ impl Micromap {
         MicromapSyncInfo::from_accesses(self.lock_accesses().iter().copied())
     }
 
-    /// Sets the debugging name assigned to this micromap.
-    pub fn set_debug_name(&self, name: impl AsRef<str>) {
-        Device::try_set_debug_utils_object_name(&self.buffer.device, self.handle, &name);
-        Device::try_set_private_data_object_name(
-            &self.buffer.device,
-            vk::ObjectType::MICROMAP_EXT,
-            self.handle,
-            &name,
-        );
-    }
-
     /// Sets a debugging name and returns this object.
     pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
         self.set_debug_name(name);
+
         self
     }
 }
@@ -512,6 +578,7 @@ impl Micromap {
 impl Debug for Micromap {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut result = f.debug_struct(stringify!(Micromap));
+
         if let Some(name) = Device::private_data_object_name(
             &self.buffer.device,
             vk::ObjectType::MICROMAP_EXT,
@@ -519,6 +586,7 @@ impl Debug for Micromap {
         ) {
             result.field("debug_name", &name);
         }
+
         result.field("handle", &self.handle).finish_non_exhaustive()
     }
 }
@@ -536,6 +604,7 @@ impl Drop for Micromap {
             self.handle,
         );
         let ext = Device::expect_vk_ext_opacity_micromap(&self.buffer.device);
+
         unsafe {
             (ext.fp().destroy_micromap_ext)(ext.device(), self.handle, ptr::null());
         }
@@ -548,6 +617,113 @@ impl PartialEq for Micromap {
     fn eq(&self, other: &Self) -> bool {
         self.handle == other.handle
     }
+}
+
+struct MicromapAccessIter<'a> {
+    accesses: MutexGuard<'a, Vec<AccessType>>,
+    index: usize,
+    previous_len: usize,
+}
+
+impl<'a> MicromapAccessIter<'a> {
+    fn many(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_accesses: &[AccessType]) -> Self {
+        if next_accesses.is_empty() {
+            return Self::one(accesses, AccessType::Nothing);
+        }
+
+        if next_accesses.iter().copied().any(super::is_write_access) {
+            let previous_len = accesses.len();
+
+            for &next_access in next_accesses {
+                if !accesses[previous_len..].contains(&next_access) {
+                    accesses.push(next_access);
+                }
+            }
+
+            return Self {
+                accesses,
+                index: 0,
+                previous_len,
+            };
+        }
+
+        if next_accesses
+            .iter()
+            .all(|next_access| accesses.contains(next_access))
+        {
+            return Self {
+                accesses,
+                index: 0,
+                previous_len: 0,
+            };
+        }
+
+        let previous_len = accesses.len();
+        accesses.extend_from_within(..);
+
+        for &next_access in next_accesses {
+            if !accesses[previous_len..].contains(&next_access) {
+                accesses.push(next_access);
+            }
+        }
+
+        Self {
+            accesses,
+            index: 0,
+            previous_len,
+        }
+    }
+
+    fn one(mut accesses: MutexGuard<'a, Vec<AccessType>>, next: AccessType) -> Self {
+        let previous_len = accesses.len();
+        accesses.push(next);
+
+        Self {
+            accesses,
+            index: 0,
+            previous_len,
+        }
+    }
+}
+
+impl Drop for MicromapAccessIter<'_> {
+    fn drop(&mut self) {
+        self.accesses.drain(..self.previous_len);
+    }
+}
+
+impl Iterator for MicromapAccessIter<'_> {
+    type Item = AccessType;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == self.previous_len {
+            return None;
+        }
+
+        let result = self.accesses[self.index];
+        self.index += 1;
+
+        Some(result)
+    }
+}
+
+/// Size requirements returned by [`Micromap::build_sizes`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MicromapBuildSizes {
+    /// Required build scratch size in bytes.
+    pub build_scratch_size: vk::DeviceSize,
+
+    /// Whether the micromap may be destroyed after an acceleration-structure build or update.
+    ///
+    /// When false, the acceleration structure may reference the micromap's storage, so the
+    /// micromap must remain alive until ray traversal has concluded. When true, the information
+    /// is copied into the acceleration structure and the micromap may be destroyed once that
+    /// build or update completes. Micromap-build input and scratch memory may be released after
+    /// the micromap build completes, independently of this flag.
+    pub discardable: bool,
+
+    /// Required micromap storage size in bytes.
+    pub micromap_size: vk::DeviceSize,
 }
 
 /// Information used to create a [`Micromap`].
@@ -618,23 +794,36 @@ impl MicromapInfoBuilder {
     }
 }
 
-/// Size requirements returned by [`Micromap::size_of`].
+/// Synchronization information for a micromap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MicromapSize {
-    /// Required build scratch size.
-    pub build_size: vk::DeviceSize,
+pub struct MicromapSyncInfo {
+    /// Synchronization2 access mask for `stage_mask`.
+    pub access_mask: vk::AccessFlags2,
 
-    /// Required micromap storage size.
-    pub create_size: vk::DeviceSize,
+    /// Current exclusive queue-family ownership, when known.
+    pub queue_family_index: Option<u32>,
 
-    /// Whether the micromap may be destroyed after an acceleration-structure build or update.
-    ///
-    /// When false, the acceleration structure may reference the micromap's storage, so the
-    /// micromap must remain alive until ray traversal has concluded. When true, the information
-    /// is copied into the acceleration structure and the micromap may be destroyed once that
-    /// build or update completes. Micromap-build input and scratch memory may be released after
-    /// the micromap build completes, independently of this flag.
-    pub discardable: bool,
+    /// Synchronization2 pipeline stages accessing the micromap.
+    pub stage_mask: vk::PipelineStageFlags2,
+}
+
+impl MicromapSyncInfo {
+    fn from_accesses(accesses: impl IntoIterator<Item = AccessType>) -> Self {
+        let mut stage_mask = vk::PipelineStageFlags2::empty();
+        let mut access_mask = vk::AccessFlags2::empty();
+
+        for access in accesses {
+            let (stages, mask) = micromap_sync_flags_for_access(access);
+            stage_mask |= stages;
+            access_mask |= mask;
+        }
+
+        Self {
+            access_mask,
+            queue_family_index: None,
+            stage_mask,
+        }
+    }
 }
 
 /// Typed opacity micromap usage count.
@@ -674,243 +863,57 @@ impl From<OpacityMicromapUsage> for vk::MicromapUsageEXT {
     }
 }
 
-/// Build parameters for an opacity micromap.
-///
-/// Usage counts are owned so pointers passed to Vulkan remain valid for the complete call.
-#[derive(Clone, Debug)]
-pub struct OpacityMicromapBuildInfo {
-    /// Address containing encoded opacity data.
-    pub data: DeviceOrHostAddress,
-
-    /// Additional build behavior.
-    pub flags: vk::BuildMicromapFlagsEXT,
-
-    /// Build scratch address.
-    pub scratch_data: DeviceOrHostAddress,
-
-    /// Address of the micromap triangle array.
-    pub triangle_array: DeviceOrHostAddress,
-
-    /// Byte stride between triangle entries.
-    pub triangle_array_stride: vk::DeviceSize,
-
-    usage_counts: Box<[vk::MicromapUsageEXT]>,
-}
-
-impl OpacityMicromapBuildInfo {
-    /// Creates build parameters with owned usage counts and null addresses.
-    pub fn new(usage_counts: impl IntoIterator<Item = OpacityMicromapUsage>) -> Self {
-        let usage_counts = usage_counts.into_iter().map(Into::into).collect();
-        Self {
-            data: DeviceOrHostAddress::DeviceAddress(0),
-            flags: vk::BuildMicromapFlagsEXT::empty(),
-            scratch_data: DeviceOrHostAddress::DeviceAddress(0),
-            triangle_array: DeviceOrHostAddress::DeviceAddress(0),
-            triangle_array_stride: size_of::<vk::MicromapTriangleEXT>() as _,
-            usage_counts,
-        }
-    }
-
-    /// Sets the encoded opacity-data address.
-    pub fn data(mut self, data: impl Into<DeviceOrHostAddress>) -> Self {
-        self.data = data.into();
-        self
-    }
-
-    /// Sets build flags.
-    pub fn flags(mut self, flags: vk::BuildMicromapFlagsEXT) -> Self {
-        self.flags = flags;
-        self
-    }
-
-    /// Sets the scratch address.
-    pub fn scratch_data(mut self, scratch_data: impl Into<DeviceOrHostAddress>) -> Self {
-        self.scratch_data = scratch_data.into();
-        self
-    }
-
-    /// Sets the triangle array address and stride.
-    pub fn triangle_array(
-        mut self,
-        triangle_array: impl Into<DeviceOrHostAddress>,
-        stride: vk::DeviceSize,
-    ) -> Self {
-        self.triangle_array = triangle_array.into();
-        self.triangle_array_stride = stride;
-        self
-    }
-
-    /// Returns the typed usage counts supplied at construction.
-    pub fn usage_counts(&self) -> impl ExactSizeIterator<Item = OpacityMicromapUsage> + '_ {
-        self.usage_counts.iter().map(|usage| OpacityMicromapUsage {
-            count: usage.count,
-            format: vk::OpacityMicromapFormatEXT::from_raw(usage.format as i32),
-            subdivision_level: usage.subdivision_level,
-        })
-    }
-
-    fn has_host_addresses(&self, allow_null_scratch: bool) -> bool {
-        matches!(self.data, DeviceOrHostAddress::HostAddress(address) if !address.is_null())
-            && matches!(self.scratch_data, DeviceOrHostAddress::HostAddress(address) if allow_null_scratch || !address.is_null())
-            && matches!(self.triangle_array, DeviceOrHostAddress::HostAddress(address) if !address.is_null())
-    }
-
-    pub(crate) fn to_vk(&self, destination: vk::MicromapEXT) -> vk::MicromapBuildInfoEXT<'_> {
-        vk::MicromapBuildInfoEXT::default()
-            .ty(vk::MicromapTypeEXT::OPACITY_MICROMAP)
-            .flags(self.flags)
-            .mode(vk::BuildMicromapModeEXT::BUILD)
-            .dst_micromap(destination)
-            .usage_counts(&self.usage_counts)
-            .data(self.data.into())
-            .scratch_data(self.scratch_data.into())
-            .triangle_array(self.triangle_array.into())
-            .triangle_array_stride(self.triangle_array_stride)
-    }
-}
-
-/// Synchronization information for a micromap.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MicromapSyncInfo {
-    /// Synchronization2 access masks for those stages.
-    pub access_mask: vk::AccessFlags2,
-
-    /// Current exclusive queue-family ownership, when known.
-    pub queue_family_index: Option<u32>,
-
-    /// Synchronization2 pipeline stages accessing the micromap.
-    pub stage_mask: vk::PipelineStageFlags2,
-}
-
-impl MicromapSyncInfo {
-    fn from_accesses(accesses: impl IntoIterator<Item = AccessType>) -> Self {
-        let mut stage_mask = vk::PipelineStageFlags2::empty();
-        let mut access_mask = vk::AccessFlags2::empty();
-
-        for access in accesses {
-            let (stages, mask) = micromap_sync_flags_for_access(access);
-            stage_mask |= stages;
-            access_mask |= mask;
-        }
-
-        Self {
-            access_mask,
-            queue_family_index: None,
-            stage_mask,
-        }
-    }
-}
-
-struct MicromapAccessIter<'a> {
-    accesses: MutexGuard<'a, Vec<AccessType>>,
-    index: usize,
-    previous_len: usize,
-}
-
-impl<'a> MicromapAccessIter<'a> {
-    fn one(mut accesses: MutexGuard<'a, Vec<AccessType>>, next: AccessType) -> Self {
-        let previous_len = accesses.len();
-        accesses.push(next);
-        Self {
-            accesses,
-            index: 0,
-            previous_len,
-        }
-    }
-
-    fn many(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_accesses: &[AccessType]) -> Self {
-        if next_accesses.is_empty() {
-            return Self::one(accesses, AccessType::Nothing);
-        }
-
-        if next_accesses.iter().copied().any(super::is_write_access) {
-            let previous_len = accesses.len();
-            for &next_access in next_accesses {
-                if !accesses[previous_len..].contains(&next_access) {
-                    accesses.push(next_access);
-                }
-            }
-
-            return Self {
-                accesses,
-                index: 0,
-                previous_len,
-            };
-        }
-
-        if next_accesses
-            .iter()
-            .all(|next_access| accesses.contains(next_access))
-        {
-            return Self {
-                accesses,
-                index: 0,
-                previous_len: 0,
-            };
-        }
-
-        let previous_len = accesses.len();
-        accesses.extend_from_within(..);
-        for &next_access in next_accesses {
-            if !accesses[previous_len..].contains(&next_access) {
-                accesses.push(next_access);
-            }
-        }
-
-        Self {
-            accesses,
-            index: 0,
-            previous_len,
-        }
-    }
-}
-
-impl Iterator for MicromapAccessIter<'_> {
-    type Item = AccessType;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.previous_len {
-            return None;
-        }
-
-        let result = self.accesses[self.index];
-        self.index += 1;
-
-        Some(result)
-    }
-}
-
-impl Drop for MicromapAccessIter<'_> {
-    fn drop(&mut self) {
-        self.accesses.drain(..self.previous_len);
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
-    fn micromap_host_null_scratch_requires_zero_scratch_size() {
-        let mut byte = 0_u8;
-        let address = DeviceOrHostAddress::HostAddress((&mut byte as *mut u8).cast());
-        let mut info = OpacityMicromapBuildInfo::new([])
-            .data(address)
-            .triangle_array(address, size_of::<vk::MicromapTriangleEXT>() as u64)
-            .scratch_data(DeviceOrHostAddress::HostAddress(ptr::null_mut()));
+    fn access_tracking_elides_repeated_reads_and_retains_reads_until_write() {
+        let accesses = Mutex::new(vec![AccessType::Nothing]);
+        let read = AccessType::MicromapBuildRead;
+        let other_read = AccessType::AccelerationStructureBuildMicromapRead;
+        let write = AccessType::MicromapBuildWrite;
 
-        assert!(info.has_host_addresses(true));
-        assert!(!info.has_host_addresses(false));
-        info.scratch_data = address;
-        assert!(info.has_host_addresses(false));
-        info.scratch_data = DeviceOrHostAddress::DeviceAddress(0);
-        assert!(!info.has_host_addresses(true));
-        info.scratch_data = address;
-        info.data = DeviceOrHostAddress::HostAddress(ptr::null_mut());
-        assert!(!info.has_host_addresses(true));
-        info.data = address;
-        info.triangle_array = DeviceOrHostAddress::HostAddress(ptr::null_mut());
-        assert!(!info.has_host_addresses(true));
+        assert_eq!(
+            MicromapAccessIter::many(lock_test_accesses(&accesses), &[read]).collect::<Vec<_>>(),
+            [AccessType::Nothing]
+        );
+        assert!(
+            MicromapAccessIter::many(lock_test_accesses(&accesses), &[read])
+                .collect::<Vec<_>>()
+                .is_empty()
+        );
+        assert_eq!(
+            MicromapAccessIter::many(lock_test_accesses(&accesses), &[other_read])
+                .collect::<Vec<_>>(),
+            [AccessType::Nothing, read]
+        );
+        assert_eq!(
+            MicromapAccessIter::many(lock_test_accesses(&accesses), &[write]).collect::<Vec<_>>(),
+            [AccessType::Nothing, read, other_read]
+        );
+    }
+
+    #[test]
+    fn build_sizes_preserve_storage_scratch_and_discardability() {
+        let sizes = MicromapBuildSizes {
+            build_scratch_size: 256,
+            discardable: true,
+            micromap_size: 1024,
+        };
+        let copy = sizes;
+
+        assert_eq!(copy, sizes);
+        assert_eq!(copy.micromap_size, 1024);
+        assert_eq!(copy.build_scratch_size, 256);
+        assert!(copy.discardable);
+        assert!(
+            !MicromapBuildSizes {
+                discardable: false,
+                ..sizes
+            }
+            .discardable
+        );
     }
 
     #[test]
@@ -924,19 +927,95 @@ mod test {
         assert_eq!(MicromapInfo::builder().size(64).build().size, 64);
     }
 
+    fn lock_test_accesses(accesses: &Mutex<Vec<AccessType>>) -> MutexGuard<'_, Vec<AccessType>> {
+        let accesses = accesses.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let accesses = accesses.expect("poisoned test access lock");
+
+        accesses
+    }
+
     #[test]
-    fn opacity_usage_is_typed_and_owned() {
+    fn micromap_access_one_and_empty_many_replace_state_on_early_drop() {
+        let read = AccessType::MicromapBuildRead;
+        let write = AccessType::MicromapBuildWrite;
+        let accesses = Mutex::new(vec![
+            read,
+            AccessType::AccelerationStructureBuildMicromapRead,
+        ]);
+
+        let mut iter = MicromapAccessIter::one(lock_test_accesses(&accesses), write);
+
+        assert_eq!(iter.next(), Some(read));
+        drop(iter);
+
+        assert_eq!(*lock_test_accesses(&accesses), [write]);
+
+        drop(MicromapAccessIter::many(lock_test_accesses(&accesses), &[]));
+
+        assert_eq!(*lock_test_accesses(&accesses), [AccessType::Nothing]);
+    }
+
+    #[test]
+    fn micromap_buffer_and_input_accesses_use_distinct_sync2_masks() {
+        for (access, expected) in [
+            (
+                AccessType::MicromapBuildInputRead,
+                vk::AccessFlags2::SHADER_READ,
+            ),
+            (
+                AccessType::MicromapBuildBufferRead,
+                vk::AccessFlags2::TRANSFER_READ,
+            ),
+            (
+                AccessType::MicromapBuildBufferWrite,
+                vk::AccessFlags2::TRANSFER_WRITE,
+            ),
+        ] {
+            let (stage, mask) = micromap_sync_flags_for_access(access);
+
+            assert_eq!(stage, vk::PipelineStageFlags2::MICROMAP_BUILD_EXT);
+            assert_eq!(mask, expected);
+        }
+    }
+
+    #[test]
+    fn micromap_host_null_scratch_requires_zero_scratch_size() {
+        let mut byte = 0_u8;
+        let address = (&mut byte as *mut u8).cast::<c_void>();
+        let mut info = HostMicromapBuildInfo {
+            data: address,
+            flags: vk::BuildMicromapFlagsEXT::empty(),
+            scratch_data: ptr::null_mut(),
+            triangle_array: address,
+            triangle_array_stride: 0,
+            usage_counts: &[],
+        };
+
+        assert!(info.has_host_addresses(true));
+        assert!(!info.has_host_addresses(false));
+        info.scratch_data = address;
+        assert!(info.has_host_addresses(false));
+        info.data = ptr::null();
+        assert!(!info.has_host_addresses(true));
+        info.data = address;
+        info.triangle_array = ptr::null();
+        assert!(!info.has_host_addresses(true));
+    }
+
+    #[test]
+    fn opacity_usage_is_typed_and_converts_to_vulkan() {
         let usage = OpacityMicromapUsage::new(7, 3, vk::OpacityMicromapFormatEXT::TYPE_4_STATE);
-        let info = OpacityMicromapBuildInfo::new([usage]);
+        let raw = vk::MicromapUsageEXT::from(usage);
 
-        assert_eq!(info.usage_counts().collect::<Vec<_>>(), [usage]);
-
-        let raw = info.to_vk(vk::MicromapEXT::null());
-
-        assert_eq!(raw.mode, vk::BuildMicromapModeEXT::BUILD);
-        assert_eq!(raw.usage_counts_count, 1);
-        assert!(!raw.p_usage_counts.is_null());
-        assert!(raw.pp_usage_counts.is_null());
+        assert_eq!(raw.count, 7);
+        assert_eq!(raw.subdivision_level, 3);
+        assert_eq!(
+            raw.format,
+            vk::OpacityMicromapFormatEXT::TYPE_4_STATE.as_raw() as u32
+        );
+        assert_eq!(usage.count, 7);
     }
 
     #[test]
@@ -972,82 +1051,5 @@ mod test {
             info.access_mask
                 .contains(vk::AccessFlags2::MICROMAP_WRITE_EXT)
         );
-    }
-
-    #[test]
-    fn micromap_buffer_and_input_accesses_use_distinct_sync2_masks() {
-        for (access, expected) in [
-            (
-                AccessType::MicromapBuildInputRead,
-                vk::AccessFlags2::SHADER_READ,
-            ),
-            (
-                AccessType::MicromapBuildBufferRead,
-                vk::AccessFlags2::TRANSFER_READ,
-            ),
-            (
-                AccessType::MicromapBuildBufferWrite,
-                vk::AccessFlags2::TRANSFER_WRITE,
-            ),
-        ] {
-            let (stage, mask) = micromap_sync_flags_for_access(access);
-
-            assert_eq!(stage, vk::PipelineStageFlags2::MICROMAP_BUILD_EXT);
-            assert_eq!(mask, expected);
-        }
-    }
-
-    #[test]
-    fn access_tracking_elides_repeated_reads_and_retains_reads_until_write() {
-        let accesses = Mutex::new(vec![AccessType::Nothing]);
-        let read = AccessType::MicromapBuildRead;
-        let other_read = AccessType::AccelerationStructureBuildMicromapRead;
-        let write = AccessType::MicromapBuildWrite;
-
-        assert_eq!(
-            MicromapAccessIter::many(lock_test_accesses(&accesses), &[read]).collect::<Vec<_>>(),
-            [AccessType::Nothing]
-        );
-        assert!(
-            MicromapAccessIter::many(lock_test_accesses(&accesses), &[read])
-                .collect::<Vec<_>>()
-                .is_empty()
-        );
-        assert_eq!(
-            MicromapAccessIter::many(lock_test_accesses(&accesses), &[other_read])
-                .collect::<Vec<_>>(),
-            [AccessType::Nothing, read]
-        );
-        assert_eq!(
-            MicromapAccessIter::many(lock_test_accesses(&accesses), &[write]).collect::<Vec<_>>(),
-            [AccessType::Nothing, read, other_read]
-        );
-    }
-
-    #[test]
-    fn micromap_access_one_and_empty_many_replace_state_on_early_drop() {
-        let read = AccessType::MicromapBuildRead;
-        let write = AccessType::MicromapBuildWrite;
-        let accesses = Mutex::new(vec![
-            read,
-            AccessType::AccelerationStructureBuildMicromapRead,
-        ]);
-
-        let mut iter = MicromapAccessIter::one(lock_test_accesses(&accesses), write);
-        assert_eq!(iter.next(), Some(read));
-        drop(iter);
-        assert_eq!(*lock_test_accesses(&accesses), [write]);
-
-        drop(MicromapAccessIter::many(lock_test_accesses(&accesses), &[]));
-        assert_eq!(*lock_test_accesses(&accesses), [AccessType::Nothing]);
-    }
-
-    fn lock_test_accesses(accesses: &Mutex<Vec<AccessType>>) -> MutexGuard<'_, Vec<AccessType>> {
-        let accesses = accesses.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let accesses = accesses.expect("poisoned test access lock");
-
-        accesses
     }
 }

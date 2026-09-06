@@ -9,18 +9,50 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `Device::enable_background_fence_cleanup` and `BackgroundFenceCleanupGuard` for opt-in background
-  disposal of completed fence payloads, including command-buffer recycling. Concurrent guards share
-  a worker, and dropping the final guard initiates nonblocking worker shutdown.
-- `PoolConfig::descriptor_pool_capacity` for configuring cached automatic descriptor pools.
-- `ImageSet`, `ImageSetMember`, and `ImageSetNode` optimization for persistent sets of image
-  resources which declare a single aggregate `ImageAccessType` graph access.
-- `AccelerationStructureSet`, `AccelerationStructureSetMember`, and `AccelerationStructureSetNode`
-  optimization for persistent sets of acceleration-structure resources which declare aggregate
-  `AccelerationStructureAccessType` graph access.
-- `VK_EXT_opacity_micromap` support with `Micromap` resources: device build, copy, serialization,
-  deserialization, and property-query commands, synchronous host operations, opacity attachments for
-  triangle BLAS geometry, and a headless build example.
+- Opt-in background fence cleanup with `Device::enable_background_fence_cleanup` and
+  `BackgroundFenceCleanupGuard` to manage the worker's lifetime.
+- `PoolConfig::descriptor_pool_capacity` for cached descriptor pools.
+- Persistent read-only `ImageSet` and `AccelerationStructureSet` resources with aggregate
+  synchronization for large resource collections.
+- `VK_EXT_opacity_micromap` support, including pooled resources, host/device operations,
+  triangle attachments, and a headless example.
+- Typed per-invocation command-stream values through `StreamValueArg<T>` and batched resource
+  binding through `CommandStreamRun::with_args`.
+- Stream shader-resource and image-view declarations, plus populated descriptor-set binding
+  through `StreamPipelineCommand::bind_descriptor_set`.
+- Separate acceleration-structure build-input and scratch-buffer access types.
+
+### Changed
+
+- **`checked` is disabled by default.** Default features are now `loaded` and `parking_lot`.
+  Enable it for graph/stream validation in debug or release builds. Vulkan validation layers
+  are separate, and API preconditions still apply without checks.
+- **Redesign the acceleration-structure API.** Geometry borrows metadata and uses device addresses,
+  with primitive counts and build ranges supplied separately. Replace `size_of` and the old
+  size/geometry/build descriptors, `DeviceOrHostAddress`, and separate build/update commands with
+  unsafe `build_sizes`, `build_acceleration_structures`, and `build_acceleration_structures_indirect`.
+  Builds use `AccelerationStructureBuildGeometryInfo` with explicit BUILD or UPDATE mode.
+  Geometry data no longer implements equality, hashing, or the old Vulkan conversion traits.
+  See the [geometry](guide/src/resource_accel_struct.md) and [command](guide/src/cmd_ray_trace.md)
+  migration guides.
+- Reduce scheduling overhead for resource-heavy graphs by combining duplicate resource-use chains.
+- Reduce image ownership-tracking overhead and skip redundant sampled-read barriers when layout
+  and queue ownership are unchanged.
+- Cache prepared-stream argument lookups and reduce temporary allocations in batch validation.
+- Reject prepared-stream invocations nested inside reusable streams when `checked` is enabled.
+  This nesting is unsupported with or without checks; unprepared streams can still be nested.
+- Set and inherit a workspace Rust requirement of 1.92, with CI checks for that version.
+
+### Fixed
+
+- Prevent prepared-stream invocations from overwriting automatic descriptor sets still used by
+  earlier submissions.
+- Preserve buffer and acceleration-structure write dependencies across subsequent reads, and
+  correct acceleration-structure scratch synchronization masks.
+- Correct image ownership-transfer layout pairing and acquire stages for the destination queue.
+- Fix builds without `checked` and/or `parking_lot`.
+- Correct maximum vertex indices in ray-tracing examples and acceleration-structure storage
+  sizing in the guide.
 
 ## [0.14.8] - 2026-09-14
 

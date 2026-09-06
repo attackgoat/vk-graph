@@ -140,11 +140,6 @@ impl<'c, T> PipelineCommand<'c, T> {
         self.cmd.bind_resource(resource)
     }
 
-    /// Equivalent to [`Command::write_timestamp`] for a command that already has a bound pipeline.
-    pub fn write_timestamp(&mut self) -> TimestampQuery {
-        self.cmd.write_timestamp()
-    }
-
     /// Equivalent to [`Command::end_cmd`] for a command that already has a bound pipeline.
     pub fn end_cmd(self) -> &'c mut Graph {
         self.cmd.end_cmd()
@@ -346,5 +341,10 @@ impl<'c, T> PipelineCommand<'c, T> {
         self.cmd
             .set_subresource_access(resource_node, subresource, access);
         self
+    }
+
+    /// Equivalent to [`Command::write_timestamp`] for a command with a bound pipeline.
+    pub fn write_timestamp(&mut self) -> TimestampQuery {
+        self.cmd.write_timestamp()
     }
 }

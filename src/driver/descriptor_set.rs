@@ -1195,6 +1195,7 @@ impl DescriptorWrite {
                                 .add(acceleration_structure_idx)
                                 .cast()
                         };
+
                         acceleration_structure_idx += 1;
                     }
                     DescriptorWriteKind::Buffer => {
@@ -1253,6 +1254,7 @@ impl DescriptorWriteRange {
                 .descriptor_count
                 .checked_add(1)
                 .expect("descriptor write count overflow");
+
             return;
         }
 
@@ -1327,8 +1329,7 @@ impl Drop for RawDescriptorSet {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use ash::vk::Handle as _;
+    use {super::*, ash::vk::Handle as _};
 
     #[test]
     fn descriptor_set_binding_conversions() {
@@ -1519,6 +1520,7 @@ mod test {
             let acceleration_structure_info = unsafe {
                 &*(writes[5].p_next as *const vk::WriteDescriptorSetAccelerationStructureKHR<'_>)
             };
+
             assert_eq!(acceleration_structure_info.acceleration_structure_count, 2);
             assert_eq!(
                 unsafe { *acceleration_structure_info.p_acceleration_structures },
@@ -1562,6 +1564,7 @@ mod test {
                     &*(writes[write_idx].p_next
                         as *const vk::WriteDescriptorSetAccelerationStructureKHR<'_>)
                 };
+
                 assert_eq!(info.acceleration_structure_count, 1);
                 assert_eq!(
                     unsafe { *info.p_acceleration_structures },
@@ -1625,6 +1628,7 @@ mod test {
             let acceleration_structure_info = unsafe {
                 &*(writes[2].p_next as *const vk::WriteDescriptorSetAccelerationStructureKHR<'_>)
             };
+
             assert_eq!(acceleration_structure_info.acceleration_structure_count, 1);
             assert_eq!(
                 unsafe { *acceleration_structure_info.p_acceleration_structures },

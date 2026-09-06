@@ -91,18 +91,18 @@ fn invalid_input(label: &'static str, message: &'static str) -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, format!("{label} {message}"))
 }
 
-fn meaningful_execs(command: &CommandData) -> impl Iterator<Item = &Execution> {
-    command
-        .execs
-        .iter()
-        .filter(|exec| exec.func.is_some() || exec.accesses.iter().len() != 0)
-}
-
 fn meaningful_commands(commands: &[CommandData]) -> Vec<&CommandData> {
     commands
         .iter()
         .filter(|command| meaningful_execs(command).next().is_some())
         .collect()
+}
+
+fn meaningful_execs(command: &CommandData) -> impl Iterator<Item = &Execution> {
+    command
+        .execs
+        .iter()
+        .filter(|exec| exec.func.is_some() || exec.accesses.iter().len() != 0)
 }
 
 fn relationship_markdown(graph: &Graph, commands: &[&CommandData]) -> String {
@@ -229,18 +229,6 @@ fn relationship_markdown(graph: &Graph, commands: &[&CommandData]) -> String {
     markdown
 }
 
-fn sample_count_into_u8(sample_count: SampleCount) -> u8 {
-    match sample_count {
-        SampleCount::Type1 => 1,
-        SampleCount::Type2 => 2,
-        SampleCount::Type4 => 4,
-        SampleCount::Type8 => 8,
-        SampleCount::Type16 => 16,
-        SampleCount::Type32 => 32,
-        SampleCount::Type64 => 64,
-    }
-}
-
 fn sample_count_from_u8(value: u8) -> io::Result<SampleCount> {
     match value {
         1 => Ok(SampleCount::Type1),
@@ -251,6 +239,18 @@ fn sample_count_from_u8(value: u8) -> io::Result<SampleCount> {
         32 => Ok(SampleCount::Type32),
         64 => Ok(SampleCount::Type64),
         _ => Err(invalid_data("invalid image sample count")),
+    }
+}
+
+fn sample_count_into_u8(sample_count: SampleCount) -> u8 {
+    match sample_count {
+        SampleCount::Type1 => 1,
+        SampleCount::Type2 => 2,
+        SampleCount::Type4 => 4,
+        SampleCount::Type8 => 8,
+        SampleCount::Type16 => 16,
+        SampleCount::Type32 => 32,
+        SampleCount::Type64 => 64,
     }
 }
 
@@ -267,63 +267,6 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    /// Returns the number of subresource accesses stored by this fixture.
-    #[doc(hidden)]
-    pub fn access_count(&self) -> usize {
-        self.commands
-            .iter()
-            .flat_map(|cmd| &cmd.execs)
-            .map(|exec| exec.accesses.len())
-            .sum()
-    }
-
-    /// Returns the number of commands stored by this fixture.
-    #[doc(hidden)]
-    pub fn command_count(&self) -> usize {
-        self.commands.len()
-    }
-
-    /// Rebuilds this fixture as a graph containing no-op command callbacks.
-    #[doc(hidden)]
-    pub fn into_graph(self) -> Graph {
-        let mut graph = Graph::new();
-
-        for (expected_idx, resource) in self.resources.into_iter().enumerate() {
-            let node_idx = match resource {
-                FixtureResource::AccelerationStructure(info) => {
-                    graph.bind_stream_arg_resource(AnyResource::AccelerationStructureArg(info))
-                }
-                FixtureResource::Buffer(info) => {
-                    graph.bind_stream_arg_resource(AnyResource::BufferArg(info))
-                }
-                FixtureResource::Image(info) => {
-                    graph.bind_stream_arg_resource(AnyResource::ImageArg(info))
-                }
-                FixtureResource::Micromap(info) => {
-                    graph.bind_stream_arg_resource(AnyResource::MicromapArg(info))
-                }
-            };
-            debug_assert_eq!(node_idx, expected_idx);
-        }
-
-        for command in self.commands {
-            let mut graph_cmd = graph.begin_cmd();
-            for exec in command.execs {
-                for access in exec.accesses {
-                    graph_cmd.push_subresource_access_index(
-                        access.node_idx,
-                        access.subresource,
-                        access.access,
-                    );
-                }
-                graph_cmd.record_cmd_mut(|_| {});
-            }
-            graph_cmd.end_cmd();
-        }
-
-        graph
-    }
-
     /// Reads a binary graph fixture.
     #[doc(hidden)]
     pub fn read(path: impl AsRef<Path>) -> io::Result<Self> {
@@ -377,8 +320,10 @@ impl Fixture {
                         subresource,
                     });
                 }
+
                 execs.push(FixtureExecution { accesses });
             }
+
             commands.push(FixtureCommand { execs });
         }
 
@@ -390,6 +335,65 @@ impl Fixture {
             resources,
             commands,
         })
+    }
+
+    /// Returns the number of subresource accesses stored by this fixture.
+    #[doc(hidden)]
+    pub fn access_count(&self) -> usize {
+        self.commands
+            .iter()
+            .flat_map(|cmd| &cmd.execs)
+            .map(|exec| exec.accesses.len())
+            .sum()
+    }
+
+    /// Returns the number of commands stored by this fixture.
+    #[doc(hidden)]
+    pub fn command_count(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// Rebuilds this fixture as a graph with no-op command callbacks.
+    #[doc(hidden)]
+    pub fn into_graph(self) -> Graph {
+        let mut graph = Graph::new();
+
+        for (expected_idx, resource) in self.resources.into_iter().enumerate() {
+            let node_idx = match resource {
+                FixtureResource::AccelerationStructure(info) => {
+                    graph.bind_stream_arg_resource(AnyResource::AccelerationStructureArg(info))
+                }
+                FixtureResource::Buffer(info) => {
+                    graph.bind_stream_arg_resource(AnyResource::BufferArg(info))
+                }
+                FixtureResource::Image(info) => {
+                    graph.bind_stream_arg_resource(AnyResource::ImageArg(info))
+                }
+                FixtureResource::Micromap(info) => {
+                    graph.bind_stream_arg_resource(AnyResource::MicromapArg(info))
+                }
+            };
+            debug_assert_eq!(node_idx, expected_idx);
+        }
+
+        for command in self.commands {
+            let mut graph_cmd = graph.begin_cmd();
+            for exec in command.execs {
+                for access in exec.accesses {
+                    graph_cmd.push_subresource_access_index(
+                        access.node_idx,
+                        access.subresource,
+                        access.access,
+                    );
+                }
+
+                graph_cmd.record_cmd_mut(|_| {});
+            }
+
+            graph_cmd.end_cmd();
+        }
+
+        graph
     }
 
     /// Returns the number of resources stored by this fixture.
@@ -414,62 +418,6 @@ struct FixtureCommand {
 #[derive(Debug)]
 struct FixtureExecution {
     accesses: Vec<FixtureAccess>,
-}
-
-#[derive(Debug)]
-enum FixtureResource {
-    AccelerationStructure(AccelerationStructureInfo),
-    Buffer(BufferInfo),
-    Image(ImageInfo),
-    Micromap(MicromapInfo),
-}
-
-impl FixtureResource {
-    fn validate_subresource(&self, subresource: SubresourceRange) -> io::Result<()> {
-        match (self, subresource) {
-            (Self::AccelerationStructure(_), SubresourceRange::AccelerationStructure) => Ok(()),
-            (Self::Buffer(info), SubresourceRange::Buffer(range)) => {
-                let end = if range.end == vk::WHOLE_SIZE {
-                    info.size
-                } else {
-                    range.end
-                };
-                if range.start >= end || end > info.size {
-                    return Err(invalid_data("invalid buffer subresource range"));
-                }
-
-                Ok(())
-            }
-            (Self::Image(info), SubresourceRange::Image(range)) => {
-                let aspect_mask = driver::format_aspect_mask(info.format);
-                if range.aspect_mask.is_empty() || !aspect_mask.contains(range.aspect_mask) {
-                    return Err(invalid_data("invalid image aspect mask"));
-                }
-
-                let layers_fit = range.base_array_layer < info.array_layer_count
-                    && (range.layer_count == vk::REMAINING_ARRAY_LAYERS
-                        || range.layer_count > 0
-                            && range
-                                .base_array_layer
-                                .checked_add(range.layer_count)
-                                .is_some_and(|end| end <= info.array_layer_count));
-                let levels_fit = range.base_mip_level < info.mip_level_count
-                    && (range.level_count == vk::REMAINING_MIP_LEVELS
-                        || range.level_count > 0
-                            && range
-                                .base_mip_level
-                                .checked_add(range.level_count)
-                                .is_some_and(|end| end <= info.mip_level_count));
-                if !layers_fit || !levels_fit {
-                    return Err(invalid_data("invalid image subresource range"));
-                }
-
-                Ok(())
-            }
-            (Self::Micromap(_), SubresourceRange::Micromap) => Ok(()),
-            _ => Err(invalid_data("subresource kind does not match resource")),
-        }
-    }
 }
 
 struct FixtureReader<'a> {
@@ -598,6 +546,62 @@ impl<'a> FixtureReader<'a> {
             })),
             3 => Ok(SubresourceRange::Micromap),
             _ => Err(invalid_data("invalid subresource kind")),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum FixtureResource {
+    AccelerationStructure(AccelerationStructureInfo),
+    Buffer(BufferInfo),
+    Image(ImageInfo),
+    Micromap(MicromapInfo),
+}
+
+impl FixtureResource {
+    fn validate_subresource(&self, subresource: SubresourceRange) -> io::Result<()> {
+        match (self, subresource) {
+            (Self::AccelerationStructure(_), SubresourceRange::AccelerationStructure) => Ok(()),
+            (Self::Buffer(info), SubresourceRange::Buffer(range)) => {
+                let end = if range.end == vk::WHOLE_SIZE {
+                    info.size
+                } else {
+                    range.end
+                };
+                if range.start >= end || end > info.size {
+                    return Err(invalid_data("invalid buffer subresource range"));
+                }
+
+                Ok(())
+            }
+            (Self::Image(info), SubresourceRange::Image(range)) => {
+                let aspect_mask = driver::format_aspect_mask(info.format);
+                if range.aspect_mask.is_empty() || !aspect_mask.contains(range.aspect_mask) {
+                    return Err(invalid_data("invalid image aspect mask"));
+                }
+
+                let layers_fit = range.base_array_layer < info.array_layer_count
+                    && (range.layer_count == vk::REMAINING_ARRAY_LAYERS
+                        || range.layer_count > 0
+                            && range
+                                .base_array_layer
+                                .checked_add(range.layer_count)
+                                .is_some_and(|end| end <= info.array_layer_count));
+                let levels_fit = range.base_mip_level < info.mip_level_count
+                    && (range.level_count == vk::REMAINING_MIP_LEVELS
+                        || range.level_count > 0
+                            && range
+                                .base_mip_level
+                                .checked_add(range.level_count)
+                                .is_some_and(|end| end <= info.mip_level_count));
+                if !layers_fit || !levels_fit {
+                    return Err(invalid_data("invalid image subresource range"));
+                }
+
+                Ok(())
+            }
+            (Self::Micromap(_), SubresourceRange::Micromap) => Ok(()),
+            _ => Err(invalid_data("subresource kind does not match resource")),
         }
     }
 }
@@ -739,6 +743,12 @@ impl FixtureWriter {
 }
 
 impl Graph {
+    /// Imports an unstable graph fixture as a graph with no-op callbacks.
+    #[doc(hidden)]
+    pub fn import_fixture(binary_path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::read_fixture(binary_path).map(Fixture::into_graph)
+    }
+
     /// Exports scheduler data to an unstable binary fixture and Markdown overview.
     ///
     /// The fixture contains resource descriptions, command execution boundaries, access types, and
@@ -793,24 +803,11 @@ impl Graph {
         write(markdown_path, relationship_markdown(self, &commands))
     }
 
-    /// Imports an unstable graph fixture as a graph with no-op callbacks.
-    #[doc(hidden)]
-    pub fn import_fixture(binary_path: impl AsRef<Path>) -> io::Result<Self> {
-        Self::read_fixture(binary_path).map(Fixture::into_graph)
-    }
-
     /// Reads an unstable graph fixture.
     #[doc(hidden)]
     pub fn read_fixture(binary_path: impl AsRef<Path>) -> io::Result<Fixture> {
         Fixture::read(binary_path)
     }
-}
-
-#[derive(Clone, Copy, Default)]
-struct ResourceCommandAccess {
-    access_count: usize,
-    reads: bool,
-    writes: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -820,6 +817,13 @@ struct OverviewEdge {
     raw: bool,
     war: bool,
     waw: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ResourceCommandAccess {
+    access_count: usize,
+    reads: bool,
+    writes: bool,
 }
 
 #[cfg(test)]

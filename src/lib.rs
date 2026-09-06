@@ -9,6 +9,9 @@ execution. Start with [`Graph`] — bind resources, record commands, and submit 
 
 For installation, guides, and examples see the [Guide Book](https://attackgoat.github.io/vk-graph).
 
+For optional DLSS Ray Reconstruction and NRD denoising adapters, see the independently maintained
+[nvidia-rs integrations](https://github.com/attackgoat/nvidia#renderer-integrations).
+
 */
 
 #![deny(missing_docs)]
@@ -184,14 +187,6 @@ impl Clone for CommandExecutions {
 }
 
 impl CommandExecutions {
-    fn signal_abandoned(&self) {
-        self.for_each(AtomicCommandExecution::compare_pending_exchange_abandoned);
-    }
-
-    fn signal_executed(&self) {
-        self.for_each(AtomicCommandExecution::compare_pending_exchange_executed);
-    }
-
     fn extend(&mut self, other: Self) {
         match (mem::take(self), other) {
             (Self::None, rhs) => *self = rhs,
@@ -230,25 +225,20 @@ impl CommandExecutions {
         }
     }
 
+    fn signal_abandoned(&self) {
+        self.for_each(AtomicCommandExecution::compare_pending_exchange_abandoned);
+    }
+
+    fn signal_executed(&self) {
+        self.for_each(AtomicCommandExecution::compare_pending_exchange_executed);
+    }
+
     fn track(&mut self) -> CommandExecution {
         let tracker = AtomicCommandExecution::new_pending();
         let cmd_exec = CommandExecution(tracker.clone());
         self.extend(Self::One(tracker));
 
         cmd_exec
-    }
-}
-
-#[cfg(feature = "checked")]
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct GraphId(u64);
-
-#[cfg(feature = "checked")]
-impl GraphId {
-    fn next() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -682,6 +672,7 @@ enum CommandFunction {
 }
 
 impl CommandFunction {
+    #[cfg(feature = "checked")]
     fn is_reusable(&self) -> bool {
         matches!(self, Self::Reusable(_))
     }
@@ -896,6 +887,7 @@ struct Execution {
     node_map: Option<Arc<[NodeIndex]>>,
     pipeline: Option<ExecutionPipeline>,
     resource_set_map: Option<Arc<[ResourceSetIndex]>>,
+    stream_values: Option<Arc<stream::StreamValues>>,
 
     #[cfg(feature = "checked")]
     stream_graph_id: Option<GraphId>,
@@ -943,6 +935,7 @@ impl Execution {
         for access in &mut self.resource_set_accesses {
             access.resource_set_idx = resource_set_map[access.resource_set_idx.as_usize()];
         }
+
         self.resource_set_map = Some(original_resource_set_map);
     }
 }
@@ -1080,11 +1073,6 @@ impl Graph {
         GraphBuilder::new()
     }
 
-    /// Converts this graph into a builder.
-    pub fn into_builder(self) -> GraphBuilder {
-        GraphBuilder { graph: self }
-    }
-
     pub(crate) fn assert_node_owner<N>(&self, _resource_node: &N)
     where
         N: Node,
@@ -1158,6 +1146,7 @@ impl Graph {
                 "acceleration structure set member cannot also be accessed directly"
             );
         }
+
         for physical_id in &self.prepared_stream_image_accesses {
             assert!(
                 !member_images.contains_key(physical_id),
@@ -1185,11 +1174,6 @@ impl Graph {
                 );
             }
         }
-    }
-
-    #[cfg(feature = "checked")]
-    pub(crate) fn graph_id(&self) -> GraphId {
-        self.graph_id
     }
 
     /// Allocates and begins writing a new command.
@@ -1672,6 +1656,16 @@ impl Graph {
         Submission::new(self)
     }
 
+    #[cfg(feature = "checked")]
+    pub(crate) fn graph_id(&self) -> GraphId {
+        self.graph_id
+    }
+
+    /// Converts this graph into a builder.
+    pub fn into_builder(self) -> GraphBuilder {
+        GraphBuilder { graph: self }
+    }
+
     /// Returns a borrow of the Vulkan resource represented by `resource_node`.
     ///
     /// The exact return type depends on the node type:
@@ -1832,11 +1826,6 @@ impl GraphBuilder {
         }
     }
 
-    /// Builds the graph.
-    pub fn build(self) -> Graph {
-        self.graph
-    }
-
     /// Binds a Vulkan resource or persistent resource set to this graph.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
@@ -1853,7 +1842,13 @@ impl GraphBuilder {
         filter: vk::Filter,
     ) -> Self {
         self.graph.blit_image(src, dst, filter);
+
         self
+    }
+
+    /// Builds the graph.
+    pub fn build(self) -> Graph {
+        self.graph
     }
 
     /// Clears a color image.
@@ -1863,6 +1858,7 @@ impl GraphBuilder {
         color: impl Into<ClearColorValue>,
     ) -> Self {
         self.graph.clear_color_image(image, color);
+
         self
     }
 
@@ -1874,6 +1870,7 @@ impl GraphBuilder {
         stencil: u32,
     ) -> Self {
         self.graph.clear_depth_stencil_image(image, depth, stencil);
+
         self
     }
 
@@ -1884,6 +1881,7 @@ impl GraphBuilder {
         dst: impl Into<AnyBufferNode>,
     ) -> Self {
         self.graph.copy_buffer(src, dst);
+
         self
     }
 
@@ -1894,6 +1892,7 @@ impl GraphBuilder {
         dst: impl Into<AnyImageNode>,
     ) -> Self {
         self.graph.copy_buffer_to_image(src, dst);
+
         self
     }
 
@@ -1904,6 +1903,7 @@ impl GraphBuilder {
         dst: impl Into<AnyImageNode>,
     ) -> Self {
         self.graph.copy_image(src, dst);
+
         self
     }
 
@@ -1914,6 +1914,7 @@ impl GraphBuilder {
         dst: impl Into<AnyBufferNode>,
     ) -> Self {
         self.graph.copy_image_to_buffer(src, dst);
+
         self
     }
 
@@ -1925,6 +1926,7 @@ impl GraphBuilder {
         data: u32,
     ) -> Self {
         self.graph.fill_buffer(buffer, region, data);
+
         self
     }
 
@@ -1936,6 +1938,7 @@ impl GraphBuilder {
         data: impl AsRef<[u8]> + 'static + Send,
     ) -> Self {
         self.graph.update_buffer(buffer, offset, data);
+
         self
     }
 }
@@ -1943,6 +1946,19 @@ impl GraphBuilder {
 impl Default for GraphBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(feature = "checked")]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct GraphId(u64);
+
+#[cfg(feature = "checked")]
+impl GraphId {
+    fn next() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -2037,6 +2053,7 @@ mod private {
             Self: ResourceNode,
         {
             let index = self.resource_node_index();
+
             self.borrow_at(resources, resource_sets, index)
         }
 
@@ -2096,36 +2113,6 @@ pub trait Resource: private::ResourceSealed {
 
     #[doc(hidden)]
     fn bind_graph(self, _: &mut Graph) -> Self::Node;
-}
-
-/// A graph-local handle whose bound resource can be borrowed from a [`Graph`].
-///
-/// This includes ordinary Vulkan resource nodes and persistent resource-set nodes. The trait is
-/// sealed and cannot be implemented outside of `vk-graph`.
-#[allow(private_bounds)]
-pub trait ResourceNode: private::ResourceNodeSealed {
-    /// The resource returned by [`Graph::resource`].
-    type Resource;
-}
-
-impl<T> ResourceNode for T
-where
-    T: Node,
-{
-    type Resource = <T as Node>::Resource;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ResourceSetAccess {
-    resource_set_idx: ResourceSetIndex,
-    access_type: ResourceSetAccessType,
-}
-
-impl ResourceSetAccess {
-    const fn acquisition_index(self, resource_set_count: usize) -> usize {
-        self.access_type.acquisition_offset() * resource_set_count
-            + self.resource_set_idx.as_usize()
-    }
 }
 
 impl private::ResourceSealed for &AccelerationStructureSet {}
@@ -2265,8 +2252,8 @@ macro_rules! resource {
 }
 
 resource!(AccelerationStructure);
-resource!(Image);
 resource!(Buffer);
+resource!(Image);
 resource!(Micromap);
 
 #[derive(Debug, Default)]
@@ -2316,6 +2303,36 @@ impl Deref for ResourceMap {
 impl DerefMut for ResourceMap {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.resources
+    }
+}
+
+/// A graph-local handle whose bound resource can be borrowed from a [`Graph`].
+///
+/// This includes Vulkan resource nodes and persistent resource-set nodes. The trait is
+/// sealed and cannot be implemented outside of `vk-graph`.
+#[allow(private_bounds)]
+pub trait ResourceNode: private::ResourceNodeSealed {
+    /// The resource returned by [`Graph::resource`].
+    type Resource;
+}
+
+impl<T> ResourceNode for T
+where
+    T: Node,
+{
+    type Resource = <T as Node>::Resource;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResourceSetAccess {
+    resource_set_idx: ResourceSetIndex,
+    access_type: ResourceSetAccessType,
+}
+
+impl ResourceSetAccess {
+    const fn acquisition_index(self, resource_set_count: usize) -> usize {
+        self.access_type.acquisition_offset() * resource_set_count
+            + self.resource_set_idx.as_usize()
     }
 }
 

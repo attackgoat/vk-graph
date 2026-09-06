@@ -876,6 +876,7 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
 
 pub(super) const fn is_write_access(ty: self::sync::AccessType) -> bool {
     use self::sync::AccessType::*;
+
     matches!(
         ty,
         CommandBufferWriteNVX

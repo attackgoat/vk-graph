@@ -241,53 +241,6 @@ impl Access {
         self.swap_with(dense, info, next_access, access_range, true)
     }
 
-    fn swap_with<'a>(
-        &'a self,
-        dense: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
-        info: ImageInfo,
-        next_access: AccessType,
-        access_range: vk::ImageSubresourceRange,
-        accumulate_sampled_reads: bool,
-    ) -> AccessIter<'a> {
-        match self {
-            Self::Uniform(uniform) => AccessIter::Uniform(Some(uniform.swap(
-                next_access,
-                access_range,
-                accumulate_sampled_reads,
-            ))),
-            Self::DualAspect(dual) => AccessIter::DualAspect(DualAspectAccessIter::new(
-                dual,
-                info,
-                next_access,
-                access_range,
-                accumulate_sampled_reads,
-            )),
-            Self::Dense(access) => {
-                if !access.uses_dense() && info.is_full_subresource_range(access_range) {
-                    return AccessIter::Uniform(Some(access.swap_range(
-                        next_access,
-                        access_range,
-                        accumulate_sampled_reads,
-                    )));
-                }
-
-                let mut dense = dense.lock();
-
-                #[cfg(not(feature = "parking_lot"))]
-                let mut dense = dense.expect("poisoned image dense lock");
-
-                access.ensure_dense(&mut dense, info);
-
-                AccessIter::DenseMap(ImageAccessSetMapIter::new(
-                    DenseAccessMapGuard { access, dense },
-                    next_access,
-                    access_range,
-                    accumulate_sampled_reads,
-                ))
-            }
-        }
-    }
-
     fn swap_accesses<'a, I>(
         &'a self,
         dense_access: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
@@ -386,6 +339,7 @@ impl Access {
                         first_accesses
                             .swap(false, first_access_range)
                             .for_each(drop);
+
                         first_accesses
                     });
                     self.current_access = Some((
@@ -415,6 +369,55 @@ impl Access {
             info,
             current: None,
             current_access: None,
+        }
+    }
+
+    fn swap_with<'a>(
+        &'a self,
+        dense: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
+        info: ImageInfo,
+        next_access: AccessType,
+        access_range: vk::ImageSubresourceRange,
+        accumulate_sampled_reads: bool,
+    ) -> AccessIter<'a> {
+        match self {
+            Self::Uniform(uniform) => AccessIter::Uniform(Some(uniform.swap(
+                next_access,
+                access_range,
+                accumulate_sampled_reads,
+            ))),
+            Self::DualAspect(dual) => AccessIter::DualAspect(DualAspectAccessIter::new(
+                dual,
+                info,
+                next_access,
+                access_range,
+                accumulate_sampled_reads,
+            )),
+            Self::Dense(access) => {
+                if !access.uses_dense() && info.is_full_subresource_range(access_range) {
+                    return AccessIter::Uniform(Some(access.swap_range(
+                        next_access,
+                        access_range,
+                        accumulate_sampled_reads,
+                    )));
+                }
+
+                let dense = dense.lock();
+
+                #[cfg(not(feature = "parking_lot"))]
+                let dense = dense.expect("poisoned image dense lock");
+
+                let mut dense = dense;
+
+                access.ensure_dense(&mut dense, info);
+
+                AccessIter::DenseMap(ImageAccessSetMapIter::new(
+                    DenseAccessMapGuard { access, dense },
+                    next_access,
+                    access_range,
+                    accumulate_sampled_reads,
+                ))
+            }
         }
     }
 }
@@ -748,7 +751,9 @@ impl DenseMapCursor {
             range.base_array_layer,
             range.base_mip_level,
         );
+
         let entry = unsafe { map.values.get_unchecked_mut(idx) };
+
         let prev_value = *entry;
         let value = update(prev_value);
         *entry = value;
@@ -985,6 +990,16 @@ struct ExclusiveSharing {
 }
 
 impl ExclusiveSharing {
+    fn new(_info: ImageInfo) -> Self {
+        let sharing = SharingMode::Exclusive(None);
+
+        Self {
+            uniform: AtomicU64::new(sharing.encode()),
+            dense_sharing_state: AtomicU8::new(0),
+            image_set_queues: OnceLock::new(),
+        }
+    }
+
     fn dense_sharing_state(&self) -> DenseSharingState {
         match self.dense_sharing_state.load(Ordering::Acquire) {
             0 => DenseSharingState::Idle,
@@ -1029,16 +1044,6 @@ impl ExclusiveSharing {
         image_set_queues
     }
 
-    fn new(_info: ImageInfo) -> Self {
-        let sharing = SharingMode::Exclusive(None);
-
-        Self {
-            uniform: AtomicU64::new(sharing.encode()),
-            dense_sharing_state: AtomicU8::new(0),
-            image_set_queues: OnceLock::new(),
-        }
-    }
-
     fn promote_dense_sharing_and_set_ranges(
         &self,
         dense: &Mutex<Option<DenseMap<SharingMode>>>,
@@ -1046,10 +1051,12 @@ impl ExclusiveSharing {
         sharing: SharingMode,
         sharing_ranges: &[vk::ImageSubresourceRange],
     ) {
-        let mut dense = dense.lock();
+        let dense = dense.lock();
 
         #[cfg(not(feature = "parking_lot"))]
-        let mut dense = dense.expect("poisoned image dense lock");
+        let dense = dense.expect("poisoned image dense lock");
+
+        let mut dense = dense;
 
         if self.is_dense_sharing_active() {
             let dense_sharing = dense.as_mut().expect("missing dense sharing state");
@@ -1136,10 +1143,12 @@ impl ExclusiveSharing {
 
         loop {
             if self.uses_dense_sharing() {
-                let mut dense = dense.lock();
+                let dense = dense.lock();
 
                 #[cfg(not(feature = "parking_lot"))]
-                let mut dense = dense.expect("poisoned image dense lock");
+                let dense = dense.expect("poisoned image dense lock");
+
+                let mut dense = dense;
 
                 dense
                     .as_mut()
@@ -1161,10 +1170,12 @@ impl ExclusiveSharing {
                 .is_ok()
             {
                 if self.is_promoting_dense_sharing() {
-                    let mut dense = dense.lock();
+                    let dense = dense.lock();
 
                     #[cfg(not(feature = "parking_lot"))]
-                    let mut dense = dense.expect("poisoned image dense lock");
+                    let dense = dense.expect("poisoned image dense lock");
+
+                    let mut dense = dense;
 
                     dense
                         .as_mut()
@@ -1520,7 +1531,10 @@ impl Image {
         I::IntoIter: 'a,
     {
         let info = self.info;
+
+        #[cfg(feature = "checked")]
         let format_aspect_mask = format_aspect_mask(info.format);
+
         let accesses =
             accesses
                 .into_iter()
@@ -2043,6 +2057,14 @@ impl ImageAccessSet {
         Self(raw)
     }
 
+    pub(crate) const fn is_nothing(self) -> bool {
+        matches!(self.non_sampled_access(), Some(AccessType::Nothing))
+    }
+
+    pub(crate) const fn is_sampled_read(self) -> bool {
+        self.0 & Self::SAMPLED_READ_TAG != 0
+    }
+
     pub(crate) fn iter(self) -> ImageAccessSetIter {
         if let Some(access) = self.non_sampled_access() {
             ImageAccessSetIter {
@@ -2057,23 +2079,11 @@ impl ImageAccessSet {
         }
     }
 
-    pub(crate) const fn is_nothing(self) -> bool {
-        matches!(self.non_sampled_access(), Some(AccessType::Nothing))
-    }
-
-    pub(crate) const fn is_sampled_read(self) -> bool {
-        self.0 & Self::SAMPLED_READ_TAG != 0
-    }
-
     fn layout(self) -> Option<vk::ImageLayout> {
         self.non_sampled_access().map_or(
             Some(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
             access_type_to_layout,
         )
-    }
-
-    const fn raw(self) -> u16 {
-        self.0
     }
 
     pub(crate) const fn non_sampled_access(self) -> Option<AccessType> {
@@ -2082,6 +2092,10 @@ impl ImageAccessSet {
         } else {
             Some(access_type_from_u8(self.0 as u8))
         }
+    }
+
+    const fn raw(self) -> u16 {
+        self.0
     }
 }
 
@@ -2107,11 +2121,13 @@ impl Iterator for ImageAccessSetIter {
         if let Some(access) = self.single_access.take() {
             return Some(access);
         }
+
         if self.sampled_read_bits & ImageAccessSet::ANY_SAMPLED_READ_BIT != 0 {
             self.sampled_read_bits = 0;
 
             return Some(AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer);
         }
+
         if self.sampled_read_bits == 0 {
             return None;
         }
@@ -2548,6 +2564,40 @@ impl ImageInfoBuilder {
     /// Provides an `ImageViewInfo` for this format, type, aspect, array elements, and mip levels.
     pub fn into_image_view(self) -> ImageViewInfoBuilder {
         self.build().into_image_view().into_builder()
+    }
+}
+
+/// The last queue to which every exclusive member of an image set was submitted.
+///
+/// Member queue updates invalidate this cache. Resources are externally synchronized, so
+/// publication cannot race those updates.
+#[derive(Debug)]
+pub(crate) struct ImageSetQueue(AtomicU64);
+
+impl ImageSetQueue {
+    pub(crate) const fn new() -> Self {
+        Self(AtomicU64::new(SharingMode::Exclusive(None).encode()))
+    }
+
+    fn invalidate(&self) {
+        self.0
+            .store(SharingMode::Exclusive(None).encode(), Ordering::Release);
+    }
+
+    pub(crate) fn publish(&self, queue: (u32, u32)) {
+        self.0.store(
+            SharingMode::Exclusive(Some(queue)).encode(),
+            Ordering::Release,
+        );
+    }
+
+    pub(crate) fn queue(&self) -> Option<(u32, u32)> {
+        let SharingMode::Exclusive(queue) = SharingMode::decode(self.0.load(Ordering::Acquire))
+        else {
+            unreachable!("invalid image set queue")
+        };
+
+        queue
     }
 }
 
@@ -3037,40 +3087,6 @@ impl From<SampleCount> for vk::SampleCountFlags {
             SampleCount::Type32 => Self::TYPE_32,
             SampleCount::Type64 => Self::TYPE_64,
         }
-    }
-}
-
-/// The last queue to which every exclusive member of an image set was submitted.
-///
-/// Member queue updates invalidate this cache. Resources are externally synchronized, so
-/// publication cannot race those updates.
-#[derive(Debug)]
-pub(crate) struct ImageSetQueue(AtomicU64);
-
-impl ImageSetQueue {
-    fn invalidate(&self) {
-        self.0
-            .store(SharingMode::Exclusive(None).encode(), Ordering::Release);
-    }
-
-    pub(crate) const fn new() -> Self {
-        Self(AtomicU64::new(SharingMode::Exclusive(None).encode()))
-    }
-
-    pub(crate) fn publish(&self, queue: (u32, u32)) {
-        self.0.store(
-            SharingMode::Exclusive(Some(queue)).encode(),
-            Ordering::Release,
-        );
-    }
-
-    pub(crate) fn queue(&self) -> Option<(u32, u32)> {
-        let SharingMode::Exclusive(queue) = SharingMode::decode(self.0.load(Ordering::Acquire))
-        else {
-            unreachable!("invalid image set queue")
-        };
-
-        queue
     }
 }
 

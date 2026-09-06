@@ -1177,10 +1177,7 @@ impl ExclusiveSharing {
                 let sharing_runs = self.sharing_runs.lock();
 
                 #[cfg(not(feature = "parking_lot"))]
-                let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
-
-                #[cfg(feature = "parking_lot")]
-                let sharing_runs = sharing_runs;
+                let sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
 
                 RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
 
@@ -1202,10 +1199,7 @@ impl ExclusiveSharing {
                     let sharing_runs = self.sharing_runs.lock();
 
                     #[cfg(not(feature = "parking_lot"))]
-                    let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
-
-                    #[cfg(feature = "parking_lot")]
-                    let sharing_runs = sharing_runs;
+                    let sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
 
                     RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
                 }
@@ -1354,6 +1348,7 @@ impl RunMapCursor {
         debug_assert!(map.runs.get(self.run_idx).is_some());
 
         let (old_value, old_start) = unsafe { *map.runs.get_unchecked(self.run_idx) };
+
         let new_value = new_value(old_value);
         let old_end = map
             .runs

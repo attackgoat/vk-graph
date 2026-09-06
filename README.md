@@ -11,8 +11,10 @@ real-world use, and supports modern Vulkan commands[^modern].
 
 ```toml
 [dependencies]
-vk-graph = "0.14"
+vk-graph = "0.15"
 ```
+
+Requires Rust 1.92 or newer.
 
 [*Changelog*](https://github.com/attackgoat/vk-graph/blob/main/CHANGELOG.md)
 
@@ -76,6 +78,8 @@ if device.physical.vk_khr_synchronization2 {
  - Automatic render pass scheduling, re-ordering, merging, with resource aliasing
  - Interoperable with existing Vulkan code
  - Optional [shader hot-reload](crates/vk-graph-hot/README.md) from disk
+ - Optional [nvidia-rs crates](https://github.com/attackgoat/nvidia#renderer-integrations): DLSS,
+   denoising, additional SDKs
 
 Example code:
 
@@ -104,10 +108,11 @@ _vk-graph_ puts a lot of functionality behind optional features in order to opti
 compile time for the most common use cases. The following features are
 available.
 
-- **`checked`** *(enabled by default)* — Runtime validation of common misuse patterns
+- **`checked`** *(disabled by default)* — Runtime validation of common misuse patterns
   (missing access declarations, buffer bounds, image aspects) that the Vulkan Validation Layer
-  cannot catch, including cross-graph node ownership checks. Disable for zero-overhead in
-  validated releases.
+  cannot catch, including cross-graph node ownership checks. Enable explicitly with
+  `vk-graph = { version = "0.15", features = ["checked"] }` during validation. It applies in both
+  debug and release builds, independently of device debug mode or Vulkan validation layers.
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
 - **`ash-molten`** — Enable `ash-molten` support for MoltenVK-based platforms.

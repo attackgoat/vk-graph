@@ -103,15 +103,18 @@ misuse patterns that the VVL cannot catch:
 - Valid image aspect masks and subresource ranges
 - Cross-graph node ownership checks
 
-The `checked` feature is **enabled by default** — it activates in both debug and release builds.
-Disable it for zero-overhead release builds that have been validated:
+The `checked` feature is **disabled by default**. Enable it during development and testing:
 
-With `checked` disabled, `vk-graph` no longer fail-fast validates that a node handle belongs to the
-graph it is used with. That remains invalid usage; the caller is responsible for avoiding it.
-
-```bash
-cargo run --no-default-features --features loaded,parking_lot --release
+```toml
+[dependencies]
+vk-graph = { version = "{{ crate.version }}", features = ["checked"] }
 ```
+
+It runs in both debug and release builds, independently of device debug mode and Vulkan
+validation layers. To run this repository's examples with checks, pass `--features checked`.
+
+Without `checked`, `vk-graph` does not check that node handles belong to the graph using them.
+You must still use each handle only with its own graph.
 
 ## Vulkan Validation Layer
 

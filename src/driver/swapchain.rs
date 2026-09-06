@@ -1182,6 +1182,9 @@ impl Swapchain {
         queue_family_index: u32,
         queue_index: u32,
     ) {
+        #[cfg(not(feature = "checked"))]
+        let _ = (image, queue_family_index, queue_index);
+
         #[cfg(feature = "checked")]
         {
             assert!(
@@ -2081,6 +2084,8 @@ impl SwapchainState<Live> {
                 image,
                 index,
                 suboptimal,
+
+                #[cfg(feature = "checked")]
                 swapchain_id: self.swapchain_id,
             },
         };

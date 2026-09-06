@@ -400,6 +400,7 @@ impl Pool<MicromapInfo, Micromap> for FifoPool {
             if let Some(item) = with_cache(&self.micromap_cache, |cache| {
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
+
                     if compatible_micromap_info(&item.info, &info) {
                         let item = cache.swap_remove(idx);
 

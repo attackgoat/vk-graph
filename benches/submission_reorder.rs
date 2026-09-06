@@ -130,6 +130,7 @@ fn submission_reorder_bench(c: &mut Criterion) {
                 .expect("empty acceleration structure set");
         let mut graph = Graph::new();
         let resource_set_node = graph.bind_resource(&resource_set);
+
         for cmd_idx in 0..cmd_count {
             let access = if cmd_idx % 2 == 0 {
                 AccelerationStructureAccessType::BuildRead
@@ -142,6 +143,7 @@ fn submission_reorder_bench(c: &mut Criterion) {
                 .record_cmd(|_| {})
                 .end_cmd();
         }
+
         let submission = graph.finalize();
         let mut harness = ReorderBenchHarness::from_submission(&submission, 1);
 
@@ -159,6 +161,7 @@ fn submission_reorder_bench(c: &mut Criterion) {
             ImageSet::new(std::iter::empty::<ImageSetMember>()).expect("empty image set");
         let mut graph = Graph::new();
         let resource_set_node = graph.bind_resource(&resource_set);
+
         for _ in 0..cmd_count {
             graph
                 .begin_cmd()
@@ -166,6 +169,7 @@ fn submission_reorder_bench(c: &mut Criterion) {
                 .record_cmd(|_| {})
                 .end_cmd();
         }
+
         let submission = graph.finalize();
         let mut harness = ReorderBenchHarness::from_submission(&submission, 1);
 

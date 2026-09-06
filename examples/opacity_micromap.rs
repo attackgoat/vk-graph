@@ -8,22 +8,39 @@ use {
     std::{mem::size_of, slice},
     vk_graph::{
         Graph,
-        cmd::{BuildAccelerationStructureInfo, BuildMicromapInfo},
+        cmd::{AccelerationStructureBuildGeometryInfo, MicromapBuildInfo},
         driver::{
             DriverError,
             accel_struct::{
-                AccelerationStructure, AccelerationStructureGeometry,
-                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
-                AccelerationStructureInfo, AccelerationStructureOpacityMicromap,
+                AccelerationStructure, AccelerationStructureGeometry, AccelerationStructureInfo,
+                AccelerationStructureOpacityMicromap, AccelerationStructureTriangles,
             },
             buffer::{Buffer, BufferInfo},
             device::{Device, DeviceInfo},
-            micromap::{Micromap, MicromapInfo, OpacityMicromapBuildInfo, OpacityMicromapUsage},
+            micromap::{Micromap, MicromapInfo, OpacityMicromapUsage},
         },
         pool::hash::HashPool,
     },
     vk_sync::AccessType,
 };
+
+fn bytes_of<T>(value: &T) -> &[u8] {
+    unsafe { slice::from_raw_parts((value as *const T).cast(), size_of::<T>()) }
+}
+
+fn bytes_of_slice<T>(values: &[T]) -> &[u8] {
+    unsafe { slice::from_raw_parts(values.as_ptr().cast(), size_of_val(values)) }
+}
+
+fn encode_2_state(states: [bool; 4]) -> [u8; 1] {
+    let mut packed = 0_u8;
+
+    for (index, opaque) in states.into_iter().enumerate() {
+        packed |= u8::from(opaque) << index;
+    }
+
+    [packed]
+}
 
 fn main() -> Result<(), DriverError> {
     pretty_env_logger::init();
@@ -31,15 +48,19 @@ fn main() -> Result<(), DriverError> {
     let device = Device::create(DeviceInfo::default())?;
     let Some(extension) = &device.physical.vk_ext_opacity_micromap else {
         println!("VK_EXT_opacity_micromap is unsupported; skipping example");
+
         return Ok(());
     };
+
     if !extension.features.micromap || extension.properties.max_opacity2_state_subdivision_level < 1
     {
         println!(
             "two-state subdivision-level-1 opacity micromaps are unsupported; skipping example"
         );
+
         return Ok(());
     }
+
     let queue_family_index = device
         .physical
         .queue_families
@@ -63,14 +84,18 @@ fn main() -> Result<(), DriverError> {
     };
     let triangle_buffer = upload_micromap_input(&device, bytes_of(&micromap_triangle))?;
 
-    let micromap_build = OpacityMicromapBuildInfo::new([micromap_usage])
-        .data(opacity_buffer.device_address())
-        .triangle_array(
-            triangle_buffer.device_address(),
-            size_of::<vk::MicromapTriangleEXT>() as _,
-        );
-    let micromap_size = Micromap::size_of(&device, &micromap_build);
-    let micromap = Micromap::create(&device, MicromapInfo::device_mem(micromap_size.create_size))?;
+    let usage_counts = [micromap_usage];
+    let micromap_flags = vk::BuildMicromapFlagsEXT::empty();
+    let micromap_size = Micromap::build_sizes(
+        &device,
+        vk::AccelerationStructureBuildTypeKHR::DEVICE,
+        micromap_flags,
+        &usage_counts,
+    );
+    let micromap = Micromap::create(
+        &device,
+        MicromapInfo::device_mem(micromap_size.micromap_size),
+    )?;
 
     let scratch_alignment = device
         .physical
@@ -82,48 +107,57 @@ fn main() -> Result<(), DriverError> {
     let micromap_scratch = Buffer::create(
         &device,
         BufferInfo::device_mem(
-            micromap_size.build_size,
+            micromap_size.build_scratch_size.max(1),
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .into_builder()
         .alignment(scratch_alignment),
     )?;
-    let micromap_build = micromap_build.scratch_data(micromap_scratch.device_address());
 
     let indices = [0_u32, 1, 2];
     let index_buffer = upload_acceleration_structure_input(&device, bytes_of_slice(&indices))?;
     let vertices = [[-1.0_f32, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, -1.0, 0.0]];
     let vertex_buffer = upload_acceleration_structure_input(&device, bytes_of_slice(&vertices))?;
 
-    let geometry = AccelerationStructureGeometry::new(
-        1,
-        AccelerationStructureGeometryData::triangles(
-            index_buffer.device_address(),
-            vk::IndexType::UINT32,
-            2,
-            None,
-            vertex_buffer.device_address(),
-            vk::Format::R32G32B32_SFLOAT,
-            size_of::<[f32; 3]>() as _,
-        )
-        .opacity_micromap(AccelerationStructureOpacityMicromap::new(
-            micromap.handle,
-            [micromap_usage],
-        )),
+    let triangles = AccelerationStructureTriangles::new(
+        index_buffer.device_address(),
+        vk::IndexType::UINT32,
+        2,
+        0,
+        vertex_buffer.device_address(),
+        vk::Format::R32G32B32_SFLOAT,
+        size_of::<[f32; 3]>() as _,
     );
-    let blas_build = AccelerationStructureGeometryInfo::blas([(
-        geometry,
-        vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
-    )]);
-    let blas_size = AccelerationStructure::size_of(&device, &blas_build);
+    let geometries = [AccelerationStructureGeometry::new(
+        triangles
+            .opacity_micromap(AccelerationStructureOpacityMicromap::new(
+                micromap.handle,
+                &usage_counts,
+            ))
+            .into(),
+    )];
+    let blas_flags = vk::BuildAccelerationStructureFlagsKHR::empty();
+
+    // Safety: Geometry and counts describe the build; the attached micromap is live on this device.
+    let blas_size = unsafe {
+        AccelerationStructure::build_sizes(
+            &device,
+            vk::AccelerationStructureBuildTypeKHR::DEVICE,
+            vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            blas_flags,
+            &geometries,
+            &[1],
+        )
+    };
+
     let blas = AccelerationStructure::create(
         &device,
-        AccelerationStructureInfo::blas(blas_size.create_size),
+        AccelerationStructureInfo::blas(blas_size.acceleration_structure_size),
     )?;
     let blas_scratch = Buffer::create(
         &device,
         BufferInfo::device_mem(
-            blas_size.build_size,
+            blas_size.build_scratch_size.max(1),
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .into_builder()
@@ -153,9 +187,18 @@ fn main() -> Result<(), DriverError> {
         .record_cmd(move |cmd| {
             // Safety: The graph retains the separate, correctly sized and aligned buffers until
             // completion. Inputs match the usage record, remain unchanged, and all accesses are
-            // declared above; the destination and scratch sizes come from the same build info.
+            // declared above. Destination and scratch sizes were queried with the same flags
+            // and usage counts.
             unsafe {
-                cmd.build_micromaps(&[BuildMicromapInfo::new(micromap_node, micromap_build)]);
+                cmd.build_micromaps(&[MicromapBuildInfo {
+                    data: cmd.resource(opacity_node).device_address(),
+                    dst_micromap: micromap_node.into(),
+                    flags: micromap_flags,
+                    scratch_data: cmd.resource(micromap_scratch_node).device_address(),
+                    triangle_array: cmd.resource(triangle_node).device_address(),
+                    triangle_array_stride: size_of::<vk::MicromapTriangleEXT>() as _,
+                    usage_counts: &usage_counts,
+                }]);
             }
         })
         .resource_access(index_node, AccessType::AccelerationStructureBuildInputRead)
@@ -170,11 +213,31 @@ fn main() -> Result<(), DriverError> {
         )
         .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
         .record_cmd(move |cmd| {
-            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
-                blas_node,
-                cmd.resource(blas_scratch_node).device_address(),
-                blas_build,
-            )]);
+            let geometries = [AccelerationStructureGeometry::new(
+                triangles
+                    .opacity_micromap(AccelerationStructureOpacityMicromap::new(
+                        cmd.resource(micromap_node).handle,
+                        &usage_counts,
+                    ))
+                    .into(),
+            )];
+            let ranges = [vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1)];
+
+            // Safety: Inputs match the queried geometry; graph accesses retain and synchronize
+            // the completed micromap, geometry buffers, and separate destination and scratch
+            // allocations.
+            unsafe {
+                cmd.build_acceleration_structures(
+                    &[AccelerationStructureBuildGeometryInfo::build(
+                        vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+                        blas_flags,
+                        blas_node,
+                        &geometries,
+                        cmd.resource(blas_scratch_node).device_address(),
+                    )],
+                    &[&ranges],
+                );
+            }
         });
 
     let mut fence =
@@ -186,29 +249,6 @@ fn main() -> Result<(), DriverError> {
     println!("built a two-state opacity micromap and attached BLAS");
 
     Ok(())
-}
-
-fn upload_micromap_input(device: &Device, data: &[u8]) -> Result<Buffer, DriverError> {
-    let mut buffer = Buffer::create(
-        device,
-        BufferInfo::host_mem(
-            data.len() as _,
-            vk::BufferUsageFlags::MICROMAP_BUILD_INPUT_READ_ONLY_EXT
-                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-        )
-        .into_builder()
-        .alignment(256),
-    )?;
-    buffer.copy_from_slice(0, data);
-    Ok(buffer)
-}
-
-fn encode_2_state(states: [bool; 4]) -> [u8; 1] {
-    let mut packed = 0_u8;
-    for (index, opaque) in states.into_iter().enumerate() {
-        packed |= u8::from(opaque) << index;
-    }
-    [packed]
 }
 
 fn upload_acceleration_structure_input(
@@ -224,13 +264,22 @@ fn upload_acceleration_structure_input(
         ),
     )?;
     buffer.copy_from_slice(0, data);
+
     Ok(buffer)
 }
 
-fn bytes_of<T>(value: &T) -> &[u8] {
-    unsafe { slice::from_raw_parts((value as *const T).cast(), size_of::<T>()) }
-}
+fn upload_micromap_input(device: &Device, data: &[u8]) -> Result<Buffer, DriverError> {
+    let mut buffer = Buffer::create(
+        device,
+        BufferInfo::host_mem(
+            data.len() as _,
+            vk::BufferUsageFlags::MICROMAP_BUILD_INPUT_READ_ONLY_EXT
+                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        )
+        .into_builder()
+        .alignment(256),
+    )?;
+    buffer.copy_from_slice(0, data);
 
-fn bytes_of_slice<T>(values: &[T]) -> &[u8] {
-    unsafe { slice::from_raw_parts(values.as_ptr().cast(), size_of_val(values)) }
+    Ok(buffer)
 }

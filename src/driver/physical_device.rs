@@ -50,6 +50,69 @@ fn vk_extension_name(extension_name: &'static CStr) -> &'static str {
         .expect("Vulkan extension name should be UTF-8")
 }
 
+/// Physical-device support types for `VK_EXT_*` extensions.
+pub mod ext {
+    use ash::vk;
+
+    /// Features and properties advertised by `VK_EXT_opacity_micromap`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct OpacityMicromap {
+        /// Features advertised by `VK_EXT_opacity_micromap`.
+        pub features: OpacityMicromapFeatures,
+
+        /// Properties advertised by `VK_EXT_opacity_micromap`.
+        pub properties: OpacityMicromapProperties,
+    }
+
+    /// Opacity micromap features supported by the physical device.
+    ///
+    /// See [`VkPhysicalDeviceOpacityMicromapFeaturesEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceOpacityMicromapFeaturesEXT.html).
+    #[derive(Clone, Copy, Debug)]
+    pub struct OpacityMicromapFeatures {
+        /// Whether opacity micromaps are supported.
+        pub micromap: bool,
+
+        /// Whether opacity micromap capture and replay is supported.
+        pub micromap_capture_replay: bool,
+
+        /// Whether opacity micromaps can be built on the host.
+        pub micromap_host_commands: bool,
+    }
+
+    impl From<vk::PhysicalDeviceOpacityMicromapFeaturesEXT<'_>> for OpacityMicromapFeatures {
+        fn from(features: vk::PhysicalDeviceOpacityMicromapFeaturesEXT<'_>) -> Self {
+            Self {
+                micromap: features.micromap == vk::TRUE,
+                micromap_capture_replay: features.micromap_capture_replay == vk::TRUE,
+                micromap_host_commands: features.micromap_host_commands == vk::TRUE,
+            }
+        }
+    }
+
+    /// Opacity micromap properties of the physical device.
+    ///
+    /// See [`VkPhysicalDeviceOpacityMicromapPropertiesEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceOpacityMicromapPropertiesEXT.html).
+    #[derive(Clone, Copy, Debug)]
+    pub struct OpacityMicromapProperties {
+        /// The maximum supported subdivision level for two-state opacity micromaps.
+        pub max_opacity2_state_subdivision_level: u32,
+
+        /// The maximum supported subdivision level for four-state opacity micromaps.
+        pub max_opacity4_state_subdivision_level: u32,
+    }
+
+    impl From<vk::PhysicalDeviceOpacityMicromapPropertiesEXT<'_>> for OpacityMicromapProperties {
+        fn from(properties: vk::PhysicalDeviceOpacityMicromapPropertiesEXT<'_>) -> Self {
+            Self {
+                max_opacity2_state_subdivision_level: properties
+                    .max_opacity2_state_subdivision_level,
+                max_opacity4_state_subdivision_level: properties
+                    .max_opacity4_state_subdivision_level,
+            }
+        }
+    }
+}
+
 /// Physical-device support types for `VK_KHR_*` extensions.
 pub mod khr {
     use ash::vk;
@@ -306,69 +369,6 @@ pub mod khr {
                 present_wait: features.present_wait == vk::TRUE,
             }
         }
-    }
-}
-
-/// Physical-device support types for `VK_EXT_*` extensions.
-pub mod ext {
-    use ash::vk;
-
-    /// Features of the physical device for opacity micromaps.
-    ///
-    /// See [`VkPhysicalDeviceOpacityMicromapFeaturesEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceOpacityMicromapFeaturesEXT.html).
-    #[derive(Clone, Copy, Debug)]
-    pub struct OpacityMicromapFeatures {
-        /// Indicates whether the implementation supports opacity micromap functionality.
-        pub micromap: bool,
-
-        /// Indicates whether opacity micromap capture and replay is supported.
-        pub micromap_capture_replay: bool,
-
-        /// Indicates whether opacity micromaps can be built on the host.
-        pub micromap_host_commands: bool,
-    }
-
-    impl From<vk::PhysicalDeviceOpacityMicromapFeaturesEXT<'_>> for OpacityMicromapFeatures {
-        fn from(features: vk::PhysicalDeviceOpacityMicromapFeaturesEXT<'_>) -> Self {
-            Self {
-                micromap: features.micromap == vk::TRUE,
-                micromap_capture_replay: features.micromap_capture_replay == vk::TRUE,
-                micromap_host_commands: features.micromap_host_commands == vk::TRUE,
-            }
-        }
-    }
-
-    /// Properties of the physical device for opacity micromaps.
-    ///
-    /// See [`VkPhysicalDeviceOpacityMicromapPropertiesEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceOpacityMicromapPropertiesEXT.html).
-    #[derive(Clone, Copy, Debug)]
-    pub struct OpacityMicromapProperties {
-        /// The maximum supported subdivision level for two-state opacity micromaps.
-        pub max_opacity2_state_subdivision_level: u32,
-
-        /// The maximum supported subdivision level for four-state opacity micromaps.
-        pub max_opacity4_state_subdivision_level: u32,
-    }
-
-    impl From<vk::PhysicalDeviceOpacityMicromapPropertiesEXT<'_>> for OpacityMicromapProperties {
-        fn from(properties: vk::PhysicalDeviceOpacityMicromapPropertiesEXT<'_>) -> Self {
-            Self {
-                max_opacity2_state_subdivision_level: properties
-                    .max_opacity2_state_subdivision_level,
-                max_opacity4_state_subdivision_level: properties
-                    .max_opacity4_state_subdivision_level,
-            }
-        }
-    }
-
-    /// Features and properties advertised by `VK_EXT_opacity_micromap`.
-    #[derive(Clone, Copy, Debug)]
-    pub struct OpacityMicromap {
-        /// Features advertised by `VK_EXT_opacity_micromap`.
-        pub features: OpacityMicromapFeatures,
-
-        /// Properties advertised by `VK_EXT_opacity_micromap`.
-        pub properties: OpacityMicromapProperties,
     }
 }
 
@@ -964,6 +964,7 @@ impl PhysicalDevice {
             .push_next(&mut depth_stencil_resolve_properties)
             .push_next(&mut ray_tracing_pipeline_properties)
             .push_next(&mut sampler_filter_minmax_properties);
+
         if vk_ext_opacity_micromap {
             properties = properties.push_next(&mut opacity_micromap_properties);
         }

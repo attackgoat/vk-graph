@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-rust-version = "1.94"
+rust-version = "1.92"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/attackgoat/vk-graph"
@@ -23,8 +23,8 @@ readme = "README.md"
 [workspace.dependencies]
 log = "0.4"
 profiling = "1.0"
-read-only = "0.1"
-vk-graph = { path = "", version = "0.14.8" }
+read-only = "0.1.3"
+vk-graph = { path = "", version = "0.15.0" }
 vk-graph-egui = { path = "crates/vk-graph-egui", version = "0.1.2" }
 vk-graph-fx = { path = "crates/vk-graph-fx", version = "0.1.1" }
 vk-graph-hot = { path = "crates/vk-graph-hot", version = "0.1.1" }
@@ -34,9 +34,10 @@ winit = "0.30"
 
 [package]
 name = "vk-graph"
-version = "0.14.8"
+version = "0.15.0"
 authors = ["John Wells <john@attackgoat.com>"]
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
@@ -47,7 +48,7 @@ categories = ["game-development", "multimedia::images", "rendering::engine"]
 description = "A high-performance Vulkan driver with automatic resource management and execution."
 
 [features]
-default = ["checked", "loaded", "parking_lot"]
+default = ["loaded", "parking_lot"]
 checked = []
 ash-molten=["loaded", "dep:ash-molten"]
 linked=["ash/linked"]
@@ -106,9 +107,9 @@ winit.workspace = true
 winit_input_helper = "0.17"
 
 [[bench]]
-name = "submission_reorder"
+name = "image_swap_access"
 harness = false
 
 [[bench]]
-name = "image_swap_access"
+name = "submission_reorder"
 harness = false

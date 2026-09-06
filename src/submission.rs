@@ -51,7 +51,7 @@ use {
         },
         lazy_str,
         node::AnyNode,
-        pool::{Lease, Pool, SubmissionPool},
+        pool::{Lease, Pool, SubmissionPool, hash::HashPool},
         resource::{
             ImageAccessType, PhysicalImageId, ResourceSet, ResourceSetAccessType, ResourceSetIndex,
             ResourceSetMap,
@@ -99,6 +99,35 @@ fn aspect_mask_for_span(base_aspect: u32, start: u32, end: u32) -> vk::ImageAspe
     }
 
     mask
+}
+
+fn barriers_require_sync2(
+    global_barrier: Option<&GlobalBarrier<'_>>,
+    micromap_barrier: Option<&GlobalBarrier<'_>>,
+    buffer_barriers: &[BufferBarrier<'_>],
+    image_barriers: &[TrackedImageBarrier],
+) -> bool {
+    micromap_barrier.is_some()
+        || global_barrier.is_some_and(|barrier| {
+            barrier
+                .previous_accesses
+                .iter()
+                .chain(barrier.next_accesses)
+                .copied()
+                .any(is_micromap_access)
+        })
+        || buffer_barriers.iter().any(|barrier| {
+            barrier
+                .previous_accesses
+                .iter()
+                .chain(barrier.next_accesses)
+                .copied()
+                .any(is_micromap_access)
+        })
+        || image_barriers.iter().any(|barrier| {
+            is_micromap_access(barrier.next_access)
+                || barrier.previous_accesses.iter().any(is_micromap_access)
+        })
 }
 
 fn buffer_barriers_from_transfers<'a>(
@@ -196,6 +225,24 @@ fn buffer_subresource_range_intersects(
     lhs.start < rhs.end && lhs.end > rhs.start
 }
 
+fn can_elide_sampled_read_barrier(barrier: TrackedImageBarrier) -> bool {
+    if !barrier.previous_accesses.is_sampled_read()
+        || !ImageAccessSet::from_access(barrier.next_access).is_sampled_read()
+        || !barrier
+            .previous_accesses
+            .contains_sampled_read(barrier.next_access)
+        || barrier.ownership_layouts.is_some()
+        || barrier.discard_contents
+    {
+        return false;
+    }
+
+    let (_, _, barrier) = get_tracked_image_memory_barrier(barrier);
+
+    barrier.old_layout == barrier.new_layout
+        && barrier.src_queue_family_index == barrier.dst_queue_family_index
+}
+
 fn check_queue_submit_args(
     waits: &[SemaphoreSubmitInfo],
     signals: &[SemaphoreSubmitInfo],
@@ -252,93 +299,6 @@ fn exclusive_transfer_source(sharing: SharingMode, queue_family_index: u32) -> O
         .then_some((src_queue_family_index, src_queue_index))
 }
 
-const fn image_access_layout(access: AccessType) -> ImageLayout {
-    if matches!(access, AccessType::Present | AccessType::ComputeShaderWrite) {
-        ImageLayout::General
-    } else {
-        ImageLayout::Optimal
-    }
-}
-
-fn image_access_set_layout(access_set: ImageAccessSet) -> ImageLayout {
-    access_set
-        .non_sampled_access()
-        .map_or(ImageLayout::Optimal, image_access_layout)
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ImageOwnershipLayouts {
-    old: vk::ImageLayout,
-    new: vk::ImageLayout,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct TrackedImageBarrier {
-    previous_accesses: ImageAccessSet,
-    next_access: AccessType,
-    previous_layout: ImageLayout,
-    next_layout: ImageLayout,
-    ownership_layouts: Option<ImageOwnershipLayouts>,
-    discard_contents: bool,
-    src_queue_family_index: u32,
-    dst_queue_family_index: u32,
-    image: vk::Image,
-    range: vk::ImageSubresourceRange,
-}
-
-impl TrackedImageBarrier {
-    fn new(
-        image: vk::Image,
-        prev_access: ImageAccessSet,
-        next_access: AccessType,
-        range: vk::ImageSubresourceRange,
-        transfer: Option<&ImageOwnershipTransfer>,
-        discard_contents: bool,
-    ) -> Self {
-        trace!(
-            "    image {:?} {:?} {:?}->{:?}",
-            image,
-            ImageSubresourceRangeDebug(range),
-            prev_access,
-            next_access,
-        );
-
-        Self {
-            next_access,
-            next_layout: image_access_layout(next_access),
-            previous_accesses: prev_access,
-            previous_layout: image_access_set_layout(prev_access),
-            ownership_layouts: transfer.map(|transfer| transfer.layouts),
-            discard_contents,
-            src_queue_family_index: transfer.map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
-                transfer.src_queue_family_index
-            }),
-            dst_queue_family_index: transfer.map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
-                transfer.dst_queue_family_index
-            }),
-            image,
-            range,
-        }
-    }
-}
-
-fn can_elide_sampled_read_barrier(barrier: TrackedImageBarrier) -> bool {
-    if !barrier.previous_accesses.is_sampled_read()
-        || !ImageAccessSet::from_access(barrier.next_access).is_sampled_read()
-        || !barrier
-            .previous_accesses
-            .contains_sampled_read(barrier.next_access)
-        || barrier.ownership_layouts.is_some()
-        || barrier.discard_contents
-    {
-        return false;
-    }
-
-    let (_, _, barrier) = get_tracked_image_memory_barrier(barrier);
-    barrier.old_layout == barrier.new_layout
-        && barrier.src_queue_family_index == barrier.dst_queue_family_index
-}
-
 fn get_tracked_image_memory_barrier(
     barrier: TrackedImageBarrier,
 ) -> (
@@ -386,6 +346,20 @@ fn get_tracked_image_memory_barrier(
     }
 
     (src_stage_mask, dst_stage_mask, barrier)
+}
+
+const fn image_access_layout(access: AccessType) -> ImageLayout {
+    if matches!(access, AccessType::Present | AccessType::ComputeShaderWrite) {
+        ImageLayout::General
+    } else {
+        ImageLayout::Optimal
+    }
+}
+
+fn image_access_set_layout(access_set: ImageAccessSet) -> ImageLayout {
+    access_set
+        .non_sampled_access()
+        .map_or(ImageLayout::Optimal, image_access_layout)
 }
 
 fn image_barriers_from_transfers<'a>(
@@ -637,6 +611,22 @@ fn image_ownership_layouts(
     }
 }
 
+fn image_queue_ownership_release_barrier(
+    release: ImageQueueOwnershipRelease,
+    src_queue_family_index: u32,
+    dst_queue_family_index: u32,
+) -> vk::ImageMemoryBarrier<'static> {
+    vk::ImageMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+        .dst_access_mask(vk::AccessFlags::empty())
+        .old_layout(release.layouts.old)
+        .new_layout(release.layouts.new)
+        .src_queue_family_index(src_queue_family_index)
+        .dst_queue_family_index(dst_queue_family_index)
+        .image(release.image)
+        .subresource_range(release.range)
+}
+
 fn image_subresource_range_eq(
     lhs: vk::ImageSubresourceRange,
     rhs: vk::ImageSubresourceRange,
@@ -648,7 +638,45 @@ fn image_subresource_range_eq(
         && lhs.level_count == rhs.level_count
 }
 
-// Added because vk-sync requires allocation to record barriers, see that impl for reference
+fn is_micromap_access(access: AccessType) -> bool {
+    matches!(
+        access,
+        AccessType::MicromapBuildRead
+            | AccessType::MicromapBuildWrite
+            | AccessType::MicromapBuildInputRead
+            | AccessType::MicromapBuildScratchReadWrite
+            | AccessType::MicromapBuildBufferRead
+            | AccessType::MicromapBuildBufferWrite
+            | AccessType::AccelerationStructureBuildMicromapRead
+    )
+}
+
+fn memory_barrier2(barrier: GlobalBarrier<'_>) -> vk::MemoryBarrier2<'static> {
+    let (mut src_stage_mask, mut src_access_mask) =
+        (vk::PipelineStageFlags2::empty(), vk::AccessFlags2::empty());
+    let (mut dst_stage_mask, mut dst_access_mask) =
+        (vk::PipelineStageFlags2::empty(), vk::AccessFlags2::empty());
+
+    for access in barrier.previous_accesses {
+        let (stages, accesses) = micromap_sync_flags_for_access(*access);
+        src_stage_mask |= stages;
+        src_access_mask |= accesses;
+    }
+
+    for access in barrier.next_accesses {
+        let (stages, accesses) = micromap_sync_flags_for_access(*access);
+        dst_stage_mask |= stages;
+        dst_access_mask |= accesses;
+    }
+
+    vk::MemoryBarrier2::default()
+        .src_stage_mask(src_stage_mask)
+        .src_access_mask(src_access_mask)
+        .dst_stage_mask(dst_stage_mask)
+        .dst_access_mask(dst_access_mask)
+}
+
+// Avoid vk-sync's barrier-recording allocations; see its implementation for reference.
 fn pipeline_barrier_from_slices<'a>(
     device: &Device,
     command_buffer: vk::CommandBuffer,
@@ -690,6 +718,7 @@ fn pipeline_barrier_from_slices<'a>(
                         previous_accesses: barrier.previous_accesses,
                         next_accesses: barrier.next_accesses,
                     });
+
                     vk::BufferMemoryBarrier2::default()
                         .src_stage_mask(sync.src_stage_mask)
                         .src_access_mask(sync.src_access_mask)
@@ -714,6 +743,7 @@ fn pipeline_barrier_from_slices<'a>(
                     });
                     let ownership_acquire = barrier.ownership_layouts.is_some();
                     let (_, _, barrier) = get_tracked_image_memory_barrier(barrier);
+
                     vk::ImageMemoryBarrier2::default()
                         .src_stage_mask(if ownership_acquire {
                             vk::PipelineStageFlags2::ALL_COMMANDS
@@ -826,71 +856,6 @@ fn pipeline_barrier_from_slices<'a>(
     });
 }
 
-fn barriers_require_sync2(
-    global_barrier: Option<&GlobalBarrier<'_>>,
-    micromap_barrier: Option<&GlobalBarrier<'_>>,
-    buffer_barriers: &[BufferBarrier<'_>],
-    image_barriers: &[TrackedImageBarrier],
-) -> bool {
-    micromap_barrier.is_some()
-        || global_barrier.is_some_and(|barrier| {
-            barrier
-                .previous_accesses
-                .iter()
-                .chain(barrier.next_accesses)
-                .copied()
-                .any(is_micromap_access)
-        })
-        || buffer_barriers.iter().any(|barrier| {
-            barrier
-                .previous_accesses
-                .iter()
-                .chain(barrier.next_accesses)
-                .copied()
-                .any(is_micromap_access)
-        })
-        || image_barriers.iter().any(|barrier| {
-            is_micromap_access(barrier.next_access)
-                || barrier.previous_accesses.iter().any(is_micromap_access)
-        })
-}
-
-fn is_micromap_access(access: AccessType) -> bool {
-    matches!(
-        access,
-        AccessType::MicromapBuildRead
-            | AccessType::MicromapBuildWrite
-            | AccessType::MicromapBuildInputRead
-            | AccessType::MicromapBuildScratchReadWrite
-            | AccessType::MicromapBuildBufferRead
-            | AccessType::MicromapBuildBufferWrite
-            | AccessType::AccelerationStructureBuildMicromapRead
-    )
-}
-
-fn memory_barrier2(barrier: GlobalBarrier<'_>) -> vk::MemoryBarrier2<'static> {
-    let (mut src_stage_mask, mut src_access_mask) =
-        (vk::PipelineStageFlags2::empty(), vk::AccessFlags2::empty());
-    let (mut dst_stage_mask, mut dst_access_mask) =
-        (vk::PipelineStageFlags2::empty(), vk::AccessFlags2::empty());
-    for access in barrier.previous_accesses {
-        let (stages, accesses) = micromap_sync_flags_for_access(*access);
-        src_stage_mask |= stages;
-        src_access_mask |= accesses;
-    }
-    for access in barrier.next_accesses {
-        let (stages, accesses) = micromap_sync_flags_for_access(*access);
-        dst_stage_mask |= stages;
-        dst_access_mask |= accesses;
-    }
-
-    vk::MemoryBarrier2::default()
-        .src_stage_mask(src_stage_mask)
-        .src_access_mask(src_access_mask)
-        .dst_stage_mask(dst_stage_mask)
-        .dst_access_mask(dst_access_mask)
-}
-
 fn schedule_dependency_cmds_before_target_access(
     target_node_idx: usize,
     first_target_cmd_idx: usize,
@@ -929,22 +894,6 @@ fn submit_stage_mask_legacy(stage_mask: vk::PipelineStageFlags2) -> vk::Pipeline
 
 fn supports_timeline_semaphores(device: &Device) -> bool {
     device.physical.features_v1_2.timeline_semaphore
-}
-
-fn image_queue_ownership_release_barrier(
-    release: ImageQueueOwnershipRelease,
-    src_queue_family_index: u32,
-    dst_queue_family_index: u32,
-) -> vk::ImageMemoryBarrier<'static> {
-    vk::ImageMemoryBarrier::default()
-        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-        .dst_access_mask(vk::AccessFlags::empty())
-        .old_layout(release.layouts.old)
-        .new_layout(release.layouts.new)
-        .src_queue_family_index(src_queue_family_index)
-        .dst_queue_family_index(dst_queue_family_index)
-        .image(release.image)
-        .subresource_range(release.range)
 }
 
 /// Builds and submits a release barrier command buffer for each release group, calling
@@ -1184,6 +1133,7 @@ impl CommandAccessIndex {
                     {
                         let resource_set_idx = access.resource_set_idx;
                         let index = resource_set_idx.as_usize();
+
                         debug_assert!(index < resource_set_count);
 
                         if !seen_resource_sets.put(index) {
@@ -1369,6 +1319,12 @@ impl ImageOwnership {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct ImageOwnershipLayouts {
+    old: vk::ImageLayout,
+    new: vk::ImageLayout,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct ImageOwnershipTransfer {
     dst_queue_family_index: u32,
     layouts: ImageOwnershipLayouts,
@@ -1386,6 +1342,13 @@ impl PartialEq for ImageOwnershipTransfer {
             && self.src_queue_index == other.src_queue_index
             && image_subresource_range_eq(self.range, other.range)
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImageQueueOwnershipRelease {
+    image: vk::Image,
+    layouts: ImageOwnershipLayouts,
+    range: vk::ImageSubresourceRange,
 }
 
 struct ImageSubresourceRangeDebug(vk::ImageSubresourceRange);
@@ -1588,6 +1551,11 @@ impl PipelineStageAccessFlags {
     }
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct PreparedStreamRecording {
+    resources: Mutex<Vec<CommandRecordingResources>>,
+}
+
 #[derive(Debug)]
 struct QueueOwnershipRelease {
     _cmd_buf: Lease<CommandBuffer>,
@@ -1601,13 +1569,6 @@ struct QueueOwnershipReleaseGroup {
     images: Vec<ImageQueueOwnershipRelease>,
     src_queue_family_index: u32,
     src_queue_index: u32,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ImageQueueOwnershipRelease {
-    image: vk::Image,
-    layouts: ImageOwnershipLayouts,
-    range: vk::ImageSubresourceRange,
 }
 
 fn queue_ownership_release_group(
@@ -1823,6 +1784,7 @@ where
         }
 
         let queue = (queue_family_index, queue_index);
+
         for resource_set_idx in state.submission.touched_image_sets.ones() {
             let resource_set = state
                 .submission
@@ -2273,6 +2235,7 @@ impl Schedule {
             omitted_predecessor_counts: &mut [usize],
         ) {
             let mut previous = Option::<usize>::None;
+
             for &cmd_idx in resource_cmds {
                 let Some(&local_idx) = local_of_global.get(cmd_idx) else {
                     continue;
@@ -2687,6 +2650,7 @@ impl Submission {
     pub(super) fn new(graph: Graph) -> Self {
         let recorded_commands = Vec::with_capacity(graph.cmds.len());
         let touched_image_sets = FixedBitSet::with_capacity(graph.resource_sets.len());
+
         Self {
             exclusive_buffer_ranges: HashMap::new(),
             exclusive_image_ranges: HashMap::new(),
@@ -2713,6 +2677,7 @@ impl Submission {
         }
     }
 
+    #[cfg(feature = "checked")]
     pub(crate) fn assert_reusable_commands(&self) {
         for cmd in &self.graph.cmds {
             for exec in &cmd.execs {
@@ -2760,12 +2725,30 @@ impl Submission {
         &mut self,
         cmd_buf: &CommandBuffer,
         resources: crate::ResourceMap,
+        recording: &PreparedStreamRecording,
+        values: &crate::stream::StreamValues,
     ) -> Result<(), DriverError> {
+        let mut recording = recording
+            .resources
+            .lock()
+            .expect("poisoned stream recording");
+        std::mem::swap(&mut self.recorded_commands, &mut recording);
         let original_resources = std::mem::replace(&mut self.graph.resources, resources);
 
-        let result = self.record_prepared_command_stream_inner(cmd_buf);
+        let result = (|| {
+            if self.recorded_commands.is_empty() {
+                let schedule = (0..self.graph.cmds.len()).collect::<Vec<_>>();
+                self.lease_scheduled_resources(&mut HashPool::new(&cmd_buf.device), &schedule)?;
+            }
+
+            self.record_prepared_command_stream_inner(cmd_buf, values)
+        })();
 
         self.graph.resources = original_resources;
+        if result.is_err() {
+            self.recorded_commands.clear();
+        }
+        std::mem::swap(&mut self.recorded_commands, &mut recording);
 
         result
     }
@@ -2773,6 +2756,7 @@ impl Submission {
     fn record_prepared_command_stream_inner(
         &mut self,
         cmd_buf: &CommandBuffer,
+        values: &crate::stream::StreamValues,
     ) -> Result<(), DriverError> {
         let mut ownership = RecordingOwnership::default();
 
@@ -2798,6 +2782,7 @@ impl Submission {
             cmd_buf,
             0..self.graph.cmds.len(),
             ResourceSetSynchronization::DeferredToOuterBoundary,
+            Some(values),
         )?;
 
         Ok(())
@@ -3119,25 +3104,6 @@ impl Submission {
             }
             _ => vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
         }
-    }
-
-    fn whole_resource_canonical_accesses<'a>(
-        accesses: &'a [SubresourceAccess],
-        scratch: &'a mut Vec<AccessType>,
-    ) -> &'a [AccessType] {
-        scratch.clear();
-
-        let [access] = accesses else {
-            for access in accesses {
-                if !scratch.contains(&access.access) {
-                    scratch.push(access.access);
-                }
-            }
-
-            return scratch.as_slice();
-        };
-
-        slice::from_ref(&access.access)
     }
 
     fn attachment_read_write_access(
@@ -5546,6 +5512,7 @@ impl Submission {
                                     .filter(|barrier| !can_elide_sampled_read_barrier(*barrier)),
                                 );
                             }
+
                             tls.image_accesses = image_accesses;
 
                             let remove_transfers = pending_transfers
@@ -5856,6 +5823,7 @@ impl Submission {
         cmd_buf: &CommandBuffer,
         cmd_indices: impl IntoIterator<Item = usize>,
         resource_set_synchronization: ResourceSetSynchronization,
+        stream_values: Option<&crate::stream::StreamValues>,
     ) -> Result<(), DriverError> {
         #[cfg(feature = "checked")]
         let graph_id = self.graph.graph_id();
@@ -6068,6 +6036,7 @@ impl Submission {
                         &self.graph.resources,
                         &self.graph.resource_sets,
                         exec,
+                        stream_values,
                         #[cfg(feature = "checked")]
                         graph_id,
                     ));
@@ -6178,6 +6147,7 @@ impl Submission {
             cmd_buf,
             schedule.cmds.iter().copied(),
             ResourceSetSynchronization::Enabled,
+            None,
         )?;
 
         if include_final_timestamp_queries
@@ -6416,6 +6386,12 @@ impl Submission {
         }
     }
 
+    pub(crate) fn take_prepared_stream_recording(&mut self) -> PreparedStreamRecording {
+        PreparedStreamRecording {
+            resources: Mutex::new(take(&mut self.recorded_commands)),
+        }
+    }
+
     fn take_timestamp_queries_for_command(
         &mut self,
         command_idx: usize,
@@ -6602,6 +6578,25 @@ impl Submission {
 
         let end_pass_idx = self.graph.cmds.len();
         self.record_node_cmds(pool, cmd_buf, node_idx, end_pass_idx, ownership)
+    }
+
+    fn whole_resource_canonical_accesses<'a>(
+        accesses: &'a [SubresourceAccess],
+        scratch: &'a mut Vec<AccessType>,
+    ) -> &'a [AccessType] {
+        scratch.clear();
+
+        let [access] = accesses else {
+            for access in accesses {
+                if !scratch.contains(&access.access) {
+                    scratch.push(access.access);
+                }
+            }
+
+            return scratch.as_slice();
+        };
+
+        slice::from_ref(&access.access)
     }
 
     #[profiling::function]
@@ -7229,6 +7224,56 @@ struct TimestampQueryPoolInner {
     #[cfg(feature = "checked")]
     graph_id: Option<GraphId>,
     timestamps: Option<Box<[Option<Duration>]>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TrackedImageBarrier {
+    previous_accesses: ImageAccessSet,
+    next_access: AccessType,
+    previous_layout: ImageLayout,
+    next_layout: ImageLayout,
+    ownership_layouts: Option<ImageOwnershipLayouts>,
+    discard_contents: bool,
+    src_queue_family_index: u32,
+    dst_queue_family_index: u32,
+    image: vk::Image,
+    range: vk::ImageSubresourceRange,
+}
+
+impl TrackedImageBarrier {
+    fn new(
+        image: vk::Image,
+        prev_access: ImageAccessSet,
+        next_access: AccessType,
+        range: vk::ImageSubresourceRange,
+        transfer: Option<&ImageOwnershipTransfer>,
+        discard_contents: bool,
+    ) -> Self {
+        trace!(
+            "    image {:?} {:?} {:?}->{:?}",
+            image,
+            ImageSubresourceRangeDebug(range),
+            prev_access,
+            next_access,
+        );
+
+        Self {
+            next_access,
+            next_layout: image_access_layout(next_access),
+            previous_accesses: prev_access,
+            previous_layout: image_access_set_layout(prev_access),
+            ownership_layouts: transfer.map(|transfer| transfer.layouts),
+            discard_contents,
+            src_queue_family_index: transfer.map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                transfer.src_queue_family_index
+            }),
+            dst_queue_family_index: transfer.map_or(vk::QUEUE_FAMILY_IGNORED, |transfer| {
+                transfer.dst_queue_family_index
+            }),
+            image,
+            range,
+        }
+    }
 }
 
 #[doc(hidden)]
@@ -8219,6 +8264,7 @@ mod test {
             &mut acquired,
             |access| visited.push((access.resource_set_idx.as_usize(), access.access_type)),
         );
+
         assert_eq!(visited.len(), 3);
         assert_eq!(visited[0], (0, accesses[0].access_type));
         assert_eq!(visited[1], (1, accesses[1].access_type));
@@ -8239,6 +8285,7 @@ mod test {
             &mut acquired,
             |access| visited.push((access.resource_set_idx.as_usize(), access.access_type)),
         );
+
         assert_eq!(visited[3], (0, accesses[0].access_type));
     }
 
@@ -8705,6 +8752,7 @@ mod test {
 
         let mut accumulated = sampled_read_barrier(compute, ray_tracing);
         accumulated.previous_accesses = accumulated.previous_accesses.after_access(ray_tracing);
+
         assert!(super::can_elide_sampled_read_barrier(accumulated));
 
         assert!(!super::can_elide_sampled_read_barrier(
@@ -8713,6 +8761,7 @@ mod test {
 
         let mut layout_transition = sampled_read_barrier(compute, ray_tracing);
         layout_transition.next_layout = vk_sync::ImageLayout::General;
+
         assert!(!super::can_elide_sampled_read_barrier(layout_transition));
 
         let mut ownership_transfer = sampled_read_barrier(compute, ray_tracing);
@@ -8722,6 +8771,7 @@ mod test {
         });
         ownership_transfer.src_queue_family_index = 1;
         ownership_transfer.dst_queue_family_index = 2;
+
         assert!(!super::can_elide_sampled_read_barrier(ownership_transfer));
     }
 
@@ -8865,6 +8915,7 @@ mod test {
             AccessType::TransferWrite,
             true,
         );
+
         assert_eq!(discarded.old, vk::ImageLayout::UNDEFINED);
         assert_eq!(discarded.new, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
     }
@@ -8901,6 +8952,7 @@ mod test {
             .iter()
             .map(|resource_set_indices| {
                 let mut exec = Execution::default();
+
                 for &resource_set_idx in *resource_set_indices {
                     exec.push_resource_set_access(crate::ResourceSetAccess {
                         resource_set_idx: ResourceSetIndex::new(resource_set_idx),
@@ -8909,6 +8961,7 @@ mod test {
                         ),
                     });
                 }
+
                 exec
             })
             .collect();
@@ -11715,6 +11768,7 @@ mod test {
                 next_accesses: &next_accesses,
                 ..Default::default()
             }];
+
             assert!(barriers_require_sync2(None, None, &barriers, &[]));
         }
     }

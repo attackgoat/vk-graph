@@ -26,6 +26,7 @@ pub(crate) fn drop_fence_payloads(payloads: FencePayloads) -> bool {
     for payload in payloads {
         if catch_unwind(AssertUnwindSafe(|| drop(payload))).is_err() {
             all_succeeded = false;
+
             error!("fence payload panicked while being dropped");
         }
     }
@@ -97,11 +98,6 @@ impl Fence {
         })
     }
 
-    /// Drops an item after this fence signals.
-    pub(crate) fn drop_when_signaled(&self, x: impl Debug + Send + 'static) {
-        self.payloads.borrow_mut().push(Box::new(DeferredDrop(x)));
-    }
-
     pub(crate) fn drop_fence_droppable(&self, x: impl FenceDroppable + 'static) {
         self.payloads.borrow_mut().push(Box::new(x));
     }
@@ -143,6 +139,11 @@ impl Fence {
         if let Some(panic) = panic {
             resume_unwind(panic);
         }
+    }
+
+    /// Drops an item after this fence signals.
+    pub(crate) fn drop_when_signaled(&self, x: impl Debug + Send + 'static) {
+        self.payloads.borrow_mut().push(Box::new(DeferredDrop(x)));
     }
 
     #[deprecated = "use status"]
@@ -279,9 +280,6 @@ mod tests {
     #[derive(Debug)]
     struct CountDrop(Arc<AtomicUsize>);
 
-    #[derive(Debug)]
-    struct PanicDrop;
-
     impl FenceDroppable for CountDrop {}
 
     impl Drop for CountDrop {
@@ -290,25 +288,15 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct PanicDrop;
+
     impl FenceDroppable for PanicDrop {}
 
     impl Drop for PanicDrop {
         fn drop(&mut self) {
             panic!("expected test panic");
         }
-    }
-
-    #[test]
-    fn payload_drop_isolates_each_panic() {
-        let dropped = Arc::new(AtomicUsize::new(0));
-        let payloads: Vec<Box<dyn FenceDroppable>> = vec![
-            Box::new(PanicDrop),
-            Box::new(PanicDrop),
-            Box::new(CountDrop(Arc::clone(&dropped))),
-        ];
-
-        assert!(!drop_fence_payloads(payloads));
-        assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -326,5 +314,18 @@ mod tests {
 
         assert!(panic.is_some());
         assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn payload_drop_isolates_each_panic() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let payloads: Vec<Box<dyn FenceDroppable>> = vec![
+            Box::new(PanicDrop),
+            Box::new(PanicDrop),
+            Box::new(CountDrop(Arc::clone(&dropped))),
+        ];
+
+        assert!(!drop_fence_payloads(payloads));
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
 }

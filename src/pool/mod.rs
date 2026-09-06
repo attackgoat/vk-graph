@@ -450,6 +450,17 @@ impl PoolConfig {
         Default::default()
     }
 
+    /// Creates a `PoolConfig` with the given capacity for each resource bucket and descriptor cache.
+    pub const fn with_capacity(resource_capacity: usize) -> Self {
+        Self {
+            accel_struct_capacity: resource_capacity,
+            buffer_capacity: resource_capacity,
+            descriptor_pool_capacity: resource_capacity,
+            image_capacity: resource_capacity,
+            micromap_capacity: resource_capacity,
+        }
+    }
+
     fn default_cache<T>() -> Cache<T> {
         Cache::new(Mutex::new(Vec::with_capacity(
             Self::DEFAULT_RESOURCE_CAPACITY,
@@ -468,17 +479,6 @@ impl PoolConfig {
             descriptor_pool_capacity: Some(self.descriptor_pool_capacity),
             image_capacity: Some(self.image_capacity),
             micromap_capacity: Some(self.micromap_capacity),
-        }
-    }
-
-    /// Constructs a new `PoolConfig` with the given resource capacity for any single bucket.
-    pub const fn with_capacity(resource_capacity: usize) -> Self {
-        Self {
-            accel_struct_capacity: resource_capacity,
-            buffer_capacity: resource_capacity,
-            descriptor_pool_capacity: resource_capacity,
-            image_capacity: resource_capacity,
-            micromap_capacity: resource_capacity,
         }
     }
 }
