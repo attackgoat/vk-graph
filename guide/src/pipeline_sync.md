@@ -103,10 +103,11 @@ insert the `MicromapBuildWrite` to `AccelerationStructureBuildMicromapRead` depe
 
 The unsafe `build_acceleration_structures` and `build_acceleration_structures_indirect` commands
 use the same declarations for BUILD and UPDATE. Declare both AS read and write access for in-place
-updates, and `AccessType::General` for indirect AS range buffers. `IndirectBuffer` maps to
+updates, and `AccessType::AccelerationStructureBuildIndirectRead` for indirect AS range buffers.
+`IndirectBuffer` maps to
 `DRAW_INDIRECT`, not the required `ACCELERATION_STRUCTURE_BUILD_KHR` / `INDIRECT_COMMAND_READ`
-combination. `vk-sync` has no exact access type for this combination; `General` uses `ALL_COMMANDS`
-with memory read/write access, which is safe but may synchronize more work than needed. No dependencies
+combination. `General` remains a valid conservative fallback using `ALL_COMMANDS`
+with memory read/write access, but may synchronize more work than needed. No dependencies
 are inserted between entries of a build batch. Borrowed geometry and micromap usage slices must remain
 alive through recording; resources referenced by address must remain alive through GPU execution. Declarations
 do not validate address ranges, input contents, build flags, or non-overlap requirements. See the

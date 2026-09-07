@@ -219,6 +219,7 @@ access_type_u8_map! {
     74 => AccelerationStructureBuildMicromapRead,
     75 => MicromapBuildBufferRead,
     76 => MicromapBuildBufferWrite,
+    77 => AccelerationStructureBuildIndirectRead,
 }
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
@@ -853,6 +854,7 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | AccelerationStructureBuildRead
         | AccelerationStructureBufferWrite
         | AccelerationStructureBuildInputRead
+        | AccelerationStructureBuildIndirectRead
         | AccelerationStructureBuildScratchReadWrite
         | MicromapBuildInputRead
         | MicromapBuildScratchReadWrite
@@ -1025,6 +1027,10 @@ pub(super) const fn pipeline_stage_access_flags(
             access::COMMAND_PREPROCESS_READ_NV,
         ),
         ty::IndirectBuffer => (stage::DRAW_INDIRECT, access::INDIRECT_COMMAND_READ),
+        ty::AccelerationStructureBuildIndirectRead => (
+            stage::ACCELERATION_STRUCTURE_BUILD_KHR,
+            access::INDIRECT_COMMAND_READ,
+        ),
         ty::IndexBuffer => (stage::VERTEX_INPUT, access::INDEX_READ),
         ty::VertexBuffer => (stage::VERTEX_INPUT, access::VERTEX_ATTRIBUTE_READ),
         ty::VertexShaderReadUniformBuffer => (stage::VERTEX_SHADER, access::SHADER_READ),
@@ -1326,6 +1332,33 @@ mod test {
 
     #[test]
     fn acceleration_structure_build_buffer_accesses_are_precise() {
+        let indirect = AccessType::AccelerationStructureBuildIndirectRead;
+        assert_eq!(access_type_into_u8(indirect), 77);
+        assert_eq!(access_type_from_u8(77), indirect);
+        assert!(is_read_access(indirect));
+        assert!(!is_write_access(indirect));
+        assert_eq!(
+            pipeline_stage_access_flags(indirect),
+            (
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                vk::AccessFlags::INDIRECT_COMMAND_READ,
+            )
+        );
+        assert_eq!(
+            pipeline_stage_access_flags(AccessType::IndirectBuffer),
+            (
+                vk::PipelineStageFlags::DRAW_INDIRECT,
+                vk::AccessFlags::INDIRECT_COMMAND_READ
+            )
+        );
+        assert_eq!(
+            pipeline_stage_access_flags(AccessType::General),
+            (
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+            )
+        );
+
         let input = AccessType::AccelerationStructureBuildInputRead;
         assert_eq!(access_type_into_u8(input), 68);
         assert_eq!(access_type_from_u8(68), input);

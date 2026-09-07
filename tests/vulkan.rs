@@ -73,7 +73,9 @@ fn vulkan_acceleration_structure_commands() -> Result<(), vk_graph::driver::Driv
                     AccelerationStructureGeometryData, AccelerationStructureInfo,
                 },
                 buffer::{Buffer, BufferInfo},
+                compute::{ComputePipeline, ComputePipelineInfo},
                 device::{Device, DeviceInfo},
+                shader::Shader,
             },
             pool::hash::HashPool,
         },
@@ -281,21 +283,21 @@ fn vulkan_acceleration_structure_commands() -> Result<(), vk_graph::driver::Driv
     let indirect_supported = support.features.acceleration_structure_indirect_build;
 
     if indirect_supported {
-        let range_words = [1u32, 0, 0, 0];
         let stride = size_of::<vk::AccelerationStructureBuildRangeInfoKHR>() as u32;
 
         assert_eq!(stride, 16);
 
-        let mut indirect = Buffer::create(
+        let indirect = Buffer::create(
             &device,
-            BufferInfo::host_mem(
+            BufferInfo::device_mem(
                 stride as _,
-                vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                vk::BufferUsageFlags::INDIRECT_BUFFER
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
             )
             .into_builder()
             .alignment(4),
         )?;
-        indirect.copy_from_slice(0, bytemuck::cast_slice(&range_words));
         let indirect = graph.bind_resource(indirect);
         let indirect_address = graph.resource(indirect).device_address();
 
@@ -304,18 +306,40 @@ fn vulkan_acceleration_structure_commands() -> Result<(), vk_graph::driver::Driv
 
         graph
             .begin_cmd()
+            .debug_name("compute write AS indirect ranges")
+            .bind_pipeline(ComputePipeline::create(
+                &device,
+                ComputePipelineInfo::default(),
+                Shader::new_compute(
+                    vk_shader_macros::glsl!(
+                        r#"
+                        #version 460 core
+                        #pragma shader_stage(compute)
+                        layout(local_size_x = 1) in;
+                        layout(binding = 0, std430) writeonly buffer Ranges { uvec4 range; };
+                        void main() { range = uvec4(1, 0, 0, 0); }
+                        "#
+                    )
+                    .as_slice(),
+                ),
+            )?)
+            .shader_resource_access(0, indirect, AccessType::ComputeShaderWrite)
+            .record_cmd(|cmd| {
+                cmd.dispatch(1, 1, 1);
+            });
+
+        graph
+            .begin_cmd()
             .debug_name("AS indirect rebuild")
             .resource_access(input, AccessType::AccelerationStructureBuildInputRead)
-            // IndirectBuffer uses the draw-indirect stage, not the acceleration structure
-            // build stage.
-            .resource_access(indirect, AccessType::General)
+            .resource_access(indirect, AccessType::AccelerationStructureBuildIndirectRead)
             .resource_access(c, AccessType::AccelerationStructureBuildWrite)
             .resource_access(
                 scratch_a,
                 AccessType::AccelerationStructureBuildScratchReadWrite,
             )
             .record_cmd(move |cmd| {
-                // SAFETY: The feature is supported; graph-owned, initialized range bytes
+                // SAFETY: The feature is supported; graph-owned, compute-written range bytes
                 // describe one triangle within the queried maximum. C and scratch reuse
                 // are synchronized after the direct update; BUILD has no source.
                 unsafe {
@@ -352,7 +376,7 @@ fn vulkan_acceleration_structure_commands() -> Result<(), vk_graph::driver::Driv
 
     if indirect_supported {
         eprintln!(
-            "Executed 1 indirect AS BUILD command; total 4 AS commands, 3 BUILD + 2 UPDATE entries; fence signaled"
+            "Executed compute write -> range buffer -> indirect AS BUILD with AccelerationStructureBuildIndirectRead; total 4 AS commands, 3 BUILD + 2 UPDATE entries; fence signaled"
         );
     }
 

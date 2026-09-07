@@ -1880,6 +1880,9 @@ where
                                 .wait_dst_stage_mask(tls.wait_stage_masks.as_slice());
                         }
 
+                        #[cfg(test)]
+                        test::fail_queue_submit()?;
+
                         Device::queue_submit(
                             device,
                             queue,
@@ -1942,6 +1945,9 @@ where
                                 submit_info.signal_semaphore_infos(tls.signal_infos.as_slice());
                         }
 
+                        #[cfg(test)]
+                        test::fail_queue_submit()?;
+
                         Device::queue_submit2(
                             device,
                             queue,
@@ -1965,6 +1971,11 @@ where
         let timestamp_query_graph_id = state.submission.graph.graph_id();
 
         let submitted_timestamps = Self::attach_locked(&mut state, command_buffer, queue_index);
+        // Only commands actually recorded into this submission reached the successful
+        // queue submit above. Unselected graph commands remain pending.
+        for command in &state.submission.submit_retained {
+            command.cmd.tracking.signal_submitted();
+        }
         drop(state);
 
         #[cfg(feature = "checked")]
@@ -8480,6 +8491,176 @@ mod test {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    thread_local! {
+        static FAIL_QUEUE_SUBMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    // Inject at the Vulkan call boundary, before any success publication or fence attachment.
+    pub(super) fn fail_queue_submit() -> Result<(), DriverError> {
+        if FAIL_QUEUE_SUBMIT.replace(false) {
+            Err(DriverError::InvalidData)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn submission_milestone_failed_submit_and_unsubmitted_drop() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let mut pool = HashPool::new(&device);
+        for reject_submit in [false, true] {
+            let mut graph = Graph::new();
+            let buffer = graph.bind_resource(Buffer::create(
+                &device,
+                BufferInfo::device_mem(4, vk::BufferUsageFlags::TRANSFER_DST),
+            )?);
+            let mut cmd = graph.begin_cmd();
+            let execution = cmd.track_execution();
+            cmd.fill_buffer(buffer, 0..4, 7).end_cmd();
+            let mut cmd_buf = pool.resource(CommandBufferInfo::new(0))?;
+            cmd_buf.begin(&vk::CommandBufferBeginInfo::default())?;
+            let recording =
+                graph
+                    .finalize()
+                    .record(&mut pool, &mut cmd_buf, RecordSelection::All)?;
+            recording.cmd_buf.end()?;
+            let mut recorded = recording.finish()?;
+            assert_eq!(execution.has_submitted(), Ok(false));
+            if reject_submit {
+                let mut fence = Fence::create(&device, false)?;
+                let waits = [super::SemaphoreSubmitInfo {
+                    semaphore: vk::Semaphore::null(),
+                    stage_mask: vk::PipelineStageFlags2::COPY,
+                    value: 0,
+                }];
+                assert!(
+                    recorded
+                        .queue_submit(
+                            &mut fence,
+                            0,
+                            QueueSubmitInfo::QueueSubmit {
+                                waits: &waits,
+                                signals: &[]
+                            }
+                        )
+                        .is_err()
+                );
+                assert!(!fence.is_queued());
+                assert_eq!(execution.has_submitted(), Ok(false));
+                assert_eq!(execution.has_executed(), Ok(false));
+                for submit in [
+                    QueueSubmitInfo::QUEUE_SUBMIT,
+                    QueueSubmitInfo::QUEUE_SUBMIT2,
+                ] {
+                    FAIL_QUEUE_SUBMIT.set(true);
+                    assert!(recorded.queue_submit(&mut fence, 0, submit).is_err());
+                    assert!(
+                        !FAIL_QUEUE_SUBMIT.replace(false),
+                        "submit did not reach Vulkan boundary"
+                    );
+                    assert!(!fence.is_queued());
+                    assert_eq!(execution.has_submitted(), Ok(false));
+                    assert_eq!(execution.has_executed(), Ok(false));
+                }
+            }
+            drop(recorded);
+            assert_eq!(
+                execution.has_submitted(),
+                Err(crate::CommandExecutionAbandoned)
+            );
+            assert_eq!(
+                execution.has_executed(),
+                Err(crate::CommandExecutionAbandoned)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device with timeline semaphores and synchronization2"]
+    fn submission_milestone_partial_recording_before_fence() -> Result<(), DriverError> {
+        let device = test_device()?;
+        let mut pool = HashPool::new(&device);
+        let mut graph = Graph::new();
+        let mut nodes = Vec::new();
+        let mut executions = Vec::new();
+        for value in [7, 9] {
+            let buffer = graph.bind_resource(Buffer::create(
+                &device,
+                BufferInfo::device_mem(4, vk::BufferUsageFlags::TRANSFER_DST),
+            )?);
+            nodes.push(buffer);
+            let mut cmd = graph.begin_cmd();
+            executions.push(cmd.track_execution());
+            cmd.fill_buffer(buffer, 0..4, value).end_cmd();
+        }
+        let mut cmd_buf = pool.resource(CommandBufferInfo::new(0))?;
+        cmd_buf.begin(&vk::CommandBufferBeginInfo::default())?;
+        let recording = graph.finalize().record(&mut pool, &mut cmd_buf, nodes[0])?;
+        recording.cmd_buf.end()?;
+        let mut recorded = recording.finish()?;
+        let mut fence = Fence::create(&device, false)?;
+        let mut timeline =
+            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+        let semaphore = unsafe {
+            device.create_semaphore(
+                &vk::SemaphoreCreateInfo::default().push_next(&mut timeline),
+                None,
+            )
+        }
+        .unwrap();
+        let waits = [super::SemaphoreSubmit2Info {
+            semaphore,
+            value: 1,
+            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            device_index: 0,
+        }];
+        // Always release the timeline before dropping a queued fence, including assertion unwind.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recorded
+                .queue_submit(
+                    &mut fence,
+                    0,
+                    QueueSubmitInfo::QueueSubmit2 {
+                        waits: &waits,
+                        signals: &[],
+                    },
+                )
+                .unwrap();
+            assert_eq!(executions[0].has_submitted(), Ok(true));
+            assert_eq!(executions[0].has_executed(), Ok(false));
+            assert_eq!(executions[1].has_submitted(), Ok(false));
+            assert!(!fence.status().unwrap());
+            assert_eq!(executions[0].has_executed(), Ok(false));
+        }));
+        unsafe {
+            device.signal_semaphore(
+                &vk::SemaphoreSignalInfo::default()
+                    .semaphore(semaphore)
+                    .value(1),
+            )
+        }
+        .unwrap();
+        if fence.is_queued() {
+            fence.wait()?;
+        }
+        unsafe {
+            device.destroy_semaphore(semaphore, None);
+        }
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+        assert_eq!(executions[0].has_executed(), Ok(true));
+        drop(recorded);
+        assert_eq!(executions[0].has_submitted(), Ok(true));
+        assert_eq!(
+            executions[1].has_submitted(),
+            Err(crate::CommandExecutionAbandoned)
+        );
+        Ok(())
     }
 
     fn assert_no_invalid_attachment_stage_access_pairs(dep: &SubpassDependency) {

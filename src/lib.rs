@@ -110,27 +110,38 @@ impl AtomicCommandExecution {
     const PENDING: u8 = 0xf0;
     const EXECUTED: u8 = 0xf1;
     const ABANDONED: u8 = 0xf2;
+    const SUBMITTED: u8 = 0xf3;
+    const SUBMITTED_ABANDONED: u8 = 0xf4;
 
     fn new_pending() -> Arc<Self> {
         Arc::new(Self(AtomicU8::new(Self::PENDING)))
     }
 
     fn compare_pending_exchange_abandoned(&self) {
+        let _ = self
+            .0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
+                Self::PENDING => Some(Self::ABANDONED),
+                Self::SUBMITTED => Some(Self::SUBMITTED_ABANDONED),
+                _ => None,
+            });
+    }
+
+    fn signal_submitted(&self) {
         let _ = self.0.compare_exchange(
             Self::PENDING,
-            Self::ABANDONED,
+            Self::SUBMITTED,
             Ordering::AcqRel,
             Ordering::Acquire,
         );
     }
 
     fn compare_pending_exchange_executed(&self) {
-        let _ = self.0.compare_exchange(
-            Self::PENDING,
-            Self::EXECUTED,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        let _ = self
+            .0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                matches!(state, Self::PENDING | Self::SUBMITTED).then_some(Self::EXECUTED)
+            });
     }
 
     fn load(&self) -> u8 {
@@ -149,13 +160,26 @@ impl Drop for AtomicCommandExecution {
 pub struct CommandExecution(Arc<AtomicCommandExecution>);
 
 impl CommandExecution {
+    /// Returns `true` after a successful Vulkan queue submission of this command.
+    /// This milestone is sticky, including if completion is later abandoned. It does not
+    /// imply fence completion or replace queue ordering and resource barriers. Never waits.
+    /// Returns `Ok(false)` while unsubmitted, or [`CommandExecutionAbandoned`] if discarded
+    /// before submission. A failed submit attempt leaves a retained recording unsubmitted.
+    pub fn has_submitted(&self) -> Result<bool, CommandExecutionAbandoned> {
+        match self.0.load() {
+            AtomicCommandExecution::PENDING => Ok(false),
+            AtomicCommandExecution::ABANDONED => Err(CommandExecutionAbandoned),
+            _ => Ok(true),
+        }
+    }
+
     /// Returns `true` when the tracked command has completed device execution.
     ///
     /// Returns [`CommandExecutionAbandoned`] if the graph command can no longer execute, such as
     /// when the graph, submission, or queued work was dropped before successful completion.
     pub fn has_executed(&self) -> Result<bool, CommandExecutionAbandoned> {
         match self.0.load() {
-            AtomicCommandExecution::PENDING => Ok(false),
+            AtomicCommandExecution::PENDING | AtomicCommandExecution::SUBMITTED => Ok(false),
             AtomicCommandExecution::EXECUTED => Ok(true),
             _ => Err(CommandExecutionAbandoned),
         }
@@ -231,6 +255,10 @@ impl CommandExecutions {
 
     fn signal_executed(&self) {
         self.for_each(AtomicCommandExecution::compare_pending_exchange_executed);
+    }
+
+    fn signal_submitted(&self) {
+        self.for_each(AtomicCommandExecution::signal_submitted);
     }
 
     fn track(&mut self) -> CommandExecution {
@@ -732,11 +760,11 @@ impl ExecutionAccess {
     }
 
     fn freeze(&mut self) {
-        let Self::Building(builder) = mem::take(self) else {
+        let Self::Building(builder) = self else {
             return;
         };
 
-        let ExecutionAccessBuilder { entries, lookup } = builder;
+        let ExecutionAccessBuilder { entries, lookup } = mem::take(builder);
         let entries = entries
             .into_iter()
             .map(|entry| NodeAccess {
@@ -1958,7 +1986,11 @@ impl GraphId {
     fn next() -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+        Self(
+            NEXT_ID
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .expect("graph identity overflow"),
+        )
     }
 }
 
@@ -2439,12 +2471,55 @@ mod test {
     use crate::pool::{Pool, hash::HashPool};
 
     #[test]
+    fn freezing_stream_accesses_again_preserves_declarations_and_remapping() {
+        use {
+            super::ExecutionAccess,
+            crate::cmd::{SubresourceAccess, SubresourceRange},
+            vk_sync::AccessType,
+        };
+
+        let mut accesses = ExecutionAccess::default();
+        for access in [AccessType::VertexBuffer, AccessType::IndirectBuffer] {
+            accesses.push(
+                3,
+                SubresourceAccess {
+                    access,
+                    subresource: SubresourceRange::Buffer((0..64).into()),
+                },
+            );
+        }
+        for _ in 0..3 {
+            accesses.freeze();
+            assert!(accesses.contains(3));
+            assert_eq!(accesses.iter().len(), 1);
+            let (node, ranges) = accesses.iter().next().unwrap();
+            assert_eq!(node, 3);
+            assert_eq!(ranges.len(), 2);
+            assert_eq!(ranges[0].access, AccessType::VertexBuffer);
+            assert_eq!(ranges[1].access, AccessType::IndirectBuffer);
+            assert!(
+                matches!(ranges[0].subresource, SubresourceRange::Buffer(range)
+                if range.start == 0 && range.end == 64)
+            );
+        }
+
+        let mut rebound = accesses.clone();
+        rebound.remap_nodes(&[0, 1, 2, 9]);
+        rebound.freeze();
+        assert!(accesses.contains(3));
+        assert!(rebound.contains(9));
+        assert!(!rebound.contains(3));
+        assert_eq!(rebound.iter().next().unwrap().1.len(), 2);
+    }
+
+    #[test]
     fn command_execution_starts_pending() {
         let mut graph = Graph::new();
         let mut cmd = graph.begin_cmd();
         let execution = cmd.track_execution();
 
         assert_eq!(execution.has_executed(), Ok(false));
+        assert_eq!(execution.has_submitted(), Ok(false));
     }
 
     #[test]
@@ -2457,6 +2532,38 @@ mod test {
         };
 
         assert_eq!(execution.has_executed(), Err(CommandExecutionAbandoned));
+        assert_eq!(execution.has_submitted(), Err(CommandExecutionAbandoned));
+    }
+
+    #[test]
+    fn command_execution_submission_is_sticky_without_claiming_completion() {
+        let mut executions = CommandExecutions::default();
+        let execution = executions.track();
+        executions.signal_submitted();
+        assert_eq!(execution.has_submitted(), Ok(true));
+        assert_eq!(execution.has_executed(), Ok(false));
+        executions.signal_abandoned();
+        assert_eq!(execution.has_submitted(), Ok(true));
+        assert_eq!(execution.has_executed(), Err(CommandExecutionAbandoned));
+    }
+
+    #[test]
+    fn command_execution_submission_then_completion() {
+        let mut executions = CommandExecutions::default();
+        let execution = executions.track();
+        executions.signal_submitted();
+        executions.signal_executed();
+        executions.signal_abandoned();
+        assert_eq!(execution.has_submitted(), Ok(true));
+        assert_eq!(execution.has_executed(), Ok(true));
+    }
+
+    #[test]
+    #[cfg(feature = "checked")]
+    fn graph_identity_is_stable_and_unique() {
+        let graph = Graph::new();
+        assert_eq!(graph.graph_id(), graph.graph_id());
+        assert_ne!(graph.graph_id(), Graph::new().graph_id());
     }
 
     #[test]

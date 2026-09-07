@@ -76,6 +76,7 @@ fn access_writes(access: AccessType) -> bool {
             | AccessType::RayTracingShaderReadOther
             | AccessType::AccelerationStructureBuildRead
             | AccessType::AccelerationStructureBuildInputRead
+            | AccessType::AccelerationStructureBuildIndirectRead
             | AccessType::MicromapBuildInputRead
             | AccessType::MicromapBuildRead
             | AccessType::MicromapBuildBufferRead
@@ -308,7 +309,7 @@ impl Fixture {
                     }
 
                     let access_value = reader.u8()?;
-                    if access_value > 76 {
+                    if access_value > 77 {
                         return Err(invalid_data("invalid access type"));
                     }
 
@@ -839,6 +840,31 @@ mod test {
     #[test]
     fn micromap_build_input_is_read_only() {
         assert!(!access_writes(AccessType::MicromapBuildInputRead));
+    }
+
+    #[test]
+    fn acceleration_structure_indirect_access_round_trips_as_read_only() {
+        let access = AccessType::AccelerationStructureBuildIndirectRead;
+        assert!(!access_writes(access));
+        let mut writer = FixtureWriter::default();
+        writer.bytes(MAGIC);
+        writer.count(1, "resource count").unwrap();
+        writer.count(1, "command count").unwrap();
+        writer.write_resource(&AnyResource::BufferArg(BufferInfo::device_mem(
+            16,
+            vk::BufferUsageFlags::INDIRECT_BUFFER,
+        )));
+        writer.count(1, "execution count").unwrap();
+        writer.count(1, "access count").unwrap();
+        writer.u32(0);
+        writer.u8(driver::access_type_into_u8(access));
+        writer.write_subresource(SubresourceRange::Buffer(BufferSubresourceRange {
+            start: 0,
+            end: 16,
+        }));
+        let bytes = writer.finish().unwrap();
+        let fixture = read_fixture_bytes("indirect_as_read", &bytes).unwrap();
+        assert_eq!(fixture.commands[0].execs[0].accesses[0].access, access);
     }
 
     fn fixture_paths(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {

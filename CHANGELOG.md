@@ -20,7 +20,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   binding through `CommandStreamRun::with_args`.
 - Stream shader-resource and image-view declarations, plus populated descriptor-set binding
   through `StreamPipelineCommand::bind_descriptor_set`.
+- `CommandExecution::has_submitted` distinguishes successful queue submission from recording,
+  abandonment, and fence completion, including partial submissions, without a CPU wait.
+- Caller-owned command streams retain callback captures through GPU completion, supporting
+  external query-pool lifetime management with declared attachments and shader resources.
 - Separate acceleration-structure build-input and scratch-buffer access types.
+- `AccelerationStructureBuildIndirectRead` for exact indirect-range synchronization, with read-only
+  tracking and legacy/synchronization2 mappings; `General` remains a conservative fallback.
 
 ### Changed
 
@@ -45,6 +51,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Preserve already-frozen resource accesses when an unprepared stream is inserted and the
+  parent graph is finalized; repeated freezing no longer clears the access declarations.
+- Prefer cached coherent host memory for readable/read-write buffers.
 - Prevent prepared-stream invocations from overwriting automatic descriptor sets still used by
   earlier submissions.
 - Preserve buffer and acceleration-structure write dependencies across subsequent reads, and

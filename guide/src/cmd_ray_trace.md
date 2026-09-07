@@ -89,11 +89,12 @@ slice per build and one range per geometry. The unsafe indirect method takes `in
 points to strided Vulkan build ranges, one per geometry; outer arrays have one entry per build.
 Counts must not exceed the limits used in the size query. Indirect builds require the enabled
 `acceleration_structure_indirect_build` feature, four-byte-aligned addresses and strides, and
-`INDIRECT_BUFFER | SHADER_DEVICE_ADDRESS` buffers declared as `AccessType::General`.
+`INDIRECT_BUFFER | SHADER_DEVICE_ADDRESS` buffers declared as
+`AccessType::AccelerationStructureBuildIndirectRead`.
 Do not use `AccessType::IndirectBuffer` for indirect AS ranges: it maps to `DRAW_INDIRECT`, while
 Vulkan reads these ranges at `ACCELERATION_STRUCTURE_BUILD_KHR` with `INDIRECT_COMMAND_READ`.
-`vk-sync` has no exact access type for this combination. `General` uses `ALL_COMMANDS` with
-memory read/write access, which is safe but may synchronize more work than needed.
+`General` remains a valid conservative fallback: it uses `ALL_COMMANDS` with memory read/write
+access, which is safe but may synchronize more work than needed.
 
 Both commands are unsafe. A batch may mix BUILD and UPDATE entries, but entries are not synchronized
 with each other.

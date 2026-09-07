@@ -8,6 +8,14 @@ API docs: [`GraphicsCommandRef::draw`](https://docs.rs/vk-graph/latest/vk_graph/
 [`GraphicsCommandRef::draw_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw_indirect),
 [`GraphicsCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.push_constants).
 
+For external objects such as debug pipeline-statistics query pools, capture their owner in a
+caller-owned `CommandStream` graphics `record_cmd` callback. Build an unprepared stream with
+`CommandStream::finalize(...).into_stream()`, declare attachments and shader-resource accesses
+using stream arguments, then bind parent graph resources with `insert_cmd_stream(...).with_arg(...)`.
+The inserted callbacks retain their captures through submission completion even after the caller
+drops its stream and owner handles. Ordinary graph `record_cmd` callbacks are one-shot and do not
+provide that lifetime.
+
 ## Available Commands
 
 Command | Typical use

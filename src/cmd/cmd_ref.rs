@@ -223,10 +223,10 @@ impl<'a> CommandRef<'a> {
     /// `accelerationStructureIndirectBuild` feature must be enabled. Indirect buffers must remain
     /// alive, bound, and unchanged during reads, with `INDIRECT_BUFFER` and `SHADER_DEVICE_ADDRESS` usage. Addresses and
     /// strides must be multiples of four, and each range's primitive count must not exceed its
-    /// corresponding maximum. Declare [`vk_sync::AccessType::General`] for range buffers and
-    /// synchronize their producers. This conservatively uses `ALL_COMMANDS` and
-    /// `MEMORY_READ | MEMORY_WRITE`: vk-sync has no exact access type for indirect reads during
-    /// acceleration structure builds, and `IndirectBuffer` uses the wrong stage for these reads.
+    /// corresponding maximum. Declare [`vk_sync::AccessType::AccelerationStructureBuildIndirectRead`]
+    /// for range buffers and synchronize their producers. This uses `ACCELERATION_STRUCTURE_BUILD_KHR`
+    /// and `INDIRECT_COMMAND_READ`; `IndirectBuffer` uses the wrong stage for these reads.
+    /// `General` remains a valid conservative fallback (`ALL_COMMANDS`, `MEMORY_READ | MEMORY_WRITE`).
     /// Size queries must cover the supplied maximum primitive counts.
     ///
     /// ```compile_fail,E0133
