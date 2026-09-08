@@ -937,7 +937,7 @@ impl PhysicalDevice {
         let features_v1_1 = features_v1_1.into();
         let features_v1_2 = features_v1_2.into();
         vk_ext_index_type_uint8 &= index_type_u8_features.index_type_uint8 == vk::TRUE;
-        vk_khr_present_id &= present_id_features.present_id == vk::TRUE;
+        vk_khr_present_id &= vk_khr_swapchain && present_id_features.present_id == vk::TRUE;
         vk_khr_present_wait &= present_wait_features.present_wait == vk::TRUE && vk_khr_present_id;
         vk_khr_ray_query &= ray_query_features.ray_query == vk::TRUE;
         vk_khr_synchronization2 &= synchronization2_features.synchronization2 == vk::TRUE;

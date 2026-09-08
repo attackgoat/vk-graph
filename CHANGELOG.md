@@ -51,6 +51,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Do not enable presentation extensions on headless devices without their swapchain dependency.
 - Preserve already-frozen resource accesses when an unprepared stream is inserted and the
   parent graph is finalized; repeated freezing no longer clears the access declarations.
 - Prefer cached coherent host memory for readable/read-write buffers.
