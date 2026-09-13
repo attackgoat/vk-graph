@@ -53,6 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Fix missing stencil synchronization when depth layers or mip levels have different prior accesses.
 - Correct subpass synchronization for multiple resource accesses, uniform-buffer reads, and
   depth/stencil resolves.
 - Do not enable presentation extensions on headless devices without their swapchain dependency.

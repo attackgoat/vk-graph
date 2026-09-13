@@ -873,6 +873,13 @@ impl DenseMapCursor {
                 return Some((prev_value, range));
             }
 
+            // Only a complete layer/mip rectangle can absorb another whole aspect.
+            if range.base_array_layer != self.range.base_array_layer
+                || range.base_mip_level != self.range.base_mip_level
+            {
+                return Some((prev_value, range));
+            }
+
             let end_array_layer = self.range.base_array_layer + self.range.layer_count;
             let end_mip_level = self.range.base_mip_level + self.range.level_count;
 
@@ -5276,10 +5283,12 @@ mod test {
             AccessType::Nothing,
         );
         let mut data = vec![AccessType::Nothing; total];
+        let mut covered = vec![false; total];
 
         let aspect_bits = format_aspect_mask(fmt);
 
-        for _ in 0..FUZZ_COUNT {
+        for iteration in 0..FUZZ_COUNT {
+            covered.fill(false);
             let new_access = ACCESS_TYPES[rng.random_range(..ACCESS_TYPES.len())];
 
             // Pick a valid aspect mask from the format's supported aspects
@@ -5296,10 +5305,14 @@ mod test {
             let mip_start = rng.random_range(..mip_level_count);
             let mip_end = rng.random_range(mip_start + 1..=mip_level_count);
 
-            let range =
+            let requested =
                 image_subresource_range(aspect_mask, layer_start..layer_end, mip_start..mip_end);
 
-            for (prev, range) in access_map.swap(new_access, range) {
+            for (prev, range) in access_map.swap(new_access, requested) {
+                assert!(
+                    super::image_subresource_range_contains(requested, range),
+                    "out-of-range coverage at iteration {iteration}: requested {requested:?}, returned {range:?}"
+                );
                 let range_mask = range.aspect_mask.as_raw();
                 for ai in 0..range_mask.count_ones() as u8 {
                     let bit = range_mask.trailing_zeros() + ai as u32;
@@ -5309,6 +5322,10 @@ mod test {
                             let idx = (l * aspect_count as u32 * mip_level_count
                                 + m * aspect_count as u32
                                 + a as u32) as usize;
+                            assert!(
+                                !std::mem::replace(&mut covered[idx], true),
+                                "duplicate coverage at iteration {iteration}: aspect={a} layer={l} mip={m}"
+                            );
                             assert_eq!(
                                 data[idx], prev,
                                 "prev mismatch at aspect={a} layer={l} mip={m} idx={idx}: expected {prev:?}, got {:?}",
@@ -5327,6 +5344,10 @@ mod test {
                 for l in layer_start..layer_end {
                     for m in mip_start..mip_end {
                         let idx = access_map.idx(a, l, m);
+                        assert!(
+                            covered[idx],
+                            "missing coverage at iteration {iteration}: aspect={a} layer={l} mip={m} requested {requested:?}"
+                        );
                         data[idx] = new_access;
                     }
                 }
@@ -5380,10 +5401,12 @@ mod test {
         let access = Access::new(info, AccessType::Nothing);
         let dense = Mutex::new(None);
         let mut data = vec![ImageAccessSet::from_access(AccessType::Nothing); total];
+        let mut covered = vec![false; total];
 
         let aspect_bits = format_aspect_mask(fmt);
 
-        for _ in 0..FUZZ_COUNT {
+        for iteration in 0..FUZZ_COUNT {
+            covered.fill(false);
             let new_access = ACCESS_TYPES[rng.random_range(..ACCESS_TYPES.len())];
 
             let aspect_mask = if aspect_count == 2 && rng.random_bool(0.5) {
@@ -5404,6 +5427,10 @@ mod test {
             let resolved = info.resolve_subresource_counts(range);
 
             for (prev, returned_range) in access.swap(&dense, info, new_access, resolved) {
+                assert!(
+                    super::image_subresource_range_contains(resolved, returned_range),
+                    "out-of-range coverage at iteration {iteration}: requested {resolved:?}, returned {returned_range:?}"
+                );
                 let range_mask = returned_range.aspect_mask.as_raw();
                 for ai in 0..range_mask.count_ones() as u8 {
                     let bit = range_mask.trailing_zeros() + ai as u32;
@@ -5417,6 +5444,10 @@ mod test {
                             let idx = (l * aspect_count as u32 * mip_level_count
                                 + m * aspect_count as u32
                                 + a as u32) as usize;
+                            assert!(
+                                !std::mem::replace(&mut covered[idx], true),
+                                "duplicate coverage at iteration {iteration}: aspect={a} layer={l} mip={m}"
+                            );
                             assert_eq!(
                                 data[idx], prev,
                                 "prev mismatch at aspect={a} layer={l} mip={m} idx={idx}: expected {prev:?}, got {:?}",
@@ -5437,6 +5468,10 @@ mod test {
                         let idx = (l * aspect_count as u32 * mip_level_count
                             + m * aspect_count as u32
                             + a as u32) as usize;
+                        assert!(
+                            covered[idx],
+                            "missing coverage at iteration {iteration}: aspect={a} layer={l} mip={m} requested {resolved:?}"
+                        );
                         data[idx] = data[idx].after_access(new_access);
                     }
                 }
