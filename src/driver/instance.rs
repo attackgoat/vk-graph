@@ -32,178 +32,14 @@ use {
     },
 };
 
-#[cfg(any(not(target_os = "macos"), feature = "loaded"))]
-const SKIP_VALIDATION_PARK_ENV: &str = "VK_GRAPH_SKIP_VALIDATION_PARK";
-
 #[cfg(target_os = "macos")]
 use std::env::set_var;
 
 #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
-unsafe extern "system" fn debug_callback(
-    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-    _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
-    callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
-    _user_data: *mut c_void,
-) -> vk::Bool32 {
-    if panicking() {
-        return vk::FALSE;
-    }
+const SKIP_VALIDATION_PARK_ENV: &str = "VK_GRAPH_SKIP_VALIDATION_PARK";
 
-    assert!(!callback_data.is_null());
-
-    let callback_data = unsafe { &*callback_data };
-    let message = if callback_data.p_message.is_null() {
-        "<missing Vulkan validation message>"
-    } else {
-        unsafe { CStr::from_ptr(callback_data.p_message) }
-            .to_str()
-            .unwrap_or("<invalid Vulkan validation message>")
-    };
-
-    if !callback_data.p_message_id_name.is_null() {
-        let vuid = unsafe { CStr::from_ptr(callback_data.p_message_id_name) }
-            .to_str()
-            .unwrap_or("<invalid Vulkan validation message ID name>");
-        if vuid != "Loader Message" {
-            debug!("{vuid}");
-        }
-    };
-
-    let is_error = message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR);
-
-    if is_error {
-        error!("{message}");
-    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING)
-        && !var("VK_GRAPH_DEBUG_IGNORE_WARNING")
-            .map(var_value_is_set)
-            .unwrap_or_default()
-    {
-        warn!("{message}");
-    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::INFO)
-        && !var("VK_GRAPH_DEBUG_IGNORE_INFO")
-            .map(var_value_is_set)
-            .unwrap_or_default()
-    {
-        info!("{message}");
-    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE)
-        && !var("VK_GRAPH_DEBUG_IGNORE_VERBOSE")
-            .map(var_value_is_set)
-            .unwrap_or_default()
-    {
-        debug!("{message}");
-    }
-
-    if !is_error {
-        return vk::FALSE;
-    }
-
-    if !logger().enabled(&Metadata::builder().level(Level::Debug).build())
-        || var("RUST_LOG")
-            .map(|rust_log| rust_log.is_empty())
-            .unwrap_or(true)
-    {
-        eprintln!(
-            "note: run with `RUST_LOG=trace` environment variable to display more information"
-        );
-        eprintln!("note: see https://github.com/rust-lang/log#in-executables");
-        abort()
-    }
-
-    if current().name() != Some("main") {
-        warn!("invalid validation callback thread: child thread")
-    }
-
-    if var(SKIP_VALIDATION_PARK_ENV)
-        .map(var_value_is_set)
-        .unwrap_or_default()
-    {
-        warn!("validation callback park skipped; execution will continue");
-
-        return vk::FALSE;
-    }
-
-    if !stderr().is_terminal() {
-        warn!("validation callback park skipped; stderr is not an interactive terminal");
-
-        return vk::FALSE;
-    }
-
-    debug!(
-        "parking validation callback thread `{}` for debugger attach to pid {}",
-        current().name().unwrap_or_default(),
-        id()
-    );
-
-    logger().flush();
-    park();
-
-    vk::FALSE
-}
-
-fn debug_extension_names() -> &'static [&'static CStr] {
-    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
-    return &[ext::debug_utils::NAME];
-
-    #[cfg(all(target_os = "macos", not(feature = "loaded")))]
-    return &[];
-}
-
-fn debug_layer_names() -> &'static [&'static CStr] {
-    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
-    return &[c"VK_LAYER_KHRONOS_validation"];
-
-    #[cfg(all(target_os = "macos", not(feature = "loaded")))]
-    return &[];
-}
-
-// Copied from ash_window::enumerate_required_extensions to change the signature
-fn display_extension_names(
-    display_handle: RawDisplayHandle,
-) -> Result<&'static [&'static CStr], DriverError> {
-    let extensions = match display_handle {
-        RawDisplayHandle::Windows(_) => &[khr::surface::NAME, khr::win32_surface::NAME],
-        RawDisplayHandle::Wayland(_) => &[khr::surface::NAME, khr::wayland_surface::NAME],
-        RawDisplayHandle::Xlib(_) => &[khr::surface::NAME, khr::xlib_surface::NAME],
-        RawDisplayHandle::Xcb(_) => &[khr::surface::NAME, khr::xcb_surface::NAME],
-        RawDisplayHandle::Android(_) => &[khr::surface::NAME, khr::android_surface::NAME],
-        RawDisplayHandle::AppKit(_) | RawDisplayHandle::UiKit(_) => {
-            &[khr::surface::NAME, ext::metal_surface::NAME]
-        }
-        _ => {
-            warn!("unsupported display handle type: {display_handle:?}");
-
-            return Err(DriverError::Unsupported);
-        }
-    };
-
-    Ok(extensions)
-}
-
-/*
-Estimates surface extension support.
-
-Imported instances do not expose their enabled extension list, so we infer support by checking that
-the VK_KHR_surface entry points resolve for this instance handle.
-*/
-fn has_vk_khr_surface(entry: &ash::Entry, instance: vk::Instance) -> bool {
-    [
-        c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
-        c"vkGetPhysicalDeviceSurfaceFormatsKHR",
-        c"vkGetPhysicalDeviceSurfacePresentModesKHR",
-        c"vkGetPhysicalDeviceSurfaceSupportKHR",
-        c"vkDestroySurfaceKHR",
-    ]
-    .into_iter()
-    .all(|name| unsafe {
-        entry
-            .get_instance_proc_addr(instance, name.as_ptr())
-            .is_some()
-    })
-}
-
-fn var_value_is_set(val: String) -> bool {
-    !matches!(val.as_str(), "" | "0" | "false" | "False" | "FALSE")
-}
+#[cfg(test)]
+static VALIDATION_ERRORS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Vulkan API version.
 ///
@@ -318,18 +154,6 @@ pub struct Instance {
     pub khr_surface: bool,
 }
 
-impl Clone for Instance {
-    fn clone(&self) -> Self {
-        Self {
-            read_only: ReadOnlyInstance {
-                info: self.info,
-                inner: self.inner.clone(),
-                khr_surface: self.khr_surface,
-            },
-        }
-    }
-}
-
 impl Instance {
     /// Default Vulkan API version requested when creating an instance.
     pub const DEFAULT_API_VERSION: ApiVersion = ApiVersion::Vulkan13;
@@ -350,7 +174,7 @@ impl Instance {
         info: InstanceInfo,
         extra_extension_names: &[&CStr],
     ) -> Result<Self, DriverError> {
-        if info.debug && debug_extension_names().is_empty() {
+        if info.debug && Self::debug_extension_names().is_empty() {
             error!("debug mode requires VK_EXT_debug_utils support");
 
             return Err(DriverError::Unsupported);
@@ -391,7 +215,7 @@ impl Instance {
             .collect::<HashSet<_>>();
 
         if info.debug {
-            extension_names.extend(debug_extension_names());
+            extension_names.extend(Self::debug_extension_names());
         }
 
         /*
@@ -418,7 +242,7 @@ impl Instance {
         let mut layer_names = Vec::with_capacity(info.debug as _);
 
         if info.debug {
-            layer_names.extend(debug_layer_names());
+            layer_names.extend(Self::debug_layer_names());
         }
 
         let layer_name_ptrs = layer_names
@@ -454,7 +278,7 @@ impl Instance {
                     | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
                     | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
             )
-            .pfn_user_callback(Some(debug_callback));
+            .pfn_user_callback(Some(Self::debug_callback));
 
         #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
         let instance_desc = if info.debug {
@@ -528,13 +352,255 @@ impl Instance {
         })
     }
 
+    /// Creates a new Vulkan instance with the platform surface extensions required by the provided
+    /// display handle.
+    ///
+    /// See [`VK_KHR_surface`](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_surface.html).
+    #[profiling::function]
+    pub fn try_from_display(
+        display: impl HasDisplayHandle,
+        info: impl Into<InstanceInfo>,
+    ) -> Result<Self, DriverError> {
+        let display_handle = display.display_handle().map_err(|err| {
+            warn!("unable to get display handle: {err}");
+
+            DriverError::Unsupported
+        })?;
+        let display_extension_names = Self::display_extension_names(display_handle.as_raw())
+            .map_err(|err| {
+                warn!("unable to enumerate display extensions: {err}");
+
+                DriverError::Unsupported
+            })?;
+
+        Self::create_with_extension_names(info.into(), display_extension_names)
+    }
+
+    /// Loads an existing Vulkan instance that may have been created by other means.
+    ///
+    /// This is useful when you want to use a Vulkan instance created by some other library, such
+    /// as OpenXR.
+    ///
+    /// See [`VkInstance`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkInstance.html).
+    #[profiling::function]
+    pub fn try_from_entry(entry: ash::Entry, instance: vk::Instance) -> Result<Self, DriverError> {
+        if instance == vk::Instance::null() {
+            warn!("invalid VkInstance handle: null");
+
+            return Err(DriverError::InvalidData);
+        }
+
+        let api_version = unsafe { entry.try_enumerate_instance_version() }
+            .map_err(|err| match err {
+                vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
+                vk::Result::ERROR_VALIDATION_FAILED_EXT => DriverError::InvalidData,
+                err => {
+                    error!("unable to enumerate instance version: {err}");
+
+                    DriverError::Unsupported
+                }
+            })?
+            .unwrap_or_else(|| {
+                /*
+                The implementation *should* provide a version. If it does not, use the default.
+                */
+                Self::DEFAULT_API_VERSION.to_vk_api_version()
+            })
+            .try_into()
+            .map_err(|err| {
+                warn!("unsupported instance: {err}");
+
+                DriverError::Unsupported
+            })?;
+        let khr_surface = Self::has_vk_khr_surface(&entry, instance);
+
+        let instance = unsafe { ash::Instance::load(entry.static_fn(), instance) };
+
+        Ok(Self {
+            read_only: ReadOnlyInstance {
+                info: InstanceInfo {
+                    api_version,
+                    ..Default::default()
+                },
+                inner: Arc::new(InstanceInner {
+                    debug_utils: None,
+                    entry,
+                    instance,
+                    instance_created: false,
+                }),
+                khr_surface,
+            },
+        })
+    }
+
+    #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+    unsafe extern "system" fn debug_callback(
+        message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+        _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
+        callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+        _user_data: *mut c_void,
+    ) -> vk::Bool32 {
+        if panicking() {
+            return vk::FALSE;
+        }
+
+        assert!(!callback_data.is_null());
+
+        let callback_data = unsafe { &*callback_data };
+        let message = if callback_data.p_message.is_null() {
+            "<missing Vulkan validation message>"
+        } else {
+            unsafe { CStr::from_ptr(callback_data.p_message) }
+                .to_str()
+                .unwrap_or("<invalid Vulkan validation message>")
+        };
+
+        if !callback_data.p_message_id_name.is_null() {
+            let vuid = unsafe { CStr::from_ptr(callback_data.p_message_id_name) }
+                .to_str()
+                .unwrap_or("<invalid Vulkan validation message ID name>");
+            if vuid != "Loader Message" {
+                debug!("{vuid}");
+            }
+        };
+
+        let is_error = message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR);
+
+        if is_error {
+            #[cfg(test)]
+            VALIDATION_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            error!("{message}");
+        } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING)
+            && !var("VK_GRAPH_DEBUG_IGNORE_WARNING")
+                .map(Self::var_value_is_set)
+                .unwrap_or_default()
+        {
+            warn!("{message}");
+        } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::INFO)
+            && !var("VK_GRAPH_DEBUG_IGNORE_INFO")
+                .map(Self::var_value_is_set)
+                .unwrap_or_default()
+        {
+            info!("{message}");
+        } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE)
+            && !var("VK_GRAPH_DEBUG_IGNORE_VERBOSE")
+                .map(Self::var_value_is_set)
+                .unwrap_or_default()
+        {
+            debug!("{message}");
+        }
+
+        if !is_error {
+            return vk::FALSE;
+        }
+
+        if !logger().enabled(&Metadata::builder().level(Level::Debug).build())
+            || var("RUST_LOG")
+                .map(|rust_log| rust_log.is_empty())
+                .unwrap_or(true)
+        {
+            eprintln!(
+                "note: run with `RUST_LOG=trace` environment variable to display more information"
+            );
+            eprintln!("note: see https://github.com/rust-lang/log#in-executables");
+            abort()
+        }
+
+        if current().name() != Some("main") {
+            warn!("invalid validation callback thread: child thread")
+        }
+
+        if var(SKIP_VALIDATION_PARK_ENV)
+            .map(Self::var_value_is_set)
+            .unwrap_or_default()
+        {
+            warn!("validation callback park skipped; execution will continue");
+
+            return vk::FALSE;
+        }
+
+        if !stderr().is_terminal() {
+            warn!("validation callback park skipped; stderr is not an interactive terminal");
+
+            return vk::FALSE;
+        }
+
+        debug!(
+            "parking validation callback thread `{}` for debugger attach to pid {}",
+            current().name().unwrap_or_default(),
+            id()
+        );
+
+        logger().flush();
+        park();
+
+        vk::FALSE
+    }
+
+    fn debug_extension_names() -> &'static [&'static CStr] {
+        #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+        return &[ext::debug_utils::NAME];
+
+        #[cfg(all(target_os = "macos", not(feature = "loaded")))]
+        return &[];
+    }
+
+    fn debug_layer_names() -> &'static [&'static CStr] {
+        #[cfg(any(not(target_os = "macos"), feature = "loaded"))]
+        return &[c"VK_LAYER_KHRONOS_validation"];
+
+        #[cfg(all(target_os = "macos", not(feature = "loaded")))]
+        return &[];
+    }
+
+    // Copied from ash_window::enumerate_required_extensions to change the signature
+    fn display_extension_names(
+        display_handle: RawDisplayHandle,
+    ) -> Result<&'static [&'static CStr], DriverError> {
+        let extensions = match display_handle {
+            RawDisplayHandle::Windows(_) => &[khr::surface::NAME, khr::win32_surface::NAME],
+            RawDisplayHandle::Wayland(_) => &[khr::surface::NAME, khr::wayland_surface::NAME],
+            RawDisplayHandle::Xlib(_) => &[khr::surface::NAME, khr::xlib_surface::NAME],
+            RawDisplayHandle::Xcb(_) => &[khr::surface::NAME, khr::xcb_surface::NAME],
+            RawDisplayHandle::Android(_) => &[khr::surface::NAME, khr::android_surface::NAME],
+            RawDisplayHandle::AppKit(_) | RawDisplayHandle::UiKit(_) => {
+                &[khr::surface::NAME, ext::metal_surface::NAME]
+            }
+            _ => {
+                warn!("unsupported display handle type: {display_handle:?}");
+
+                return Err(DriverError::Unsupported);
+            }
+        };
+
+        Ok(extensions)
+    }
+
     /// The ash entry point used to load Vulkan instance functions.
     pub fn entry(this: &Self) -> &ash::Entry {
         &this.inner.entry
     }
 
-    pub(crate) fn supports_debug_utils(this: &Self) -> bool {
-        this.inner.debug_utils.is_some()
+    /*
+    Estimates surface extension support.
+
+    Imported instances do not expose their enabled extension list, so we infer support by checking that
+    the VK_KHR_surface entry points resolve for this instance handle.
+    */
+    fn has_vk_khr_surface(entry: &ash::Entry, instance: vk::Instance) -> bool {
+        [
+            c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+            c"vkGetPhysicalDeviceSurfaceFormatsKHR",
+            c"vkGetPhysicalDeviceSurfacePresentModesKHR",
+            c"vkGetPhysicalDeviceSurfaceSupportKHR",
+            c"vkDestroySurfaceKHR",
+        ]
+        .into_iter()
+        .all(|name| unsafe {
+            entry
+                .get_instance_proc_addr(instance, name.as_ptr())
+                .is_some()
+        })
     }
 
     /// Returns the available physical devices of this instance.
@@ -599,85 +665,29 @@ impl Instance {
             }))
     }
 
-    /// Creates a new Vulkan instance with the platform surface extensions required by the provided
-    /// display handle.
-    ///
-    /// See [`VK_KHR_surface`](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_surface.html).
-    #[profiling::function]
-    pub fn try_from_display(
-        display: impl HasDisplayHandle,
-        info: impl Into<InstanceInfo>,
-    ) -> Result<Self, DriverError> {
-        let display_handle = display.display_handle().map_err(|err| {
-            warn!("unable to get display handle: {err}");
-
-            DriverError::Unsupported
-        })?;
-        let display_extension_names =
-            display_extension_names(display_handle.as_raw()).map_err(|err| {
-                warn!("unable to enumerate display extensions: {err}");
-
-                DriverError::Unsupported
-            })?;
-
-        Self::create_with_extension_names(info.into(), display_extension_names)
+    pub(crate) fn supports_debug_utils(this: &Self) -> bool {
+        this.inner.debug_utils.is_some()
     }
 
-    /// Loads an existing Vulkan instance that may have been created by other means.
-    ///
-    /// This is useful when you want to use a Vulkan instance created by some other library, such
-    /// as OpenXR.
-    ///
-    /// See [`VkInstance`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkInstance.html).
-    #[profiling::function]
-    pub fn try_from_entry(entry: ash::Entry, instance: vk::Instance) -> Result<Self, DriverError> {
-        if instance == vk::Instance::null() {
-            warn!("invalid VkInstance handle: null");
+    #[cfg(test)]
+    pub(crate) fn validation_error_count() -> usize {
+        VALIDATION_ERRORS.load(std::sync::atomic::Ordering::Relaxed)
+    }
 
-            return Err(DriverError::InvalidData);
-        }
+    fn var_value_is_set(val: String) -> bool {
+        !matches!(val.as_str(), "" | "0" | "false" | "False" | "FALSE")
+    }
+}
 
-        let api_version = unsafe { entry.try_enumerate_instance_version() }
-            .map_err(|err| match err {
-                vk::Result::ERROR_OUT_OF_HOST_MEMORY => DriverError::OutOfMemory,
-                vk::Result::ERROR_VALIDATION_FAILED_EXT => DriverError::InvalidData,
-                err => {
-                    error!("unable to enumerate instance version: {err}");
-
-                    DriverError::Unsupported
-                }
-            })?
-            .unwrap_or_else(|| {
-                /*
-                The implementation *should* provide a version. If it does not, use the default.
-                */
-                Self::DEFAULT_API_VERSION.to_vk_api_version()
-            })
-            .try_into()
-            .map_err(|err| {
-                warn!("unsupported instance: {err}");
-
-                DriverError::Unsupported
-            })?;
-        let khr_surface = has_vk_khr_surface(&entry, instance);
-
-        let instance = unsafe { ash::Instance::load(entry.static_fn(), instance) };
-
-        Ok(Self {
+impl Clone for Instance {
+    fn clone(&self) -> Self {
+        Self {
             read_only: ReadOnlyInstance {
-                info: InstanceInfo {
-                    api_version,
-                    ..Default::default()
-                },
-                inner: Arc::new(InstanceInner {
-                    debug_utils: None,
-                    entry,
-                    instance,
-                    instance_created: false,
-                }),
-                khr_surface,
+                info: self.info,
+                inner: self.inner.clone(),
+                khr_surface: self.khr_surface,
             },
-        })
+        }
     }
 }
 
@@ -749,17 +759,17 @@ impl InstanceInfo {
     }
 }
 
+impl From<InstanceInfoBuilder> for InstanceInfo {
+    fn from(info: InstanceInfoBuilder) -> Self {
+        info.build()
+    }
+}
+
 impl InstanceInfoBuilder {
     /// Builds a new `InstanceInfo`.
     #[inline(always)]
     pub fn build(self) -> InstanceInfo {
         self.fallible_build().expect("invalid instance info")
-    }
-}
-
-impl From<InstanceInfoBuilder> for InstanceInfo {
-    fn from(info: InstanceInfoBuilder) -> Self {
-        info.build()
     }
 }
 

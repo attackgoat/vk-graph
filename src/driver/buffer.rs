@@ -2184,15 +2184,12 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Alignment must be a power of two")]
+    #[cfg_attr(
+        feature = "checked",
+        should_panic(expected = "Alignment must be a power of two")
+    )]
     pub fn buffer_info_builder_alignment_0() {
         Builder::default().size(0).alignment(0).build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Alignment must be a power of two")]
-    pub fn buffer_info_builder_alignment_42() {
-        Builder::default().size(0).alignment(42).build();
     }
 
     #[test]
@@ -2203,6 +2200,15 @@ mod test {
         let builder = Builder::default().size(42).alignment(256).build();
 
         assert_eq!(info, builder);
+    }
+
+    #[test]
+    #[cfg_attr(
+        feature = "checked",
+        should_panic(expected = "Alignment must be a power of two")
+    )]
+    pub fn buffer_info_builder_alignment_42() {
+        Builder::default().size(0).alignment(42).build();
     }
 
     #[test]

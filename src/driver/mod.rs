@@ -1033,7 +1033,7 @@ pub(super) const fn pipeline_stage_access_flags(
         ),
         ty::IndexBuffer => (stage::VERTEX_INPUT, access::INDEX_READ),
         ty::VertexBuffer => (stage::VERTEX_INPUT, access::VERTEX_ATTRIBUTE_READ),
-        ty::VertexShaderReadUniformBuffer => (stage::VERTEX_SHADER, access::SHADER_READ),
+        ty::VertexShaderReadUniformBuffer => (stage::VERTEX_SHADER, access::UNIFORM_READ),
         ty::VertexShaderReadSampledImageOrUniformTexelBuffer => {
             (stage::VERTEX_SHADER, access::SHADER_READ)
         }
@@ -1222,12 +1222,12 @@ pub(super) const fn pipeline_stage_access_flags(
         ty::AccelerationStructureBuildMicromapRead => {
             (stage::ACCELERATION_STRUCTURE_BUILD_KHR, access::MEMORY_READ)
         }
-        ty::MeshShaderReadUniformBuffer => (stage::MESH_SHADER_EXT, access::SHADER_READ),
+        ty::MeshShaderReadUniformBuffer => (stage::MESH_SHADER_EXT, access::UNIFORM_READ),
         ty::MeshShaderReadSampledImageOrUniformTexelBuffer => {
             (stage::MESH_SHADER_EXT, access::SHADER_READ)
         }
         ty::MeshShaderReadOther => (stage::MESH_SHADER_EXT, access::SHADER_READ),
-        ty::TaskShaderReadUniformBuffer => (stage::TASK_SHADER_EXT, access::SHADER_READ),
+        ty::TaskShaderReadUniformBuffer => (stage::TASK_SHADER_EXT, access::UNIFORM_READ),
         ty::TaskShaderReadSampledImageOrUniformTexelBuffer => {
             (stage::TASK_SHADER_EXT, access::SHADER_READ)
         }

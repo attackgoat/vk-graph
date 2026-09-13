@@ -1,0 +1,849 @@
+#!/usr/bin/env rust-script
+//! ```cargo
+//! [dependencies]
+//! syn = { version = "2", features = ["full", "visit"] }
+//! proc-macro2 = { version = "1", features = ["span-locations"] }
+//! ```
+// Adapted from the reusable AST-span sorting in submission-organize/main.rs;
+// intentionally contains none of its project-specific semantic transformations.
+
+use proc_macro2::{LineColumn, Span};
+use std::{
+    cmp::Reverse, collections::BTreeMap, ffi::OsString, fs, ops::Range, path::PathBuf,
+    process::ExitCode,
+};
+use syn::{
+    ImplItem, Item,
+    spanned::Spanned,
+    visit::{self, Visit},
+};
+
+const HELP: &str = "Usage: bin/organize [--check] FILE...
+       bin/organize --help
+
+Sort Rust source in place, writing only changed files. --check never writes:
+exit 0 means ordered, 1 means changes needed, 2 means a usage/read/parse/write
+error. Multiple files are processed independently; errors do not stop later files.
+Use -- before filenames beginning with '-'. Paths need not be UTF-8; source must be.
+
+Structs, enums, unions and type aliases sort alphabetically (case-sensitive),
+with impls directly after their unique, unqualified local owner. Impl ordering
+is a stable heuristic, not a proof of specialization: fewer type+const params,
+then fewer lifetime params, then MORE constraints first. Constraints count
+individual inline/where bounds (including lifetime bounds); ties retain order.
+Methods sort constructors first, then alphabetically. Receiver-free new comes
+first, then from_* or functions returning Self, Option<Self>, Result<Self, E>
+(including nested Option/Result); remaining functions sort alphabetically.
+
+Inline modules and function-local item runs are visited recursively. Within a
+safe run, type/impl groups occupy the first selected item's position; intervening
+other items follow in their original relative order. No item crosses a macro
+item or executable statement. Unresolved impl owners and duplicate type names
+are barriers (cfg branches are not evaluated). Non-function impl items,
+including macro invocations, are method-sorting barriers. Macro bodies and
+out-of-line modules are not expanded or loaded.
+
+Source slices preserve attributes, docs, bodies and comments without token
+reprinting. Same-line // comments travel with the preceding item; contiguous
+whole-line // comments immediately above an item travel with that item.
+Detached comments, non-doc block comments outside AST spans, and other ambiguous
+trivia freeze both neighboring items, forming conservative barriers. Comments
+inside AST spans, including block docs, travel unchanged. Whitespace is not
+formatted; moved EOF items receive a terminating newline if needed, and leading
+line comments receive a separating newline to keep their attachment unambiguous.
+
+This is syntactic organization, not a semantic refactor or compiler check.
+Order-sensitive attributes/macros may still require manual review. Automatic
+free-function promotion, API/call-site changes, graph rebuilding, audits and
+project-specific moves/mappings are deliberately excluded: those require an
+explicit manual semantic refactor. Review the diff and run your project's tests.
+
+Requires rust-script. Tests: rust-script --test bin/organize
+";
+
+struct Sorter<'a> {
+    source: Source<'a>,
+    edits: Vec<(Range<usize>, String)>,
+}
+
+impl Sorter<'_> {
+    fn items(&mut self, items: &[&Item], bounds: Range<usize>) {
+        if items.is_empty() || !self.edits.is_empty() {
+            return;
+        }
+        let spans: Vec<_> = items.iter().map(|i| i.span()).collect();
+        let (ranges, mut frozen) = self.source.pieces(&spans, bounds);
+        let mut names = BTreeMap::<String, usize>::new();
+        for item in items {
+            if let Some(name) = type_name(item) {
+                *names.entry(name).or_default() += 1;
+            }
+        }
+        for (index, item) in items.iter().enumerate() {
+            frozen[index] |= match item {
+                Item::Macro(_) | Item::Verbatim(_) => true,
+                Item::Impl(i) => owner(i).is_none_or(|name| names.get(&name) != Some(&1)),
+                _ => type_name(item).is_some_and(|name| names[&name] != 1),
+            };
+        }
+        // Freezing an impl can itself separate another impl from its owner.
+        loop {
+            let mut changed = false;
+            for (index, item) in items.iter().enumerate() {
+                if frozen[index] {
+                    continue;
+                }
+                if let Item::Impl(imp) = item {
+                    let name = owner(imp).unwrap();
+                    let ty = items
+                        .iter()
+                        .position(|i| type_name(i).as_ref() == Some(&name))
+                        .unwrap();
+                    if frozen[index.min(ty)..=index.max(ty)].iter().any(|f| *f) {
+                        frozen[index] = true;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut start = 0;
+        for end in 0..=items.len() {
+            if end < items.len() && !frozen[end] {
+                continue;
+            }
+            let mut groups = BTreeMap::<String, Vec<usize>>::new();
+            for (index, item) in items.iter().enumerate().take(end).skip(start) {
+                if let Some(name) = type_name(item) {
+                    groups.insert(name, vec![index]);
+                }
+            }
+            for (index, item) in items.iter().enumerate().take(end).skip(start) {
+                if let Item::Impl(i) = item {
+                    if let Some(group) = owner(i).and_then(|name| groups.get_mut(&name)) {
+                        group.push(index);
+                    }
+                }
+            }
+            let mut selected = vec![false; items.len()];
+            let mut sorted = Vec::new();
+            for group in groups.values_mut() {
+                group[1..].sort_by_key(|&index| {
+                    let Item::Impl(i) = items[index] else {
+                        unreachable!()
+                    };
+                    generic_key(i)
+                });
+                for &index in group.iter() {
+                    selected[index] = true;
+                }
+                sorted.extend(group.iter().copied());
+            }
+            if let Some(first) = (start..end).find(|&i| selected[i]) {
+                sorted.extend((first..end).filter(|&i| !selected[i]));
+                self.reorder(&ranges, &(first..end).collect::<Vec<_>>(), &sorted);
+            }
+            start = end + 1;
+        }
+    }
+
+    fn reorder(&mut self, ranges: &[Range<usize>], original: &[usize], sorted: &[usize]) {
+        if original == sorted || !self.edits.is_empty() {
+            return;
+        }
+        self.edits = original
+            .iter()
+            .zip(sorted)
+            .map(|(&old, &new)| {
+                let r = ranges[new].clone();
+                let mut text = self.source.text[r.clone()].to_owned();
+                // A whole-line comment must stay whole-line even in an inline slot.
+                if text.starts_with("//") {
+                    text.insert(0, '\n');
+                }
+                // EOF trailing // comments must not swallow text at their new location.
+                if r.end == self.source.text.len() && !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                (ranges[old].clone(), text)
+            })
+            .collect();
+    }
+}
+
+impl<'ast> Visit<'ast> for Sorter<'_> {
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        let mut items = Vec::new();
+        let mut start = self.source.range(block.brace_token.span.open()).end;
+        for stmt in &block.stmts {
+            if let syn::Stmt::Item(item) = stmt {
+                items.push(item);
+            } else {
+                let r = self.source.range(stmt.span());
+                self.items(&items, start..r.start);
+                items.clear();
+                start = r.end;
+            }
+        }
+        self.items(
+            &items,
+            start..self.source.range(block.brace_token.span.close()).start,
+        );
+        if self.edits.is_empty() {
+            visit::visit_block(self, block);
+        }
+    }
+
+    fn visit_file(&mut self, file: &'ast syn::File) {
+        let start = self.source.lines[0] + file.shebang.as_ref().map_or(0, String::len);
+        self.items(
+            &file.items.iter().collect::<Vec<_>>(),
+            start..self.source.text.len(),
+        );
+        if self.edits.is_empty() {
+            visit::visit_file(self, file);
+        }
+    }
+
+    fn visit_item_impl(&mut self, imp: &'ast syn::ItemImpl) {
+        if !self.edits.is_empty() {
+            return;
+        }
+        let bounds = self.source.range(imp.brace_token.span.open()).end
+            ..self.source.range(imp.brace_token.span.close()).start;
+        let spans: Vec<_> = imp.items.iter().map(Spanned::span).collect();
+        let (ranges, frozen) = self.source.pieces(&spans, bounds);
+        let mut start = 0;
+        for end in 0..=imp.items.len() {
+            if end < imp.items.len() && !frozen[end] && matches!(imp.items[end], ImplItem::Fn(_)) {
+                continue;
+            }
+            let original: Vec<_> = (start..end).collect();
+            let mut sorted = original.clone();
+            sorted.sort_by_key(|&index| {
+                let ImplItem::Fn(f) = &imp.items[index] else {
+                    unreachable!()
+                };
+                method_key(f)
+            });
+            self.reorder(&ranges, &original, &sorted);
+            start = end + 1;
+        }
+        if self.edits.is_empty() {
+            visit::visit_item_impl(self, imp);
+        }
+    }
+
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if let Some((brace, items)) = &module.content {
+            let bounds = self.source.range(brace.span.open()).end
+                ..self.source.range(brace.span.close()).start;
+            self.items(&items.iter().collect::<Vec<_>>(), bounds);
+        }
+        if self.edits.is_empty() {
+            visit::visit_item_mod(self, module);
+        }
+    }
+}
+
+// proc_macro2 columns count Unicode characters, not UTF-8 bytes.
+struct Source<'a> {
+    text: &'a str,
+    lines: Vec<usize>,
+}
+
+impl<'a> Source<'a> {
+    fn new(text: &'a str) -> Self {
+        // syn strips a leading BOM before assigning spans on the first line.
+        let mut lines = vec![if text.starts_with('\u{feff}') { 3 } else { 0 }];
+        lines.extend(text.match_indices('\n').map(|(i, _)| i + 1));
+        Self { text, lines }
+    }
+
+    fn offset(&self, pos: LineColumn) -> usize {
+        let start = self.lines[pos.line - 1];
+        start
+            + self.text[start..]
+                .char_indices()
+                .nth(pos.column)
+                .map_or(self.text.len() - start, |(i, _)| i)
+    }
+
+    // Only inspect AST gaps: comment-looking text in strings/bodies is opaque.
+    fn pieces(&self, spans: &[Span], bounds: Range<usize>) -> (Vec<Range<usize>>, Vec<bool>) {
+        let raw: Vec<_> = spans.iter().map(|s| self.range(*s)).collect();
+        let mut ranges = raw.clone();
+        let mut frozen = vec![false; raw.len()];
+        for gap in 0..=raw.len() {
+            let start = if gap == 0 {
+                bounds.start
+            } else {
+                raw[gap - 1].end
+            };
+            let end = if gap == raw.len() {
+                bounds.end
+            } else {
+                raw[gap].start
+            };
+            let mut cursor = start;
+            let mut comments = Vec::new();
+            let mut ambiguous = false;
+            while cursor < end {
+                let rest = &self.text[cursor..end];
+                if rest.starts_with("//") && !rest.starts_with("//!") {
+                    let stop = rest.find('\n').map_or(end, |n| cursor + n);
+                    comments.push(cursor..stop);
+                    cursor = stop;
+                } else if let Some(c) = rest.chars().next().filter(|c| c.is_whitespace()) {
+                    cursor += c.len_utf8();
+                } else {
+                    ambiguous = true;
+                    break;
+                }
+            }
+            if !ambiguous && !comments.is_empty() {
+                if gap > 0 && !self.text[start..comments[0].start].contains('\n') {
+                    let comment = comments.remove(0);
+                    ranges[gap - 1].end = comment.end + usize::from(comment.end < end);
+                }
+                if !comments.is_empty() {
+                    let contiguous = gap < raw.len()
+                        && comments.iter().enumerate().all(|(i, comment)| {
+                            let next = comments.get(i + 1).map_or(end, |c| c.start);
+                            self.text[comment.end..next]
+                                .chars()
+                                .filter(|c| *c == '\n')
+                                .count()
+                                == 1
+                        });
+                    let line_start = self.text[..comments[0].start]
+                        .rfind('\n')
+                        .map_or(0, |i| i + 1);
+                    if contiguous && self.text[line_start..comments[0].start].trim().is_empty() {
+                        ranges[gap].start = comments[0].start;
+                    } else {
+                        ambiguous = true;
+                    }
+                }
+            }
+            if ambiguous {
+                if gap > 0 {
+                    frozen[gap - 1] = true;
+                }
+                if gap < raw.len() {
+                    frozen[gap] = true;
+                }
+            }
+        }
+        (ranges, frozen)
+    }
+
+    fn range(&self, span: Span) -> Range<usize> {
+        self.offset(span.start())..self.offset(span.end())
+    }
+}
+
+fn type_name(item: &Item) -> Option<String> {
+    let ident = match item {
+        Item::Struct(i) => &i.ident,
+        Item::Enum(i) => &i.ident,
+        Item::Union(i) => &i.ident,
+        Item::Type(i) => &i.ident,
+        _ => return None,
+    };
+    Some(ident.to_string())
+}
+
+fn owner(item: &syn::ItemImpl) -> Option<String> {
+    let syn::Type::Path(p) = &*item.self_ty else {
+        return None;
+    };
+    if p.qself.is_some() || p.path.leading_colon.is_some() || p.path.segments.len() != 1 {
+        return None;
+    }
+    let ident = &p.path.segments[0].ident;
+    if item
+        .generics
+        .type_params()
+        .any(|param| param.ident == *ident)
+    {
+        return None;
+    }
+    Some(ident.to_string())
+}
+
+fn generic_key(item: &syn::ItemImpl) -> (usize, usize, Reverse<usize>) {
+    let g = &item.generics;
+    let bounds = g.type_params().map(|p| p.bounds.len()).sum::<usize>()
+        + g.lifetimes().map(|p| p.bounds.len()).sum::<usize>()
+        + g.where_clause.as_ref().map_or(0, |w| {
+            w.predicates
+                .iter()
+                .map(|p| match p {
+                    syn::WherePredicate::Type(p) => p.bounds.len(),
+                    syn::WherePredicate::Lifetime(p) => p.bounds.len(),
+                    _ => 1,
+                })
+                .sum::<usize>()
+        });
+    (
+        g.type_params().count() + g.const_params().count(),
+        g.lifetimes().count(),
+        Reverse(bounds),
+    )
+}
+
+fn returns_self(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Paren(t) => returns_self(&t.elem),
+        syn::Type::Group(t) => returns_self(&t.elem),
+        syn::Type::Path(p) if p.qself.is_none() => {
+            if p.path.is_ident("Self") {
+                return true;
+            }
+            let Some(last) = p.path.segments.last() else {
+                return false;
+            };
+            if last.ident != "Option" && last.ident != "Result" {
+                return false;
+            }
+            let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+                return false;
+            };
+            matches!(args.args.first(), Some(syn::GenericArgument::Type(t)) if returns_self(t))
+        }
+        _ => false,
+    }
+}
+
+fn method_key(f: &syn::ImplItemFn) -> (u8, String) {
+    let name = f.sig.ident.to_string();
+    let ctor = f.sig.receiver().is_none()
+        && (name == "new"
+            || name.starts_with("from_")
+            || matches!(&f.sig.output, syn::ReturnType::Type(_, t) if returns_self(t)));
+    (
+        if ctor && name == "new" {
+            0
+        } else if ctor {
+            1
+        } else {
+            2
+        },
+        name,
+    )
+}
+
+fn organize(input: &str) -> Result<String, String> {
+    let mut text = input.to_owned();
+    loop {
+        let file = syn::parse_file(&text).map_err(|e| {
+            let p = e.span().start();
+            format!("parse error at {}:{}: {e}", p.line, p.column + 1)
+        })?;
+        let mut sorter = Sorter {
+            source: Source::new(&text),
+            edits: Vec::new(),
+        };
+        sorter.visit_file(&file);
+        if sorter.edits.is_empty() {
+            return Ok(text);
+        }
+        let mut edits = sorter.edits;
+        edits.sort_by_key(|(r, _)| r.start);
+        if edits.windows(2).any(|p| p[0].0.end > p[1].0.start) {
+            return Err("refusing overlapping source/comment attachments".into());
+        }
+        for (r, replacement) in edits.into_iter().rev() {
+            text.replace_range(r, &replacement);
+        }
+        // Reparse after each scope edit, avoiding overlapping parent/child edits.
+        syn::parse_file(&text).map_err(|e| format!("refusing invalid reordered source: {e}"))?;
+    }
+}
+
+fn process_file(path: &PathBuf, check: bool) -> Result<bool, String> {
+    let original = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
+    let sorted = organize(&original)?;
+    let changed = sorted != original;
+    if changed && !check {
+        fs::write(path, sorted).map_err(|e| format!("write: {e}"))?;
+    }
+    Ok(changed)
+}
+
+fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
+    let mut check = false;
+    let mut literal = false;
+    let mut files = Vec::new();
+    for arg in args {
+        if !literal && arg == "--" {
+            literal = true;
+        } else if !literal && arg == "--check" {
+            check = true;
+        } else if !literal && (arg == "--help" || arg == "-h") {
+            print!("{HELP}");
+            return 0;
+        } else if !literal && arg.as_encoded_bytes().starts_with(b"-") {
+            eprintln!("organize: unknown option {arg:?}; use -- before filenames or --help");
+            return 2;
+        } else {
+            files.push(PathBuf::from(arg));
+        }
+    }
+    if files.is_empty() {
+        eprintln!("organize: expected FILE...; use --help");
+        return 2;
+    }
+    let mut status = 0;
+    for path in files {
+        match process_file(&path, check) {
+            Ok(true) => {
+                println!(
+                    "{}: {}",
+                    path.display(),
+                    if check { "would organize" } else { "organized" }
+                );
+                if check {
+                    status = status.max(1);
+                }
+            }
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("organize: {}: {e}", path.display());
+                status = 2;
+            }
+        }
+    }
+    status
+}
+
+fn main() -> ExitCode {
+    ExitCode::from(run(std::env::args_os().skip(1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sorted(input: &str) -> String {
+        let output = organize(input).unwrap();
+        assert_eq!(organize(&output).unwrap(), output, "idempotence");
+        output
+    }
+
+    fn in_order(text: &str, needles: &[&str]) {
+        let mut rest = text;
+        for needle in needles {
+            let at = rest
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing {needle:?} in {rest:?}"));
+            rest = &rest[at + needle.len()..];
+        }
+    }
+
+    #[test]
+    fn types_impls_generics_and_constructors() {
+        let text = sorted(
+            "\
+struct Z;
+impl<T> A<T> { fn z(&self) {} fn build() -> Result<Option<Self>, E> { todo!() }
+fn from_z() {} fn new() {} fn a(&self) {} fn from_a() {} }
+fn unrelated() {}
+impl<T: Send + Sync> A<T> {}
+impl<const N: usize> A<[u8; N]> {}
+impl<'a> A<&'a str> {}
+impl A<u8> {}
+struct A<T>(T);
+impl<T> A<T> where T: Copy, T: Send + Sync {}
+union U { a: u8 }
+type B = u8;
+enum C {}
+",
+        );
+        in_order(
+            &text,
+            &[
+                "struct A",
+                "impl A<u8>",
+                "impl<'a>",
+                "where T: Copy",
+                "impl<T: Send",
+                "impl<T> A<T>",
+                "fn new",
+                "fn build",
+                "fn from_a",
+                "fn from_z",
+                "fn a",
+                "fn z",
+                "impl<const",
+                "type B",
+                "enum C",
+                "union U",
+                "struct Z",
+                "fn unrelated",
+            ],
+        );
+    }
+
+    #[test]
+    fn nested_and_inline_scopes() {
+        let text = sorted(
+            "mod m { struct Z; struct A; impl A { fn z() { struct Y; struct B; } fn a() {} } } fn f() { struct Z; struct A; let x = 1; struct Y; struct B; }",
+        );
+        in_order(
+            &text,
+            &[
+                "mod m", "struct A", "impl A", "fn a", "fn z", "struct B", "struct Y", "struct Z",
+                "fn f", "struct A", "struct Z", "let x", "struct B", "struct Y",
+            ],
+        );
+    }
+
+    #[test]
+    fn comments_docs_cfg_and_unicode() {
+        let input = "// Z lead\n#[cfg(feature = \"z\")]\n/// Z docs\nstruct Z; // Z tail\n// A lead\n/** A docs */\n#[allow(dead_code)]\nstruct A; // A tail\nimpl A { fn z(&self) { let s = \"\\\" // /*\"; /* body */ } fn a() {} }\n";
+        let text = sorted(input);
+        in_order(
+            &text,
+            &[
+                "// A lead\n/** A docs */\n#[allow(dead_code)]\nstruct A; // A tail\n",
+                "impl A",
+                "fn a",
+                "fn z",
+                "/* body */",
+                "// Z lead\n#[cfg(feature = \"z\")]\n/// Z docs\nstruct Z; // Z tail\n",
+            ],
+        );
+        let text = sorted(
+            "fn f() { let s = \"\u{1f980}\u{e9}\"; struct Z; struct A; impl A { fn z() { let s = \"\u{3bb}\"; } fn a() {} } }",
+        );
+        in_order(
+            &text,
+            &[
+                "\u{1f980}\u{e9}",
+                "struct A",
+                "fn a",
+                "fn z",
+                "\u{3bb}",
+                "struct Z",
+            ],
+        );
+    }
+
+    #[test]
+    fn ambiguous_comments_are_barriers() {
+        for input in [
+            "struct Z; /* belongs to whom? */ struct A;",
+            "struct Z;\n// detached\n\nstruct A;",
+            "/* nested /* // fake */ comment */\nstruct Z;\nstruct A;",
+            "struct Z;\nstruct A;\n/* trailing */",
+            "impl A { fn z() {} /* barrier */ fn a() {} }",
+        ] {
+            assert_eq!(sorted(input), input);
+        }
+        let text = sorted("struct Z; // trailing at newline\nstruct A; // trailing at EOF");
+        in_order(
+            &text,
+            &[
+                "struct A; // trailing at EOF\n",
+                "struct Z; // trailing at newline\n",
+            ],
+        );
+    }
+
+    #[test]
+    fn comments_moving_between_inline_and_multiline_slots() {
+        let text = sorted("struct Z; struct A; // A tail\n// B lead\nstruct B;");
+        in_order(
+            &text,
+            &["struct A; // A tail\n", "// B lead\nstruct B;", "struct Z;"],
+        );
+        let text = sorted("struct B; // B tail\n// A lead\nstruct A;");
+        in_order(&text, &["// A lead\nstruct A;", "struct B; // B tail\n"]);
+        let text = sorted("impl A { fn z() {} fn b() {} // B tail\n// A lead\nfn a() {} }");
+        in_order(
+            &text,
+            &["// A lead\nfn a() {}", "fn b() {} // B tail\n", "fn z() {}"],
+        );
+    }
+
+    #[test]
+    fn bom_shebang_crlf_and_unicode_identifiers() {
+        for prefix in [
+            "\u{feff}",
+            "#!/usr/bin/env rust-script\n",
+            "\u{feff}#!/usr/bin/env rust-script\n",
+        ] {
+            let text = sorted(&format!("{prefix}struct Z; struct A;"));
+            assert!(text.starts_with(prefix));
+            in_order(&text, &["struct A", "struct Z"]);
+        }
+        let text =
+            sorted("// Z \u{1f980}\r\nstruct Z; // Z tail\r\n/// A \u{3bb}\r\nstruct A;\r\n");
+        in_order(
+            &text,
+            &[
+                "/// A \u{3bb}\r\nstruct A;",
+                "// Z \u{1f980}\r\nstruct Z; // Z tail\r\n",
+            ],
+        );
+        let text = sorted("struct \u{3a9}; struct A; impl A { fn \u{3c9}() {} fn a() {} }");
+        in_order(&text, &["struct A", "fn a", "fn \u{3c9}", "struct \u{3a9}"]);
+    }
+
+    #[test]
+    fn macro_and_statement_barriers() {
+        let text = sorted(
+            "\
+struct Z;
+macro_rules! m { () => {} }
+struct Y; struct B;
+m!();
+struct X; struct A;
+impl A { fn z() {} m!(); fn y() {} fn b() {} const K: u8 = 0; fn x() {} fn a() {} }
+fn f() { struct Z; m!(); struct A; let x = 0; struct B; struct C; }
+",
+        );
+        in_order(
+            &text,
+            &[
+                "struct Z",
+                "macro_rules!",
+                "struct B",
+                "struct Y",
+                "m!();",
+                "struct A",
+                "fn z",
+                "m!();",
+                "fn b",
+                "fn y",
+                "const K",
+                "fn a",
+                "fn x",
+                "struct X",
+                "fn f",
+                "struct Z",
+                "m!();",
+                "struct A",
+                "let x",
+                "struct B",
+                "struct C",
+            ],
+        );
+    }
+
+    #[test]
+    fn qualified_owners_and_duplicate_types() {
+        for input in [
+            "struct Z; impl other::Z {} struct A;",
+            "struct Z; impl self::Z {} struct A;",
+            "struct Z; impl ::Z {} struct A;",
+            "struct Z; impl<T> <T as Trait>::Z {} struct A;",
+            "struct Z; impl<Z> Trait for Z {} struct A;",
+            "#[cfg(a)] struct Z; #[cfg(b)] struct Z; impl Z {} struct A;",
+            "struct Z; macro_rules! m { () => {} } impl Z {} struct A;",
+        ] {
+            assert_eq!(sorted(input), input);
+        }
+        let text =
+            sorted("struct Z; m!(); impl Z {} struct D; struct C; m!(); struct B; struct A;");
+        in_order(
+            &text,
+            &[
+                "struct Z", "m!();", "impl Z", "struct C", "struct D", "m!();", "struct A",
+                "struct B",
+            ],
+        );
+    }
+
+    #[test]
+    fn constructor_classification() {
+        let imp: syn::ItemImpl = syn::parse_quote! {
+            impl A {
+                fn from_z(&self) -> Self { todo!() }
+                fn z() -> Self { todo!() }
+                fn opt() -> std::option::Option<Self> { todo!() }
+                fn error() -> Result<(), Self> { todo!() }
+                fn borrowed() -> &'static Self { todo!() }
+                fn new(&self) {}
+                fn from_a() {}
+                fn vector() -> Vec<Self> { todo!() }
+            }
+        };
+        let keys: Vec<_> = imp
+            .items
+            .iter()
+            .map(|i| {
+                let ImplItem::Fn(f) = i else { unreachable!() };
+                method_key(f).0
+            })
+            .collect();
+        assert_eq!(keys, [2, 1, 1, 2, 2, 2, 1, 2]);
+    }
+
+    #[test]
+    fn parse_errors_and_cli_usage() {
+        assert!(organize("struct {").unwrap_err().contains("parse error at"));
+        assert_eq!(run([]), 2);
+        assert_eq!(run(["--wat".into()]), 2);
+        assert_eq!(run(["--help".into()]), 0);
+    }
+
+    #[test]
+    fn cli_files_read_only_and_errors() {
+        // Test-owned scratch directory only; never touch workspace inputs.
+        let dir = std::env::temp_dir().join(format!("organize-test-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let a = dir.join("-a.rs");
+        let b = dir.join("b with spaces.rs");
+        let bad = dir.join("bad.rs");
+        let missing = dir.join("missing.rs");
+        let input = "struct Z; struct A;";
+        fs::write(&a, input).unwrap();
+        fs::write(&b, input).unwrap();
+        fs::write(&bad, "struct {").unwrap();
+        let before = fs::metadata(&a).unwrap().modified().unwrap();
+        let mut permissions = fs::metadata(&a).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&a, permissions).unwrap();
+        assert_eq!(
+            run([
+                "--check".into(),
+                "--".into(),
+                a.clone().into_os_string(),
+                b.clone().into_os_string()
+            ]),
+            1
+        );
+        assert_eq!(fs::read_to_string(&a).unwrap(), input);
+        assert_eq!(fs::read_to_string(&b).unwrap(), input);
+        assert_eq!(fs::metadata(&a).unwrap().modified().unwrap(), before);
+        assert_eq!(
+            run([
+                "--check".into(),
+                missing.into_os_string(),
+                bad.clone().into_os_string(),
+                b.clone().into_os_string()
+            ]),
+            2
+        );
+        assert_eq!(fs::read_to_string(&bad).unwrap(), "struct {");
+        assert_eq!(run([b.clone().into_os_string()]), 0);
+        assert_eq!(run(["--check".into(), b.clone().into_os_string()]), 0);
+        let modified = fs::metadata(&b).unwrap().modified().unwrap();
+        assert_eq!(run([b.clone().into_os_string()]), 0);
+        assert_eq!(fs::metadata(&b).unwrap().modified().unwrap(), modified);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let path = dir.join(OsString::from_vec(b"non-utf8-\xff.rs".to_vec()));
+            fs::write(&path, input).unwrap();
+            assert_eq!(run([path.clone().into_os_string()]), 0);
+            assert_eq!(run(["--check".into(), path.into_os_string()]), 0);
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+}

@@ -30,6 +30,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Continue compatible graphics executions as shared subpasses while preserving per-execution
+  descriptors, callbacks, state, and timestamps.
 - **`checked` is disabled by default.** Default features are now `loaded` and `parking_lot`.
   Enable it for graph/stream validation in debug or release builds. Vulkan validation layers
   are separate, and API preconditions still apply without checks.
@@ -51,6 +53,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Correct subpass synchronization for multiple resource accesses, uniform-buffer reads, and
+  depth/stencil resolves.
 - Do not enable presentation extensions on headless devices without their swapchain dependency.
 - Preserve already-frozen resource accesses when an unprepared stream is inserted and the
   parent graph is finalized; repeated freezing no longer clears the access declarations.

@@ -221,6 +221,63 @@ impl Access {
         }
     }
 
+    fn with_access(
+        &self,
+        dense: &Mutex<Option<DenseMap<ImageAccessSet>>>,
+        info: ImageInfo,
+        range: vk::ImageSubresourceRange,
+        update: impl Fn(ImageAccessSet) -> ImageAccessSet,
+    ) {
+        let update_atomic = |atomic: &AtomicU16| {
+            let _ = atomic.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(update(ImageAccessSet::from_raw(current)).raw())
+            });
+        };
+        match self {
+            Self::Uniform(access) => {
+                update_atomic(&access.0);
+            }
+            Self::DualAspect(access) => {
+                let aspects = format_aspect_mask(info.format);
+                for range in ImageSubresourceRangeIter::new(range) {
+                    update_atomic(&access.0[aspect_ordinal(aspects, range.aspect_mask) as usize]);
+                }
+            }
+            Self::Dense(access) => {
+                if info.is_full_subresource_range(range)
+                    && access
+                        .0
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                            // A promotion observed on retry must take the locked path instead.
+                            if current & DenseAccess::STATE_MASK != 0 {
+                                return None;
+                            }
+
+                            let previous =
+                                ImageAccessSet::from_raw(current & DenseAccess::ACCESS_MASK);
+
+                            Some((current & !DenseAccess::ACCESS_MASK) | update(previous).raw())
+                        })
+                        .is_ok()
+                {
+                    return;
+                }
+
+                let dense = dense.lock();
+
+                #[cfg(not(feature = "parking_lot"))]
+                let dense = dense.expect("poisoned image dense lock");
+
+                let mut dense = dense;
+                access.ensure_dense(&mut dense, info);
+                let mut map = DenseAccessMapGuard { access, dense };
+                let mut cursor = DenseMapCursor::new(&map, range);
+
+                while cursor.next_with(&mut map, &update).is_some() {}
+            }
+        }
+    }
+
     fn replace<'a>(
         &'a self,
         dense: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
@@ -452,7 +509,7 @@ struct DenseAccess(AtomicU16);
 impl DenseAccess {
     const ACCESS_MASK: u16 = ImageAccessSet::VALUE_MASK;
     const STATE_MASK: u16 = 0b11 << Self::STATE_SHIFT;
-    const STATE_SHIFT: u16 = 11;
+    const STATE_SHIFT: u16 = 13;
 
     fn new(access: ImageAccessSet) -> Self {
         Self(AtomicU16::new(
@@ -1382,27 +1439,6 @@ impl Image {
         })
     }
 
-    /// Drops the given allocation, all views, and the handle.
-    #[profiling::function]
-    fn drop_allocation(&self, allocation: Allocation) {
-        {
-            profiling::scope!("views");
-
-            self.with_image_view_cache(|cache| cache.clear());
-        }
-
-        unsafe {
-            self.device.destroy_image(self.handle, None);
-        }
-
-        {
-            profiling::scope!("deallocate");
-
-            Device::with_allocator(&self.device, |allocator| allocator.free(allocation))
-        }
-        .unwrap_or_else(|err| warn!("unable to free image allocation: {err}"));
-    }
-
     /// Consumes a Vulkan image created by some other library.
     ///
     /// The image is not destroyed automatically on drop, unlike images created through the
@@ -1432,6 +1468,27 @@ impl Image {
             info,
             sharing: Sharing::new(info, info.sharing_mode),
         }
+    }
+
+    /// Drops the given allocation, all views, and the handle.
+    #[profiling::function]
+    fn drop_allocation(&self, allocation: Allocation) {
+        {
+            profiling::scope!("views");
+
+            self.with_image_view_cache(|cache| cache.clear());
+        }
+
+        unsafe {
+            self.device.destroy_image(self.handle, None);
+        }
+
+        {
+            profiling::scope!("deallocate");
+
+            Device::with_allocator(&self.device, |allocator| allocator.free(allocation))
+        }
+        .unwrap_or_else(|err| warn!("unable to free image allocation: {err}"));
     }
 
     pub(crate) fn register_image_set_queue(&self, queue: &Arc<ImageSetQueue>) {
@@ -1920,6 +1977,27 @@ impl Image {
         })
     }
 
+    /// Transforms tracked access values in `range`.
+    ///
+    /// `update` must be side-effect-free and must not reenter access tracking: it can run under
+    /// the dense lock, be retried after atomic contention, or cover multiple equal subresources.
+    pub(crate) fn with_access(
+        &self,
+        range: vk::ImageSubresourceRange,
+        update: impl Fn(ImageAccessSet) -> ImageAccessSet,
+    ) {
+        let range = self.info.resolve_subresource_counts(range);
+
+        #[cfg(feature = "checked")]
+        {
+            assert_aspect_mask_supported(range.aspect_mask);
+            assert!(format_aspect_mask(self.info.format).contains(range.aspect_mask));
+        }
+
+        self.access
+            .with_access(&self.dense_access, self.info, range, update);
+    }
+
     /// Sets the debugging name assigned to this image.
     pub fn with_debug_name(self, name: impl AsRef<str>) -> Self {
         self.set_debug_name(name);
@@ -2001,33 +2079,11 @@ impl ImageAccessSet {
     const ANY_SAMPLED_READ_BIT: u16 = 1 << 9;
     const SAMPLED_READ_BITS: u16 = (1 << 10) - 1;
     const SAMPLED_READ_TAG: u16 = 1 << 10;
-    const VALUE_MASK: u16 = Self::SAMPLED_READ_TAG | Self::SAMPLED_READ_BITS;
-
-    pub(crate) const fn after_access(self, next_access: AccessType) -> Self {
-        let next = Self::from_access(next_access);
-        if !self.is_sampled_read() || !next.is_sampled_read() {
-            return next;
-        }
-
-        let sampled_read_bits = (self.0 | next.0) & Self::SAMPLED_READ_BITS;
-        if sampled_read_bits & Self::ANY_SAMPLED_READ_BIT != 0 {
-            Self(Self::SAMPLED_READ_TAG | Self::ANY_SAMPLED_READ_BIT)
-        } else {
-            Self(Self::SAMPLED_READ_TAG | sampled_read_bits)
-        }
-    }
-
-    pub(crate) const fn contains_sampled_read(self, access: AccessType) -> bool {
-        let next = Self::from_access(access);
-        if !self.is_sampled_read() || !next.is_sampled_read() {
-            return false;
-        }
-
-        let previous_bits = self.0 & Self::SAMPLED_READ_BITS;
-        let next_bits = next.0 & Self::SAMPLED_READ_BITS;
-
-        previous_bits & Self::ANY_SAMPLED_READ_BIT != 0 || previous_bits & next_bits == next_bits
-    }
+    // Fixed-function depth/stencil resolves execute at color output, without using a color layout.
+    const RESOLVE_READ_BIT: u16 = 1 << 11;
+    const RESOLVE_WRITE_BIT: u16 = 1 << 12;
+    const RESOLVE_BITS: u16 = Self::RESOLVE_READ_BIT | Self::RESOLVE_WRITE_BIT;
+    const VALUE_MASK: u16 = Self::SAMPLED_READ_TAG | Self::SAMPLED_READ_BITS | Self::RESOLVE_BITS;
 
     pub(crate) const fn from_access(access: AccessType) -> Self {
         let sampled_read_bit = match access {
@@ -2057,12 +2113,48 @@ impl ImageAccessSet {
         Self(raw)
     }
 
+    pub(crate) const fn after_access(self, next_access: AccessType) -> Self {
+        let next = Self::from_access(next_access);
+        if !self.is_sampled_read() || !next.is_sampled_read() {
+            return next;
+        }
+
+        let sampled_read_bits = (self.0 | next.0) & Self::SAMPLED_READ_BITS;
+        if sampled_read_bits & Self::ANY_SAMPLED_READ_BIT != 0 {
+            Self(Self::SAMPLED_READ_TAG | Self::ANY_SAMPLED_READ_BIT)
+        } else {
+            Self(Self::SAMPLED_READ_TAG | sampled_read_bits)
+        }
+    }
+
+    pub(crate) const fn contains_sampled_read(self, access: AccessType) -> bool {
+        let next = Self::from_access(access);
+        if !self.is_sampled_read() || !next.is_sampled_read() {
+            return false;
+        }
+
+        let previous_bits = self.0 & Self::SAMPLED_READ_BITS;
+        let next_bits = next.0 & Self::SAMPLED_READ_BITS;
+
+        previous_bits & Self::ANY_SAMPLED_READ_BIT != 0 || previous_bits & next_bits == next_bits
+    }
+
+    pub(crate) const fn depth_stencil_resolve_access(self) -> Option<AccessType> {
+        match self.0 & Self::RESOLVE_BITS {
+            Self::RESOLVE_READ_BIT => Some(AccessType::ColorAttachmentRead),
+            Self::RESOLVE_WRITE_BIT => Some(AccessType::ColorAttachmentWrite),
+            Self::RESOLVE_BITS => Some(AccessType::ColorAttachmentReadWrite),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn is_nothing(self) -> bool {
-        matches!(self.non_sampled_access(), Some(AccessType::Nothing))
+        self.0 & Self::RESOLVE_BITS == 0
+            && matches!(self.non_sampled_access(), Some(AccessType::Nothing))
     }
 
     pub(crate) const fn is_sampled_read(self) -> bool {
-        self.0 & Self::SAMPLED_READ_TAG != 0
+        self.0 & Self::SAMPLED_READ_TAG != 0 && self.0 & Self::RESOLVE_BITS == 0
     }
 
     pub(crate) fn iter(self) -> ImageAccessSetIter {
@@ -2070,11 +2162,13 @@ impl ImageAccessSet {
             ImageAccessSetIter {
                 sampled_read_bits: 0,
                 single_access: Some(access),
+                resolve_access: self.depth_stencil_resolve_access(),
             }
         } else {
             ImageAccessSetIter {
                 sampled_read_bits: self.0 & Self::SAMPLED_READ_BITS,
                 single_access: None,
+                resolve_access: self.depth_stencil_resolve_access(),
             }
         }
     }
@@ -2087,7 +2181,7 @@ impl ImageAccessSet {
     }
 
     pub(crate) const fn non_sampled_access(self) -> Option<AccessType> {
-        if self.is_sampled_read() {
+        if self.0 & Self::SAMPLED_READ_TAG != 0 {
             None
         } else {
             Some(access_type_from_u8(self.0 as u8))
@@ -2097,11 +2191,27 @@ impl ImageAccessSet {
     const fn raw(self) -> u16 {
         self.0
     }
+
+    pub(crate) const fn with_depth_stencil_resolve(self, write: bool) -> Self {
+        let bits = if write {
+            Self::RESOLVE_WRITE_BIT
+        } else {
+            Self::RESOLVE_READ_BIT
+        };
+
+        Self(self.0 | bits)
+    }
+
+    pub(crate) const fn without_depth_stencil_resolve(self) -> Self {
+        Self(self.0 & !Self::RESOLVE_BITS)
+    }
 }
 
 impl Debug for ImageAccessSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(access) = self.non_sampled_access() {
+        if let Some(access) = self.non_sampled_access()
+            && self.depth_stencil_resolve_access().is_none()
+        {
             access.fmt(f)
         } else {
             f.debug_set().entries(self.iter()).finish()
@@ -2112,6 +2222,20 @@ impl Debug for ImageAccessSet {
 pub(crate) struct ImageAccessSetIter {
     sampled_read_bits: u16,
     single_access: Option<AccessType>,
+    resolve_access: Option<AccessType>,
+}
+
+impl ExactSizeIterator for ImageAccessSetIter {
+    fn len(&self) -> usize {
+        let base = if self.single_access.is_some()
+            || self.sampled_read_bits & ImageAccessSet::ANY_SAMPLED_READ_BIT != 0
+        {
+            1
+        } else {
+            self.sampled_read_bits.count_ones() as usize
+        };
+        base + self.resolve_access.is_some() as usize
+    }
 }
 
 impl Iterator for ImageAccessSetIter {
@@ -2129,7 +2253,7 @@ impl Iterator for ImageAccessSetIter {
         }
 
         if self.sampled_read_bits == 0 {
-            return None;
+            return self.resolve_access.take();
         }
 
         let bit = self.sampled_read_bits.trailing_zeros();
@@ -2153,18 +2277,6 @@ impl Iterator for ImageAccessSetIter {
         let len = self.len();
 
         (len, Some(len))
-    }
-}
-
-impl ExactSizeIterator for ImageAccessSetIter {
-    fn len(&self) -> usize {
-        if self.single_access.is_some()
-            || self.sampled_read_bits & ImageAccessSet::ANY_SAMPLED_READ_BIT != 0
-        {
-            1
-        } else {
-            self.sampled_read_bits.count_ones() as _
-        }
     }
 }
 
@@ -3308,6 +3420,206 @@ mod test {
             range: image_subresource_range(aspect_mask, array_layers, mip_levels),
             stage_mask: vk::PipelineStageFlags::COMPUTE_SHADER,
         }
+    }
+
+    #[test]
+    fn depth_resolve_scopes_preserve_layout_and_subresource_epochs() {
+        use vk::ImageAspectFlags as A;
+
+        let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        for (format, aspects) in [
+            (vk::Format::D32_SFLOAT, A::DEPTH),
+            (vk::Format::D32_SFLOAT_S8_UINT, A::DEPTH),
+            (vk::Format::D32_SFLOAT_S8_UINT, A::STENCIL),
+            (vk::Format::D32_SFLOAT_S8_UINT, A::DEPTH | A::STENCIL),
+        ] {
+            for (layers, mips, partial, heterogeneous) in [
+                (1, 1, false, false),
+                (3, 2, false, false),
+                (3, 2, true, false),
+                (3, 2, false, true),
+                (3, 2, true, true),
+            ] {
+                for base in [
+                    AccessType::DepthStencilAttachmentReadWrite,
+                    AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer,
+                ] {
+                    for annotations in [&[false][..], &[true], &[false, true], &[true, false]] {
+                        let info = image_subresource(format, layers, mips);
+                        let whole =
+                            image_subresource_range(format_aspect_mask(format), 0..layers, 0..mips);
+                        let touched = if partial {
+                            image_subresource_range(aspects, 1..2, 1..2)
+                        } else {
+                            image_subresource_range(aspects, 0..layers, 0..mips)
+                        };
+                        let access = Access::new(info, base);
+                        let dense = Mutex::new(None);
+                        let mut base_set = ImageAccessSet::from_access(base);
+                        if base_set.is_sampled_read() {
+                            access.swap(&dense, info, compute_read, whole).for_each(drop);
+                            base_set = base_set.after_access(compute_read);
+                        }
+                        let history = image_subresource_range(A::DEPTH, 1..2, 1..2);
+                        if heterogeneous {
+                            access
+                                .replace(&dense, info, AccessType::TransferWrite, history)
+                                .for_each(drop);
+                            assert!(
+                                matches!(&access, Access::Dense(state) if state.is_dense_active())
+                            );
+                        }
+                        // Repetition is idempotent, and read/write annotations compose in either order.
+                        for &write in annotations.iter().chain(annotations.iter()) {
+                            access.with_access(&dense, info, touched, |previous| {
+                                previous.with_depth_stencil_resolve(write)
+                            });
+                        }
+                        for cell in ImageSubresourceRangeIter::new(whole) {
+                            let previous = access
+                                .replace(&dense, info, AccessType::TransferRead, cell)
+                                .collect::<Vec<_>>();
+                            assert_eq!(previous.len(), 1);
+                            let (set, range) = previous[0];
+                            assert_access_ranges_eq((set, range), (set, cell));
+                            let expected_base = if heterogeneous
+                                && super::image_subresource_range_intersects(cell, history)
+                            {
+                                ImageAccessSet::from_access(AccessType::TransferWrite)
+                            } else {
+                                base_set
+                            };
+                            let resolved =
+                                super::image_subresource_range_intersects(touched, cell);
+                            let resolve_access = if !resolved {
+                                None
+                            } else if annotations.len() == 2 {
+                                Some(AccessType::ColorAttachmentReadWrite)
+                            } else if annotations[0] {
+                                Some(AccessType::ColorAttachmentWrite)
+                            } else {
+                                Some(AccessType::ColorAttachmentRead)
+                            };
+                            assert_eq!(set.without_depth_stencil_resolve(), expected_base);
+                            assert_eq!(set.depth_stencil_resolve_access(), resolve_access);
+                            assert_eq!(
+                                set.is_sampled_read(),
+                                !resolved && expected_base.is_sampled_read(),
+                                "resolve scopes prohibit reader elision"
+                            );
+                            let mut expected = expected_base.iter().collect::<Vec<_>>();
+                            expected.extend(resolve_access);
+                            let mut iter = set.iter();
+                            for (idx, expected_access) in expected.iter().enumerate() {
+                                assert_eq!(iter.len(), expected.len() - idx);
+                                assert_eq!(iter.next(), Some(*expected_access));
+                            }
+                            assert_eq!(iter.len(), 0);
+                            assert_eq!(iter.next(), None);
+                            let sync = ImageSubresourceSyncInfo::from_access_set(set, cell);
+                            assert_eq!(sync.layout, expected_base.layout());
+                            let mut stages = vk::PipelineStageFlags::empty();
+                            let mut accesses = vk::AccessFlags::empty();
+                            for expected_access in expected {
+                                let (stage, access) = pipeline_stage_access_flags(expected_access);
+                                stages |= stage;
+                                accesses |= access;
+                            }
+                            assert_eq!(sync.stage_mask, stages);
+                            assert_eq!(sync.access_mask, accesses);
+                        }
+                        for (set, _) in access.replace(&dense, info, base, whole) {
+                            assert_eq!(set, ImageAccessSet::from_access(AccessType::TransferRead));
+                            assert!(set.depth_stencil_resolve_access().is_none());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn image_access_transform_preserves_compact_and_dense_state() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8_UINT, 2, 2);
+        let whole = image_subresource_range(A::COLOR, 0..2, 0..2);
+        let partial = image_subresource_range(A::COLOR, 1..2, 1..2);
+        let fragment_read = AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer;
+        let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+        let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+        let image = Access::new(info, fragment_read);
+        let dense = Mutex::new(None);
+        let Access::Dense(access) = &image else {
+            panic!("expected dense-capable access tracking");
+        };
+
+        image.with_access(&dense, info, whole, |previous| {
+            previous.after_access(compute_read)
+        });
+        assert!(!access.is_dense_active());
+        assert_access_set_eq(access.load(), &[fragment_read, compute_read]);
+        {
+            let dense = dense.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let dense = dense.expect("poisoned image dense lock");
+            assert!(
+                dense.is_none(),
+                "full-range transform should not allocate a dense map"
+            );
+        }
+
+        image.with_access(&dense, info, partial, |previous| {
+            previous.after_access(ray_read)
+        });
+        assert!(access.is_dense_active());
+        // A full-range transform must receive each distinct history, not the packed sentinel.
+        image.with_access(&dense, info, whole, |previous| {
+            ImageAccessSet::from_access(if previous.contains_sampled_read(ray_read) {
+                AccessType::TransferWrite
+            } else {
+                AccessType::TransferRead
+            })
+        });
+        assert!(access.is_dense_active());
+        {
+            let dense = dense.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let dense = dense.expect("poisoned image dense lock");
+            let map = dense.as_ref().expect("missing dense access state");
+            for layer in 0..2 {
+                for mip in 0..2 {
+                    assert_access_set_eq(
+                        map.subresource(0, layer, mip),
+                        &[if layer == 1 && mip == 1 {
+                            AccessType::TransferWrite
+                        } else {
+                            AccessType::TransferRead
+                        }],
+                    );
+                }
+            }
+        }
+
+        image.with_access(&dense, info, partial, |previous| {
+            assert_access_set_eq(previous, &[AccessType::TransferWrite]);
+            ImageAccessSet::from_access(AccessType::TransferRead)
+        });
+        assert!(!access.is_dense_active());
+        image.with_access(&dense, info, whole, |previous| {
+            assert_access_set_eq(previous, &[AccessType::TransferRead]);
+            ImageAccessSet::from_access(AccessType::Nothing)
+        });
+        assert!(!access.is_dense_active());
+        let previous = image
+            .replace(&dense, info, fragment_read, whole)
+            .collect::<Vec<_>>();
+        assert_eq!(previous.len(), 1);
+        assert_access_ranges_eq(previous[0], (AccessType::Nothing, whole));
+        let dense = dense.lock();
+        #[cfg(not(feature = "parking_lot"))]
+        let dense = dense.expect("poisoned image dense lock");
+        assert!(dense.is_none());
     }
 
     #[test]

@@ -1637,7 +1637,7 @@ fn record_transfer_graphic_multipass(frame: &mut FrameContext, pool: &mut HashPo
     frame.graph.clear_color_image(images[0], [0f32; 4]);
     frame.graph.clear_color_image(images[1], [0f32; 4]);
 
-    // a and b should merge into one render pass with two subpasses; however the use of images[1] in
+    // a and b should merge into one render pass with one subpass; however the use of images[1] in
     // b should have a pipeline barrier (on the clear we just did) before the pass starts
     frame
         .graph

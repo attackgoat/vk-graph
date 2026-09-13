@@ -50,6 +50,7 @@ description = "A high-performance Vulkan driver with automatic resource manageme
 [features]
 default = ["loaded", "parking_lot"]
 checked = []
+bench-internals = []
 ash-molten=["loaded", "dep:ash-molten"]
 linked=["ash/linked"]
 loaded=["ash/loaded"]
@@ -113,3 +114,8 @@ harness = false
 [[bench]]
 name = "submission_reorder"
 harness = false
+
+[[bench]]
+name = "subpass_deps"
+harness = false
+required-features = ["bench-internals"]

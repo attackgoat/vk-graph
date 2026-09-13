@@ -1070,7 +1070,7 @@ struct FrozenExecutionAccess {
 /// [`PassBuilder`](https://github.com/EmbarkStudios/kajiya/blob/main/crates/lib/kajiya-rg/src/pass_builder.rs)
 /// and
 /// [`graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/graph.cpp).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Graph {
     cmds: Vec<CommandData>,
     resource_sets: ResourceSetMap,
@@ -1818,29 +1818,6 @@ impl Graph {
     }
 }
 
-impl Default for Graph {
-    fn default() -> Self {
-        Self {
-            cmds: Default::default(),
-            resource_sets: Default::default(),
-            resources: Default::default(),
-            timestamp_queries: Default::default(),
-
-            #[cfg(feature = "checked")]
-            graph_id: GraphId::next(),
-
-            #[cfg(feature = "checked")]
-            prepared_stream_acceleration_structure_accesses: Default::default(),
-
-            #[cfg(feature = "checked")]
-            prepared_stream_image_accesses: Default::default(),
-
-            #[cfg(feature = "checked")]
-            prepared_stream_micromap_accesses: Default::default(),
-        }
-    }
-}
-
 /// Builder for incrementally constructing a [`Graph`].
 pub struct GraphBuilder {
     graph: Graph,
@@ -1991,6 +1968,13 @@ impl GraphId {
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .expect("graph identity overflow"),
         )
+    }
+}
+
+#[cfg(feature = "checked")]
+impl Default for GraphId {
+    fn default() -> Self {
+        Self::next()
     }
 }
 

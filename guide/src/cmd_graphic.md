@@ -3,6 +3,26 @@
 Graphics commands are recorded after binding a `GraphicsPipeline` and declaring attachments such as
 `color_attachment_image` or `depth_stencil_attachment_image`.
 
+Adjacent graphics commands in a submitted graph can share a Vulkan subpass when their attachments,
+layouts, sample counts, and multiview masks agree and non-attachment resources are read-only.
+Changing uniform buffers, sampled textures, descriptor sets, or compatible pipelines does not by
+itself cause another subpass. Each command still has its own bindings, recording callbacks, dynamic
+state setup, and timestamp positions.
+
+> [!NOTE]
+> Input attachments, resolves, shader writes, non-sampled image reads, later clears/discards, and
+> incompatible attachment configurations cause subpasses to conservatively retain command-defined
+> boundaries.
+
+> [!WARNING]
+> Recording callback boundaries are not guaranteed Vulkan subpass boundaries; raw Vulkan
+> calls within callbacks must not advance or end the graph-managed render pass.
+
+The first declaration of an attachment supplies its render-pass load operation. A later
+`LoadOp::Clear` explicitly clears that attachment before the execution's callback, over the full
+graph-managed render-pass area, regardless of the callback's viewport or scissor. `DontCare`
+permits undefined contents; it does not request a zero fill.
+
 API docs: [`GraphicsCommandRef::draw`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw),
 [`GraphicsCommandRef::draw_indexed`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw_indexed),
 [`GraphicsCommandRef::draw_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw_indirect),
