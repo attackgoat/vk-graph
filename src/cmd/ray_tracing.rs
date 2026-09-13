@@ -200,6 +200,7 @@ impl RayTracingCommandRef<'_> {
     ///
     /// See [`vkCmdSetRayTracingPipelineStackSizeKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetRayTracingPipelineStackSizeKHR.html).
     #[profiling::function]
+    #[inline]
     pub fn set_stack_size(&self, pipeline_stack_size: u32) -> &Self {
         let khr_ray_tracing_pipeline = Device::expect_vk_khr_ray_tracing_pipeline(&self.cmd.device);
 
@@ -292,6 +293,7 @@ impl RayTracingCommandRef<'_> {
     /// [example]: https://github.com/attackgoat/vk-graph/blob/master/examples/ray_tracing.rs
     #[allow(clippy::too_many_arguments)]
     #[profiling::function]
+    #[inline]
     pub fn trace_rays(
         &self,
         raygen_shader_binding_table: &vk::StridedDeviceAddressRegionKHR,
@@ -330,6 +332,7 @@ impl RayTracingCommandRef<'_> {
     ///
     /// [buffer device address]: crate::driver::buffer::Buffer::device_address
     #[profiling::function]
+    #[inline]
     pub fn trace_rays_indirect(
         &self,
         raygen_shader_binding_table: &vk::StridedDeviceAddressRegionKHR,

@@ -883,6 +883,7 @@ impl NodeSealed for StreamArg<Buffer> {
         resources[self.index].expect_buffer()
     }
 
+    #[inline]
     fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
         resources[index].expect_buffer()
     }
@@ -911,6 +912,7 @@ impl NodeSealed for StreamArg<Image> {
         resources[self.index].expect_image()
     }
 
+    #[inline]
     fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
         resources[index].expect_image()
     }

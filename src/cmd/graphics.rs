@@ -1718,6 +1718,7 @@ impl GraphicsCommandRef<'_> {
     /// `first_vertex`. The primitives are drawn `instance_count` times with `instance_index`
     /// starting with `first_instance` and increasing sequentially for each instance.
     #[profiling::function]
+    #[inline]
     pub fn draw(
         &self,
         vertex_count: u32,
@@ -1745,6 +1746,7 @@ impl GraphicsCommandRef<'_> {
     /// buffer is treated as an array of tightly packed unsigned integers of size defined by the
     /// `index_ty` parameter with which the buffer was bound.
     #[profiling::function]
+    #[inline]
     pub fn draw_indexed(
         &self,
         index_count: u32,
@@ -2068,6 +2070,7 @@ impl GraphicsCommandRef<'_> {
     ///
     /// See [`vkCmdSetScissor`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetScissor.html).
     #[profiling::function]
+    #[inline]
     pub fn set_scissor(&self, first_scissor: u32, scissors: &[vk::Rect2D]) -> &Self {
         unsafe {
             self.cmd
@@ -2085,6 +2088,7 @@ impl GraphicsCommandRef<'_> {
     ///
     /// See [`vkCmdSetViewport`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetViewport.html).
     #[profiling::function]
+    #[inline]
     pub fn set_viewport(&self, first_viewport: u32, viewports: &[vk::Viewport]) -> &Self {
         unsafe {
             self.cmd

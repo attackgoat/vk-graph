@@ -337,6 +337,7 @@ impl AnyResource {
         }
     }
 
+    #[inline]
     fn expect_buffer(&self) -> &Buffer {
         self.as_buffer().expect("missing buffer resource")
     }
@@ -350,6 +351,7 @@ impl AnyResource {
         }
     }
 
+    #[inline]
     fn expect_image(&self) -> &Image {
         self.as_image().expect("missing image resource")
     }
