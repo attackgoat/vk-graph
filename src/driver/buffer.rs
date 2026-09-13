@@ -18,7 +18,7 @@ use {
         iter::once,
         mem::{ManuallyDrop, take},
         ops::{DerefMut, Range},
-        sync::atomic::{AtomicU8, AtomicU64, Ordering},
+        sync::atomic::{AtomicU64, Ordering},
         thread::panicking,
     },
     vk_sync::AccessType,
@@ -1038,27 +1038,21 @@ impl BufferSyncInfo {
 #[derive(Debug)]
 struct ExclusiveSharing {
     sharing_runs: Mutex<RunMap<SharingMode>>,
-    sharing_runs_state: AtomicU8,
     uniform: AtomicU64,
 }
 
 impl ExclusiveSharing {
+    // Distinct from Concurrent/Unknown; its family is QUEUE_FAMILY_IGNORED,
+    // which cannot identify a real queue. Once published, this marker is permanent.
+    const DENSE: u64 = u64::MAX - 2;
+
     fn new(size: vk::DeviceSize) -> Self {
         let sharing = SharingMode::Exclusive(None);
 
         Self {
             sharing_runs: Mutex::new(RunMap::new(size, sharing)),
-            sharing_runs_state: AtomicU8::new(RunTrackingState::Uniform as _),
             uniform: AtomicU64::new(sharing.encode()),
         }
-    }
-
-    fn is_sharing_runs_active(&self) -> bool {
-        self.sharing_runs_state() == RunTrackingState::Dense
-    }
-
-    fn is_promoting(&self) -> bool {
-        self.sharing_runs_state() == RunTrackingState::Promoting
     }
 
     fn promote_and_set_ranges<I>(
@@ -1078,31 +1072,27 @@ impl ExclusiveSharing {
         let mut sharing_runs = sharing_runs;
 
         let (min_ranges, _) = sharing_ranges.size_hint();
-        sharing_runs.runs.reserve(min_ranges.saturating_mul(2));
 
-        if self.is_sharing_runs_active() {
-            for sharing_range in sharing_ranges {
-                RunMapIter::new(&mut *sharing_runs, sharing, sharing_range).finish();
-            }
-
-            return;
+        // A uniform writer either precedes this swap and is captured here, or its
+        // CAS fails and it takes the locked path. Readers also lock on the marker.
+        let current = self.uniform.swap(Self::DENSE, Ordering::AcqRel);
+        if current != Self::DENSE {
+            *sharing_runs = RunMap::new(size, SharingMode::decode(current));
         }
 
-        self.set_promoting();
-        let current = SharingMode::decode(self.uniform.load(Ordering::Acquire));
-        *sharing_runs = RunMap::new(size, current);
-        sharing_runs.runs.reserve(min_ranges.saturating_mul(2));
+        if min_ranges > 1 {
+            sharing_runs.runs.reserve(min_ranges.saturating_mul(2));
+        }
 
         for sharing_range in sharing_ranges {
-            RunMapIter::new(&mut *sharing_runs, sharing, sharing_range).finish();
+            sharing_runs.set_range(sharing, sharing_range);
         }
-
-        self.set_dense();
     }
 
     fn ranges_in(&self, query_range: BufferSubresourceRange) -> SharingRunIter<'_> {
-        if !self.uses_sharing_runs() {
-            let sharing = SharingMode::decode(self.uniform.load(Ordering::Acquire));
+        let current = self.uniform.load(Ordering::Acquire);
+        if current != Self::DENSE {
+            let sharing = SharingMode::decode(current);
 
             return SharingRunIter::Constant(Some((sharing, query_range)));
         }
@@ -1121,16 +1111,6 @@ impl ExclusiveSharing {
         }
     }
 
-    fn set_promoting(&self) {
-        self.sharing_runs_state
-            .store(RunTrackingState::Promoting as _, Ordering::Release);
-    }
-
-    fn set_dense(&self) {
-        self.sharing_runs_state
-            .store(RunTrackingState::Dense as _, Ordering::Release);
-    }
-
     fn set_range(
         &self,
         size: vk::DeviceSize,
@@ -1142,25 +1122,7 @@ impl ExclusiveSharing {
             return;
         }
 
-        let sharing_runs = self.sharing_runs.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
-
-        #[cfg(feature = "parking_lot")]
-        let mut sharing_runs = sharing_runs;
-
-        if self.is_sharing_runs_active() {
-            RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
-
-            return;
-        }
-
-        self.set_promoting();
-        let current = SharingMode::decode(self.uniform.load(Ordering::Acquire));
-        *sharing_runs = RunMap::new(size, current);
-        RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
-        self.set_dense();
+        self.promote_and_set_ranges(size, sharing, once(sharing_range));
     }
 
     fn set_ranges<I>(&self, size: vk::DeviceSize, sharing: SharingMode, sharing_ranges: I)
@@ -1188,54 +1150,40 @@ impl ExclusiveSharing {
     fn set_uniform_or_dense(&self, sharing: SharingMode, sharing_range: BufferSubresourceRange) {
         let encoded_sharing = sharing.encode();
 
+        debug_assert_ne!(encoded_sharing, Self::DENSE);
+
+        let mut current = self.uniform.load(Ordering::Acquire);
+
         loop {
-            if self.uses_sharing_runs() {
+            if current == Self::DENSE {
                 let sharing_runs = self.sharing_runs.lock();
 
                 #[cfg(not(feature = "parking_lot"))]
-                let sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
+                let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
 
-                RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
+                #[cfg(feature = "parking_lot")]
+                let mut sharing_runs = sharing_runs;
 
-                return;
-            }
-
-            let current = self.uniform.load(Ordering::Acquire);
-            if self
-                .uniform
-                .compare_exchange(
-                    current,
-                    encoded_sharing,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                if self.is_promoting() {
-                    let sharing_runs = self.sharing_runs.lock();
-
-                    #[cfg(not(feature = "parking_lot"))]
-                    let sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
-
-                    RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
-                }
+                sharing_runs.set_range(sharing, sharing_range);
 
                 return;
             }
-        }
-    }
 
-    fn sharing_runs_state(&self) -> RunTrackingState {
-        match self.sharing_runs_state.load(Ordering::Acquire) {
-            0 => RunTrackingState::Uniform,
-            1 => RunTrackingState::Promoting,
-            2 => RunTrackingState::Dense,
-            _ => unreachable!("invalid buffer sharing_runs_state"),
-        }
-    }
+            #[cfg(test)]
+            if let Some(before_cas) = test::BEFORE_SHARING_CAS.with(|hook| hook.take()) {
+                before_cas();
+            }
 
-    fn uses_sharing_runs(&self) -> bool {
-        self.sharing_runs_state() != RunTrackingState::Uniform
+            match self.uniform.compare_exchange(
+                current,
+                encoded_sharing,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(observed) => current = observed,
+            }
+        }
     }
 }
 
@@ -1275,10 +1223,59 @@ impl<V> RunMap<V> {
 
         run_idx.saturating_sub(1)
     }
+
+    /// Assigns without visiting old values, retaining only the boundary runs.
+    fn set_range(&mut self, value: V, range: BufferSubresourceRange)
+    where
+        V: Copy + PartialEq,
+    {
+        debug_assert!(range.start < range.end && range.end <= self.size);
+
+        if range.start == 0 && range.end == self.size {
+            self.runs.truncate(1);
+            self.runs[0] = (value, 0);
+            return;
+        }
+
+        let start_idx = self.run_index_at(range.start);
+        if self.runs[start_idx].0 == value
+            && self
+                .runs
+                .get(start_idx + 1)
+                .is_none_or(|(_, start)| range.end <= *start)
+        {
+            return;
+        }
+
+        let end_idx = self.run_index_at(range.end);
+        let right = (range.end < self.size).then(|| self.runs[end_idx].0);
+        let mut insert_idx = start_idx + usize::from(self.runs[start_idx].1 < range.start);
+        let removed = end_idx + 1 - insert_idx;
+
+        #[cfg(test)]
+        if removed != 0 {
+            test::SET_RANGE_SHIFTED_RUNS.with(|count| {
+                count.set(count.get() + self.runs.len() - (end_idx + 1));
+            });
+        }
+
+        self.runs.copy_within(end_idx + 1.., insert_idx);
+        self.runs.truncate(self.runs.len() - removed);
+
+        if insert_idx == 0 || self.runs[insert_idx - 1].0 != value {
+            self.runs.insert(insert_idx, (value, range.start));
+            insert_idx += 1;
+        }
+
+        if let Some(right) = right.filter(|right| *right != value) {
+            self.runs.insert(insert_idx, (right, range.end));
+        }
+    }
 }
 
 struct RunMapCursor {
     run_idx: usize,
+    write_idx: usize,
     remaining_range: BufferSubresourceRange,
 }
 
@@ -1336,14 +1333,8 @@ impl RunMapCursor {
         Self {
             remaining_range,
             run_idx,
+            write_idx: run_idx,
         }
-    }
-
-    fn next<V>(&mut self, map: &mut RunMap<V>, new_value: V) -> Option<(V, BufferSubresourceRange)>
-    where
-        V: Copy + PartialEq + Debug,
-    {
-        self.next_with(map, |_| new_value)
     }
 
     fn next_with<V>(
@@ -1376,114 +1367,59 @@ impl RunMapCursor {
         remaining_range.end = remaining_range.end.min(old_end);
         self.remaining_range.start = remaining_range.end;
 
-        if old_value == new_value {
-            self.run_idx += 1;
-        } else if old_start < remaining_range.start {
-            if let Some((_, start)) = map
-                .runs
-                .get_mut(self.run_idx + 1)
-                .filter(|(value, _)| *value == new_value && old_end == remaining_range.end)
-            {
-                *start = remaining_range.start;
-                self.run_idx += 1;
+        let mut new_start = remaining_range.start;
+        if old_start < new_start {
+            if old_value == new_value {
+                new_start = old_start;
             } else {
+                // Only the first run can need a left-boundary split.
                 self.run_idx += 1;
-                map.runs
-                    .insert(self.run_idx, (new_value, remaining_range.start));
+                self.write_idx += 1;
+                map.runs.insert(self.run_idx, (old_value, new_start));
+            }
+        }
 
-                if old_end > remaining_range.end {
+        // Compact behind the read index without shifting unvisited old values.
+        // The gap is private to this cursor until its final next (also on Drop).
+        if self.write_idx == 0 || map.runs[self.write_idx - 1].0 != new_value {
+            map.runs[self.write_idx] = (new_value, new_start);
+            self.write_idx += 1;
+        }
+
+        self.run_idx += 1;
+
+        if self.remaining_range.start == self.remaining_range.end {
+            if old_end > remaining_range.end && old_value != new_value {
+                if self.write_idx < self.run_idx {
+                    map.runs[self.write_idx] = (old_value, remaining_range.end);
+                    self.write_idx += 1;
+                } else {
                     map.runs
-                        .insert(self.run_idx + 1, (old_value, remaining_range.end));
+                        .insert(self.run_idx, (old_value, remaining_range.end));
                 }
-
-                self.run_idx += 1;
             }
-        } else if self.run_idx > 0 {
-            if map
-                .runs
-                .get(self.run_idx - 1)
-                .filter(|(value, _)| *value == new_value)
-                .is_some()
-            {
-                if old_end == remaining_range.end {
-                    map.runs.remove(self.run_idx);
-
-                    if map
-                        .runs
-                        .get(self.run_idx)
-                        .filter(|(value, _)| *value == new_value)
-                        .is_some()
-                    {
-                        map.runs.remove(self.run_idx);
-                        self.run_idx -= 1;
-                    }
-                } else {
-                    debug_assert!(map.runs.get(self.run_idx).is_some());
-
-                    let (_, start) = unsafe { map.runs.get_unchecked_mut(self.run_idx) };
-                    *start = remaining_range.end;
-                }
-            } else if old_end == remaining_range.end {
-                debug_assert!(map.runs.get(self.run_idx).is_some());
-
-                let (value, _) = unsafe { map.runs.get_unchecked_mut(self.run_idx) };
-                *value = new_value;
-
-                if map
-                    .runs
-                    .get(self.run_idx + 1)
-                    .filter(|(value, _)| *value == new_value)
-                    .is_some()
-                {
-                    map.runs.remove(self.run_idx + 1);
-                } else {
-                    self.run_idx += 1;
-                }
-            } else {
-                if let Some((_, start)) = map.runs.get_mut(self.run_idx) {
-                    *start = remaining_range.end;
-                }
-
-                map.runs
-                    .insert(self.run_idx, (new_value, remaining_range.start));
-                self.run_idx += 2;
-            }
-        } else if let Some((_, start)) = map
-            .runs
-            .get_mut(1)
-            .filter(|(value, _)| *value == new_value && old_end == remaining_range.end)
-        {
-            *start = 0;
-            map.runs.remove(0);
-        } else if old_end > remaining_range.end {
-            map.runs.insert(0, (new_value, 0));
-
-            debug_assert!(map.runs.get(1).is_some());
-
-            let (_, start) = unsafe { map.runs.get_unchecked_mut(1) };
-            *start = remaining_range.end;
-        } else {
-            debug_assert!(!map.runs.is_empty());
-
-            let (value, _) = unsafe { map.runs.get_unchecked_mut(0) };
-            *value = new_value;
 
             if map
                 .runs
-                .get(1)
-                .filter(|(value, _)| *value == new_value)
-                .is_some()
+                .get(self.run_idx)
+                .is_some_and(|(value, _)| *value == map.runs[self.write_idx - 1].0)
             {
-                map.runs.remove(1);
-            } else {
                 self.run_idx += 1;
             }
+
+            let removed = self.run_idx - self.write_idx;
+            map.runs.copy_within(self.run_idx.., self.write_idx);
+            map.runs.truncate(map.runs.len() - removed);
         }
 
         Some((old_value, remaining_range))
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "The single-range access path is currently only used in tests"
+)]
 struct RunMapIter<M, V>
 where
     M: DerefMut<Target = RunMap<V>>,
@@ -1499,6 +1435,10 @@ where
     M: DerefMut<Target = RunMap<V>>,
     V: Copy + PartialEq + Debug,
 {
+    #[allow(
+        dead_code,
+        reason = "The single-range access path is currently only used in tests"
+    )]
     fn new(map: M, new_value: V, remaining_range: BufferSubresourceRange) -> Self {
         let cursor = RunMapCursor::new(&map, remaining_range);
 
@@ -1508,8 +1448,6 @@ where
             new_value,
         }
     }
-
-    fn finish(self) {}
 }
 
 impl<M, V> Iterator for RunMapIter<M, V>
@@ -1520,7 +1458,7 @@ where
     type Item = (V, BufferSubresourceRange);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.cursor.next(&mut self.map, self.new_value)
+        self.cursor.next_with(&mut self.map, |_| self.new_value)
     }
 }
 
@@ -1532,14 +1470,6 @@ where
     fn drop(&mut self) {
         while self.next().is_some() {}
     }
-}
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RunTrackingState {
-    Uniform = 0,
-    Promoting = 1,
-    Dense = 2,
 }
 
 #[derive(Debug)]
@@ -1626,6 +1556,276 @@ mod test {
     type Builder = BufferInfoBuilder;
 
     const FUZZ_COUNT: usize = 100_000;
+
+    std::thread_local! {
+        // Count entries shifted by set_range's tail removal, not comparisons or elapsed time.
+        pub(super) static SET_RANGE_SHIFTED_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub(super) static BEFORE_SHARING_CAS: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+    }
+
+    #[test]
+    fn buffer_sharing_whole_update_retries_after_promotion() {
+        for bulk in [false, true] {
+            let sharing = std::sync::Arc::new(ExclusiveSharing::new(16));
+            let whole_owner = SharingMode::Exclusive(Some((1, 0)));
+            let partial_owner = SharingMode::Exclusive(Some((2, 1)));
+            let promoter = sharing.clone();
+            BEFORE_SHARING_CAS.with(|hook| {
+                hook.set(Some(Box::new(move || {
+                    // Complete promotion after the whole-buffer writer has loaded its
+                    // expected owner, but before it attempts the CAS.
+                    if bulk {
+                        promoter.set_ranges(16, partial_owner, [(4..8).into(), (10..12).into()]);
+                    } else {
+                        promoter.set_range(16, partial_owner, (4..8).into());
+                    }
+                })));
+            });
+            sharing.set_range(16, whole_owner, (0..16).into());
+            assert_eq!(
+                sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                vec![(whole_owner, (0..16).into())],
+                "bulk={bulk}"
+            );
+        }
+    }
+
+    #[test]
+    fn buffer_sharing_uniform_updates_survive_promotion() {
+        for bulk in [false, true] {
+            for whole_owner in [
+                SharingMode::Exclusive(None),
+                SharingMode::Concurrent,
+                SharingMode::Exclusive(Some((1, 0))),
+            ] {
+                let sharing = ExclusiveSharing::new(16);
+                let partial_owner = SharingMode::Exclusive(Some((2, 1)));
+                sharing.set_range(16, whole_owner, (0..16).into());
+                assert_eq!(
+                    sharing.uniform.load(Ordering::Acquire),
+                    whole_owner.encode()
+                );
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![(whole_owner, (0..16).into())]
+                );
+
+                if bulk {
+                    sharing.set_ranges(16, partial_owner, [(4..6).into(), (6..8).into()]);
+                } else {
+                    sharing.set_range(16, partial_owner, (4..8).into());
+                }
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![
+                        (whole_owner, (0..4).into()),
+                        (partial_owner, (4..8).into()),
+                        (whole_owner, (8..16).into()),
+                    ],
+                    "bulk={bulk}, whole_owner={whole_owner:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn run_map_set_range_noops_do_not_shift_tail() {
+        let mut map = RunMap {
+            runs: (0..1024).map(|idx| ((idx % 2) as u8, idx * 4)).collect(),
+            size: 4096,
+        };
+        let expected = map.runs.clone();
+        SET_RANGE_SHIFTED_RUNS.with(|count| count.set(0));
+        for _ in 0..128 {
+            for range in [8..9, 9..11, 8..12, 9..12] {
+                map.set_range(0, range.into());
+            }
+        }
+        assert_eq!(map.runs, expected);
+        SET_RANGE_SHIFTED_RUNS.with(|count| assert_eq!(count.get(), 0));
+    }
+
+    #[test]
+    fn run_map_set_range_matches_exhaustive_oracle() {
+        const SIZE: usize = 8;
+        let compact = |data: &[u8]| -> SmallVec<[(u8, vk::DeviceSize); 4]> {
+            data.iter()
+                .copied()
+                .enumerate()
+                .filter(|&(idx, value)| idx == 0 || data[idx - 1] != value)
+                .map(|(idx, value)| (value, idx as vk::DeviceSize))
+                .collect()
+        };
+        for bits in 0..1 << SIZE {
+            let data: [u8; SIZE] = std::array::from_fn(|idx| ((bits >> idx) & 1) as u8);
+            for start in 0..SIZE {
+                for end in start + 1..=SIZE {
+                    for value in 0..3 {
+                        let mut map = RunMap {
+                            runs: compact(&data),
+                            size: SIZE as vk::DeviceSize,
+                        };
+                        let mut expected = data;
+                        expected[start..end].fill(value);
+                        let expected = compact(&expected);
+                        for _ in 0..2 {
+                            map.set_range(
+                                value,
+                                (start as vk::DeviceSize..end as vk::DeviceSize).into(),
+                            );
+                            assert_eq!(
+                                map.runs, expected,
+                                "bits={bits} range={start}..{end} value={value}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fragmented_cursor_defers_tail_shifts() {
+        let mut map = RunMap {
+            runs: (0..1024).map(|idx| ((idx % 2) as u8, idx)).collect(),
+            size: 1024,
+        };
+        let mut iter = RunMapIter::new(&mut map, 2, (0..1024).into());
+        assert_eq!(iter.map.runs[0], (0, 0));
+        for idx in 0..128 {
+            assert_eq!(iter.next(), Some(((idx % 2) as u8, (idx..idx + 1).into())));
+        }
+        // Unvisited entries stay in place until the cursor finishes, rather than
+        // shifting the entire tail once for every merged run.
+        assert_eq!(iter.map.runs.len(), 1024);
+        assert_eq!(iter.map.runs[128], (0, 128));
+        drop(iter);
+        assert_eq!(map.runs.as_slice(), &[(2, 0)]);
+    }
+
+    #[test]
+    fn fragmented_cursor_partial_drop_preserves_boundaries() {
+        for consumed in [0, 1, 17, 63] {
+            let mut map = RunMap {
+                runs: (0..64).map(|idx| ((idx % 2) as u8, idx * 4)).collect(),
+                size: 256,
+            };
+            let mut iter = RunMapIter::new(&mut map, 2, (2..254).into());
+            for idx in 0..consumed {
+                assert_eq!(
+                    iter.next(),
+                    Some((
+                        (idx % 2) as u8,
+                        ((idx * 4).max(2)..(idx * 4 + 4).min(254)).into()
+                    ))
+                );
+            }
+            drop(iter);
+            assert_eq!(map.runs.as_slice(), &[(0, 0), (2, 2), (1, 254)]);
+        }
+    }
+
+    #[test]
+    fn fragmented_cursor_transforms_each_old_value_lazily() {
+        let mut map = AccessRuns {
+            runs: (0..64)
+                .map(|idx| {
+                    (
+                        if idx % 2 == 0 {
+                            AccessType::TransferWrite
+                        } else {
+                            AccessType::TransferRead
+                        },
+                        idx * 4,
+                    )
+                })
+                .collect(),
+            size: 256,
+        };
+        let mut cursor = RunMapCursor::new(&map, (2..254).into());
+        let mut calls = 0;
+        for idx in 0..64 {
+            let expected = if idx % 2 == 0 {
+                AccessType::TransferWrite
+            } else {
+                AccessType::TransferRead
+            };
+            assert_eq!(
+                cursor.next_with(&mut map, |old| {
+                    calls += 1;
+                    assert_eq!(old, expected);
+                    tracked_access_after(old, AccessType::HostRead)
+                }),
+                Some((expected, ((idx * 4).max(2)..(idx * 4 + 4).min(254)).into()))
+            );
+            assert_eq!(calls, idx + 1);
+        }
+        assert!(
+            cursor
+                .next_with(&mut map, |_| panic!("exhausted cursor transformed a value"))
+                .is_none()
+        );
+        let mut expected = vec![(AccessType::TransferWrite, 0)];
+        expected.extend((0..64).map(|idx| {
+            (
+                if idx % 2 == 0 {
+                    AccessType::General
+                } else {
+                    AccessType::HostRead
+                },
+                (idx * 4).max(2),
+            )
+        }));
+        expected.push((AccessType::TransferRead, 254));
+        assert_eq!(map.runs.as_slice(), expected);
+    }
+
+    #[test]
+    fn fragmented_ownership_bulk_assignment_preserves_gaps_and_resets() {
+        let sharing = ExclusiveSharing::new(256);
+        let owner_a = SharingMode::Exclusive(Some((1, 0)));
+        let owner_b = SharingMode::Exclusive(Some((2, 1)));
+        sharing.set_ranges(
+            256,
+            owner_a,
+            (0..128).map(|idx| (idx * 2..idx * 2 + 1).into()),
+        );
+        sharing.set_ranges(
+            256,
+            owner_b,
+            [(3..101).into(), (99..201).into(), (220..240).into()],
+        );
+        for offset in 0..256 {
+            let expected = if (3..201).contains(&offset) || (220..240).contains(&offset) {
+                owner_b
+            } else if offset % 2 == 0 {
+                owner_a
+            } else {
+                SharingMode::Exclusive(None)
+            };
+            assert_eq!(
+                sharing
+                    .ranges_in((offset..offset + 1).into())
+                    .collect::<Vec<_>>(),
+                vec![(expected, (offset..offset + 1).into())]
+            );
+        }
+        for ranges in [
+            vec![(0..256).into()],
+            vec![(0..128).into(), (128..256).into()],
+        ] {
+            sharing.set_ranges(256, owner_a, ranges);
+            assert_eq!(
+                sharing.ranges_in((0..256).into()).collect::<Vec<_>>(),
+                vec![(owner_a, (0..256).into())]
+            );
+            assert_eq!(
+                sharing.uniform.load(Ordering::Acquire),
+                ExclusiveSharing::DENSE
+            );
+            sharing.set_range(256, owner_b, (80..160).into());
+        }
+    }
 
     #[test]
     #[ignore = "requires a Vulkan device"]
@@ -1786,7 +1986,12 @@ mod test {
             );
             assert_access_runs_eq(
                 accesses.map,
-                &[(AccessType::HostRead, 0), (AccessType::Nothing, 15)],
+                &[
+                    (AccessType::HostRead, 0),
+                    // Compaction leaves a gap until the last old run is visited.
+                    (AccessType::TransferRead, 5),
+                    (AccessType::Nothing, 15),
+                ],
             );
             assert_eq!(
                 accesses.next().unwrap(),

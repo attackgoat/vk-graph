@@ -244,21 +244,20 @@ impl Access {
                 }
             }
             Self::Dense(access) => {
-                if info.is_full_subresource_range(range)
-                    && access
-                        .0
-                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                            // A promotion observed on retry must take the locked path instead.
-                            if current & DenseAccess::STATE_MASK != 0 {
-                                return None;
-                            }
+                if access
+                    .0
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                        // A promotion observed on retry must take the locked path instead.
+                        if current & DenseAccess::STATE_MASK != 0 {
+                            return None;
+                        }
 
-                            let previous =
-                                ImageAccessSet::from_raw(current & DenseAccess::ACCESS_MASK);
-
-                            Some((current & !DenseAccess::ACCESS_MASK) | update(previous).raw())
-                        })
-                        .is_ok()
+                        let previous = ImageAccessSet::from_raw(current & DenseAccess::ACCESS_MASK);
+                        let next = update(previous);
+                        (info.is_full_subresource_range(range) || next == previous)
+                            .then_some((current & !DenseAccess::ACCESS_MASK) | next.raw())
+                    })
+                    .is_ok()
                 {
                     return;
                 }
@@ -451,12 +450,12 @@ impl Access {
                 accumulate_sampled_reads,
             )),
             Self::Dense(access) => {
-                if !access.uses_dense() && info.is_full_subresource_range(access_range) {
-                    return AccessIter::Uniform(Some(access.swap_range(
-                        next_access,
-                        access_range,
-                        accumulate_sampled_reads,
-                    )));
+                if let Some(previous) = access.try_swap_range(
+                    next_access,
+                    accumulate_sampled_reads,
+                    info.is_full_subresource_range(access_range),
+                ) {
+                    return AccessIter::Uniform(Some((previous, access_range)));
                 }
 
                 let dense = dense.lock();
@@ -546,11 +545,9 @@ impl DenseAccess {
     }
 
     fn set_promoting(&self) {
-        let current = self.0.load(Ordering::Acquire);
-        self.0.store(
-            (current & !Self::STATE_MASK)
-                | (DenseAccessState::Promoting as u16) << Self::STATE_SHIFT,
-            Ordering::Release,
+        self.0.fetch_or(
+            (DenseAccessState::Promoting as u16) << Self::STATE_SHIFT,
+            Ordering::AcqRel,
         );
     }
 
@@ -570,20 +567,29 @@ impl DenseAccess {
         }
     }
 
-    fn swap_range(
+    fn try_swap_range(
         &self,
         next_access: AccessType,
-        access_range: vk::ImageSubresourceRange,
         accumulate_sampled_reads: bool,
-    ) -> (ImageAccessSet, vk::ImageSubresourceRange) {
+        whole_image: bool,
+    ) -> Option<ImageAccessSet> {
         let mut current = self.0.load(Ordering::Acquire);
         loop {
+            if current & Self::STATE_MASK != 0 {
+                return None;
+            }
+
             let prev_access = ImageAccessSet::from_raw(current & ImageAccessSet::VALUE_MASK);
             let next_access = if accumulate_sampled_reads {
                 prev_access.after_access(next_access)
             } else {
                 ImageAccessSet::from_access(next_access)
             };
+
+            if !whole_image && next_access != prev_access {
+                return None;
+            }
+
             let packed =
                 (DenseAccessState::Uniform as u16) << Self::STATE_SHIFT | next_access.raw();
 
@@ -591,7 +597,7 @@ impl DenseAccess {
                 .0
                 .compare_exchange_weak(current, packed, Ordering::AcqRel, Ordering::Acquire)
             {
-                Ok(_) => return (prev_access, access_range),
+                Ok(_) => return Some(prev_access),
                 Err(observed) => current = observed,
             }
         }
@@ -653,12 +659,13 @@ enum DenseAccessState {
 
 #[derive(Debug)]
 pub(crate) struct DenseMap<V> {
-    #[cfg(feature = "checked")]
     array_layer_count: u32,
-
     aspect_count: u8,
     mip_level_count: u32,
-    values: Box<[V]>,
+    // One value represents the entire image. Expanded storage counts unequal neighbors so
+    // detecting a return to uniform state never requires a second full-image scan.
+    values: Vec<V>,
+    transitions: usize,
 }
 
 impl<V> DenseMap<V> {
@@ -676,7 +683,8 @@ impl<V> DenseMap<V> {
 
         #[cfg(feature = "checked")]
         assert!(
-            idx < self.values.len(),
+            idx < (self.array_layer_count * self.mip_level_count * self.aspect_count as u32)
+                as usize,
             "idx={idx}, aspect={aspect}, layer={array_layer}, mip={mip_level}, aspect_count={}, mip_level_count={}, array_layer_count={}, len={}",
             self.aspect_count,
             self.mip_level_count,
@@ -700,18 +708,17 @@ impl<V: Copy> DenseMap<V> {
         let mip_level_count = info.mip_level_count;
 
         Self {
+            array_layer_count,
             aspect_count,
             mip_level_count,
-            values: vec![value; (aspect_count as u32 * array_layer_count * mip_level_count) as _]
-                .into_boxed_slice(),
-
-            #[cfg(feature = "checked")]
-            array_layer_count,
+            values: vec![value],
+            transitions: 0,
         }
     }
 
     fn subresource(&self, aspect: u8, array_layer: u32, mip_level: u32) -> V {
-        self.values[self.idx(aspect, array_layer, mip_level)]
+        let idx = self.idx(aspect, array_layer, mip_level);
+        self.values[if self.values.len() == 1 { 0 } else { idx }]
     }
 }
 
@@ -725,10 +732,72 @@ impl<V: Copy + PartialEq> DenseMap<V> {
     }
 
     fn uniform_value(&self) -> Option<V> {
-        let mut iter = self.values.iter().copied();
-        let first = iter.next()?;
+        (self.transitions == 0).then(|| self.values[0])
+    }
 
-        iter.all(|value| value == first).then_some(first)
+    fn set_value(&mut self, idx: usize, value: V) {
+        let previous = self.values[idx];
+        if previous == value {
+            return;
+        }
+
+        for neighbor in [idx.checked_sub(1), idx.checked_add(1)]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(&other) = self.values.get(neighbor) {
+                self.transitions -= (previous != other) as usize;
+                self.transitions += (value != other) as usize;
+            }
+        }
+
+        self.values[idx] = value;
+    }
+
+    fn set_range(&mut self, value: V, range: vk::ImageSubresourceRange) {
+        if self
+            .uniform_value()
+            .is_some_and(|previous| previous == value)
+        {
+            self.values.truncate(1);
+            return;
+        }
+
+        if range.base_array_layer == 0
+            && range.layer_count == self.array_layer_count
+            && range.base_mip_level == 0
+            && range.level_count == self.mip_level_count
+            && range.aspect_mask.as_raw().count_ones() == self.aspect_count as u32
+        {
+            self.values[0] = value;
+            self.values.truncate(1);
+            self.transitions = 0;
+            return;
+        }
+
+        if self.values.len() == 1 {
+            self.values.resize(
+                (self.array_layer_count * self.mip_level_count * self.aspect_count as u32) as usize,
+                self.values[0],
+            );
+        }
+
+        let base_aspect =
+            self.base_aspect_ordinal(range.aspect_mask.as_raw().trailing_zeros() as u8);
+        for layer in range.base_array_layer..range.base_array_layer + range.layer_count {
+            for mip in range.base_mip_level..range.base_mip_level + range.level_count {
+                for aspect in
+                    base_aspect..base_aspect + range.aspect_mask.as_raw().count_ones() as u8
+                {
+                    let idx = self.idx(aspect, layer, mip);
+                    self.set_value(idx, value);
+                }
+            }
+        }
+
+        if self.transitions == 0 {
+            self.values.truncate(1);
+        }
     }
 }
 
@@ -802,6 +871,22 @@ impl DenseMapCursor {
             level_count: 1,
         };
 
+        if self.aspect == 0
+            && self.array_layer == 0
+            && self.mip_level == 0
+            && let Some(previous) = map.uniform_value()
+        {
+            range.aspect_mask = vk::ImageAspectFlags::from_raw(
+                ((1 << self.range.aspect_count) - 1) << self.range.base_aspect_bit,
+            );
+            range.layer_count = self.range.layer_count;
+            range.level_count = self.range.level_count;
+            map.set_range(update(previous), range);
+            self.aspect = self.range.aspect_count;
+
+            return Some((previous, range));
+        }
+
         let base_aspect_ordinal = map.base_aspect_ordinal(self.range.base_aspect_bit);
         let idx = map.idx(
             base_aspect_ordinal + self.aspect,
@@ -809,11 +894,9 @@ impl DenseMapCursor {
             range.base_mip_level,
         );
 
-        let entry = unsafe { map.values.get_unchecked_mut(idx) };
-
-        let prev_value = *entry;
+        let prev_value = map.values[idx];
         let value = update(prev_value);
-        *entry = value;
+        map.set_value(idx, value);
 
         loop {
             self.mip_level += 1;
@@ -827,12 +910,11 @@ impl DenseMapCursor {
                 self.range.base_array_layer + self.array_layer,
                 self.range.base_mip_level + self.mip_level,
             );
-            let next_value = unsafe { map.values.get_unchecked_mut(idx) };
-            if *next_value != prev_value {
+            if map.values[idx] != prev_value {
                 return Some((prev_value, range));
             }
 
-            *next_value = value;
+            map.set_value(idx, value);
             range.level_count += 1;
         }
 
@@ -860,8 +942,7 @@ impl DenseMapCursor {
 
             for mip_level in self.range.base_mip_level..end_mip_level {
                 let idx = map.idx(base_aspect_ordinal + self.aspect, array_layer, mip_level);
-                let next_value = unsafe { map.values.get_unchecked_mut(idx) };
-                *next_value = value;
+                map.set_value(idx, value);
             }
 
             range.layer_count += 1;
@@ -896,8 +977,7 @@ impl DenseMapCursor {
             for array_layer in self.range.base_array_layer..end_array_layer {
                 for mip_level in self.range.base_mip_level..end_mip_level {
                     let idx = map.idx(base_aspect_ordinal + self.aspect, array_layer, mip_level);
-                    let next_value = unsafe { map.values.get_unchecked_mut(idx) };
-                    *next_value = value;
+                    map.set_value(idx, value);
                 }
             }
 
@@ -1125,7 +1205,7 @@ impl ExclusiveSharing {
         if self.is_dense_sharing_active() {
             let dense_sharing = dense.as_mut().expect("missing dense sharing state");
             for &sharing_range in sharing_ranges {
-                dense_sharing.swap(sharing, info.resolve_subresource_counts(sharing_range));
+                dense_sharing.set_range(sharing, info.resolve_subresource_counts(sharing_range));
             }
 
             return;
@@ -1138,7 +1218,7 @@ impl ExclusiveSharing {
         *dense = Some(DenseMap::new(info, current));
         let sharing_state = dense.as_mut().expect("missing dense sharing state");
         for &sharing_range in sharing_ranges {
-            sharing_state.swap(sharing, info.resolve_subresource_counts(sharing_range));
+            sharing_state.set_range(sharing, info.resolve_subresource_counts(sharing_range));
         }
 
         self.set_dense_sharing_active();
@@ -1199,7 +1279,7 @@ impl ExclusiveSharing {
     fn set_uniform_or_dense_sharing(
         &self,
         dense: &Mutex<Option<DenseMap<SharingMode>>>,
-        _info: ImageInfo,
+        info: ImageInfo,
         sharing: SharingMode,
         sharing_range: vk::ImageSubresourceRange,
     ) {
@@ -1217,7 +1297,7 @@ impl ExclusiveSharing {
                 dense
                     .as_mut()
                     .expect("missing dense sharing state")
-                    .swap(sharing, sharing_range);
+                    .set_range(sharing, info.resolve_subresource_counts(sharing_range));
 
                 return;
             }
@@ -1244,7 +1324,7 @@ impl ExclusiveSharing {
                     dense
                         .as_mut()
                         .expect("missing dense sharing state")
-                        .swap(sharing, sharing_range);
+                        .set_range(sharing, info.resolve_subresource_counts(sharing_range));
                 }
 
                 return;
@@ -1647,6 +1727,24 @@ impl Image {
         &self,
         query_range: vk::ImageSubresourceRange,
     ) -> impl Iterator<Item = (ImageSubresourceSyncInfo, SharingMode)> {
+        Self::sync_info_for_range(
+            &self.access,
+            &self.sharing,
+            &self.dense_access,
+            &self.dense_sharing,
+            self.info,
+            query_range,
+        )
+    }
+
+    fn sync_info_for_range<'a>(
+        access: &'a Access,
+        sharing: &'a Sharing,
+        dense_access: &'a Mutex<Option<DenseMap<ImageAccessSet>>>,
+        dense_sharing: &'a Mutex<Option<DenseMap<SharingMode>>>,
+        info: ImageInfo,
+        query_range: vk::ImageSubresourceRange,
+    ) -> impl Iterator<Item = (ImageSubresourceSyncInfo, SharingMode)> + 'a {
         #[derive(Clone, Copy)]
         enum SharingSource {
             Concurrent,
@@ -1654,9 +1752,9 @@ impl Image {
             Dense,
         }
 
-        let query_range = self.info.resolve_subresource_counts(query_range);
+        let query_range = info.resolve_subresource_counts(query_range);
         let subresource_ranges = ImageSubresourceRangeIter::new(query_range);
-        let format_aspect_mask = format_aspect_mask(self.info.format);
+        let format_aspect_mask = format_aspect_mask(info.format);
         #[derive(Clone, Copy)]
         enum AccessSource<'a> {
             Uniform(ImageAccessSet),
@@ -1664,13 +1762,13 @@ impl Image {
             Dense,
         }
 
-        let access_source = match &self.access {
+        let mut access_source = match access {
             Access::Uniform(uniform) => AccessSource::Uniform(uniform.load()),
             Access::DualAspect(dual) => AccessSource::DualAspect(dual),
             Access::Dense(access) if access.uses_dense() => AccessSource::Dense,
             Access::Dense(access) => AccessSource::Uniform(access.load()),
         };
-        let sharing_source = match &self.sharing {
+        let mut sharing_source = match sharing {
             Sharing::Concurrent => SharingSource::Concurrent,
             Sharing::Exclusive(exclusive) if exclusive.uses_dense_sharing() => SharingSource::Dense,
             Sharing::Exclusive(exclusive) => SharingSource::Uniform(SharingMode::decode(
@@ -1678,32 +1776,74 @@ impl Image {
             )),
         };
 
+        let access_dense = if matches!(access_source, AccessSource::Dense) {
+            let dense = dense_access.lock();
+
+            #[cfg(not(feature = "parking_lot"))]
+            let dense = dense.expect("poisoned image dense access lock");
+
+            // The access iterator may have demoted while this reader waited for its lock.
+            if let Some(value) = dense.as_ref().and_then(DenseMap::uniform_value) {
+                access_source = AccessSource::Uniform(value);
+            } else if dense.is_none() {
+                let Access::Dense(access) = access else {
+                    unreachable!()
+                };
+                access_source = AccessSource::Uniform(access.load());
+            }
+
+            Some(dense)
+        } else {
+            None
+        };
+        let sharing_dense = if matches!(sharing_source, SharingSource::Dense) {
+            let dense = dense_sharing.lock();
+
+            #[cfg(not(feature = "parking_lot"))]
+            let dense = dense.expect("poisoned image dense sharing lock");
+
+            if let Some(value) = dense.as_ref().and_then(DenseMap::uniform_value) {
+                sharing_source = SharingSource::Uniform(value);
+            }
+
+            Some(dense)
+        } else {
+            None
+        };
+
         struct UniformSyncInfoIter {
-            access: ImageAccessSet,
+            sync: ImageSubresourceSyncInfo,
             sharing: SharingMode,
-            subresource_ranges: ImageSubresourceRangeIter,
+            aspects: vk::ImageAspectFlags,
         }
 
         impl Iterator for UniformSyncInfoIter {
             type Item = (ImageSubresourceSyncInfo, SharingMode);
 
             fn next(&mut self) -> Option<Self::Item> {
-                self.subresource_ranges.next().map(|range| {
-                    (
-                        ImageSubresourceSyncInfo::from_access_set(self.access, range),
-                        self.sharing,
-                    )
-                })
+                if self.aspects.is_empty() {
+                    return None;
+                }
+
+                let aspect =
+                    vk::ImageAspectFlags::from_raw(1 << self.aspects.as_raw().trailing_zeros());
+                self.aspects &= !aspect;
+                let mut sync = self.sync;
+                sync.range.aspect_mask = aspect;
+
+                Some((sync, self.sharing))
             }
 
             fn size_hint(&self) -> (usize, Option<usize>) {
-                self.subresource_ranges.size_hint()
+                let len = self.len();
+
+                (len, Some(len))
             }
         }
 
         impl ExactSizeIterator for UniformSyncInfoIter {
             fn len(&self) -> usize {
-                self.subresource_ranges.len()
+                self.aspects.as_raw().count_ones() as usize
             }
         }
 
@@ -1803,32 +1943,11 @@ impl Image {
             (access_source, uniform_sharing)
         {
             SyncInfoIter::Uniform(UniformSyncInfoIter {
-                access,
+                sync: ImageSubresourceSyncInfo::from_access_set(access, query_range),
                 sharing,
-                subresource_ranges,
+                aspects: query_range.aspect_mask,
             })
         } else {
-            let access_dense = if matches!(access_source, AccessSource::Dense) {
-                let dense = self.dense_access.lock();
-
-                #[cfg(not(feature = "parking_lot"))]
-                let dense = dense.expect("poisoned image dense access lock");
-
-                Some(dense)
-            } else {
-                None
-            };
-            let sharing_dense = if matches!(sharing_source, SharingSource::Dense) {
-                let dense = self.dense_sharing.lock();
-
-                #[cfg(not(feature = "parking_lot"))]
-                let dense = dense.expect("poisoned image dense sharing lock");
-
-                Some(dense)
-            } else {
-                None
-            };
-
             SyncInfoIter::Dense(DenseSyncInfoIter {
                 access_source,
                 format_aspect_mask,
@@ -1903,10 +2022,15 @@ impl Image {
             }
         }
 
-        let same_sync_and_sharing =
+        let can_merge_mip_levels =
             |lhs: (ImageSubresourceSyncInfo, SharingMode),
              rhs: (ImageSubresourceSyncInfo, SharingMode)| {
-                lhs.0.same_sync(rhs.0) && lhs.1 == rhs.1
+                lhs.0.can_merge_mip_levels(rhs.0) && lhs.1 == rhs.1
+            };
+        let can_merge_array_layers =
+            |lhs: (ImageSubresourceSyncInfo, SharingMode),
+             rhs: (ImageSubresourceSyncInfo, SharingMode)| {
+                lhs.0.can_merge_array_layers(rhs.0) && lhs.1 == rhs.1
             };
         let merge_array_layers =
             |lhs: &mut (ImageSubresourceSyncInfo, SharingMode),
@@ -1919,9 +2043,9 @@ impl Image {
                 lhs.0.merge_mip_levels(rhs.0);
             };
 
-        let mip_levels = CompactIter::new(sync_infos, same_sync_and_sharing, merge_mip_levels);
+        let mip_levels = CompactIter::new(sync_infos, can_merge_mip_levels, merge_mip_levels);
 
-        CompactIter::new(mip_levels, same_sync_and_sharing, merge_array_layers)
+        CompactIter::new(mip_levels, can_merge_array_layers, merge_array_layers)
     }
 
     /// Produces a new `Image` sharing the same Vulkan handle with independent access tracking.
@@ -3464,7 +3588,9 @@ mod test {
                         let dense = Mutex::new(None);
                         let mut base_set = ImageAccessSet::from_access(base);
                         if base_set.is_sampled_read() {
-                            access.swap(&dense, info, compute_read, whole).for_each(drop);
+                            access
+                                .swap(&dense, info, compute_read, whole)
+                                .for_each(drop);
                             base_set = base_set.after_access(compute_read);
                         }
                         let history = image_subresource_range(A::DEPTH, 1..2, 1..2);
@@ -3496,8 +3622,7 @@ mod test {
                             } else {
                                 base_set
                             };
-                            let resolved =
-                                super::image_subresource_range_intersects(touched, cell);
+                            let resolved = super::image_subresource_range_intersects(touched, cell);
                             let resolve_access = if !resolved {
                                 None
                             } else if annotations.len() == 2 {
@@ -5725,6 +5850,320 @@ mod test {
                 );
             }
             Sharing::Concurrent => panic!("expected exclusive ownership"),
+        }
+    }
+
+    #[test]
+    fn reduced_snapshot_preserves_layers_mips_and_aspects() {
+        use vk::ImageAspectFlags as A;
+
+        for format in [vk::Format::R8_UINT, vk::Format::D32_SFLOAT_S8_UINT] {
+            let info = image_subresource(format, 4, 4);
+            let aspects = format_aspect_mask(format);
+            let range = image_subresource_range(aspects, 1..3, 1..3);
+            let access = Access::new(info, AccessType::TransferWrite);
+            let dense_access = Mutex::new(None);
+            let sharing = Sharing::new(info, vk::SharingMode::EXCLUSIVE);
+            let dense_sharing = Mutex::new(None);
+
+            // Exercise both the atomic and promoted ownership sources.
+            for promoted in [false, true] {
+                if promoted {
+                    sharing.set_ranges(
+                        &dense_sharing,
+                        info,
+                        SharingMode::Exclusive(Some((2, 1))),
+                        &[range],
+                    );
+                }
+                let snapshots = Image::sync_info_for_range(
+                    &access,
+                    &sharing,
+                    &dense_access,
+                    &dense_sharing,
+                    info,
+                    range,
+                )
+                .collect::<Vec<_>>();
+                assert_eq!(snapshots.len(), aspects.as_raw().count_ones() as usize);
+                for ((snapshot, owner), aspect) in snapshots.into_iter().zip(
+                    [A::COLOR, A::DEPTH, A::STENCIL]
+                        .into_iter()
+                        .filter(|aspect| aspects.contains(*aspect)),
+                ) {
+                    assert_access_ranges_eq(
+                        (AccessType::TransferWrite, snapshot.range),
+                        (
+                            AccessType::TransferWrite,
+                            image_subresource_range(aspect, 1..3, 1..3),
+                        ),
+                    );
+                    assert_eq!(
+                        owner,
+                        if promoted {
+                            SharingMode::Exclusive(Some((2, 1)))
+                        } else {
+                            SharingMode::Exclusive(None)
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reduced_snapshot_preserves_mixed_coverage() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8_UINT, 3, 3);
+        let access = Access::new(info, AccessType::TransferRead);
+        let dense_access = Mutex::new(None);
+        let sharing = Sharing::new(info, vk::SharingMode::EXCLUSIVE);
+        let dense_sharing = Mutex::new(None);
+        let changed = image_subresource_range(A::COLOR, 1..2, 1..2);
+        access
+            .swap(&dense_access, info, AccessType::TransferWrite, changed)
+            .for_each(drop);
+        sharing.set_ranges(
+            &dense_sharing,
+            info,
+            SharingMode::Exclusive(Some((2, 1))),
+            &[changed],
+        );
+        let mut visited = [[false; 3]; 3];
+        for (snapshot, owner) in Image::sync_info_for_range(
+            &access,
+            &sharing,
+            &dense_access,
+            &dense_sharing,
+            info,
+            image_subresource_range(A::COLOR, 0..3, 0..3),
+        ) {
+            let range = snapshot.range;
+            assert!(range.base_array_layer + range.layer_count <= 3);
+            assert!(range.base_mip_level + range.level_count <= 3);
+            for layer in range.base_array_layer..range.base_array_layer + range.layer_count {
+                for mip in range.base_mip_level..range.base_mip_level + range.level_count {
+                    assert!(!visited[layer as usize][mip as usize]);
+                    visited[layer as usize][mip as usize] = true;
+                    let changed = layer == 1 && mip == 1;
+                    assert_eq!(
+                        owner,
+                        if changed {
+                            SharingMode::Exclusive(Some((2, 1)))
+                        } else {
+                            SharingMode::Exclusive(None)
+                        }
+                    );
+                    assert_eq!(
+                        snapshot.layout,
+                        access_type_to_layout(if changed {
+                            AccessType::TransferWrite
+                        } else {
+                            AccessType::TransferRead
+                        })
+                    );
+                }
+            }
+        }
+        assert!(visited.into_iter().flatten().all(|visited| visited));
+    }
+
+    #[test]
+    fn reduced_partial_noop_does_not_promote_access() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8_UINT, 64, 8);
+        let image = Access::new(info, AccessType::TransferWrite);
+        let dense = Mutex::new(None);
+        let range = image_subresource_range(A::COLOR, 63..64, 7..8);
+        let mut iter = image.swap(&dense, info, AccessType::TransferWrite, range);
+        assert!(matches!(iter, AccessIter::Uniform(_)));
+        assert_access_ranges_eq(iter.next().unwrap(), (AccessType::TransferWrite, range));
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn reduced_ownership_equalization_uses_one_value() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8_UINT, 64, 8);
+        let sharing = Sharing::new(info, vk::SharingMode::EXCLUSIVE);
+        let dense = Mutex::new(None);
+        let owner = SharingMode::Exclusive(Some((2, 1)));
+        sharing.set_ranges(
+            &dense,
+            info,
+            owner,
+            &[image_subresource_range(A::COLOR, 0..32, 0..8)],
+        );
+        sharing.set_ranges(
+            &dense,
+            info,
+            owner,
+            &[image_subresource_range(A::COLOR, 32..64, 0..8)],
+        );
+        {
+            let map = dense.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let map = map.unwrap();
+            let map = map.as_ref().unwrap();
+            assert_eq!(map.uniform_value(), Some(owner));
+            assert_eq!(map.values.len(), 1);
+        }
+        let owner = SharingMode::Exclusive(Some((3, 0)));
+        sharing.set_ranges(
+            &dense,
+            info,
+            owner,
+            &[image_subresource_range(A::COLOR, 0..64, 0..8)],
+        );
+        let map = dense.lock();
+        #[cfg(not(feature = "parking_lot"))]
+        let map = map.unwrap();
+        let map = map.as_ref().unwrap();
+        assert_eq!(map.values.len(), 1);
+        assert_eq!(map.subresource(0, 63, 7), owner);
+    }
+
+    #[test]
+    fn reduced_uniform_check_does_not_scan_dense_values() {
+        use std::cell::Cell;
+
+        #[derive(Clone, Copy)]
+        struct Value<'a>(u8, &'a Cell<usize>);
+        impl PartialEq for Value<'_> {
+            fn eq(&self, other: &Self) -> bool {
+                self.1.set(self.1.get() + 1);
+                self.0 == other.0
+            }
+        }
+
+        let comparisons = Cell::new(0);
+        let info = image_subresource(vk::Format::R8_UINT, 64, 8);
+        let mut map = DenseMap::new(info, Value(0, &comparisons));
+        map.swap(
+            Value(1, &comparisons),
+            image_subresource_range(vk::ImageAspectFlags::COLOR, 63..64, 7..8),
+        )
+        .for_each(drop);
+        comparisons.set(0);
+        assert!(map.uniform_value().is_none());
+        assert_eq!(comparisons.get(), 0);
+
+        map.set_range(
+            Value(2, &comparisons),
+            image_subresource_range(vk::ImageAspectFlags::COLOR, 0..64, 0..8),
+        );
+        assert_eq!(comparisons.get(), 0);
+        assert_eq!(map.values.len(), 1);
+        assert_eq!(map.subresource(0, 63, 7).0, 2);
+    }
+
+    #[test]
+    fn reduced_dense_map_matches_subresource_oracle() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::D32_SFLOAT_S8_UINT, 4, 3);
+        let mut map = DenseMap::new(info, 0u8);
+        let mut expected = [0u8; 24];
+        let mut rng = SmallRng::seed_from_u64(83);
+        for iteration in 0..10_000 {
+            let layer = rng.random_range(0..4);
+            let mip = rng.random_range(0..3);
+            let range = image_subresource_range(
+                [A::DEPTH, A::STENCIL, A::DEPTH | A::STENCIL][rng.random_range(0..3)],
+                layer..rng.random_range(layer + 1..=4),
+                mip..rng.random_range(mip + 1..=3),
+            );
+            let value = rng.random_range(0..3);
+            if iteration % 2 == 0 {
+                map.set_range(value, range);
+            } else {
+                let mut iter = map.swap(value, range);
+                // Check yielded old values, then exercise completion on early drop.
+                for _ in 0..iteration % 5 {
+                    let Some((previous, range)) = iter.next() else {
+                        break;
+                    };
+                    for cell in ImageSubresourceRangeIter::new(range) {
+                        let aspect = aspect_ordinal(A::DEPTH | A::STENCIL, cell.aspect_mask);
+                        let idx = (cell.base_array_layer * 6
+                            + cell.base_mip_level * 2
+                            + aspect as u32) as usize;
+                        assert_eq!(previous, expected[idx]);
+                    }
+                }
+            }
+            for cell in ImageSubresourceRangeIter::new(range) {
+                let aspect = aspect_ordinal(A::DEPTH | A::STENCIL, cell.aspect_mask);
+                let idx =
+                    (cell.base_array_layer * 6 + cell.base_mip_level * 2 + aspect as u32) as usize;
+                expected[idx] = value;
+            }
+            assert_eq!(
+                map.transitions,
+                expected
+                    .windows(2)
+                    .filter(|pair| pair[0] != pair[1])
+                    .count()
+            );
+            assert_eq!(
+                map.uniform_value(),
+                expected
+                    .iter()
+                    .all(|value| *value == expected[0])
+                    .then_some(expected[0])
+            );
+            for layer in 0..4 {
+                for mip in 0..3 {
+                    for aspect in 0..2 {
+                        assert_eq!(
+                            map.subresource(aspect, layer, mip),
+                            expected[(layer * 6 + mip * 2 + aspect as u32) as usize]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reduced_snapshot_keeps_queue_indices_separate() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8_UINT, 1, 2);
+        let access = Access::new(info, AccessType::TransferWrite);
+        let dense_access = Mutex::new(None);
+        let sharing = Sharing::new(info, vk::SharingMode::EXCLUSIVE);
+        let dense_sharing = Mutex::new(None);
+        for mip in 0..2 {
+            sharing.set_ranges(
+                &dense_sharing,
+                info,
+                SharingMode::Exclusive(Some((2, mip))),
+                &[image_subresource_range(A::COLOR, 0..1, mip..mip + 1)],
+            );
+        }
+        let snapshots = Image::sync_info_for_range(
+            &access,
+            &sharing,
+            &dense_access,
+            &dense_sharing,
+            info,
+            image_subresource_range(A::COLOR, 0..1, 0..2),
+        )
+        .collect::<Vec<_>>();
+        assert_eq!(snapshots.len(), 2);
+        for (mip, (snapshot, owner)) in snapshots.into_iter().enumerate() {
+            assert_eq!(owner, SharingMode::Exclusive(Some((2, mip as u32))));
+            assert_access_ranges_eq(
+                (AccessType::TransferWrite, snapshot.range),
+                (
+                    AccessType::TransferWrite,
+                    image_subresource_range(A::COLOR, 0..1, mip as u32..mip as u32 + 1),
+                ),
+            );
         }
     }
 
