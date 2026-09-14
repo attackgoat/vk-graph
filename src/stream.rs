@@ -1902,13 +1902,13 @@ mod test {
             driver::{
                 compute::{ComputePipeline, ComputePipelineInfo},
                 descriptor_set::{DescriptorSetInfo, DescriptorSetUpdateInfo},
-                device::{Device, DeviceInfo},
                 shader::Shader,
             },
             pool::hash::HashPool,
+            test_support::TestDevice,
         };
 
-        let device = Device::create(DeviceInfo::default()).unwrap();
+        let device = TestDevice::new().unwrap();
         let mut pool = HashPool::new(&device);
         let pipeline = ComputePipeline::create(
             &device,

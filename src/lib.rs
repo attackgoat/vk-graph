@@ -17,6 +17,9 @@ For optional DLSS Ray Reconstruction and NRD denoising adapters, see the indepen
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+#[cfg(test)]
+extern crate self as vk_graph;
+
 pub mod cmd;
 pub mod driver;
 pub mod node;
@@ -25,13 +28,17 @@ pub mod resource;
 pub mod stream;
 pub mod submission;
 
-#[doc(hidden)]
-pub use self::fixture::Fixture;
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+pub(crate) mod test_support;
 
 mod fixture;
 mod lazy_str;
 
 pub use self::lazy_str::LazyStr;
+
+#[doc(hidden)]
+pub use self::fixture::Fixture;
 
 use {
     self::{
@@ -2439,22 +2446,24 @@ pub mod stat {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
-    use ash::vk;
-
-    use super::{
-        AnyResource, CommandExecutionAbandoned, CommandExecutions, Graph, Node, ResourceMap,
+    use {
+        super::{
+            AnyResource, CommandExecutionAbandoned, CommandExecutions, Graph, Node, ResourceMap,
+        },
+        crate::{
+            driver::{
+                DriverError,
+                accel_struct::{AccelerationStructure, AccelerationStructureInfo},
+                buffer::{Buffer, BufferInfo},
+                image::{Image, ImageInfo},
+                swapchain::SwapchainImage,
+            },
+            pool::{Pool, hash::HashPool},
+            test_support::TestDevice,
+        },
+        ash::vk,
+        std::sync::Arc,
     };
-    use crate::driver::{
-        DriverError,
-        accel_struct::{AccelerationStructure, AccelerationStructureInfo},
-        buffer::{Buffer, BufferInfo},
-        device::{Device, DeviceInfo},
-        image::{Image, ImageInfo},
-        swapchain::SwapchainImage,
-    };
-    use crate::pool::{Pool, hash::HashPool};
 
     #[test]
     fn freezing_stream_accesses_again_preserves_declarations_and_remapping() {
@@ -2602,17 +2611,13 @@ mod test {
     mod integration {
         use super::*;
 
-        fn test_device() -> Result<Device, DriverError> {
-            Device::create(DeviceInfo::default())
-        }
-
         mod resource_map {
             use super::*;
 
             #[test]
             #[ignore = "requires Vulkan device"]
             fn bind_assigns_a_new_node_index_every_time() -> Result<(), DriverError> {
-                let device = test_device()?;
+                let device = TestDevice::new()?;
                 let buffer = Arc::new(Buffer::create(
                     &device,
                     BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
@@ -2639,7 +2644,7 @@ mod test {
             #[ignore = "requires Vulkan device"]
             fn bind_shared_reuses_the_existing_node_index_for_the_same_address()
             -> Result<(), DriverError> {
-                let device = test_device()?;
+                let device = TestDevice::new()?;
                 let buffer = Arc::new(Buffer::create(
                     &device,
                     BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
@@ -2657,7 +2662,7 @@ mod test {
             #[ignore = "requires Vulkan device"]
             fn bind_shared_creates_distinct_node_indices_for_different_addresses()
             -> Result<(), DriverError> {
-                let device = test_device()?;
+                let device = TestDevice::new()?;
                 let buffer = Arc::new(Buffer::create(
                     &device,
                     BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
@@ -2733,7 +2738,7 @@ mod test {
                     *state
                 }
 
-                let device = test_device()?;
+                let device = TestDevice::new()?;
                 let mut pool = HashPool::new(&device);
                 let mut graph = Graph::new();
 

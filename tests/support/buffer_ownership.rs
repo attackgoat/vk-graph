@@ -1,22 +1,18 @@
 //! Run with Vulkan validation installed:
 //! ```sh
 //! RUST_LOG=debug VK_GRAPH_SKIP_VALIDATION_PARK=1 \
-//! VK_VALIDATION_VALIDATE_SYNC=1 VK_VALIDATION_SYNCVAL_SHADER_ACCESSES_HEURISTIC=1 \
-//! cargo test --offline --test buffer_ownership -- --ignored --nocapture
+//! cargo test --offline --lib test_support::buffer_ownership -- --ignored --nocapture
 //! ```
 
 use {
+    super::TestDevice,
     ash::vk,
-    std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    std::sync::Arc,
     vk_graph::{
         Graph,
         cmd::{LoadOp, StoreOp},
         driver::{
             buffer::{Buffer, BufferInfo},
-            device::{Device, DeviceInfo},
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
         },
@@ -26,55 +22,11 @@ use {
     vk_sync::AccessType,
 };
 
-static ERRORS: AtomicUsize = AtomicUsize::new(0);
-static LOGGER: ValidationLog = ValidationLog;
-
-struct ValidationLog;
-
-impl log::Log for ValidationLog {
-    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-        metadata.level() <= log::Level::Debug
-    }
-
-    fn flush(&self) {}
-
-    fn log(&self, record: &log::Record<'_>) {
-        if record.level() == log::Level::Error {
-            ERRORS.fetch_add(1, Ordering::Relaxed);
-        }
-        if record.level() <= log::Level::Warn {
-            eprintln!("{}: {}", record.level(), record.args());
-        }
-    }
-}
-
 #[test]
 #[ignore = "requires Vulkan validation, graphics and a dedicated transfer queue"]
 fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow::Result<()> {
-    // The validation callback otherwise aborts or parks on errors.
-    anyhow::ensure!(
-        !std::env::var("RUST_LOG").unwrap_or_default().is_empty(),
-        "set RUST_LOG=debug"
-    );
-    anyhow::ensure!(
-        std::env::var("VK_GRAPH_SKIP_VALIDATION_PARK").as_deref() == Ok("1"),
-        "set VK_GRAPH_SKIP_VALIDATION_PARK=1"
-    );
-    // debug(true) enables the layer, not synchronization or shader-access checks.
-    // Require launch-time settings rather than mutating the test runner's environment.
-    for setting in [
-        "VK_VALIDATION_VALIDATE_SYNC",
-        "VK_VALIDATION_SYNCVAL_SHADER_ACCESSES_HEURISTIC",
-    ] {
-        anyhow::ensure!(
-            std::env::var(setting).as_deref() == Ok("1"),
-            "set {setting}=1"
-        );
-    }
-    log::set_logger(&LOGGER).unwrap();
-    log::set_max_level(log::LevelFilter::Debug);
+    let device = TestDevice::new()?;
     let result = (|| -> anyhow::Result<()> {
-        let device = Device::create(DeviceInfo::builder().debug(true))?;
         let families = &device.physical.queue_families;
         let graphics = families
             .iter()
@@ -127,7 +79,6 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
             ),
         )?);
         for sharing_mode in [vk::SharingMode::EXCLUSIVE, vk::SharingMode::CONCURRENT] {
-            let errors = ERRORS.load(Ordering::Relaxed);
             let exclusive = sharing_mode == vk::SharingMode::EXCLUSIVE;
             let output = Arc::new(Buffer::create(
                 &device,
@@ -189,11 +140,9 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
                 output.sync_info().ranges[0].queue_family_index,
                 exclusive.then_some(transfer)
             );
-            assert_eq!(
-                ERRORS.load(Ordering::Relaxed),
-                errors,
-                "sharing_mode={sharing_mode:?}"
-            );
+            drop(readback);
+            drop(output);
+            device.assert_valid();
         }
 
         let reader = GraphicsPipeline::create(
@@ -301,11 +250,7 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
         assert_eq!(pixels.mapped_slice(), &[42, 0, 0, 255]);
         Ok(())
     })();
-    // Include errors emitted while destroying the device and pooled resources.
-    assert_eq!(
-        ERRORS.load(Ordering::Relaxed),
-        0,
-        "Vulkan validation errors"
-    );
+    // Resources have been destroyed; finish also checks device and instance teardown.
+    device.finish();
     result
 }

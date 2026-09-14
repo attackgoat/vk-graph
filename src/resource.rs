@@ -1223,7 +1223,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device"]
     fn acceleration_structure_set_rejects_direct_member_access() {
-        let device = Device::create(crate::driver::device::DeviceInfo::default()).unwrap();
+        let device = crate::test_support::TestDevice::new().unwrap();
         let acceleration_structure = Arc::new(
             AccelerationStructure::create(
                 &device,
@@ -1259,7 +1259,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device"]
     fn image_set_rejects_direct_member_access() {
-        let device = Device::create(crate::driver::device::DeviceInfo::default()).unwrap();
+        let device = crate::test_support::TestDevice::new().unwrap();
         let image = Arc::new(
             Image::create(
                 &device,
@@ -1300,7 +1300,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device"]
     fn image_set_rejects_distinct_wrappers_for_one_physical_image() {
-        let device = Device::create(crate::driver::device::DeviceInfo::default()).unwrap();
+        let device = crate::test_support::TestDevice::new().unwrap();
         let image = Arc::new(
             Image::create(
                 &device,

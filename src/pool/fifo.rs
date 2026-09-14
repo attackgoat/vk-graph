@@ -449,17 +449,14 @@ impl Pool<RenderPassInfo, RenderPass> for FifoPool {
 mod test {
     use {
         super::*,
-        crate::{
-            driver::device::{Device, DeviceInfo},
-            pool::garbage_collector::GarbageCollector,
-        },
+        crate::{pool::garbage_collector::GarbageCollector, test_support::TestDevice},
         ash::vk,
     };
 
     #[test]
     #[ignore = "requires Vulkan device"]
     fn vulkan_garbage_collector_retains_supported_fifo_resources() -> Result<(), DriverError> {
-        let device = Device::create(DeviceInfo::default())?;
+        let device = TestDevice::new()?;
         let mut collector = GarbageCollector::new(FifoPool::with_capacity(&device, 4));
         let retained_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::TRANSFER_SRC);
         let removed_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::STORAGE_BUFFER);

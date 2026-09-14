@@ -577,16 +577,13 @@ impl Pool<RenderPassInfo, RenderPass> for LazyPool {
 mod test {
     use {
         super::*,
-        crate::{
-            driver::device::{Device, DeviceInfo},
-            pool::garbage_collector::GarbageCollector,
-        },
+        crate::{pool::garbage_collector::GarbageCollector, test_support::TestDevice},
     };
 
     #[test]
     #[ignore = "requires Vulkan device"]
     fn vulkan_garbage_collector_retains_supported_lazy_resources() -> Result<(), DriverError> {
-        let device = Device::create(DeviceInfo::default())?;
+        let device = TestDevice::new()?;
         let mut collector = GarbageCollector::new(LazyPool::with_capacity(&device, 4));
         let retained_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::TRANSFER_SRC);
         let removed_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::STORAGE_BUFFER);

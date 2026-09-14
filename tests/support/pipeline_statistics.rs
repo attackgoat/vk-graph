@@ -1,4 +1,5 @@
 use {
+    super::TestDevice,
     ash::vk,
     std::sync::{Arc, Mutex},
     vk_graph::{
@@ -6,7 +7,7 @@ use {
         cmd::{LoadOp, StoreOp},
         driver::{
             buffer::{Buffer, BufferInfo},
-            device::{Device, DeviceInfo},
+            device::Device,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
         },
@@ -46,8 +47,9 @@ impl Drop for QueryOwner {
 }
 
 #[test]
+#[ignore = "requires Vulkan validation and pipeline statistics support"]
 fn caller_stream_owns_queries_through_completion() -> anyhow::Result<()> {
-    let device = Device::create(DeviceInfo::default())?;
+    let device = TestDevice::new()?;
     let features = unsafe {
         device
             .physical
@@ -60,6 +62,12 @@ fn caller_stream_owns_queries_through_completion() -> anyhow::Result<()> {
         eprintln!("SKIP: pipeline statistics/host query reset unsupported; 0 queries executed");
         return Ok(());
     }
+    let Some(queue_family) = device.physical.queue_families.iter().position(|queue| {
+        queue.queue_count > 0 && queue.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+    }) else {
+        eprintln!("SKIP: graphics queue unavailable; 0 queries executed");
+        return Ok(());
+    };
     let flags = vk::QueryPipelineStatisticFlags::INPUT_ASSEMBLY_VERTICES
         | vk::QueryPipelineStatisticFlags::INPUT_ASSEMBLY_PRIMITIVES
         | vk::QueryPipelineStatisticFlags::VERTEX_SHADER_INVOCATIONS
@@ -171,7 +179,9 @@ fn caller_stream_owns_queries_through_completion() -> anyhow::Result<()> {
     drop(owner);
     assert!(weak.upgrade().is_some());
     let mut pool = HashPool::new(&device);
-    let mut fence = graph.finalize().queue_submit(&mut pool, 0, 0)?;
+    let mut fence = graph
+        .finalize()
+        .queue_submit(&mut pool, queue_family as u32, 0)?;
     assert!(
         weak.upgrade().is_some(),
         "query owner dropped after recording but before completion"
@@ -210,5 +220,9 @@ fn caller_stream_owns_queries_through_completion() -> anyhow::Result<()> {
     assert!(abandoned.upgrade().is_some());
     drop(graph);
     assert!(abandoned.upgrade().is_none());
+    drop(fence);
+    drop(pool);
+    drop(pipeline);
+    device.finish();
     Ok(())
 }

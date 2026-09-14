@@ -30,6 +30,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Testing now requires and automatically-enables Vulkan SDK validation layers during test runs.
 - Continue compatible graphics executions as shared subpasses while preserving per-execution
   descriptors, callbacks, state, and timestamps.
 - **`checked` is disabled by default.** Default features are now `loaded` and `parking_lot`.

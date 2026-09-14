@@ -8794,7 +8794,11 @@ pub mod bench {
                 0
             };
             let storage = matches!(spec.case, StorageHazards | StorageImageReads);
-            let shared_buffers = if spec.case == WriteOnceReadMany { 16 } else { 0 };
+            let shared_buffers = if spec.case == WriteOnceReadMany {
+                16
+            } else {
+                0
+            };
             let attachment_nodes = if grouped {
                 n / 2 + 1
             } else {
@@ -9160,10 +9164,14 @@ pub mod bench {
                         case,
                     })
             })
-            .chain([1, 16, 64, 256, 1024].into_iter().map(|subpass_count| Self {
-                subpass_count,
-                case: WriteOnceReadMany,
-            }))
+            .chain(
+                [1, 16, 64, 256, 1024]
+                    .into_iter()
+                    .map(|subpass_count| Self {
+                        subpass_count,
+                        case: WriteOnceReadMany,
+                    }),
+            )
         }
     }
 
@@ -9366,7 +9374,6 @@ pub mod fuzz {
 
 #[cfg(test)]
 mod test {
-    // Run validation tests with --test-threads=1: the error counter and logger are process-global.
     use super::{
         BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData, CommandRecordingResources,
         GraphicsExecutionInfo, ImageOwnership, ImageOwnershipLayouts, ImageOwnershipTransfer,
@@ -9389,11 +9396,10 @@ mod test {
             cmd_buf::{CommandBuffer, CommandBufferInfo},
             compute::{ComputePipeline, ComputePipelineInfo},
             descriptor_set::{DescriptorSet, DescriptorSetInfo, DescriptorSetUpdateInfo},
-            device::{Device, DeviceInfo},
+            device::Device,
             fence::Fence,
             graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageAccessSet, ImageInfo, SampleCount},
-            instance::Instance,
             render_pass::{RenderPassInfo, SubpassDependency, SubpassInfo},
         },
         node::{AnyBufferNode, AnyImageNode, AnyNode, BufferNode},
@@ -9403,14 +9409,13 @@ mod test {
             PhysicalImageId, ResourceSetIndex,
         },
         stream::{BufferArg, CommandStream, CommandStreamDraft, ImageArg, StreamValueArg},
+        test_support::TestDevice,
     };
 
     use {
         ash::vk::Handle,
         std::{
-            env::set_var,
-            ops::Deref,
-            sync::{Arc, Mutex, MutexGuard, OnceLock},
+            sync::{Arc, Mutex, OnceLock},
             time::{Duration, Instant},
         },
         vk_shader_macros::glsl,
@@ -9508,7 +9513,7 @@ mod test {
                 upload.copy_buffer_to_image(staging, image);
                 textures.push(texture);
             }
-            // Complete uploads and sampled-layout transitions outside all measured render work.
+            // Complete uploads and sampled-layout transitions before exercising rendering.
             let mut ready = upload.begin_cmd();
             for texture in &textures {
                 let node = ready.bind_resource(texture);
@@ -10156,105 +10161,6 @@ mod test {
 
         fn uniform_color(index: usize) -> [u32; 4] {
             [index as u32 & 255, (index as u32 >> 8) * 47, 19, 0]
-        }
-    }
-
-    #[derive(Debug)]
-    struct TestDevice<'a, T = Device, F: Fn() -> usize = fn() -> usize> {
-        guard: Option<MutexGuard<'a, ()>>,
-        device: Option<T>,
-        validation: Option<(F, usize)>,
-    }
-
-    impl TestDevice<'static> {
-        fn new() -> Result<TestDevice<'static>, DriverError> {
-            let guard = TestDevice::lock()
-                .lock()
-                .expect("poisoned test device lock");
-
-            TestDevice::create(guard, None, || Device::create(DeviceInfo::default()))
-        }
-
-        // All validation-enabled unit-test devices must use this lock: the counter is process-global.
-        fn new_debug() -> Result<TestDevice<'static>, DriverError> {
-            let guard = TestDevice::lock()
-                .lock()
-                .expect("poisoned test device lock");
-
-            TestDevice::create(guard, Some(Instance::validation_error_count), || {
-                Device::create(DeviceInfo::builder().debug(true).build())
-            })
-        }
-
-        fn init_validation_test_logging() {
-            static INIT: OnceLock<()> = OnceLock::new();
-
-            INIT.get_or_init(|| {
-                unsafe {
-                    if std::env::var_os("RUST_LOG").is_none() {
-                        set_var("RUST_LOG", "trace");
-                    }
-                    set_var("VK_GRAPH_SKIP_VALIDATION_PARK", "1");
-                }
-
-                let _ = pretty_env_logger::try_init();
-            });
-        }
-
-        fn lock() -> &'static Mutex<()> {
-            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-            LOCK.get_or_init(|| Mutex::new(()))
-        }
-    }
-
-    impl<'a, T, F: Fn() -> usize> TestDevice<'a, T, F> {
-        fn create(
-            guard: MutexGuard<'a, ()>,
-            validation_error_count: Option<F>,
-            create: impl FnOnce() -> Result<T, DriverError>,
-        ) -> Result<Self, DriverError> {
-            let validation = validation_error_count.map(|count| {
-                let baseline = count();
-                (count, baseline)
-            });
-            let device = create()?;
-
-            Ok(Self {
-                guard: Some(guard),
-                device: Some(device),
-                validation,
-            })
-        }
-    }
-
-    impl<T, F: Fn() -> usize> Deref for TestDevice<'_, T, F> {
-        type Target = T;
-
-        fn deref(&self) -> &Self::Target {
-            self.device.as_ref().unwrap()
-        }
-    }
-
-    impl<T, F: Fn() -> usize> Drop for TestDevice<'_, T, F> {
-        fn drop(&mut self) {
-            let before = self.validation.as_ref().map(|(count, _)| count());
-            // Taking the device also prevents a second drop if its destructor panics.
-            drop(self.device.take());
-            let after = self.validation.as_ref().map(|(count, _)| count());
-            // Snapshots and teardown belong to this session; assertions must not poison the lock.
-            drop(self.guard.take());
-
-            if !std::thread::panicking()
-                && let Some((_, baseline)) = &self.validation
-            {
-                assert_eq!(before, Some(*baseline), "Vulkan validation ERRORs occurred");
-                assert_eq!(
-                    after,
-                    Some(*baseline),
-                    "Vulkan validation ERRORs occurred during teardown"
-                );
-            }
         }
     }
 
@@ -12514,8 +12420,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan validation layers and distinct queue families; inspect output"]
     fn image_set_submission_transfers_between_queue_families() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         let Some(destination_queue_family) = device
             .physical
             .queue_families
@@ -14458,6 +14363,19 @@ mod test {
     #[ignore = "requires Vulkan device"]
     fn recorded_submission_attach_updates_only_touched_buffer_ranges() -> Result<(), DriverError> {
         let device = TestDevice::new()?;
+        let queue_family_index = device
+            .physical
+            .queue_families
+            .iter()
+            .position(|family| {
+                family.queue_count > 0
+                    && family.queue_flags.intersects(
+                        vk::QueueFlags::GRAPHICS
+                            | vk::QueueFlags::COMPUTE
+                            | vk::QueueFlags::TRANSFER,
+                    )
+            })
+            .ok_or(DriverError::Unsupported)? as u32;
         let mut graph = Graph::new();
         let buffer = graph.bind_resource(Buffer::create(
             &device,
@@ -14485,7 +14403,7 @@ mod test {
             .insert(buffer.index(), vec![range_a]);
 
         let mut fence = Fence::create(&device, false)?;
-        let cmd_buf = CommandBuffer::create(&device, CommandBufferInfo::new(3))?;
+        let cmd_buf = CommandBuffer::create(&device, CommandBufferInfo::new(queue_family_index))?;
         cmd_buf.begin(
             &vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
@@ -14502,6 +14420,7 @@ mod test {
         };
 
         recorded.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
+        fence.wait()?;
 
         let state = recorded.state.lock().expect("poisoned recorded state");
         let sync_info = state.submission.graph.resource(buffer).sync_info();
@@ -14509,7 +14428,7 @@ mod test {
         ranges.sort_unstable_by_key(|range| (range.range.start, range.range.end));
 
         assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0].queue_family_index, Some(3));
+        assert_eq!(ranges[0].queue_family_index, Some(queue_family_index));
         assert_eq!(ranges[1].queue_family_index, Some(2));
 
         Ok(())
@@ -14519,6 +14438,19 @@ mod test {
     #[ignore = "requires Vulkan device"]
     fn recorded_submission_attach_updates_only_touched_subresources() -> Result<(), DriverError> {
         let device = TestDevice::new()?;
+        let queue_family_index = device
+            .physical
+            .queue_families
+            .iter()
+            .position(|family| {
+                family.queue_count > 0
+                    && family.queue_flags.intersects(
+                        vk::QueueFlags::GRAPHICS
+                            | vk::QueueFlags::COMPUTE
+                            | vk::QueueFlags::TRANSFER,
+                    )
+            })
+            .ok_or(DriverError::Unsupported)? as u32;
         let mut graph = Graph::new();
         let image = graph.bind_resource(Image::create(
             &device,
@@ -14546,7 +14478,7 @@ mod test {
             .insert(image.index(), vec![range_a]);
 
         let mut fence = Fence::create(&device, false)?;
-        let cmd_buf = CommandBuffer::create(&device, CommandBufferInfo::new(3))?;
+        let cmd_buf = CommandBuffer::create(&device, CommandBufferInfo::new(queue_family_index))?;
         cmd_buf.begin(
             &vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
@@ -14563,6 +14495,7 @@ mod test {
         };
 
         recorded.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
+        fence.wait()?;
 
         let state = recorded.state.lock().expect("poisoned recorded state");
         let sync_info = state.submission.graph.resource(image).sync_info();
@@ -14570,7 +14503,7 @@ mod test {
         sort_image_subresource_sync_infos(&mut subresources);
 
         assert_eq!(subresources.len(), 2);
-        assert_eq!(subresources[0].queue_family_index, Some(3));
+        assert_eq!(subresources[0].queue_family_index, Some(queue_family_index));
         assert_eq!(subresources[1].queue_family_index, Some(2));
 
         Ok(())
@@ -15830,9 +15763,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan validation layers; inspect validation output"]
     fn submission_external_subpass_dependency_validation_repro() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         let mut pool = HashPool::new(&device);
         let pipeline = SubpassFixture::test_triangle_pipeline(&device)?;
         let mut graph = Graph::new();
@@ -16089,6 +16020,7 @@ mod test {
         recorded.cmd_buf.end()?;
         let mut replay = recorded.finish()?;
         replay.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
+        fence.wait()?;
 
         Ok(())
     }
@@ -16512,102 +16444,6 @@ mod test {
             );
             assert_ne!(expected, SubpassFixture::expected(tile, texture, 18));
         }
-    }
-
-    #[test]
-    #[ignore = "manual release benchmark; requires Vulkan device, validation disabled"]
-    #[allow(clippy::assertions_on_constants)]
-    fn subpass_gpu_benchmark() -> Result<(), DriverError> {
-        assert!(!cfg!(debug_assertions), "run this benchmark with --release");
-        let device = TestDevice::new()?;
-        eprintln!(
-            "subpass benchmark device: {}",
-            device.physical.properties_v1_0.device_name
-        );
-        eprintln!(
-            "CPU milliseconds; input/output allocation, upload, submit/wait and pixel checks excluded; readback command recording included; cold = fresh pool per mode, not a cleared driver cache"
-        );
-        eprintln!("N,prepared,physical_subpasses,draft_ms,prepare_ms,sample,build_ms,record_ms");
-        for n in [1, 64, 256, 1024] {
-            let mut pool = HashPool::new(&device);
-            let fixture = SubpassFixture::new(&device, &mut pool, n)?;
-            for prepared in [false, true] {
-                let mut pool = HashPool::new(&device);
-                let start = Instant::now();
-                let draft = fixture.draft();
-                let draft_ms = start.elapsed().as_secs_f64() * 1000.0;
-                let start = Instant::now();
-                let stream = if prepared {
-                    draft.prepare(&mut pool)?
-                } else {
-                    draft.into_stream()
-                };
-                let prepare_ms = start.elapsed().as_secs_f64() * 1000.0;
-                let prepared_count = if prepared {
-                    SubpassFixture::subpass_counts(&stream.inner.submission.lock().unwrap())
-                        .into_iter()
-                        .sum()
-                } else {
-                    0
-                };
-                let (target, output) = fixture.output(&device)?;
-                let budget = Instant::now();
-                let mut warm_records = Vec::new();
-                for sample in 0..120 {
-                    let start = Instant::now();
-                    let mut graph = Graph::new();
-                    fixture.invoke(&mut graph, &stream, &target, sample, sample as u32 + 17);
-                    let image = graph.bind_resource(&target);
-                    SubpassFixture::readback(&mut graph, image.into(), &output);
-                    let submission = graph.finalize();
-                    let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    let mut cmd_buf = pool.resource(CommandBufferInfo::new(0))?;
-                    cmd_buf.begin(
-                        &vk::CommandBufferBeginInfo::default()
-                            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                    )?;
-                    let start = Instant::now();
-                    let recording =
-                        submission.record(&mut pool, &mut cmd_buf, RecordSelection::All)?;
-                    let record_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    if sample >= 20 {
-                        warm_records.push(record_ms);
-                    }
-                    let count = if prepared {
-                        prepared_count
-                    } else {
-                        recording
-                            .submission
-                            .submit_retained
-                            .iter()
-                            .filter_map(|command| command._resources.render_pass.as_ref())
-                            .map(|render_pass| render_pass.info.subpasses.len())
-                            .sum::<usize>()
-                    };
-                    assert_eq!(count, 1, "eligible benchmark draws must share one subpass");
-                    recording.cmd_buf.end()?;
-                    let mut recorded = recording.finish()?;
-                    let mut fence = Fence::create(&device, false)?;
-                    recorded.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
-                    fence.wait()?;
-                    fixture.check(&output, sample, sample as u32 + 17);
-                    eprintln!(
-                        "{n},{prepared},{count},{draft_ms:.6},{prepare_ms:.6},{sample},{build_ms:.6},{record_ms:.6}"
-                    );
-                    // Finish warm-up and collect at least one sample before capping slow drivers.
-                    if sample >= 20 && budget.elapsed() > Duration::from_secs(15) {
-                        break;
-                    }
-                }
-                warm_records.sort_unstable_by(f64::total_cmp);
-                eprintln!(
-                    "summary: N={n} prepared={prepared} warm_record_median_ms={:.3} samples={}",
-                    warm_records[warm_records.len() / 2],
-                    warm_records.len(),
-                );
-            }
-        }
-        Ok(())
     }
 
     #[test]
@@ -17165,8 +17001,7 @@ mod test {
     fn vulkan_depth_resolve_cross_graph_scopes() -> Result<(), DriverError> {
         use crate::driver::render_pass::ResolveMode;
 
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let info = ImageInfo::image_2d(
                 2,
@@ -17347,8 +17182,7 @@ mod test {
     fn vulkan_late_depth_resolve_public_api() -> Result<(), DriverError> {
         use crate::driver::{graphics::StencilMode, render_pass::ResolveMode};
 
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let pipeline = GraphicsPipeline::create(
@@ -17682,8 +17516,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_later_color_clear_public_api() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let pipeline = GraphicsPipeline::create(
@@ -17846,8 +17679,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_later_color_clear_stream_replay_public_api() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let pipeline = SubpassFixture::test_triangle_pipeline(&device)?;
@@ -17924,8 +17756,7 @@ mod test {
     fn vulkan_later_depth_stencil_clear_public_api() -> Result<(), DriverError> {
         use crate::driver::graphics::StencilMode;
 
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let pipeline = GraphicsPipeline::create(
@@ -18097,8 +17928,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_subpass_buffer_reads_retain_upload_for_next_graph() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let fixture = SubpassFixture::new(&device, &mut pool, 1)?;
@@ -18234,8 +18064,7 @@ mod test {
     fn vulkan_subpass_color_depth_resolves_keep_boundary() -> Result<(), DriverError> {
         use crate::driver::render_pass::ResolveMode;
 
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         let color_info = ImageInfo::image_2d(
             2,
             2,
@@ -18420,8 +18249,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_subpass_depth_clear_and_ordering() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         if !device
             .physical
             .format_properties(vk::Format::D32_SFLOAT)
@@ -18596,8 +18424,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_subpass_descriptors_and_state() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let fixture = SubpassFixture::new(&device, &mut pool, 64)?;
@@ -18654,8 +18481,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_subpass_grouped_writers_feed_input_attachment() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let fixture = SubpassFixture::new(&device, &mut pool, 2)?;
@@ -18921,8 +18747,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device and validation layers; records barriers without submitting"]
     fn vulkan_subpass_incoming_buffer_deduplicates_repeated_consumers() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let mut buffers = Vec::new();
@@ -19051,8 +18876,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_subpass_incoming_buffer_previous_graph() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let fixture = SubpassFixture::new(&device, &mut pool, 4)?;
@@ -19302,8 +19126,7 @@ mod test {
     #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_subpass_incoming_buffer_pure_read_chain_before_overwrite() -> Result<(), DriverError>
     {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let fixture = SubpassFixture::new(&device, &mut pool, 1)?;
@@ -19477,8 +19300,7 @@ mod test {
     #[ignore = "requires Vulkan device and validation layers; records barriers without submitting"]
     fn vulkan_subpass_incoming_buffer_range_oracle_and_reader_ordering() -> Result<(), DriverError>
     {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let buffer = Arc::new(Buffer::create(
@@ -19732,8 +19554,7 @@ mod test {
     #[ignore = "requires Vulkan device and synchronization validation layers"]
     fn vulkan_subpass_storage_image_reader_scope_survives_next_graph_overwrite()
     -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let fixture = SubpassFixture::new(&device, &mut pool, 4)?;
@@ -19952,9 +19773,68 @@ mod test {
 
     #[test]
     #[ignore = "requires Vulkan device and validation layers"]
+    fn vulkan_subpass_stream_reuses_targets_at_scale() -> Result<(), DriverError> {
+        let device = TestDevice::new()?;
+        for n in [1, 64, 256, 1024] {
+            let mut pool = HashPool::new(&device);
+            let fixture = SubpassFixture::new(&device, &mut pool, n)?;
+            for prepared in [false, true] {
+                let draft = fixture.draft();
+                let stream = if prepared {
+                    draft.prepare(&mut pool)?
+                } else {
+                    draft.into_stream()
+                };
+                if prepared {
+                    assert_eq!(
+                        SubpassFixture::subpass_counts(&stream.inner.submission.lock().unwrap()),
+                        [1],
+                        "prepared stream with {n} draws"
+                    );
+                }
+
+                // Reuse both outputs across submissions with different bindings and constants.
+                let (target, output) = fixture.output(&device)?;
+                for (shift, salt) in [(0, 17), (1, 31), (n + 3, 47)] {
+                    let mut graph = Graph::new();
+                    fixture.invoke(&mut graph, &stream, &target, shift, salt);
+                    let image = graph.bind_resource(&target);
+                    SubpassFixture::readback(&mut graph, image.into(), &output);
+                    let mut cmd_buf = pool.resource(CommandBufferInfo::new(0))?;
+                    cmd_buf.begin(
+                        &vk::CommandBufferBeginInfo::default()
+                            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                    )?;
+                    let recording =
+                        graph
+                            .finalize()
+                            .record(&mut pool, &mut cmd_buf, RecordSelection::All)?;
+                    if !prepared {
+                        let subpasses = recording
+                            .submission
+                            .submit_retained
+                            .iter()
+                            .filter_map(|command| command._resources.render_pass.as_ref())
+                            .map(|render_pass| render_pass.info.subpasses.len())
+                            .collect::<Vec<_>>();
+                        assert_eq!(subpasses, [1], "unprepared stream with {n} draws");
+                    }
+                    recording.cmd_buf.end()?;
+                    let mut recorded = recording.finish()?;
+                    let mut fence = Fence::create(&device, false)?;
+                    recorded.queue_submit(&mut fence, 0, QueueSubmitInfo::QUEUE_SUBMIT)?;
+                    fence.wait()?;
+                    fixture.check(&output, shift, salt);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device and validation layers"]
     fn vulkan_subpass_stream_slots_rebind() -> Result<(), DriverError> {
-        TestDevice::init_validation_test_logging();
-        let device = TestDevice::new_debug()?;
+        let device = TestDevice::new()?;
         {
             let mut pool = HashPool::new(&device);
             let fixture = SubpassFixture::new(&device, &mut pool, 8)?;
@@ -20022,176 +19902,5 @@ mod test {
             ],
             "mixed acceleration-structure slices should preserve all accesses for next-state tracking"
         );
-    }
-
-    mod test_device_lifecycle {
-        use {
-            super::{DriverError, TestDevice},
-            std::{
-                cell::Cell,
-                panic::{AssertUnwindSafe, catch_unwind},
-                sync::{
-                    Mutex, TryLockError,
-                    atomic::{AtomicUsize, Ordering},
-                    mpsc,
-                },
-                thread,
-            },
-        };
-
-        struct OnDrop<F: FnMut()>(F);
-
-        impl<F: FnMut()> Drop for OnDrop<F> {
-            fn drop(&mut self) {
-                (self.0)();
-            }
-        }
-
-        #[test]
-        fn contending_session_does_not_inherit_validation_errors() {
-            let lock = Mutex::new(());
-            let errors = AtomicUsize::new(0);
-            let first = TestDevice::create(
-                lock.lock().unwrap(),
-                Some(|| errors.load(Ordering::Relaxed)),
-                || {
-                    Ok(OnDrop(|| {
-                        errors.fetch_add(1, Ordering::Relaxed);
-                    }))
-                },
-            )
-            .unwrap();
-            let (ready_tx, ready_rx) = mpsc::channel();
-            thread::scope(|scope| {
-                let second = scope.spawn(|| {
-                    assert!(matches!(lock.try_lock(), Err(TryLockError::WouldBlock)));
-                    ready_tx.send(()).unwrap();
-                    let device = TestDevice::create(
-                        lock.lock().unwrap(),
-                        Some(|| errors.load(Ordering::Relaxed)),
-                        || {
-                            assert_eq!(errors.load(Ordering::Relaxed), 1);
-                            Ok(())
-                        },
-                    )
-                    .unwrap();
-                    drop(device);
-                });
-                ready_rx.recv().unwrap();
-                assert!(catch_unwind(AssertUnwindSafe(|| drop(first))).is_err());
-                second.join().unwrap();
-            });
-            assert!(lock.try_lock().is_ok());
-        }
-
-        #[test]
-        fn creation_failure_and_unwind_release_and_drop_once() {
-            let lock = Mutex::new(());
-            let errors = Cell::new(0);
-            let result = TestDevice::create(
-                lock.lock().unwrap(),
-                Some(|| {
-                    assert!(matches!(lock.try_lock(), Err(TryLockError::WouldBlock)));
-                    errors.get()
-                }),
-                || {
-                    assert!(matches!(lock.try_lock(), Err(TryLockError::WouldBlock)));
-                    errors.set(1);
-                    Err::<(), _>(DriverError::Unsupported)
-                },
-            );
-            assert!(matches!(result, Err(DriverError::Unsupported)));
-            assert!(lock.try_lock().is_ok());
-            drop(
-                TestDevice::create(lock.lock().unwrap(), Some(|| errors.get()), || Ok(())).unwrap(),
-            );
-
-            for panic_in_drop in [false, true] {
-                let lock = Mutex::new(());
-                let errors = Cell::new(0);
-                let drops = Cell::new(0);
-                let result = catch_unwind(AssertUnwindSafe(|| {
-                    let device =
-                        TestDevice::create(lock.lock().unwrap(), Some(|| errors.get()), || {
-                            Ok(OnDrop(|| {
-                                drops.set(drops.get() + 1);
-                                errors.set(1);
-                                if panic_in_drop {
-                                    panic!("device teardown panic");
-                                }
-                            }))
-                        })
-                        .unwrap();
-                    if !panic_in_drop {
-                        panic!("test body panic");
-                    }
-                    drop(device);
-                }));
-                assert_eq!(drops.get(), 1);
-                assert_eq!(
-                    *result.unwrap_err().downcast::<&str>().unwrap(),
-                    if panic_in_drop {
-                        "device teardown panic"
-                    } else {
-                        "test body panic"
-                    }
-                );
-                // Existing panics still poison the mutex, but must not retain its guard.
-                assert!(matches!(lock.try_lock(), Err(TryLockError::Poisoned(_))));
-            }
-        }
-
-        #[test]
-        fn validation_failures_are_scoped_through_teardown() {
-            // No error, creation error, execution error, and teardown error.
-            for phase in 0..4 {
-                let lock = Mutex::new(());
-                let errors = Cell::new(7);
-                let snapshots = Cell::new(0);
-                let drops = Cell::new(0);
-                let result = catch_unwind(AssertUnwindSafe(|| {
-                    let device = TestDevice::create(
-                        lock.lock().unwrap(),
-                        Some(|| {
-                            assert!(matches!(lock.try_lock(), Err(TryLockError::WouldBlock)));
-                            snapshots.set(snapshots.get() + 1);
-                            errors.get()
-                        }),
-                        || {
-                            assert_eq!(snapshots.get(), 1, "snapshot must precede creation");
-                            assert!(matches!(lock.try_lock(), Err(TryLockError::WouldBlock)));
-                            errors.set(errors.get() + usize::from(phase == 1));
-                            Ok(OnDrop(|| {
-                                assert!(matches!(lock.try_lock(), Err(TryLockError::WouldBlock)));
-                                drops.set(drops.get() + 1);
-                                errors.set(errors.get() + usize::from(phase == 3));
-                            }))
-                        },
-                    )
-                    .unwrap();
-                    errors.set(errors.get() + usize::from(phase == 2));
-                    if phase == 0 {
-                        return; // Successful early returns must also finish the session.
-                    }
-                    drop(device);
-                }));
-                assert_eq!(drops.get(), 1);
-                assert_eq!(snapshots.get(), 3);
-                assert_eq!(result.is_err(), phase != 0);
-                if let Err(error) = result {
-                    let message = error.downcast::<String>().unwrap();
-                    assert_eq!(message.contains("during teardown"), phase == 3);
-                }
-                assert!(
-                    !lock.is_poisoned(),
-                    "validation assertions must release the guard first"
-                );
-                // An earlier session's error is not a failure in this clean session.
-                drop(
-                    TestDevice::create(lock.lock().unwrap(), Some(|| errors.get()), || Ok(()))
-                        .unwrap(),
-                );
-            }
-        }
     }
 }

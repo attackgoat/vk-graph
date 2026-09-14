@@ -1549,6 +1549,7 @@ impl Iterator for SharingRunIter<'_> {
 mod test {
     use {
         super::*,
+        crate::test_support::TestDevice,
         rand::{Rng, SeedableRng, rngs::SmallRng},
     };
 
@@ -1830,7 +1831,7 @@ mod test {
     #[test]
     #[ignore = "requires a Vulkan device"]
     fn mapped_upload_payloads() {
-        let device = Device::create(crate::driver::device::DeviceInfo::default()).unwrap();
+        let device = TestDevice::new().unwrap();
         let info = BufferInfo::host_mem(65536, vk::BufferUsageFlags::STORAGE_BUFFER);
         let readback = Buffer::create(&device, info.into_builder().host_writable(false)).unwrap();
         let mut buf = Buffer::create(&device, info).unwrap();

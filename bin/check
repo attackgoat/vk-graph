@@ -74,7 +74,11 @@ done
 
 if [ "$RUN_VULKAN" -eq 1 ]; then
     for features in loaded,parking_lot loaded,parking_lot,checked; do
-        run "vulkan tests ($features)" env RUSTFLAGS="-D warnings" cargo test $PROFILE --workspace --no-default-features --features "$features" vulkan -- --ignored --test-threads=1
+        run "vulkan tests ($features)" env RUSTFLAGS="-D warnings" \
+            VK_GRAPH_SKIP_VALIDATION_PARK=1 \
+            cargo test $PROFILE --workspace --tests --no-default-features --features "$features" \
+            -- --ignored --test-threads=1 --nocapture \
+            --skip subpass_planning_benchmark --skip binding_metadata_benchmark
     done
 fi
 

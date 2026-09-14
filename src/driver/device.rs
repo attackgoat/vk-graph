@@ -36,6 +36,9 @@ use {
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
 
+#[cfg(test)]
+use crate::test_support::disposal::{DisposalReport, DisposalTracker};
+
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
 
@@ -155,6 +158,15 @@ pub struct Device {
 }
 
 impl Device {
+    /// Observes completed device destruction without retaining the device or its instance.
+    ///
+    /// All device clones and resources must be released before destruction can complete.
+    /// Observe [`Instance::disposal_report`] separately to check instance destruction as well.
+    #[cfg(test)]
+    pub(crate) fn disposal_report(this: &Self) -> DisposalReport {
+        this.inner.disposal.report()
+    }
+
     /// Constructs a new device using the given configuration.
     ///
     /// Intended for headless or manually managed setups. Does not infer or enable platform-specific
@@ -1082,6 +1094,8 @@ impl Device {
         Ok(Self {
             read_only: ReadOnlyDevice {
                 inner: Arc::new(DeviceInner {
+                    #[cfg(test)]
+                    disposal: DisposalTracker::default(),
                     allocator: ManuallyDrop::new(Mutex::new(allocator)),
                     device,
                     pipeline_cache,
@@ -1335,7 +1349,8 @@ impl PartialEq for Device {
 pub struct DeviceInfo {
     /// Enables the Vulkan validation layers.
     ///
-    /// This requires a Vulkan SDK installation and will panic when validation errors happen. See
+    /// This requires a Vulkan SDK installation. Errors are recorded in the instance's
+    /// [`ValidationReport`](super::instance::ValidationReport), independently of logging. See
     /// the LunarG [Vulkan Validation Layers] documentation for setup and behavior details.
     ///
     /// When `stderr` is attached to an interactive terminal, validation errors will park the
@@ -1390,6 +1405,8 @@ impl DeviceInfoBuilder {
 }
 
 struct DeviceInner {
+    #[cfg(test)]
+    disposal: DisposalTracker,
     allocator: ManuallyDrop<Mutex<Allocator>>,
     device: ash::Device,
     pipeline_cache: vk::PipelineCache,
@@ -1465,6 +1482,8 @@ impl Drop for DeviceInner {
         unsafe {
             self.device.destroy_device(None);
         }
+        #[cfg(test)]
+        self.disposal.complete();
     }
 }
 
@@ -1609,7 +1628,10 @@ impl Deref for ReadOnlyDevice {
 
 #[cfg(test)]
 mod test {
-    use {super::*, crate::driver::fence::Fence};
+    use {
+        super::*,
+        crate::{driver::fence::Fence, test_support::TestDevice},
+    };
 
     type Info = DeviceInfo;
     type Builder = DeviceInfoBuilder;
@@ -1636,7 +1658,7 @@ mod test {
     #[test]
     #[ignore = "requires Vulkan device"]
     fn background_cleanup_waits_for_signaled_fence_payloads() -> Result<(), DriverError> {
-        let device = Device::create(DeviceInfo::default())?;
+        let device = TestDevice::new()?;
         let first_cleanup_guard = Device::enable_background_fence_cleanup(&device)?;
         let cleanup_guard = Device::enable_background_fence_cleanup(&device)?;
         drop(first_cleanup_guard);
@@ -1648,6 +1670,72 @@ mod test {
         cleanup_guard.wait_for_pending_cleanup()?;
         assert!(dropped.load(Ordering::Acquire));
 
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn vulkan_disposal_checks_require_background_cleanup_completion() -> Result<(), DriverError> {
+        use {
+            crate::test_support::DeviceChecks,
+            std::{
+                sync::mpsc::{Receiver, Sender, channel},
+                time::Duration,
+            },
+        };
+
+        #[derive(Debug)]
+        struct DelayedOwner {
+            device: Option<Device>,
+            started: Sender<()>,
+            release: Receiver<()>,
+            done: Sender<()>,
+        }
+        impl Drop for DelayedOwner {
+            fn drop(&mut self) {
+                self.started.send(()).unwrap();
+                self.release.recv().unwrap();
+                drop(self.device.take());
+                self.done.send(()).unwrap();
+            }
+        }
+
+        for drain_first in [false, true] {
+            let device = TestDevice::with_checks(DeviceChecks {
+                validation: false,
+                disposal: true,
+            })?;
+            let device_report = Device::disposal_report(&device);
+            let instance_report = Instance::disposal_report(&device.physical.instance).unwrap();
+            let cleanup = Device::enable_background_fence_cleanup(&device)?;
+            let fence = Fence::create(&device, true)?;
+            let (started_tx, started_rx) = channel();
+            let (release_tx, release_rx) = channel();
+            let (done_tx, done_rx) = channel();
+            fence.drop_when_signaled(DelayedOwner {
+                device: Some(device.clone()),
+                started: started_tx,
+                release: release_rx,
+                done: done_tx,
+            });
+            assert!(fence.status()?);
+            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            drop(fence);
+            if drain_first {
+                release_tx.send(()).unwrap();
+                cleanup.wait_for_pending_cleanup()?;
+            }
+            drop(cleanup);
+            let result = catch_unwind(AssertUnwindSafe(|| device.finish()));
+            if !drain_first {
+                // Always unblock the detached worker before asserting the result.
+                release_tx.send(()).unwrap();
+            }
+            done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(result.is_err(), !drain_first);
+            assert!(device_report.is_disposed());
+            assert!(instance_report.is_disposed());
+        }
         Ok(())
     }
 
