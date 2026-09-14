@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Reflected vertex attribute parsing and multi-binding offsets.
+
 ## [0.14.7] - 2026-08-19
 
 ### Added

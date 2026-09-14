@@ -1286,7 +1286,8 @@ impl Shader {
                 .as_ref()
                 .filter(|name| name.contains("_ibind") || name.contains("_vbind"))
                 .map(|name| {
-                    let binding = name[name.rfind("bind").expect("missing bind suffix")..]
+                    let binding = name
+                        [name.rfind("bind").expect("missing bind suffix") + "bind".len()..]
                         .parse()
                         .unwrap_or_default();
                     let rate = if name.contains("_ibind") {
@@ -1329,14 +1330,8 @@ impl Shader {
             });
         }
 
-        vertex_attribute_descriptions.sort_unstable_by(|lhs, rhs| {
-            let binding = lhs.binding.cmp(&rhs.binding);
-            if binding.is_lt() {
-                return binding;
-            }
-
-            lhs.location.cmp(&rhs.location)
-        });
+        vertex_attribute_descriptions
+            .sort_unstable_by_key(|attribute| (attribute.binding, attribute.location));
 
         let mut offset = 0;
         let mut offset_binding = 0;
@@ -1647,6 +1642,41 @@ mod test {
     #[test]
     pub fn invalid_spirv_try_into_driver_value() {
         assert!(Shader::try_from(vec![0u32]).is_err());
+    }
+
+    #[test]
+    fn vertex_input_groups_bindings_before_assigning_offsets() {
+        let shader = Shader {
+            entry_name: "main".to_owned(),
+            specialization: None,
+            spirv: Vec::<u32>::new().into(),
+            stage: vk::ShaderStageFlags::VERTEX,
+            entry_point: EntryPoint {
+                exec_model: ExecutionModel::Vertex,
+                name: "main".to_owned(),
+                // Reflection orders variables by SPIR-V ID, not location or binding.
+                vars: [("a_vbind0", 2), ("b_vbind1", 1), ("c_vbind0", 0)]
+                    .into_iter()
+                    .map(|(name, location)| Variable::Input {
+                        name: Some(name.to_owned()),
+                        location: spirq::var::InterfaceLocation::new(location, 0),
+                        ty: Type::Scalar(ScalarType::Float { bits: 32 }),
+                    })
+                    .collect(),
+                exec_modes: vec![],
+            },
+            image_samplers: HashMap::new(),
+            vertex_input_state: None,
+        };
+
+        let input = shader.try_vertex_input().unwrap();
+        let attributes: Vec<_> = input
+            .vertex_attribute_descriptions
+            .iter()
+            .map(|attribute| (attribute.binding, attribute.location, attribute.offset))
+            .collect();
+
+        assert_eq!(attributes, [(0, 0, 0), (0, 2, 4), (1, 1, 0)]);
     }
 
     #[test]
