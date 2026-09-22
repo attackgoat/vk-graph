@@ -193,6 +193,12 @@ fn swap_image_access_set(
         let prev_access = ImageAccessSet::from_raw(current);
         let next = prev_access.after_access(next_access).raw();
 
+        // A repeated sampled read has no new state to publish. Treat the load
+        // as its linearization point rather than writing the same value back.
+        if next == current {
+            return prev_access;
+        }
+
         match atomic.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => return prev_access,
             Err(observed) => current = observed,
@@ -524,7 +530,13 @@ impl DenseAccess {
 
         self.set_promoting();
         let current = self.load();
-        *dense = Some(DenseMap::new(info, current));
+        if let Some(map) = dense.as_mut() {
+            // A demoted map keeps its allocation, but atomic uniform writes may have
+            // changed the access since it was last used.
+            map.reset_uniform(current);
+        } else {
+            *dense = Some(DenseMap::new(info, current));
+        }
         self.set_dense();
     }
 
@@ -586,7 +598,13 @@ impl DenseAccess {
                 ImageAccessSet::from_access(next_access)
             };
 
-            if !whole_image && next_access != prev_access {
+            // An unchanged assignment publishes nothing. The acquire load above
+            // linearizes it, including when promotion starts immediately afterward.
+            if next_access == prev_access {
+                return Some(prev_access);
+            }
+
+            if !whole_image {
                 return None;
             }
 
@@ -624,7 +642,8 @@ impl DenseAccessMapGuard<'_> {
             return;
         };
 
-        *self.dense = None;
+        // Keep expanded storage for the next promotion. While uniform, the atomic
+        // access is authoritative and may change without taking this lock.
         self.access.set_uniform(access);
     }
 }
@@ -1761,18 +1780,19 @@ impl Image {
         };
 
         let access_dense = if matches!(access_source, AccessSource::Dense) {
+            #[cfg(test)]
+            test::before_access_lock();
+
             let dense = dense_access.lock();
 
             #[cfg(not(feature = "parking_lot"))]
             let dense = dense.expect("poisoned image dense access lock");
 
-            // The access iterator may have demoted while this reader waited for its lock.
-            if let Some(value) = dense.as_ref().and_then(DenseMap::uniform_value) {
-                access_source = AccessSource::Uniform(value);
-            } else if dense.is_none() {
-                let Access::Dense(access) = access else {
-                    unreachable!()
-                };
+            // A demoted map can be stale after a lock-free uniform update.
+            let Access::Dense(access) = access else {
+                unreachable!()
+            };
+            if !access.uses_dense() {
                 access_source = AccessSource::Uniform(access.load());
             }
 
@@ -3475,6 +3495,19 @@ pub mod bench {
                 )
                 .fold(0, |checksum, (_, access, _)| checksum ^ access.raw())
         }
+
+        /// Swap and consume the iterator without allocating a result vector.
+        pub fn swap_checksum(
+            &self,
+            next_access: AccessType,
+            range: vk::ImageSubresourceRange,
+        ) -> (u16, usize) {
+            self.access
+                .swap(&self.dense_access, self.info, next_access, range)
+                .fold((0, 0), |(checksum, count), (previous, _)| {
+                    (checksum ^ previous.raw(), count + 1)
+                })
+        }
     }
 
     /// CPU-only access to the production ownership tracker and synchronization snapshot path.
@@ -3577,9 +3610,16 @@ mod test {
     };
 
     std::thread_local! {
+        static BEFORE_ACCESS_LOCK: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
         pub(super) static BEFORE_SHARING_CAS: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
         static BEFORE_SHARING_LOCK: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
         static SHARING_LOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn before_access_lock() {
+        if let Some(hook) = BEFORE_ACCESS_LOCK.with(|hook| hook.take()) {
+            hook();
+        }
     }
 
     pub(super) fn before_sharing_lock() {
@@ -3960,7 +4000,10 @@ mod test {
         let dense = dense.lock();
         #[cfg(not(feature = "parking_lot"))]
         let dense = dense.expect("poisoned image dense lock");
-        assert!(dense.is_none());
+        assert_eq!(
+            dense.as_ref().and_then(DenseMap::uniform_value),
+            Some(ImageAccessSet::from_access(AccessType::TransferRead))
+        );
     }
 
     #[test]
@@ -4530,7 +4573,110 @@ mod test {
         #[cfg(not(feature = "parking_lot"))]
         let dense = dense.expect("poisoned image dense lock");
 
-        assert!(dense.is_none());
+        assert_eq!(
+            dense.as_ref().and_then(DenseMap::uniform_value),
+            Some(ImageAccessSet::from_access(AccessType::AnyShaderReadOther))
+        );
+    }
+
+    #[test]
+    fn image_access_repromotion_reuses_storage_and_refreshes_atomic_access() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8_UINT, 4, 4);
+        let whole = image_subresource_range(A::COLOR, 0..4, 0..4);
+        let partial = image_subresource_range(A::COLOR, 2..3, 1..2);
+        let access = Access::new(info, AccessType::Nothing);
+        let dense = Mutex::new(None);
+
+        access
+            .replace(&dense, info, AccessType::TransferRead, partial)
+            .for_each(drop);
+        let storage = {
+            let map = dense.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let map = map.unwrap();
+            let map = map.as_ref().unwrap();
+            (map.values.as_ptr(), map.values.capacity())
+        };
+
+        for _ in 0..8 {
+            access
+                .replace(&dense, info, AccessType::TransferRead, whole)
+                .for_each(drop);
+            // The uniform fast path changes the atomic value without updating the map.
+            access
+                .replace(&dense, info, AccessType::TransferWrite, whole)
+                .for_each(drop);
+            access
+                .replace(&dense, info, AccessType::HostRead, partial)
+                .for_each(drop);
+
+            let map = dense.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let map = map.unwrap();
+            let map = map.as_ref().unwrap();
+            assert_eq!((map.values.as_ptr(), map.values.capacity()), storage);
+            for layer in 0..4 {
+                for mip in 0..4 {
+                    assert_eq!(
+                        map.subresource(0, layer, mip),
+                        ImageAccessSet::from_access(if layer == 2 && mip == 1 {
+                            AccessType::HostRead
+                        } else {
+                            AccessType::TransferWrite
+                        })
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn image_access_snapshot_rechecks_demoted_map_after_waiting() {
+        use vk::ImageAspectFlags as A;
+
+        let info = image_subresource(vk::Format::R8_UINT, 2, 2);
+        let whole = image_subresource_range(A::COLOR, 0..2, 0..2);
+        let partial = image_subresource_range(A::COLOR, 0..1, 0..1);
+        let access = Arc::new(Access::new(info, AccessType::Nothing));
+        let dense = Arc::new(Mutex::new(None));
+        access
+            .replace(&dense, info, AccessType::TransferRead, partial)
+            .for_each(drop);
+
+        let other_access = access.clone();
+        let other_dense = dense.clone();
+        BEFORE_ACCESS_LOCK.with(|hook| {
+            hook.set(Some(Box::new(move || {
+                other_access
+                    .replace(&other_dense, info, AccessType::TransferRead, whole)
+                    .for_each(drop);
+                other_access
+                    .replace(&other_dense, info, AccessType::TransferWrite, whole)
+                    .for_each(drop);
+            })));
+        });
+
+        let sharing = Sharing::new(info, vk::SharingMode::EXCLUSIVE);
+        let dense_sharing = Mutex::new(None);
+        let snapshot =
+            Image::sync_info_for_range(&access, &sharing, &dense, &dense_sharing, info, whole)
+                .collect::<Vec<_>>();
+        assert_eq!(snapshot.len(), 1);
+        assert!(super::image_subresource_range_contains(
+            snapshot[0].0.range,
+            whole
+        ));
+        assert!(super::image_subresource_range_contains(
+            whole,
+            snapshot[0].0.range
+        ));
+        assert_eq!(
+            snapshot[0].0.layout,
+            Some(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        );
+        assert_eq!(snapshot[0].0.access_mask, vk::AccessFlags::TRANSFER_WRITE);
     }
 
     #[test]
@@ -4674,7 +4820,10 @@ mod test {
         #[cfg(not(feature = "parking_lot"))]
         let dense = dense.expect("poisoned image dense lock");
 
-        assert!(dense.is_none());
+        assert_eq!(
+            dense.as_ref().and_then(DenseMap::uniform_value),
+            Some(ImageAccessSet::from_access(AccessType::HostRead))
+        );
     }
 
     #[test]

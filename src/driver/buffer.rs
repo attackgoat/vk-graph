@@ -1252,6 +1252,14 @@ impl<V> RunMap<V> {
     }
 
     fn run_index_at(&self, offset: vk::DeviceSize) -> usize {
+        match self.runs.len() {
+            1 => 0,
+            n if n <= 6 => self.run_index_linear(offset),
+            _ => self.run_index_binary(offset),
+        }
+    }
+
+    fn run_index_binary(&self, offset: vk::DeviceSize) -> usize {
         let needle = (offset << 1) | 1;
         let run_idx = self
             .runs
@@ -1272,6 +1280,19 @@ impl<V> RunMap<V> {
         };
 
         run_idx.saturating_sub(1)
+    }
+
+    fn run_index_linear(&self, offset: vk::DeviceSize) -> usize {
+        let mut index = 0;
+        for (i, &(_, start)) in self.runs.iter().enumerate().skip(1) {
+            if start > offset {
+                break;
+            }
+
+            index = i;
+        }
+
+        index
     }
 
     /// Assigns without visiting old values, retaining only the boundary runs.
@@ -1374,30 +1395,8 @@ impl RunMapCursor {
             }
         };
 
-        // The needle will always be odd, and the probe always even, the result will always be err
-        let needle = (remaining_range.start << 1) | 1;
-        let run_idx = map
-            .runs
-            .binary_search_by(|(_, probe)| (probe << 1).cmp(&needle));
-
-        debug_assert!(run_idx.is_err());
-
-        let mut run_idx = {
-            #[cfg(feature = "checked")]
-            {
-                run_idx.unwrap_err()
-            }
-
-            #[cfg(not(feature = "checked"))]
-            unsafe {
-                run_idx.unwrap_err_unchecked()
-            }
-        };
-
-        // The first access will always be at start == 0, which is even, so run_idx cannot be 0
-        debug_assert_ne!(run_idx, 0);
-
-        run_idx -= 1;
+        debug_assert_eq!(map.runs[0].1, 0);
+        let run_idx = map.run_index_at(remaining_range.start);
 
         Self {
             remaining_range,
@@ -1431,6 +1430,19 @@ impl RunMapCursor {
             .get(self.run_idx + 1)
             .map(|(_, start)| *start)
             .unwrap_or(map.size);
+        if new_value == old_value
+            && self.remaining_range.end <= old_end
+            && self.run_idx == self.write_idx
+            && (self.write_idx == 0 || map.runs[self.write_idx - 1].0 != old_value)
+        {
+            // Nothing to split, merge, or compact; the entire remaining range is
+            // inside this unchanged run.
+            let range = self.remaining_range;
+            self.remaining_range.start = range.end;
+
+            return Some((old_value, range));
+        }
+
         let mut remaining_range = self.remaining_range;
 
         remaining_range.end = remaining_range.end.min(old_end);
@@ -1625,6 +1637,110 @@ impl Iterator for SharingRunIter<'_> {
 pub mod bench {
     //! CPU-only access to the production ownership tracker for benchmarks.
     use super::*;
+
+    /// Isolates run lookup from mutex and iterator overhead for threshold selection.
+    pub struct RunLookupBenchHarness {
+        runs: RunMap<AccessType>,
+    }
+
+    impl RunLookupBenchHarness {
+        pub fn new(count: usize) -> Self {
+            assert!(count >= 2);
+            let mut runs = RunMap::new(count as u64 * 64, AccessType::TransferRead);
+            for i in 1..count {
+                runs.runs.push((
+                    if i % 2 == 0 {
+                        AccessType::TransferRead
+                    } else {
+                        AccessType::TransferWrite
+                    },
+                    i as u64 * 64,
+                ));
+            }
+            Self { runs }
+        }
+
+        pub fn binary(&self, offset: u64) -> usize {
+            self.runs.run_index_binary(offset)
+        }
+
+        pub fn linear(&self, offset: u64) -> usize {
+            self.runs.run_index_linear(offset)
+        }
+    }
+
+    /// CPU-only buffer access tracking through the same cursor as `Buffer::swap_access`.
+    pub struct AccessBenchHarness {
+        access_runs: Mutex<AccessRuns>,
+        size: u64,
+    }
+
+    impl AccessBenchHarness {
+        pub fn new(size: u64) -> Self {
+            Self {
+                access_runs: Mutex::new(AccessRuns::new(size, AccessType::Nothing)),
+                size,
+            }
+        }
+
+        pub fn with_runs(count: usize) -> Self {
+            let size = count as u64 * 64;
+            let mut runs = AccessRuns::new(size, AccessType::TransferRead);
+            for i in 1..count {
+                runs.runs.push((
+                    if i % 2 == 0 {
+                        AccessType::TransferRead
+                    } else {
+                        AccessType::TransferWrite
+                    },
+                    i as u64 * 64,
+                ));
+            }
+            Self {
+                access_runs: Mutex::new(runs),
+                size,
+            }
+        }
+
+        pub fn swap(&self, access: AccessType, start: u64, end: u64) -> (u64, usize) {
+            let runs = self.access_runs.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let runs = runs.expect("poisoned buffer access lock");
+
+            RunMapIter::new(runs, access, (start..end.min(self.size)).into()).fold(
+                (0, 0),
+                |(checksum, count), (previous, range)| {
+                    (
+                        checksum ^ (previous as u64) ^ range.start ^ range.end,
+                        count + 1,
+                    )
+                },
+            )
+        }
+
+        pub fn swap_binary(&self, access: AccessType, start: u64, end: u64) -> (u64, usize) {
+            let runs = self.access_runs.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let runs = runs.expect("poisoned buffer access lock");
+            let run_idx = runs.run_index_binary(start);
+            let cursor = RunMapCursor {
+                run_idx,
+                write_idx: run_idx,
+                remaining_range: (start..end.min(self.size)).into(),
+            };
+            RunMapIter {
+                cursor,
+                map: runs,
+                new_value: access,
+            }
+            .fold((0, 0), |(checksum, count), (previous, range)| {
+                (
+                    checksum ^ (previous as u64) ^ range.start ^ range.end,
+                    count + 1,
+                )
+            })
+        }
+    }
 
     pub struct OwnershipBenchHarness {
         sharing: ExclusiveSharing,
@@ -1867,6 +1983,26 @@ mod test {
         }
         assert_eq!(map.runs, expected);
         SET_RANGE_SHIFTED_RUNS.with(|count| assert_eq!(count.get(), 0));
+    }
+
+    #[test]
+    fn run_lookup_linear_and_cursor_match_binary_at_boundaries() {
+        for count in 1..=16 {
+            let map = RunMap {
+                runs: (0..count).map(|i| ((i % 2) as u8, i as u64 * 4)).collect(),
+                size: count as u64 * 4,
+            };
+            for offset in 0..map.size {
+                let expected = (offset / 4) as usize;
+                assert_eq!(map.run_index_linear(offset), expected);
+                assert_eq!(map.run_index_binary(offset), expected);
+                assert_eq!(map.run_index_at(offset), expected);
+                assert_eq!(
+                    RunMapCursor::new(&map, (offset..offset + 1).into()).run_idx,
+                    expected
+                );
+            }
+        }
     }
 
     #[test]
