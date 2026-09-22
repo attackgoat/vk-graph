@@ -12627,6 +12627,9 @@ mod test {
         );
 
         image.set_sharing_ranges(SharingMode::Exclusive(Some((3, 7))), &[range]);
+        assert_eq!(resource_set.queue(), Some((3, 7)));
+        // Even a same-family change to the queue index must invalidate the cached owner.
+        image.set_sharing_ranges(SharingMode::Exclusive(Some((3, 8))), &[range]);
         assert_eq!(resource_set.queue(), None);
 
         Ok(())

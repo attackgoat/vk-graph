@@ -5,7 +5,10 @@
 //! ```
 
 use {
-    super::TestDevice,
+    super::{
+        TestDevice,
+        ownership::{OwnershipSubmissions, supports_in_flight},
+    },
     ash::vk,
     std::sync::Arc,
     vk_graph::{
@@ -25,8 +28,24 @@ use {
 #[test]
 #[ignore = "requires Vulkan validation, graphics and a dedicated transfer queue"]
 fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow::Result<()> {
+    run_graphics_buffer_ownership(None)
+}
+
+#[test]
+#[ignore = "requires Vulkan validation, graphics, dedicated transfer queue, timeline semaphores and synchronization2"]
+fn graphics_buffer_ownership_in_flight() -> anyhow::Result<()> {
+    for submit2 in [false, true] {
+        run_graphics_buffer_ownership(Some(submit2))?;
+    }
+    Ok(())
+}
+
+fn run_graphics_buffer_ownership(in_flight: Option<bool>) -> anyhow::Result<()> {
     let device = TestDevice::new()?;
     let result = (|| -> anyhow::Result<()> {
+        if in_flight.is_some() && !supports_in_flight(&device) {
+            return Ok(());
+        }
         let families = &device.physical.queue_families;
         let graphics = families
             .iter()
@@ -47,6 +66,9 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
             return Ok(());
         }
         let (graphics, transfer) = (graphics as u32, transfer as u32);
+        eprintln!(
+            "ownership queues: graphics={graphics}:0, transfer={transfer}:0, in_flight={in_flight:?}"
+        );
         let mut pool = HashPool::new(&device);
         let vertex = glsl!(kind: vert, r#"
             #version 450
@@ -79,6 +101,7 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
             ),
         )?);
         for sharing_mode in [vk::SharingMode::EXCLUSIVE, vk::SharingMode::CONCURRENT] {
+            let mut submissions = OwnershipSubmissions::new(&device, in_flight)?;
             let exclusive = sharing_mode == vk::SharingMode::EXCLUSIVE;
             let output = Arc::new(Buffer::create(
                 &device,
@@ -105,10 +128,7 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
                 .record_cmd(|cmd| {
                     cmd.draw(3, 1, 0, 0);
                 });
-            graph
-                .finalize()
-                .queue_submit(&mut pool, graphics, 0)?
-                .wait()?;
+            submissions.producer(graph, &mut pool, graphics, !exclusive)?;
             let state = output.sync_info();
             assert_eq!(
                 state.ranges[0].stage_mask,
@@ -122,7 +142,8 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
 
             // Exclusive sharing exercises release/acquire submissions. Concurrent sharing skips
             // ownership transfer, but its ordinary barrier must still be legal on the transfer queue.
-            // The producer fence wait above supplies the required cross-queue synchronization.
+            // In-flight concurrent sharing uses an explicit completion semaphore. Exclusive
+            // sharing relies entirely on the library's release/acquire dependency.
             let mut graph = Graph::new();
             let source = graph.bind_resource(&output);
             let destination = graph.bind_resource(&readback);
@@ -131,10 +152,7 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
                 .begin_cmd()
                 .resource_access(destination, AccessType::HostRead)
                 .record_cmd(|_| {});
-            graph
-                .finalize()
-                .queue_submit(&mut pool, transfer, 0)?
-                .wait()?;
+            submissions.consumer(graph, &mut pool, transfer, !exclusive)?;
             assert_eq!(readback.mapped_slice(), &0x12345678u32.to_ne_bytes());
             assert_eq!(
                 output.sync_info().ranges[0].queue_family_index,
@@ -186,6 +204,7 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
             .finalize()
             .queue_submit(&mut pool, graphics, 0)?
             .wait()?;
+        let mut submissions = OwnershipSubmissions::new(&device, in_flight)?;
         let mut graph = Graph::new();
         let staging = graph.bind_resource(Buffer::create_from_slice(
             &device,
@@ -194,10 +213,7 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
         )?);
         let destination = graph.bind_resource(&remote);
         graph.copy_buffer(staging, destination);
-        graph
-            .finalize()
-            .queue_submit(&mut pool, transfer, 0)?
-            .wait()?;
+        submissions.producer(graph, &mut pool, transfer, false)?;
         assert_eq!(
             local.sync_info().ranges[0].stage_mask,
             vk::PipelineStageFlags::HOST
@@ -243,11 +259,9 @@ fn graphics_buffer_ownership_concurrent_sharing_and_local_host_write() -> anyhow
             .begin_cmd()
             .resource_access(destination, AccessType::HostRead)
             .record_cmd(|_| {});
-        graph
-            .finalize()
-            .queue_submit(&mut pool, graphics, 0)?
-            .wait()?;
+        submissions.consumer(graph, &mut pool, graphics, false)?;
         assert_eq!(pixels.mapped_slice(), &[42, 0, 0, 255]);
+        eprintln!("ownership: 3 scenarios executed, in_flight={in_flight:?}");
         Ok(())
     })();
     // Resources have been destroyed; finish also checks device and instance teardown.

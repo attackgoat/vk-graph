@@ -1043,7 +1043,7 @@ struct ExclusiveSharing {
 
 impl ExclusiveSharing {
     // Distinct from Concurrent/Unknown; its family is QUEUE_FAMILY_IGNORED,
-    // which cannot identify a real queue. Once published, this marker is permanent.
+    // which cannot identify a real queue.
     const DENSE: u64 = u64::MAX - 2;
 
     fn new(size: vk::DeviceSize) -> Self {
@@ -1063,6 +1063,15 @@ impl ExclusiveSharing {
     ) where
         I: Iterator<Item = BufferSubresourceRange>,
     {
+        // A no-op linearizes at this load. A concurrent ownership change can follow it;
+        // no release is needed because this operation publishes no new ownership state.
+        if self.uniform.load(Ordering::Acquire) == sharing.encode() {
+            return;
+        }
+
+        #[cfg(test)]
+        test::before_sharing_lock();
+
         let sharing_runs = self.sharing_runs.lock();
 
         #[cfg(not(feature = "parking_lot"))]
@@ -1075,9 +1084,17 @@ impl ExclusiveSharing {
 
         // A uniform writer either precedes this swap and is captured here, or its
         // CAS fails and it takes the locked path. Readers also lock on the marker.
-        let current = self.uniform.swap(Self::DENSE, Ordering::AcqRel);
-        if current != Self::DENSE {
-            *sharing_runs = RunMap::new(size, SharingMode::decode(current));
+        // Under the mutex, DENSE cannot change: all writers that observe it must lock.
+        // Only actual promotion needs an exchange to capture a racing uniform writer.
+        if self.uniform.load(Ordering::Acquire) != Self::DENSE {
+            let current = self.uniform.swap(Self::DENSE, Ordering::AcqRel);
+
+            // Keep the old allocation, but never its stale ownership after demotion.
+            // Every publication of uniform state leaves exactly one run starting at zero.
+            debug_assert_eq!(sharing_runs.runs.len(), 1);
+            debug_assert_eq!(sharing_runs.size, size);
+
+            sharing_runs.runs[0].0 = SharingMode::decode(current);
         }
 
         if min_ranges > 1 {
@@ -1087,20 +1104,37 @@ impl ExclusiveSharing {
         for sharing_range in sharing_ranges {
             sharing_runs.set_range(sharing, sharing_range);
         }
+
+        if sharing_runs.runs.len() == 1 {
+            self.uniform
+                .store(sharing_runs.runs[0].0.encode(), Ordering::Release);
+        }
     }
 
+    #[inline]
     fn ranges_in(&self, query_range: BufferSubresourceRange) -> SharingRunIter<'_> {
         let current = self.uniform.load(Ordering::Acquire);
         if current != Self::DENSE {
-            let sharing = SharingMode::decode(current);
-
-            return SharingRunIter::Constant(Some((sharing, query_range)));
+            return SharingRunIter::Constant(Some((current, query_range)));
         }
+
+        self.ranges_in_dense(query_range)
+    }
+
+    fn ranges_in_dense(&self, query_range: BufferSubresourceRange) -> SharingRunIter<'_> {
+        #[cfg(test)]
+        test::before_sharing_lock();
 
         let sharing_runs = self.sharing_runs.lock();
 
         #[cfg(not(feature = "parking_lot"))]
         let sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
+
+        // A writer may have demoted, then changed the atomic owner while we waited.
+        let current = self.uniform.load(Ordering::Acquire);
+        if current != Self::DENSE {
+            return SharingRunIter::Constant(Some((current, query_range)));
+        }
 
         let run_idx = sharing_runs.run_index_at(query_range.start);
 
@@ -1118,7 +1152,7 @@ impl ExclusiveSharing {
         sharing_range: BufferSubresourceRange,
     ) {
         if sharing_range.start == 0 && sharing_range.end == size {
-            self.set_uniform_or_dense(sharing, sharing_range);
+            self.set_uniform_or_dense(sharing);
             return;
         }
 
@@ -1147,7 +1181,7 @@ impl ExclusiveSharing {
         );
     }
 
-    fn set_uniform_or_dense(&self, sharing: SharingMode, sharing_range: BufferSubresourceRange) {
+    fn set_uniform_or_dense(&self, sharing: SharingMode) {
         let encoded_sharing = sharing.encode();
 
         debug_assert_ne!(encoded_sharing, Self::DENSE);
@@ -1156,15 +1190,7 @@ impl ExclusiveSharing {
 
         loop {
             if current == Self::DENSE {
-                let sharing_runs = self.sharing_runs.lock();
-
-                #[cfg(not(feature = "parking_lot"))]
-                let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
-
-                #[cfg(feature = "parking_lot")]
-                let mut sharing_runs = sharing_runs;
-
-                sharing_runs.set_range(sharing, sharing_range);
+                self.set_whole_locked(sharing);
 
                 return;
             }
@@ -1185,6 +1211,25 @@ impl ExclusiveSharing {
             }
         }
     }
+
+    fn set_whole_locked(&self, sharing: SharingMode) {
+        #[cfg(test)]
+        test::before_sharing_lock();
+
+        let sharing_runs = self.sharing_runs.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
+
+        #[cfg(feature = "parking_lot")]
+        let mut sharing_runs = sharing_runs;
+
+        // A whole-resource assignment needs no previous owner. If another writer demoted
+        // while we waited, this store simply orders after its latest atomic assignment.
+        sharing_runs.reset_uniform(sharing);
+
+        self.uniform.store(sharing.encode(), Ordering::Release);
+    }
 }
 
 #[derive(Debug)]
@@ -1199,6 +1244,11 @@ impl<V> RunMap<V> {
             runs: smallvec![(value, 0)],
             size,
         }
+    }
+
+    fn reset_uniform(&mut self, value: V) {
+        self.runs.truncate(1);
+        self.runs[0] = (value, 0);
     }
 
     fn run_index_at(&self, offset: vk::DeviceSize) -> usize {
@@ -1232,8 +1282,27 @@ impl<V> RunMap<V> {
         debug_assert!(range.start < range.end && range.end <= self.size);
 
         if range.start == 0 && range.end == self.size {
-            self.runs.truncate(1);
-            self.runs[0] = (value, 0);
+            self.reset_uniform(value);
+
+            return;
+        }
+
+        // A split of uniform state has at most three runs. Avoid two binary searches
+        // and tail movement, retaining spilled capacity for repeated split/reset cycles.
+        if self.runs.len() == 1 {
+            let previous = self.runs[0].0;
+            if previous != value {
+                if range.start == 0 {
+                    self.runs[0].0 = value;
+                } else {
+                    self.runs.push((value, range.start));
+                }
+
+                if range.end < self.size {
+                    self.runs.push((previous, range.end));
+                }
+            }
+
             return;
         }
 
@@ -1489,7 +1558,9 @@ impl Sharing {
 
     fn ranges_in(&self, range: BufferSubresourceRange) -> SharingRunIter<'_> {
         match self {
-            Self::Concurrent => SharingRunIter::Constant(Some((SharingMode::Concurrent, range))),
+            Self::Concurrent => {
+                SharingRunIter::Constant(Some((SharingMode::Concurrent.encode(), range)))
+            }
             Self::Exclusive(sharing) => sharing.ranges_in(range),
         }
     }
@@ -1505,7 +1576,9 @@ impl Sharing {
 }
 
 enum SharingRunIter<'a> {
-    Constant(Option<(SharingMode, BufferSubresourceRange)>),
+    // Keep the atomic representation until iteration, so the fast and rechecked paths
+    // join without materializing and copying the larger SharingMode enum.
+    Constant(Option<(u64, BufferSubresourceRange)>),
     Dense {
         query_range: BufferSubresourceRange,
         run_idx: usize,
@@ -1518,7 +1591,9 @@ impl Iterator for SharingRunIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Constant(range) => range.take(),
+            Self::Constant(range) => range
+                .take()
+                .map(|(owner, range)| (SharingMode::decode(owner), range)),
             Self::Dense {
                 query_range,
                 run_idx,
@@ -1545,6 +1620,47 @@ impl Iterator for SharingRunIter<'_> {
     }
 }
 
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod bench {
+    //! CPU-only access to the production ownership tracker for benchmarks.
+    use super::*;
+
+    pub struct OwnershipBenchHarness {
+        sharing: ExclusiveSharing,
+        size: u64,
+    }
+
+    impl OwnershipBenchHarness {
+        pub fn new(size: u32) -> Self {
+            Self {
+                sharing: ExclusiveSharing::new(size as u64),
+                size: size as u64,
+            }
+        }
+
+        pub fn set(&self, owner: u32, start: u32, count: u32) {
+            self.sharing.set_range(
+                self.size,
+                SharingMode::Exclusive(Some((owner, 0))),
+                (start as u64..(start + count) as u64).into(),
+            );
+        }
+
+        pub fn read(&self) -> (u64, usize) {
+            self.sharing.ranges_in((0..self.size).into()).fold(
+                (0, 0),
+                |(checksum, count), (owner, range)| {
+                    (
+                        checksum ^ owner.encode() ^ range.start ^ range.end,
+                        count + 1,
+                    )
+                },
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use {
@@ -1562,6 +1678,113 @@ mod test {
         // Count entries shifted by set_range's tail removal, not comparisons or elapsed time.
         pub(super) static SET_RANGE_SHIFTED_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
         pub(super) static BEFORE_SHARING_CAS: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+        static BEFORE_SHARING_LOCK: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+        static SHARING_LOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn before_sharing_lock() {
+        SHARING_LOCKS.with(|count| count.set(count.get() + 1));
+        if let Some(hook) = BEFORE_SHARING_LOCK.with(|hook| hook.take()) {
+            hook();
+        }
+    }
+
+    #[test]
+    fn buffer_sharing_equalization_restores_atomic_paths() {
+        let sharing = ExclusiveSharing::new(16);
+        let owner = SharingMode::Exclusive(Some((2, 1)));
+        for _ in 0..8 {
+            sharing.set_range(16, SharingMode::Exclusive(None), (0..16).into());
+            sharing.set_range(16, owner, (0..8).into());
+            assert_eq!(
+                sharing.uniform.load(Ordering::Acquire),
+                ExclusiveSharing::DENSE
+            );
+            sharing.set_range(16, owner, (8..16).into());
+            assert_eq!(sharing.uniform.load(Ordering::Acquire), owner.encode());
+            SHARING_LOCKS.with(|count| count.set(0));
+            sharing.set_ranges(16, owner, [(1..3).into(), (7..9).into()]);
+            assert_eq!(
+                sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                vec![(owner, (0..16).into())]
+            );
+            sharing.set_range(16, SharingMode::Exclusive(Some((2, 0))), (0..16).into());
+            SHARING_LOCKS.with(|count| assert_eq!(count.get(), 0));
+        }
+    }
+
+    #[test]
+    fn buffer_sharing_waiters_recheck_after_demotion() {
+        for writer in 0..3 {
+            let sharing = std::sync::Arc::new(ExclusiveSharing::new(16));
+            let owner = SharingMode::Exclusive(Some((2, 1)));
+            let latest = SharingMode::Exclusive(Some((2, 0)));
+            sharing.set_range(16, owner, (0..8).into());
+            let other = sharing.clone();
+            BEFORE_SHARING_LOCK.with(|hook| {
+                hook.set(Some(Box::new(move || {
+                    other.set_range(16, owner, (8..16).into());
+                    other.set_range(16, latest, (0..16).into());
+                })))
+            });
+            if writer == 2 {
+                sharing.set_range(16, owner, (0..16).into());
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![(owner, (0..16).into())]
+                );
+            } else if writer == 1 {
+                sharing.set_range(16, owner, (4..8).into());
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![
+                        (latest, (0..4).into()),
+                        (owner, (4..8).into()),
+                        (latest, (8..16).into()),
+                    ]
+                );
+            } else {
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![(latest, (0..16).into())]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn buffer_sharing_repromotion_retains_capacity_and_refreshes_owner() {
+        let sharing = ExclusiveSharing::new(256);
+        let owner = SharingMode::Exclusive(Some((2, 1)));
+        let latest = SharingMode::Exclusive(Some((2, 0)));
+        sharing.set_ranges(
+            256,
+            owner,
+            (0..128).step_by(2).map(|start| (start..start + 1).into()),
+        );
+        let capacity = {
+            let map = sharing.sharing_runs.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let map = map.unwrap();
+            assert!(map.runs.spilled());
+            map.runs.capacity()
+        };
+        sharing.set_range(256, owner, (0..256).into());
+        // Leave the inactive map stale before reusing its allocation.
+        sharing.set_range(256, latest, (0..256).into());
+        sharing.set_range(256, owner, (80..160).into());
+        assert_eq!(
+            sharing.ranges_in((0..256).into()).collect::<Vec<_>>(),
+            vec![
+                (latest, (0..80).into()),
+                (owner, (80..160).into()),
+                (latest, (160..256).into()),
+            ]
+        );
+        let map = sharing.sharing_runs.lock();
+        #[cfg(not(feature = "parking_lot"))]
+        let map = map.unwrap();
+        assert_eq!(map.runs.capacity(), capacity);
     }
 
     #[test]
@@ -1820,10 +2043,7 @@ mod test {
                 sharing.ranges_in((0..256).into()).collect::<Vec<_>>(),
                 vec![(owner_a, (0..256).into())]
             );
-            assert_eq!(
-                sharing.uniform.load(Ordering::Acquire),
-                ExclusiveSharing::DENSE
-            );
+            assert_eq!(sharing.uniform.load(Ordering::Acquire), owner_a.encode());
             sharing.set_range(256, owner_b, (80..160).into());
         }
     }

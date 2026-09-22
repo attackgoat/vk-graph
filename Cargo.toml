@@ -112,6 +112,11 @@ name = "image_swap_access"
 harness = false
 
 [[bench]]
+name = "ownership_tracking"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
 name = "submission_reorder"
 harness = false
 

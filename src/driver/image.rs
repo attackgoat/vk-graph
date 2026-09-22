@@ -20,7 +20,7 @@ use {
         ops::{Deref, DerefMut},
         sync::{
             Arc, OnceLock, Weak,
-            atomic::{AtomicU8, AtomicU16, AtomicU64, Ordering},
+            atomic::{AtomicU16, AtomicU64, Ordering},
         },
         thread::panicking,
     },
@@ -716,6 +716,12 @@ impl<V: Copy> DenseMap<V> {
         }
     }
 
+    fn reset_uniform(&mut self, value: V) {
+        self.values[0] = value;
+        self.values.truncate(1);
+        self.transitions = 0;
+    }
+
     fn subresource(&self, aspect: u8, array_layer: u32, mip_level: u32) -> V {
         let idx = self.idx(aspect, array_layer, mip_level);
         self.values[if self.values.len() == 1 { 0 } else { idx }]
@@ -760,6 +766,7 @@ impl<V: Copy + PartialEq> DenseMap<V> {
             .is_some_and(|previous| previous == value)
         {
             self.values.truncate(1);
+
             return;
         }
 
@@ -769,9 +776,8 @@ impl<V: Copy + PartialEq> DenseMap<V> {
             && range.level_count == self.mip_level_count
             && range.aspect_mask.as_raw().count_ones() == self.aspect_count as u32
         {
-            self.values[0] = value;
-            self.values.truncate(1);
-            self.transitions = 0;
+            self.reset_uniform(value);
+
             return;
         }
 
@@ -1046,14 +1052,6 @@ struct DenseMapRange {
     level_count: u32,
 }
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DenseSharingState {
-    Idle = 0,
-    Promoting = 1,
-    Dense = 2,
-}
-
 #[derive(Debug)]
 struct DualAspectAccess([AtomicU16; 2]);
 
@@ -1126,30 +1124,21 @@ impl Iterator for DualAspectAccessIter<'_> {
 
 #[derive(Debug)]
 struct ExclusiveSharing {
-    // `promoting` keeps whole-image updates on the dense path while a partial update is
-    // converting uniform tracking into subresource tracking
-    dense_sharing_state: AtomicU8,
     image_set_queues: OnceLock<Box<Mutex<Vec<Weak<ImageSetQueue>>>>>,
+    // Encoded owner or DENSE. All representation changes hold dense_sharing's mutex.
     uniform: AtomicU64,
 }
 
 impl ExclusiveSharing {
+    // The reserved family cannot identify a real queue; distinct from Concurrent/Unknown.
+    const DENSE: u64 = u64::MAX - 2;
+
     fn new(_info: ImageInfo) -> Self {
         let sharing = SharingMode::Exclusive(None);
 
         Self {
             uniform: AtomicU64::new(sharing.encode()),
-            dense_sharing_state: AtomicU8::new(0),
             image_set_queues: OnceLock::new(),
-        }
-    }
-
-    fn dense_sharing_state(&self) -> DenseSharingState {
-        match self.dense_sharing_state.load(Ordering::Acquire) {
-            0 => DenseSharingState::Idle,
-            1 => DenseSharingState::Promoting,
-            2 => DenseSharingState::Dense,
-            _ => unreachable!("invalid image dense sharing state"),
         }
     }
 
@@ -1169,12 +1158,9 @@ impl ExclusiveSharing {
         });
     }
 
+    #[cfg(test)]
     fn is_dense_sharing_active(&self) -> bool {
-        self.dense_sharing_state() == DenseSharingState::Dense
-    }
-
-    fn is_promoting_dense_sharing(&self) -> bool {
-        self.dense_sharing_state() == DenseSharingState::Promoting
+        self.uniform.load(Ordering::Acquire) == Self::DENSE
     }
 
     fn lock_image_set_queues(
@@ -1195,6 +1181,9 @@ impl ExclusiveSharing {
         sharing: SharingMode,
         sharing_ranges: &[vk::ImageSubresourceRange],
     ) {
+        #[cfg(test)]
+        test::before_sharing_lock();
+
         let dense = dense.lock();
 
         #[cfg(not(feature = "parking_lot"))]
@@ -1202,26 +1191,28 @@ impl ExclusiveSharing {
 
         let mut dense = dense;
 
-        if self.is_dense_sharing_active() {
-            let dense_sharing = dense.as_mut().expect("missing dense sharing state");
-            for &sharing_range in sharing_ranges {
-                dense_sharing.set_range(sharing, info.resolve_subresource_counts(sharing_range));
+        // Capture a preceding uniform CAS, or make a racing writer retry on the locked path.
+        // Rechecking here also handles demotion while this writer waited for the mutex.
+        // DENSE is stable under the mutex. Avoid a redundant read-modify-write for
+        // already-mixed state; only promotion races with lock-free uniform writers.
+        if self.uniform.load(Ordering::Acquire) != Self::DENSE {
+            let current = SharingMode::decode(self.uniform.swap(Self::DENSE, Ordering::AcqRel));
+            if let Some(map) = dense.as_mut() {
+                // Reuse storage without trusting its stale owner after an atomic update.
+                map.reset_uniform(current);
+            } else {
+                *dense = Some(DenseMap::new(info, current));
             }
-
-            return;
         }
 
-        self.set_promoting_dense_sharing();
-
-        let current = SharingMode::decode(self.uniform.load(Ordering::Acquire));
-
-        *dense = Some(DenseMap::new(info, current));
         let sharing_state = dense.as_mut().expect("missing dense sharing state");
         for &sharing_range in sharing_ranges {
             sharing_state.set_range(sharing, info.resolve_subresource_counts(sharing_range));
         }
 
-        self.set_dense_sharing_active();
+        if let Some(owner) = sharing_state.uniform_value() {
+            self.uniform.store(owner.encode(), Ordering::Release);
+        }
     }
 
     fn register_image_set_queue(&self, queue: &Arc<ImageSetQueue>) {
@@ -1244,16 +1235,6 @@ impl ExclusiveSharing {
         }
     }
 
-    fn set_dense_sharing_active(&self) {
-        self.dense_sharing_state
-            .store(DenseSharingState::Dense as _, Ordering::Release);
-    }
-
-    fn set_promoting_dense_sharing(&self) {
-        self.dense_sharing_state
-            .store(DenseSharingState::Promoting as _, Ordering::Release);
-    }
-
     fn set_ranges(
         &self,
         dense: &Mutex<Option<DenseMap<SharingMode>>>,
@@ -1265,10 +1246,16 @@ impl ExclusiveSharing {
             return;
         }
 
+        // An unchanged assignment linearizes at this load; it does not publish state.
+        let current = self.uniform.load(Ordering::Acquire);
+        if current == sharing.encode() {
+            return;
+        }
+
         self.invalidate_image_set_queues();
 
         if sharing_ranges.len() == 1 && info.is_full_subresource_range(sharing_ranges[0]) {
-            self.set_uniform_or_dense_sharing(dense, info, sharing, sharing_ranges[0]);
+            self.set_uniform_or_dense_sharing(dense, sharing, current);
 
             return;
         }
@@ -1279,57 +1266,54 @@ impl ExclusiveSharing {
     fn set_uniform_or_dense_sharing(
         &self,
         dense: &Mutex<Option<DenseMap<SharingMode>>>,
-        info: ImageInfo,
         sharing: SharingMode,
-        sharing_range: vk::ImageSubresourceRange,
+        mut current: u64,
     ) {
         let encoded_sharing = sharing.encode();
 
+        debug_assert_ne!(encoded_sharing, Self::DENSE);
+
         loop {
-            if self.uses_dense_sharing() {
-                let dense = dense.lock();
-
-                #[cfg(not(feature = "parking_lot"))]
-                let dense = dense.expect("poisoned image dense lock");
-
-                let mut dense = dense;
-
-                dense
-                    .as_mut()
-                    .expect("missing dense sharing state")
-                    .set_range(sharing, info.resolve_subresource_counts(sharing_range));
-
+            if current == Self::DENSE {
+                self.set_whole_locked(dense, sharing);
                 return;
             }
 
-            let current = self.uniform.load(Ordering::Acquire);
-            if self
-                .uniform
-                .compare_exchange(
-                    current,
-                    encoded_sharing,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                if self.is_promoting_dense_sharing() {
-                    let dense = dense.lock();
+            #[cfg(test)]
+            if let Some(before_cas) = test::BEFORE_SHARING_CAS.with(|hook| hook.take()) {
+                before_cas();
+            }
 
-                    #[cfg(not(feature = "parking_lot"))]
-                    let dense = dense.expect("poisoned image dense lock");
-
-                    let mut dense = dense;
-
-                    dense
-                        .as_mut()
-                        .expect("missing dense sharing state")
-                        .set_range(sharing, info.resolve_subresource_counts(sharing_range));
-                }
-
-                return;
+            match self.uniform.compare_exchange(
+                current,
+                encoded_sharing,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(observed) => current = observed,
             }
         }
+    }
+
+    fn set_whole_locked(&self, dense: &Mutex<Option<DenseMap<SharingMode>>>, sharing: SharingMode) {
+        #[cfg(test)]
+        test::before_sharing_lock();
+
+        let dense = dense.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let dense = dense.expect("poisoned image dense lock");
+
+        let mut dense = dense;
+
+        // Whole-image replacement needs no previous owner, even if another writer
+        // demoted and updated the atomic owner while we waited for the mutex.
+        dense
+            .as_mut()
+            .expect("missing dense sharing state")
+            .reset_uniform(sharing);
+        self.uniform.store(sharing.encode(), Ordering::Release);
     }
 
     fn unregister_image_set_queue(&self, queue: &Arc<ImageSetQueue>) {
@@ -1342,10 +1326,6 @@ impl ExclusiveSharing {
                 .upgrade()
                 .is_some_and(|registered| !Arc::ptr_eq(&registered, queue))
         });
-    }
-
-    fn uses_dense_sharing(&self) -> bool {
-        self.dense_sharing_state() != DenseSharingState::Idle
     }
 }
 
@@ -1770,10 +1750,14 @@ impl Image {
         };
         let mut sharing_source = match sharing {
             Sharing::Concurrent => SharingSource::Concurrent,
-            Sharing::Exclusive(exclusive) if exclusive.uses_dense_sharing() => SharingSource::Dense,
-            Sharing::Exclusive(exclusive) => SharingSource::Uniform(SharingMode::decode(
-                exclusive.uniform.load(Ordering::Acquire),
-            )),
+            Sharing::Exclusive(exclusive) => {
+                let current = exclusive.uniform.load(Ordering::Acquire);
+                if current == ExclusiveSharing::DENSE {
+                    SharingSource::Dense
+                } else {
+                    SharingSource::Uniform(SharingMode::decode(current))
+                }
+            }
         };
 
         let access_dense = if matches!(access_source, AccessSource::Dense) {
@@ -1797,13 +1781,21 @@ impl Image {
             None
         };
         let sharing_dense = if matches!(sharing_source, SharingSource::Dense) {
+            #[cfg(test)]
+            test::before_sharing_lock();
+
             let dense = dense_sharing.lock();
 
             #[cfg(not(feature = "parking_lot"))]
             let dense = dense.expect("poisoned image dense sharing lock");
 
-            if let Some(value) = dense.as_ref().and_then(DenseMap::uniform_value) {
-                sharing_source = SharingSource::Uniform(value);
+            let Sharing::Exclusive(exclusive) = sharing else {
+                unreachable!()
+            };
+            let current = exclusive.uniform.load(Ordering::Acquire);
+            if current != ExclusiveSharing::DENSE {
+                // The inactive map may be stale after demotion and a subsequent atomic update.
+                sharing_source = SharingSource::Uniform(SharingMode::decode(current));
             }
 
             Some(dense)
@@ -1859,6 +1851,7 @@ impl Image {
         impl Iterator for DenseSyncInfoIter<'_> {
             type Item = (ImageSubresourceSyncInfo, SharingMode);
 
+            #[inline]
             fn next(&mut self) -> Option<Self::Item> {
                 let range = self.subresource_ranges.next()?;
                 let aspect = aspect_ordinal(self.format_aspect_mask, range.aspect_mask);
@@ -1902,14 +1895,18 @@ impl Image {
             }
         }
 
-        enum SyncInfoIter<'a> {
+        enum SyncInfoIter<I> {
             Uniform(UniformSyncInfoIter),
-            Dense(DenseSyncInfoIter<'a>),
+            Dense(I),
         }
 
-        impl Iterator for SyncInfoIter<'_> {
+        impl<I> Iterator for SyncInfoIter<I>
+        where
+            I: Iterator<Item = (ImageSubresourceSyncInfo, SharingMode)>,
+        {
             type Item = (ImageSubresourceSyncInfo, SharingMode);
 
+            #[inline]
             fn next(&mut self) -> Option<Self::Item> {
                 match self {
                     Self::Uniform(iter) => iter.next(),
@@ -1918,17 +1915,9 @@ impl Image {
             }
 
             fn size_hint(&self) -> (usize, Option<usize>) {
-                let len = self.len();
-
-                (len, Some(len))
-            }
-        }
-
-        impl ExactSizeIterator for SyncInfoIter<'_> {
-            fn len(&self) -> usize {
                 match self {
-                    Self::Uniform(iter) => iter.len(),
-                    Self::Dense(iter) => iter.len(),
+                    Self::Uniform(iter) => iter.size_hint(),
+                    Self::Dense(iter) => iter.size_hint(),
                 }
             }
         }
@@ -1937,25 +1926,6 @@ impl Image {
             SharingSource::Concurrent => Some(SharingMode::Concurrent),
             SharingSource::Uniform(sharing) => Some(sharing),
             SharingSource::Dense => None,
-        };
-
-        let sync_infos = if let (AccessSource::Uniform(access), Some(sharing)) =
-            (access_source, uniform_sharing)
-        {
-            SyncInfoIter::Uniform(UniformSyncInfoIter {
-                sync: ImageSubresourceSyncInfo::from_access_set(access, query_range),
-                sharing,
-                aspects: query_range.aspect_mask,
-            })
-        } else {
-            SyncInfoIter::Dense(DenseSyncInfoIter {
-                access_source,
-                format_aspect_mask,
-                access_dense,
-                sharing_dense,
-                sharing_source,
-                subresource_ranges,
-            })
         };
 
         struct CompactIter<I, P, M> {
@@ -2043,9 +2013,31 @@ impl Image {
                 lhs.0.merge_mip_levels(rhs.0);
             };
 
-        let mip_levels = CompactIter::new(sync_infos, can_merge_mip_levels, merge_mip_levels);
+        if let (AccessSource::Uniform(access), Some(sharing)) = (access_source, uniform_sharing) {
+            // These are already complete rectangles, one per aspect. Avoid both compaction
+            // layers entirely, and dispatch dense iteration once per reported range, not cell.
+            SyncInfoIter::Uniform(UniformSyncInfoIter {
+                sync: ImageSubresourceSyncInfo::from_access_set(access, query_range),
+                sharing,
+                aspects: query_range.aspect_mask,
+            })
+        } else {
+            let sync_infos = DenseSyncInfoIter {
+                access_source,
+                format_aspect_mask,
+                access_dense,
+                sharing_dense,
+                sharing_source,
+                subresource_ranges,
+            };
+            let mip_levels = CompactIter::new(sync_infos, can_merge_mip_levels, merge_mip_levels);
 
-        CompactIter::new(mip_levels, can_merge_array_layers, merge_array_layers)
+            SyncInfoIter::Dense(CompactIter::new(
+                mip_levels,
+                can_merge_array_layers,
+                merge_array_layers,
+            ))
+        }
     }
 
     /// Produces a new `Image` sharing the same Vulkan handle with independent access tracking.
@@ -3484,6 +3476,96 @@ pub mod bench {
                 .fold(0, |checksum, (_, access, _)| checksum ^ access.raw())
         }
     }
+
+    /// CPU-only access to the production ownership tracker and synchronization snapshot path.
+    #[cfg(feature = "bench-internals")]
+    pub struct OwnershipBenchHarness {
+        sharing: Sharing,
+        dense: Mutex<Option<DenseMap<SharingMode>>>,
+        access: Access,
+        dense_access: Mutex<Option<DenseMap<ImageAccessSet>>>,
+        info: ImageInfo,
+        queue: Option<Arc<ImageSetQueue>>,
+    }
+
+    #[cfg(feature = "bench-internals")]
+    impl OwnershipBenchHarness {
+        pub fn new(layers: u32, mips: u32) -> Self {
+            let info = ImageInfo::image_2d(
+                1,
+                1,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::empty(),
+            )
+            .into_builder()
+            .array_layer_count(layers)
+            .mip_level_count(mips)
+            .build();
+            Self {
+                sharing: Sharing::new(info, vk::SharingMode::EXCLUSIVE),
+                dense: Mutex::new(None),
+                access: Access::new(info, AccessType::TransferRead),
+                dense_access: Mutex::new(None),
+                info,
+                queue: None,
+            }
+        }
+
+        // Benchmarks use one cell or the full image; mapping cells this way retains mip boundaries.
+        pub fn set(&self, owner: u32, start: u32, count: u32) {
+            let whole = count == self.info.array_layer_count * self.info.mip_level_count;
+            assert!(count == 1 || whole);
+            let range = vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_array_layer(start / self.info.mip_level_count)
+                .base_mip_level(start % self.info.mip_level_count)
+                .layer_count(if whole {
+                    self.info.array_layer_count
+                } else {
+                    1
+                })
+                .level_count(if whole { self.info.mip_level_count } else { 1 });
+            self.sharing.set_ranges(
+                &self.dense,
+                self.info,
+                SharingMode::Exclusive(Some((owner, 0))),
+                &[range],
+            );
+        }
+
+        pub fn register_queue(&mut self, owner: u32) {
+            let queue = Arc::new(ImageSetQueue::new());
+            queue.publish((owner, 0));
+            let Sharing::Exclusive(sharing) = &self.sharing else {
+                unreachable!()
+            };
+            sharing.register_image_set_queue(&queue);
+            self.queue = Some(queue);
+        }
+
+        pub fn read(&self) -> (u64, usize) {
+            Image::sync_info_for_range(
+                &self.access,
+                &self.sharing,
+                &self.dense_access,
+                &self.dense,
+                self.info,
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .layer_count(self.info.array_layer_count)
+                    .level_count(self.info.mip_level_count),
+            )
+            .fold((0, 0), |(checksum, count), (sync, owner)| {
+                (
+                    checksum
+                        ^ owner.encode()
+                        ^ sync.range.layer_count as u64
+                        ^ sync.range.level_count as u64,
+                    count + 1,
+                )
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3493,6 +3575,133 @@ mod test {
         rand::{Rng, SeedableRng, rngs::SmallRng},
         std::ops::Range,
     };
+
+    std::thread_local! {
+        pub(super) static BEFORE_SHARING_CAS: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+        static BEFORE_SHARING_LOCK: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+        static SHARING_LOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn before_sharing_lock() {
+        SHARING_LOCKS.with(|count| count.set(count.get() + 1));
+        if let Some(hook) = BEFORE_SHARING_LOCK.with(|hook| hook.take()) {
+            hook();
+        }
+    }
+
+    #[test]
+    fn image_sharing_waiters_recheck_after_demotion() {
+        use vk::ImageAspectFlags as A;
+        let info = image_subresource(vk::Format::D32_SFLOAT_S8_UINT, 2, 2);
+        let whole = image_subresource_range(A::DEPTH | A::STENCIL, 0..2, 0..2);
+        let partial = image_subresource_range(A::DEPTH, 0..1, 0..1);
+        let owner = SharingMode::Exclusive(Some((2, 1)));
+        let latest = SharingMode::Exclusive(Some((2, 0)));
+        for writer in 0..3 {
+            let sharing = Arc::new(Sharing::new(info, vk::SharingMode::EXCLUSIVE));
+            let dense = Arc::new(Mutex::new(None));
+            sharing.set_ranges(&dense, info, owner, &[partial]);
+            let other = sharing.clone();
+            let other_dense = dense.clone();
+            BEFORE_SHARING_LOCK.with(|hook| {
+                hook.set(Some(Box::new(move || {
+                    other.set_ranges(&other_dense, info, owner, &[whole]);
+                    other.set_ranges(&other_dense, info, latest, &[whole]);
+                })))
+            });
+            if writer != 0 {
+                sharing.set_ranges(
+                    &dense,
+                    info,
+                    owner,
+                    &[if writer == 2 { whole } else { partial }],
+                );
+            }
+            let access = Access::new(info, AccessType::TransferRead);
+            let dense_access = Mutex::new(None);
+            for (snapshot, actual) in
+                Image::sync_info_for_range(&access, &sharing, &dense_access, &dense, info, whole)
+            {
+                for cell in ImageSubresourceRangeIter::new(snapshot.range) {
+                    let changed = writer == 2
+                        || (writer == 1 && super::image_subresource_range_contains(partial, cell));
+                    assert_eq!(actual, if changed { owner } else { latest });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn image_sharing_repromotion_retains_storage_and_refreshes_owner() {
+        use vk::ImageAspectFlags as A;
+        let info = image_subresource(vk::Format::D32_SFLOAT_S8_UINT, 4, 3);
+        let whole = image_subresource_range(A::DEPTH | A::STENCIL, 0..4, 0..3);
+        let partial = image_subresource_range(A::STENCIL, 1..3, 1..2);
+        let sharing = Sharing::new(info, vk::SharingMode::EXCLUSIVE);
+        let dense = Mutex::new(None);
+        let owner = SharingMode::Exclusive(Some((2, 1)));
+        let latest = SharingMode::Exclusive(Some((2, 0)));
+        sharing.set_ranges(&dense, info, owner, &[partial]);
+        let storage = {
+            let map = dense.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let map = map.unwrap();
+            let map = map.as_ref().unwrap();
+            (map.values.as_ptr(), map.values.capacity())
+        };
+        for _ in 0..8 {
+            sharing.set_ranges(&dense, info, owner, &[whole]);
+            sharing.set_ranges(&dense, info, latest, &[whole]);
+            sharing.set_ranges(&dense, info, owner, &[partial]);
+            let map = dense.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let map = map.unwrap();
+            let map = map.as_ref().unwrap();
+            assert_eq!((map.values.as_ptr(), map.values.capacity()), storage);
+            for aspect in 0..2 {
+                for layer in 0..4 {
+                    for mip in 0..3 {
+                        let changed = aspect == 1 && (1..3).contains(&layer) && mip == 1;
+                        assert_eq!(
+                            map.subresource(aspect, layer, mip),
+                            if changed { owner } else { latest }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn image_sharing_whole_update_retries_after_promotion() {
+        use vk::ImageAspectFlags as A;
+        let info = image_subresource(vk::Format::D32_SFLOAT_S8_UINT, 2, 2);
+        let sharing = Arc::new(Sharing::new(info, vk::SharingMode::EXCLUSIVE));
+        let dense = Arc::new(Mutex::new(None));
+        let owner = SharingMode::Exclusive(Some((2, 1)));
+        let other = sharing.clone();
+        let other_dense = dense.clone();
+        BEFORE_SHARING_CAS.with(|hook| {
+            hook.set(Some(Box::new(move || {
+                other.set_ranges(
+                    &other_dense,
+                    info,
+                    SharingMode::Exclusive(Some((2, 0))),
+                    &[image_subresource_range(A::DEPTH, 0..1, 0..1)],
+                );
+            })))
+        });
+        sharing.set_ranges(
+            &dense,
+            info,
+            owner,
+            &[image_subresource_range(A::DEPTH | A::STENCIL, 0..2, 0..2)],
+        );
+        let Sharing::Exclusive(exclusive) = sharing.as_ref() else {
+            unreachable!()
+        };
+        assert_eq!(exclusive.uniform.load(Ordering::Acquire), owner.encode());
+    }
 
     trait IntoImageAccessSet {
         fn into_access_set(self) -> ImageAccessSet;
@@ -5752,6 +5961,12 @@ mod test {
         let lhs = Arc::new(ImageSetQueue::new());
         let rhs = Arc::new(ImageSetQueue::new());
 
+        sharing.set_ranges(
+            &dense,
+            info,
+            SharingMode::Exclusive(Some((7, 3))),
+            &[image_subresource_range(A::COLOR, 0..1, 0..1)],
+        );
         assert_eq!(lhs.queue(), None);
         lhs.publish((7, 3));
         rhs.publish((7, 3));
@@ -5770,6 +5985,16 @@ mod test {
             .len()
         };
         assert_eq!(registered_queue_count(), 2);
+
+        // An unchanged assignment preserves valid set caches as well as avoiding promotion.
+        sharing.set_ranges(
+            &dense,
+            info,
+            SharingMode::Exclusive(Some((7, 3))),
+            &[image_subresource_range(A::COLOR, 0..1, 0..1)],
+        );
+        assert_eq!(lhs.queue(), Some((7, 3)));
+        assert_eq!(rhs.queue(), Some((7, 3)));
 
         sharing.set_ranges(
             &dense,
@@ -6012,18 +6237,38 @@ mod test {
             assert_eq!(map.values.len(), 1);
         }
         let owner = SharingMode::Exclusive(Some((3, 0)));
+        SHARING_LOCKS.with(|count| count.set(0));
         sharing.set_ranges(
             &dense,
             info,
             owner,
             &[image_subresource_range(A::COLOR, 0..64, 0..8)],
         );
-        let map = dense.lock();
-        #[cfg(not(feature = "parking_lot"))]
-        let map = map.unwrap();
-        let map = map.as_ref().unwrap();
-        assert_eq!(map.values.len(), 1);
-        assert_eq!(map.subresource(0, 63, 7), owner);
+        for _ in 0..16 {
+            sharing.set_ranges(
+                &dense,
+                info,
+                owner,
+                &[
+                    image_subresource_range(A::COLOR, 1..3, 2..4),
+                    image_subresource_range(A::COLOR, 5..7, 6..8),
+                ],
+            );
+            let access = Access::new(info, AccessType::TransferRead);
+            let dense_access = Mutex::new(None);
+            let snapshots = Image::sync_info_for_range(
+                &access,
+                &sharing,
+                &dense_access,
+                &dense,
+                info,
+                image_subresource_range(A::COLOR, 0..64, 0..8),
+            )
+            .collect::<Vec<_>>();
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(snapshots[0].1, owner);
+        }
+        SHARING_LOCKS.with(|count| assert_eq!(count.get(), 0));
     }
 
     #[test]
