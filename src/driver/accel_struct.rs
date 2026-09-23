@@ -8,6 +8,7 @@ use {
     ash::vk,
     derive_builder::Builder,
     log::warn,
+    smallvec::{SmallVec, smallvec},
     std::{
         fmt::{Debug, Formatter},
         marker::PhantomData,
@@ -16,6 +17,8 @@ use {
     },
     vk_sync::AccessType,
 };
+
+type Accesses = SmallVec<[AccessType; 4]>;
 
 #[cfg(feature = "parking_lot")]
 use parking_lot::{Mutex, MutexGuard};
@@ -102,7 +105,7 @@ fn validate_build_size_counts(geometry_count: usize, primitive_count_len: usize)
 #[read_only::cast]
 pub struct AccelerationStructure {
     // TODO: Replace with single atomicu8
-    accesses: Mutex<Vec<AccessType>>,
+    accesses: Mutex<Accesses>,
 
     /// The native Vulkan resource handle of the buffer which supports this acceleration structure.
     ///
@@ -186,7 +189,7 @@ impl AccelerationStructure {
         };
 
         Ok(Self {
-            accesses: Mutex::new(vec![AccessType::Nothing]),
+            accesses: Mutex::new(smallvec![AccessType::Nothing]),
             buffer,
             handle,
             info,
@@ -304,7 +307,7 @@ impl AccelerationStructure {
         unsafe { from_raw_parts(instances.as_ptr() as *const _, size_of_val(instances)) }
     }
 
-    fn lock_accesses(&self) -> MutexGuard<'_, Vec<AccessType>> {
+    fn lock_accesses(&self) -> MutexGuard<'_, Accesses> {
         let accesses = self.accesses.lock();
 
         #[cfg(not(feature = "parking_lot"))]
@@ -935,13 +938,13 @@ impl<'a> AccelerationStructureTriangles<'a> {
 }
 
 struct AccessIter<'a> {
-    accesses: MutexGuard<'a, Vec<AccessType>>,
+    accesses: MutexGuard<'a, Accesses>,
     idx: usize,
     previous_len: usize,
 }
 
 impl<'a> AccessIter<'a> {
-    fn many(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_accesses: &[AccessType]) -> Self {
+    fn many(mut accesses: MutexGuard<'a, Accesses>, next_accesses: &[AccessType]) -> Self {
         if next_accesses.is_empty() {
             let previous_len = accesses.len();
             accesses.push(AccessType::Nothing);
@@ -980,7 +983,11 @@ impl<'a> AccessIter<'a> {
         }
 
         let previous_len = accesses.len();
-        accesses.extend_from_within(..);
+        for idx in 0..previous_len {
+            let access = accesses[idx];
+            accesses.push(access);
+        }
+
         for &next_access in next_accesses {
             if !accesses[previous_len..].contains(&next_access) {
                 accesses.push(next_access);
@@ -994,7 +1001,7 @@ impl<'a> AccessIter<'a> {
         }
     }
 
-    fn one(mut accesses: MutexGuard<'a, Vec<AccessType>>, next_access: AccessType) -> Self {
+    fn one(mut accesses: MutexGuard<'a, Accesses>, next_access: AccessType) -> Self {
         let previous_len = accesses.len();
         accesses.push(next_access);
 
@@ -1077,7 +1084,7 @@ mod test {
 
     #[test]
     fn access_tracking_retains_write_until_next_write() {
-        let accesses = Mutex::new(vec![AccessType::Nothing]);
+        let accesses = Mutex::new(smallvec![AccessType::Nothing]);
         let write = AccessType::AccelerationStructureBuildWrite;
         let read = AccessType::RayTracingShaderReadAccelerationStructure;
 
@@ -1085,7 +1092,30 @@ mod test {
         assert_eq!(swap_accesses(&accesses, &[read]), [write]);
         assert!(swap_accesses(&accesses, &[read]).is_empty());
         assert_eq!(swap_accesses(&accesses, &[write]), [write, read]);
-        assert_eq!(*lock_accesses(&accesses), [write]);
+        assert_eq!(lock_accesses(&accesses).as_slice(), [write]);
+    }
+
+    #[test]
+    fn access_tracking_retains_reads_after_inline_capacity_is_exceeded() {
+        let accesses = Mutex::new(smallvec![AccessType::Nothing]);
+        let reads = [
+            AccessType::VertexShaderReadOther,
+            AccessType::GeometryShaderReadOther,
+            AccessType::FragmentShaderReadOther,
+            AccessType::ComputeShaderReadOther,
+            AccessType::RayTracingShaderReadAccelerationStructure,
+        ];
+
+        for &read in &reads {
+            swap_accesses(&accesses, &[read]);
+            assert!(swap_accesses(&accesses, &[read]).is_empty());
+        }
+
+        let mut expected = vec![AccessType::Nothing];
+        expected.extend(reads);
+        let write = AccessType::AccelerationStructureBuildWrite;
+        assert_eq!(swap_accesses(&accesses, &[write]), expected);
+        assert_eq!(lock_accesses(&accesses).as_slice(), [write]);
     }
 
     #[test]
@@ -1331,7 +1361,7 @@ mod test {
         }
     }
 
-    fn lock_accesses(accesses: &Mutex<Vec<AccessType>>) -> MutexGuard<'_, Vec<AccessType>> {
+    fn lock_accesses(accesses: &Mutex<Accesses>) -> MutexGuard<'_, Accesses> {
         let accesses = accesses.lock();
 
         #[cfg(not(feature = "parking_lot"))]
@@ -1340,10 +1370,7 @@ mod test {
         accesses
     }
 
-    fn swap_accesses(
-        accesses: &Mutex<Vec<AccessType>>,
-        next_accesses: &[AccessType],
-    ) -> Vec<AccessType> {
+    fn swap_accesses(accesses: &Mutex<Accesses>, next_accesses: &[AccessType]) -> Vec<AccessType> {
         AccessIter::many(lock_accesses(accesses), next_accesses).collect()
     }
 
