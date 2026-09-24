@@ -500,7 +500,8 @@ impl<'a> CommandBufferDebugLabel<'a> {
 
 #[derive(Debug, Default)]
 struct CommandRecordingResources {
-    descriptor_pool: Option<Lease<DescriptorPool>>,
+    regular_descriptor_pool: Option<Lease<DescriptorPool>>,
+    update_after_bind_descriptor_pool: Option<Lease<DescriptorPool>>,
     descriptor_sets: Vec<Vec<RecordingDescriptorSet>>,
     exec_subpasses: Box<[u32]>,
     render_pass: Option<Lease<RenderPass>>,
@@ -518,7 +519,8 @@ impl CommandRecordingResources {
 impl Drop for CommandRecordingResources {
     fn drop(&mut self) {
         self.descriptor_sets.clear();
-        self.descriptor_pool = None;
+        self.regular_descriptor_pool = None;
+        self.update_after_bind_descriptor_pool = None;
     }
 }
 
@@ -4199,34 +4201,28 @@ impl Submission {
 
     #[allow(clippy::type_complexity)]
     #[profiling::function]
-    fn lease_descriptor_pool<P>(
+    fn lease_descriptor_pools<P>(
         pool: &mut P,
         pass: &CommandData,
-    ) -> Result<Option<Lease<DescriptorPool>>, DriverError>
+    ) -> Result<(Option<Lease<DescriptorPool>>, Option<Lease<DescriptorPool>>), DriverError>
     where
         P: SubmissionPool,
     {
-        let max_sets = pass
-            .execs
-            .iter()
-            .filter_map(|exec| {
-                exec.pipeline.as_ref().map(|pipeline| {
-                    pipeline
-                        .descriptor_info()
-                        .layouts
-                        .keys()
-                        .filter(|set| !exec.descriptor_sets.contains_key(set))
-                        .count() as u32
-                })
-            })
-            .sum();
-        let mut info = DescriptorPoolInfo {
-            max_sets,
+        let mut regular_info = DescriptorPoolInfo::default();
+        let mut update_after_bind_info = DescriptorPoolInfo {
+            update_after_bind: true,
             ..Default::default()
         };
 
         // Find the total count of descriptors per type (there may be multiple pipelines!)
-        for pool_size in pass.descriptor_pools_sizes() {
+        for (update_after_bind, pool_size) in pass.descriptor_pool_sizes() {
+            let info = if update_after_bind {
+                &mut update_after_bind_info
+            } else {
+                &mut regular_info
+            };
+            info.max_sets += 1;
+
             for (&descriptor_ty, &descriptor_count) in pool_size {
                 debug_assert_ne!(descriptor_count, 0);
 
@@ -4280,35 +4276,39 @@ impl Submission {
             }
         }
 
-        // It's possible to execute a command-only pipeline or use only supplied descriptor sets.
-        if info.max_sets == 0 {
-            return Ok(None);
-        }
-
         // Trivially round up the descriptor counts to increase cache coherence
         const ATOM: u32 = 1 << 5;
-        info.acceleration_structure_count =
-            info.acceleration_structure_count.next_multiple_of(ATOM);
-        info.combined_image_sampler_count =
-            info.combined_image_sampler_count.next_multiple_of(ATOM);
-        info.input_attachment_count = info.input_attachment_count.next_multiple_of(ATOM);
-        info.sampled_image_count = info.sampled_image_count.next_multiple_of(ATOM);
-        info.sampler_count = info.sampler_count.next_multiple_of(ATOM);
-        info.storage_buffer_count = info.storage_buffer_count.next_multiple_of(ATOM);
-        info.storage_buffer_dynamic_count =
-            info.storage_buffer_dynamic_count.next_multiple_of(ATOM);
-        info.storage_image_count = info.storage_image_count.next_multiple_of(ATOM);
-        info.storage_texel_buffer_count = info.storage_texel_buffer_count.next_multiple_of(ATOM);
-        info.uniform_buffer_count = info.uniform_buffer_count.next_multiple_of(ATOM);
-        info.uniform_buffer_dynamic_count =
-            info.uniform_buffer_dynamic_count.next_multiple_of(ATOM);
-        info.uniform_texel_buffer_count = info.uniform_texel_buffer_count.next_multiple_of(ATOM);
+        for info in [&mut regular_info, &mut update_after_bind_info] {
+            info.acceleration_structure_count =
+                info.acceleration_structure_count.next_multiple_of(ATOM);
+            info.combined_image_sampler_count =
+                info.combined_image_sampler_count.next_multiple_of(ATOM);
+            info.input_attachment_count = info.input_attachment_count.next_multiple_of(ATOM);
+            info.sampled_image_count = info.sampled_image_count.next_multiple_of(ATOM);
+            info.sampler_count = info.sampler_count.next_multiple_of(ATOM);
+            info.storage_buffer_count = info.storage_buffer_count.next_multiple_of(ATOM);
+            info.storage_buffer_dynamic_count =
+                info.storage_buffer_dynamic_count.next_multiple_of(ATOM);
+            info.storage_image_count = info.storage_image_count.next_multiple_of(ATOM);
+            info.storage_texel_buffer_count =
+                info.storage_texel_buffer_count.next_multiple_of(ATOM);
+            info.uniform_buffer_count = info.uniform_buffer_count.next_multiple_of(ATOM);
+            info.uniform_buffer_dynamic_count =
+                info.uniform_buffer_dynamic_count.next_multiple_of(ATOM);
+            info.uniform_texel_buffer_count =
+                info.uniform_texel_buffer_count.next_multiple_of(ATOM);
+        }
 
         // Rounded descriptor counts make descriptor pools more reusable across similar pipelines
 
-        // debug!("{:#?}", info);
+        let regular_pool = (regular_info.max_sets != 0)
+            .then(|| pool.descriptor_pool(regular_info))
+            .transpose()?;
+        let update_after_bind_pool = (update_after_bind_info.max_sets != 0)
+            .then(|| pool.descriptor_pool(update_after_bind_info))
+            .transpose()?;
 
-        Ok(Some(pool.descriptor_pool(info)?))
+        Ok((regular_pool, update_after_bind_pool))
     }
 
     #[profiling::function]
@@ -4363,7 +4363,8 @@ impl Submission {
 
                     trace!("requesting [{pass_idx}: {}]", pass.name());
 
-                    let descriptor_pool = Self::lease_descriptor_pool(pool, pass)?;
+                    let (regular_descriptor_pool, update_after_bind_descriptor_pool) =
+                        Self::lease_descriptor_pools(pool, pass)?;
                     let mut descriptor_sets = Vec::with_capacity(pass.execs.len());
                     descriptor_sets.resize_with(pass.execs.len(), Vec::new);
                     for (exec_idx, exec) in pass.execs.iter().enumerate() {
@@ -4379,8 +4380,12 @@ impl Submission {
                                 if let Some(descriptor_set) = exec.descriptor_sets.get(&set) {
                                     Ok(RecordingDescriptorSet::Supplied(descriptor_set.clone()))
                                 } else {
-                                    let descriptor_pool = descriptor_pool
-                                        .as_ref()
+                                    let descriptor_pool =
+                                        if descriptor_set_layout.info().update_after_bind() {
+                                            update_after_bind_descriptor_pool.as_ref()
+                                        } else {
+                                            regular_descriptor_pool.as_ref()
+                                        }
                                         .expect("missing automatic descriptor pool");
                                     DescriptorPool::allocate_descriptor_set(
                                         descriptor_pool,
@@ -4443,7 +4448,8 @@ impl Submission {
                     PipelineStageAccessFlags::record_external_accesses(external_accesses, pass);
 
                     self.recorded_commands.push(CommandRecordingResources {
-                        descriptor_pool,
+                        regular_descriptor_pool,
+                        update_after_bind_descriptor_pool,
                         descriptor_sets,
                         exec_subpasses,
                         render_pass,
@@ -9409,7 +9415,7 @@ mod test {
             PhysicalImageId, ResourceSetIndex,
         },
         stream::{BufferArg, CommandStream, CommandStreamDraft, ImageArg, StreamValueArg},
-        test_support::TestDevice,
+        test_support::{DeviceChecks, TestDevice},
     };
 
     use {
@@ -11864,7 +11870,8 @@ mod test {
         let mut resources = vec![CommandRecordingResources {
             exec_subpasses: vec![0, 0, 1].into_boxed_slice(),
             descriptor_sets: vec![Vec::new(), Vec::new(), Vec::new()],
-            descriptor_pool: None,
+            regular_descriptor_pool: None,
+            update_after_bind_descriptor_pool: None,
             render_pass: None,
         }];
         let prepared = PreparedStreamRecording {
@@ -16594,6 +16601,98 @@ mod test {
             ),
             vk::PipelineStageFlags::FRAGMENT_SHADER,
         );
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn mixed_descriptor_sets_use_separate_pools() -> Result<(), DriverError> {
+        let device = TestDevice::with_checks(DeviceChecks {
+            validation: false,
+            disposal: true,
+        })?;
+        if !device.physical.features_v1_2.runtime_descriptor_array
+            || !device
+                .physical
+                .features_v1_2
+                .descriptor_binding_storage_image_update_after_bind
+        {
+            return Ok(());
+        }
+
+        let spirv = glsl!(
+            r#"
+            #version 460 core
+            #extension GL_EXT_nonuniform_qualifier : require
+            #pragma shader_stage(compute)
+            layout(local_size_x = 1) in;
+            layout(set = 0, binding = 0, rgba8) writeonly uniform image2D outputs[];
+            layout(set = 1, binding = 0) uniform Input { uint value; } input_data;
+            void main() { imageStore(outputs[input_data.value], ivec2(0), vec4(1.0)); }
+        "#
+        );
+        let pipeline = ComputePipeline::create(
+            &device,
+            ComputePipelineInfo::builder()
+                .bindless_descriptor_count(1)
+                .bindless_update_after_bind(true),
+            spirv.as_slice(),
+        )?;
+        assert!(
+            pipeline.inner.descriptor_info.layouts[&0]
+                .info()
+                .update_after_bind(),
+            "{:?}",
+            pipeline.inner.descriptor_info.layouts[&0].info()
+        );
+        let mut graph = Graph::new();
+        graph
+            .begin_cmd()
+            .bind_pipeline(&pipeline)
+            .record_cmd(|cmd| {
+                cmd.dispatch(1, 1, 1);
+            })
+            .end_cmd();
+
+        let mut pool = HashPool::new(&device);
+        let (regular, update_after_bind) =
+            Submission::lease_descriptor_pools(&mut pool, &graph.cmds[0])?;
+        let regular = regular.expect("missing regular descriptor pool");
+        let update_after_bind =
+            update_after_bind.expect("missing update-after-bind descriptor pool");
+        assert!(!regular.info.update_after_bind);
+        assert_eq!(regular.info.max_sets, 2);
+        assert_eq!(regular.info.uniform_buffer_count, 32);
+        assert_eq!(regular.info.storage_image_count, 0);
+        assert!(update_after_bind.info.update_after_bind);
+        assert_eq!(update_after_bind.info.max_sets, 2);
+        assert_eq!(update_after_bind.info.storage_image_count, 32);
+        assert_eq!(update_after_bind.info.uniform_buffer_count, 0);
+
+        drop(regular);
+        drop(update_after_bind);
+
+        let mut submission = graph.finalize();
+        submission.prepare_command_stream(&mut pool)?;
+        let recording = &submission.recorded_commands[0];
+        assert!(
+            !recording
+                .regular_descriptor_pool
+                .as_ref()
+                .expect("missing regular descriptor pool")
+                .info
+                .update_after_bind
+        );
+        assert!(
+            recording
+                .update_after_bind_descriptor_pool
+                .as_ref()
+                .expect("missing update-after-bind descriptor pool")
+                .info
+                .update_after_bind
+        );
+        assert_eq!(recording.descriptor_sets[0].len(), 2);
+
+        Ok(())
     }
 
     #[test]

@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Opt-in `bindless_update_after_bind` for compute, graphics, and ray-tracing pipelines.
 - Opt-in background fence cleanup with `Device::enable_background_fence_cleanup` and
   `BackgroundFenceCleanupGuard` to manage the worker's lifetime.
 - `PoolConfig::descriptor_pool_capacity` for cached descriptor pools.
@@ -54,6 +55,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Correct sampled-image access declarations in `min_max` and `mip_compute`, and use 2D-array image
+  views for the `vsm_omni` blur passes.
 - Fix missing stencil synchronization when depth layers or mip levels have different prior accesses.
 - Correct subpass synchronization for multiple resource accesses, uniform-buffer reads, and
   depth/stencil resolves.

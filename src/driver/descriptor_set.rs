@@ -173,10 +173,15 @@ impl DescriptorPool {
             pool_size_count += 1;
         }
 
+        let mut flags = vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET;
+        if info.update_after_bind {
+            flags |= vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND;
+        }
+
         let handle = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+                    .flags(flags)
                     .max_sets(info.max_sets)
                     .pool_sizes(&pool_sizes[0..pool_size_count]),
                 None,
@@ -215,6 +220,7 @@ impl DescriptorPool {
         layout: &DescriptorSetLayout,
         count: u32,
     ) -> Result<impl Iterator<Item = RawDescriptorSet> + 'a, DriverError> {
+        debug_assert!(!layout.info().update_after_bind() || self.info.update_after_bind);
         let layout_handles = vec![layout.handle(); count as usize];
         let create_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(self.handle)
@@ -278,12 +284,14 @@ pub(crate) struct DescriptorPoolInfo {
     pub(crate) uniform_buffer_count: u32,
     pub(crate) uniform_buffer_dynamic_count: u32,
     pub(crate) uniform_texel_buffer_count: u32,
+    pub(crate) update_after_bind: bool,
 }
 
 impl DescriptorPoolInfo {
     fn for_layout(layout: &DescriptorSetLayout) -> Result<Self, DriverError> {
         let mut info = Self {
             max_sets: 1,
+            update_after_bind: layout.info().update_after_bind(),
             ..Default::default()
         };
 

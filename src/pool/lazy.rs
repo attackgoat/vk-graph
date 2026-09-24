@@ -440,6 +440,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for LazyPool {
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
                 if item.info.max_sets >= info.max_sets
+                    && item.info.update_after_bind == info.update_after_bind
                     && item.info.acceleration_structure_count >= info.acceleration_structure_count
                     && item.info.combined_image_sampler_count >= info.combined_image_sampler_count
                     && item.info.input_attachment_count >= info.input_attachment_count
@@ -577,8 +578,51 @@ impl Pool<RenderPassInfo, RenderPass> for LazyPool {
 mod test {
     use {
         super::*,
-        crate::{pool::garbage_collector::GarbageCollector, test_support::TestDevice},
+        crate::{
+            pool::garbage_collector::GarbageCollector,
+            test_support::{DeviceChecks, TestDevice},
+        },
     };
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn vulkan_cached_descriptor_pool_respects_update_after_bind() -> Result<(), DriverError> {
+        let device = TestDevice::with_checks(DeviceChecks {
+            validation: false,
+            disposal: true,
+        })?;
+        if !device
+            .physical
+            .features_v1_2
+            .descriptor_binding_storage_buffer_update_after_bind
+        {
+            return Ok(());
+        }
+
+        let mut pool = LazyPool::new(&device);
+        let basic = DescriptorPoolInfo {
+            max_sets: 1,
+            storage_buffer_count: 1,
+            ..Default::default()
+        };
+        drop(pool.resource(basic.clone())?);
+
+        let requested = DescriptorPoolInfo {
+            update_after_bind: true,
+            ..basic.clone()
+        };
+        let leased: Lease<DescriptorPool> = pool.resource(requested.clone())?;
+        assert!(leased.info.update_after_bind);
+        drop(leased);
+        drop(pool);
+
+        let mut pool = LazyPool::new(&device);
+        drop(pool.resource(requested)?);
+        let leased: Lease<DescriptorPool> = pool.resource(basic)?;
+        assert!(!leased.info.update_after_bind);
+
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires Vulkan device"]

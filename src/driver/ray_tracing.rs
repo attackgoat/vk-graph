@@ -150,8 +150,12 @@ impl RayTracingPipeline {
             }
         }
 
-        let descriptor_info =
-            PipelineDescriptorInfo::create(device, &descriptor_bindings, &bindless_descriptors)?;
+        let descriptor_info = PipelineDescriptorInfo::create(
+            device,
+            &descriptor_bindings,
+            &bindless_descriptors,
+            info.bindless_update_after_bind,
+        )?;
         let layouts = descriptor_info
             .layouts
             .values()
@@ -481,6 +485,13 @@ pub struct RayTracingPipelineInfo {
     #[builder(default = "8192")]
     pub bindless_descriptor_count: u32,
 
+    /// Allows unsized descriptor-array bindings to be updated after their set is bound.
+    /// Requires update-after-bind support for every such binding's descriptor type.
+    /// Unsized sampler arrays use mutable samplers and require Vulkan descriptor writes.
+    /// Defaults to `false`.
+    #[builder(default)]
+    pub bindless_update_after_bind: bool,
+
     /// Allow [setting the stack size dynamically] for a ray tracing pipeline.
     ///
     /// When set, you must manually set the stack size during ray tracing commands using
@@ -515,6 +526,7 @@ impl RayTracingPipelineInfo {
     pub fn into_builder(self) -> RayTracingPipelineInfoBuilder {
         RayTracingPipelineInfoBuilder {
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
+            bindless_update_after_bind: Some(self.bindless_update_after_bind),
             dynamic_stack_size: Some(self.dynamic_stack_size),
             max_ray_recursion_depth: Some(self.max_ray_recursion_depth),
             opacity_micromap: Some(self.opacity_micromap),
@@ -526,6 +538,7 @@ impl Default for RayTracingPipelineInfo {
     fn default() -> Self {
         Self {
             bindless_descriptor_count: 8192,
+            bindless_update_after_bind: false,
             dynamic_stack_size: false,
             max_ray_recursion_depth: 16,
             opacity_micromap: false,

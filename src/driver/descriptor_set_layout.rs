@@ -88,6 +88,10 @@ impl DescriptorSetLayout {
         let mut binding_flags_info =
             vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
         let mut create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        if info.update_after_bind() {
+            create_info.flags |= vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL;
+        }
+
         if binding_flags.iter().any(|flags| !flags.is_empty()) {
             create_info = create_info.push_next(&mut binding_flags_info);
         }
@@ -180,6 +184,14 @@ impl DescriptorSetLayoutInfo {
             .binary_search_by_key(&binding, |info| info.binding)
             .ok()
             .map(|index| &self.bindings[index])
+    }
+
+    pub fn update_after_bind(&self) -> bool {
+        self.bindings.iter().any(|binding| {
+            binding
+                .binding_flags
+                .contains(vk::DescriptorBindingFlags::UPDATE_AFTER_BIND)
+        })
     }
 }
 

@@ -630,17 +630,22 @@ struct CommandData {
 }
 
 impl CommandData {
-    fn descriptor_pools_sizes(
+    fn descriptor_pool_sizes(
         &self,
-    ) -> impl Iterator<Item = impl Iterator<Item = (&vk::DescriptorType, &u32)>> {
+    ) -> impl Iterator<Item = (bool, &HashMap<vk::DescriptorType, u32>)> {
         self.execs.iter().flat_map(|exec| {
-            exec.pipeline.iter().map(move |pipeline| {
-                pipeline
-                    .descriptor_info()
-                    .pool_sizes
+            exec.pipeline.iter().flat_map(move |pipeline| {
+                let descriptor_info = pipeline.descriptor_info();
+                descriptor_info
+                    .layouts
                     .iter()
                     .filter(move |(set, _)| !exec.descriptor_sets.contains_key(set))
-                    .flat_map(|(_, pool)| pool.iter())
+                    .map(move |(set, layout)| {
+                        (
+                            layout.info().update_after_bind(),
+                            &descriptor_info.pool_sizes[set],
+                        )
+                    })
             })
         })
     }
