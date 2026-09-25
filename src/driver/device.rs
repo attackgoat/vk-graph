@@ -29,9 +29,11 @@ use {
             mpsc::{self, Receiver, SyncSender, TrySendError},
         },
         thread::{self, JoinHandle, ThreadId, panicking},
-        time::Instant,
     },
 };
+
+#[cfg(debug_assertions)]
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
@@ -43,6 +45,9 @@ use crate::test_support::disposal::{DisposalReport, DisposalTracker};
 use std::sync::Mutex;
 
 const DROP_WORKER_QUEUE_CAPACITY: usize = 64;
+
+#[cfg(debug_assertions)]
+const DEFAULT_SLOW_FENCE_WARNING_NS: u64 = 100_000_000;
 
 fn run_drop_worker<T>(queue_rx: Receiver<DropWorkerMessage<T>>, drop_value: fn(T) -> bool) {
     profiling::register_thread!();
@@ -158,6 +163,19 @@ pub struct Device {
 }
 
 impl Device {
+    /// Sets the warning threshold for completed fence waits on this device.
+    ///
+    /// `None` disables slow-fence warnings. This does not change how long Vulkan waits for a fence.
+    #[cfg(debug_assertions)]
+    pub fn set_slow_fence_warning_threshold(this: &Self, threshold: Option<Duration>) {
+        let nanoseconds = threshold.map_or(u64::MAX, |duration| {
+            u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX - 1)
+        });
+        this.inner
+            .slow_fence_warning_ns
+            .store(nanoseconds, Ordering::Relaxed);
+    }
+
     /// Observes completed device destruction without retaining the device or its instance.
     ///
     /// All device clones and resources must be released before destruction can complete.
@@ -1114,6 +1132,8 @@ impl Device {
                     private_data_slot: vk_ext_private_data_slot,
                     private_data_name_id: AtomicU64::new(0),
                     private_data_metadata: Mutex::new(Default::default()),
+                    #[cfg(debug_assertions)]
+                    slow_fence_warning_ns: AtomicU64::new(DEFAULT_SLOW_FENCE_WARNING_NS),
                 }),
                 physical: Box::new(physical_device),
             },
@@ -1201,7 +1221,8 @@ impl Device {
                 }
             }
 
-            let started = cfg!(debug_assertions).then(Instant::now);
+            #[cfg(debug_assertions)]
+            let started = Instant::now();
 
             match this.wait_for_fences(fences, true, u64::MAX) {
                 Ok(_) => (),
@@ -1217,12 +1238,13 @@ impl Device {
                 }
             }
 
-            if let Some(started) = started {
-                let elapsed = Instant::now() - started;
-                let elapsed_millis = elapsed.as_millis();
-
-                if elapsed_millis > 0 {
-                    warn!("slow fence wait: {} ms", elapsed_millis);
+            #[cfg(debug_assertions)]
+            {
+                let elapsed = started.elapsed();
+                if elapsed.as_nanos()
+                    > u128::from(this.inner.slow_fence_warning_ns.load(Ordering::Relaxed))
+                {
+                    warn!("slow fence wait: {} ms", elapsed.as_millis());
                 }
             }
         }
@@ -1425,6 +1447,8 @@ struct DeviceInner {
     private_data_slot: Option<vk::PrivateDataSlot>,
     private_data_name_id: AtomicU64,
     private_data_metadata: Mutex<PrivateDataMetadata>,
+    #[cfg(debug_assertions)]
+    slow_fence_warning_ns: AtomicU64,
 }
 
 impl Drop for DeviceInner {
