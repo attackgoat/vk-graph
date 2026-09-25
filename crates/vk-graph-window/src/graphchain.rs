@@ -6,7 +6,7 @@ use {
     std::{
         error::Error,
         fmt::{Debug, Formatter},
-        mem::take,
+        mem::{discriminant, take},
         ops::Deref,
         slice,
         thread::panicking,
@@ -94,24 +94,7 @@ impl Graphchain {
             })
             .ok_or(DriverError::Unsupported)?;
 
-        // Use the modern strategy only when both present-id and present-wait are supported.
-        let strategy = if swapchain
-            .surface
-            .device
-            .physical
-            .vk_khr_present_id
-            .is_some()
-            && swapchain
-                .surface
-                .device
-                .physical
-                .vk_khr_present_wait
-                .is_some()
-        {
-            PresentRetirementStrategy::PresentWait(PresentWait::default())
-        } else {
-            PresentRetirementStrategy::PerImageSemaphore(PerImageSemaphore::default())
-        };
+        let strategy = PresentRetirementStrategy::for_swapchain(&swapchain);
 
         let mut frames = Vec::with_capacity(info.frame_capacity);
         for _ in 0..info.frame_capacity {
@@ -180,7 +163,7 @@ impl Graphchain {
 
     /// Acquires the next available swapchain image for rendering.
     pub fn acquire_next_image(&mut self) -> Result<Option<SwapchainImage>, GraphchainError> {
-        if self.recreate_pending {
+        if self.recreate_pending || self.read_only.swapchain.recreate_pending {
             for frame in &mut self.frames {
                 if frame.fence.is_queued() {
                     frame.fence.wait()?.reset()?;
@@ -196,6 +179,7 @@ impl Graphchain {
 
             self.strategy
                 .reset(&self.read_only.swapchain.surface.device);
+            self.strategy.reselect(&self.read_only.swapchain);
             self.image_frames.clear();
             self.recreate_pending = false;
         }
@@ -873,6 +857,67 @@ enum PresentRetirementStrategy {
 }
 
 impl PresentRetirementStrategy {
+    fn for_swapchain(swapchain: &Swapchain) -> Self {
+        // MAILBOX may replace pending presentations. Waiting for each frame slot's
+        // prior present would stall recording even when another image is available.
+        // Per-image semaphores are reusable after that image is acquired again.
+        if swapchain.info.present_mode != vk::PresentModeKHR::MAILBOX
+            && swapchain
+                .surface
+                .device
+                .physical
+                .vk_khr_present_id
+                .is_some()
+            && swapchain
+                .surface
+                .device
+                .physical
+                .vk_khr_present_wait
+                .is_some()
+        {
+            Self::PresentWait(PresentWait::default())
+        } else {
+            Self::PerImageSemaphore(PerImageSemaphore::default())
+        }
+    }
+
+    fn reselect(&mut self, swapchain: &Swapchain) {
+        let next = Self::for_swapchain(swapchain);
+
+        if discriminant(self) == discriminant(&next) {
+            return;
+        }
+
+        // Reset has retired the old swapchain's semaphores; keep them until the
+        // next recreation has finished retiring that swapchain.
+        let retired = match self {
+            Self::PresentWait(strategy) => {
+                debug_assert!(strategy.rendered.is_empty());
+                debug_assert!(strategy.pending_images.is_empty());
+
+                take(&mut strategy.retired)
+            }
+            Self::PerImageSemaphore(strategy) => {
+                debug_assert!(strategy.rendered.is_empty());
+
+                take(&mut strategy.retired)
+            }
+        };
+
+        *self = match next {
+            Self::PresentWait(mut strategy) => {
+                strategy.retired = retired;
+
+                Self::PresentWait(strategy)
+            }
+            Self::PerImageSemaphore(mut strategy) => {
+                strategy.retired = retired;
+
+                Self::PerImageSemaphore(strategy)
+            }
+        };
+    }
+
     fn prepare_frame(
         &mut self,
         device: &Device,
