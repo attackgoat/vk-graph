@@ -32,6 +32,9 @@ pub enum AccelerationStructureAccessType {
     /// Reads every member while building another acceleration structure, such as a TLAS.
     BuildRead,
 
+    /// Reads every member from a compute shader, such as a ray query.
+    ComputeRead,
+
     /// Reads every member during ray traversal.
     RayTracingRead,
 }
@@ -40,6 +43,7 @@ impl AccelerationStructureAccessType {
     pub(crate) const fn access_type(self) -> AccessType {
         match self {
             Self::BuildRead => AccessType::AccelerationStructureBuildRead,
+            Self::ComputeRead => AccessType::ComputeShaderReadAccelerationStructure,
             Self::RayTracingRead => AccessType::RayTracingShaderReadAccelerationStructure,
         }
     }
@@ -635,7 +639,7 @@ pub(crate) enum ResourceSetAccessType {
 }
 
 impl ResourceSetAccessType {
-    pub(crate) const COUNT: usize = 3;
+    pub(crate) const COUNT: usize = 4;
 
     pub(crate) const fn access_type(self) -> AccessType {
         match self {
@@ -649,6 +653,7 @@ impl ResourceSetAccessType {
             Self::Image(ImageAccessType::SampledRead) => 0,
             Self::AccelerationStructure(AccelerationStructureAccessType::BuildRead) => 1,
             Self::AccelerationStructure(AccelerationStructureAccessType::RayTracingRead) => 2,
+            Self::AccelerationStructure(AccelerationStructureAccessType::ComputeRead) => 3,
         }
     }
 }
@@ -1102,13 +1107,15 @@ mod test {
                 resource_set,
                 AccelerationStructureAccessType::RayTracingRead,
             )
+            .resource_access(resource_set, AccelerationStructureAccessType::ComputeRead)
+            .resource_access(resource_set, AccelerationStructureAccessType::ComputeRead)
             .record_cmd(|_| {})
             .end_cmd();
 
         let submission = graph.finalize();
         let accesses = &submission.graph().cmds[0].execs[0].resource_set_accesses;
 
-        assert_eq!(accesses.len(), 2);
+        assert_eq!(accesses.len(), 3);
         assert_eq!(
             accesses[0].access_type,
             ResourceSetAccessType::AccelerationStructure(
@@ -1119,6 +1126,12 @@ mod test {
             accesses[1].access_type,
             ResourceSetAccessType::AccelerationStructure(
                 AccelerationStructureAccessType::RayTracingRead
+            )
+        );
+        assert_eq!(
+            accesses[2].access_type,
+            ResourceSetAccessType::AccelerationStructure(
+                AccelerationStructureAccessType::ComputeRead
             )
         );
     }

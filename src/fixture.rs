@@ -62,6 +62,7 @@ fn access_writes(access: AccessType) -> bool {
             | AccessType::ComputeShaderReadUniformBuffer
             | AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer
             | AccessType::ComputeShaderReadOther
+            | AccessType::ComputeShaderReadAccelerationStructure
             | AccessType::AnyShaderReadUniformBuffer
             | AccessType::AnyShaderReadUniformBufferOrVertexBuffer
             | AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer

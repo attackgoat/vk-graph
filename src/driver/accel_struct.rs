@@ -1087,11 +1087,17 @@ mod test {
         let accesses = Mutex::new(smallvec![AccessType::Nothing]);
         let write = AccessType::AccelerationStructureBuildWrite;
         let read = AccessType::RayTracingShaderReadAccelerationStructure;
+        let compute_read = AccessType::ComputeShaderReadAccelerationStructure;
 
         assert_eq!(swap_accesses(&accesses, &[write]), [AccessType::Nothing]);
         assert_eq!(swap_accesses(&accesses, &[read]), [write]);
         assert!(swap_accesses(&accesses, &[read]).is_empty());
-        assert_eq!(swap_accesses(&accesses, &[write]), [write, read]);
+        assert_eq!(swap_accesses(&accesses, &[compute_read]), [write, read]);
+        assert!(swap_accesses(&accesses, &[compute_read]).is_empty());
+        assert_eq!(
+            swap_accesses(&accesses, &[write]),
+            [write, read, compute_read]
+        );
         assert_eq!(lock_accesses(&accesses).as_slice(), [write]);
     }
 

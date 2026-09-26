@@ -220,6 +220,7 @@ access_type_u8_map! {
     75 => MicromapBuildBufferRead,
     76 => MicromapBuildBufferWrite,
     77 => AccelerationStructureBuildIndirectRead,
+    78 => ComputeShaderReadAccelerationStructure,
 }
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
@@ -839,6 +840,7 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | ComputeShaderReadUniformBuffer
         | ComputeShaderReadSampledImageOrUniformTexelBuffer
         | ComputeShaderReadOther
+        | ComputeShaderReadAccelerationStructure
         | AnyShaderReadUniformBuffer
         | AnyShaderReadUniformBufferOrVertexBuffer
         | AnyShaderReadSampledImageOrUniformTexelBuffer
@@ -1188,6 +1190,10 @@ pub(super) const fn pipeline_stage_access_flags(
             stage::RAY_TRACING_SHADER_KHR,
             access::ACCELERATION_STRUCTURE_READ_KHR,
         ),
+        ty::ComputeShaderReadAccelerationStructure => (
+            stage::COMPUTE_SHADER,
+            access::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
         ty::RayTracingShaderReadOther => (stage::RAY_TRACING_SHADER_KHR, access::SHADER_READ),
         ty::AccelerationStructureBuildWrite => (
             stage::ACCELERATION_STRUCTURE_BUILD_KHR,
@@ -1388,6 +1394,26 @@ mod test {
         assert!(is_read_access(legacy));
         assert!(is_write_access(legacy));
         assert_eq!(pipeline_stage_access_flags(legacy), expected_scratch);
+    }
+
+    #[test]
+    fn compute_acceleration_structure_read_is_packed_and_precise() {
+        let access = AccessType::ComputeShaderReadAccelerationStructure;
+        assert_eq!(access_type_into_u8(access), 78);
+        assert_eq!(access_type_from_u8(78), access);
+        assert_eq!(
+            access_type_from_u8(55),
+            AccessType::RayTracingShaderReadAccelerationStructure
+        );
+        assert!(is_read_access(access));
+        assert!(!is_write_access(access));
+        assert_eq!(
+            pipeline_stage_access_flags(access),
+            (
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+            )
+        );
     }
 
     #[test]

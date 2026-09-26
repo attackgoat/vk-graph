@@ -10435,6 +10435,10 @@ mod test {
                 accel_struct,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
+            .resource_access(
+                accel_struct,
+                AccessType::ComputeShaderReadAccelerationStructure,
+            )
             .record_cmd(|_| {});
 
         let submission = graph.finalize();
@@ -10460,6 +10464,12 @@ mod test {
                 .contains(vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR),
             "sync info should preserve ray-tracing-read stage bits"
         );
+        assert!(
+            sync_info
+                .stage_mask
+                .contains(vk::PipelineStageFlags::COMPUTE_SHADER),
+            "sync info should preserve compute-read stage bits"
+        );
         assert_eq!(
             sync_info.access_mask,
             vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
@@ -10471,28 +10481,37 @@ mod test {
 
     #[test]
     fn acceleration_structure_writes_have_source_and_destination_accesses() {
-        let (src_stage_mask, dst_stage_mask, barrier) =
-            vk_sync::get_memory_barrier(&vk_sync::GlobalBarrier {
-                previous_accesses: &[AccessType::AccelerationStructureBuildWrite],
-                next_accesses: &[AccessType::RayTracingShaderReadAccelerationStructure],
-            });
+        for (next_access, expected_stage) in [
+            (
+                AccessType::RayTracingShaderReadAccelerationStructure,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            ),
+            (
+                AccessType::ComputeShaderReadAccelerationStructure,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+            ),
+        ] {
+            let reads = [next_access];
+            let (src_stage_mask, dst_stage_mask, barrier) =
+                vk_sync::get_memory_barrier(&vk_sync::GlobalBarrier {
+                    previous_accesses: &[AccessType::AccelerationStructureBuildWrite],
+                    next_accesses: &reads,
+                });
 
-        assert_eq!(
-            src_stage_mask,
-            vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
-        );
-        assert_eq!(
-            barrier.src_access_mask,
-            vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
-        );
-        assert_eq!(
-            dst_stage_mask,
-            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
-        );
-        assert_eq!(
-            barrier.dst_access_mask,
-            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
-        );
+            assert_eq!(
+                src_stage_mask,
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+            );
+            assert_eq!(
+                barrier.src_access_mask,
+                vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
+            );
+            assert_eq!(dst_stage_mask, expected_stage);
+            assert_eq!(
+                barrier.dst_access_mask,
+                vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
+            );
+        }
     }
 
     #[test]
@@ -12065,6 +12084,12 @@ mod test {
                     crate::resource::AccelerationStructureAccessType::RayTracingRead,
                 ),
             },
+            crate::ResourceSetAccess {
+                resource_set_idx: ResourceSetIndex::new(0),
+                access_type: crate::resource::ResourceSetAccessType::AccelerationStructure(
+                    crate::resource::AccelerationStructureAccessType::ComputeRead,
+                ),
+            },
         ];
         let resource_set_count = 2;
         let mut acquired = fixedbitset::FixedBitSet::with_capacity(
@@ -12079,10 +12104,11 @@ mod test {
             |access| visited.push((access.resource_set_idx.as_usize(), access.access_type)),
         );
 
-        assert_eq!(visited.len(), 3);
+        assert_eq!(visited.len(), 4);
         assert_eq!(visited[0], (0, accesses[0].access_type));
         assert_eq!(visited[1], (1, accesses[1].access_type));
         assert_eq!(visited[2], (0, accesses[3].access_type));
+        assert_eq!(visited[3], (0, accesses[4].access_type));
 
         Submission::for_each_first_resource_set_access(
             &accesses,
@@ -12100,7 +12126,7 @@ mod test {
             |access| visited.push((access.resource_set_idx.as_usize(), access.access_type)),
         );
 
-        assert_eq!(visited[3], (0, accesses[0].access_type));
+        assert_eq!(visited[4], (0, accesses[0].access_type));
     }
 
     #[test]
@@ -19993,6 +20019,10 @@ mod test {
                 access: AccessType::RayTracingShaderReadAccelerationStructure,
                 subresource: SubresourceRange::AccelerationStructure,
             },
+            SubresourceAccess {
+                access: AccessType::ComputeShaderReadAccelerationStructure,
+                subresource: SubresourceRange::AccelerationStructure,
+            },
         ];
 
         let mut scratch = Vec::new();
@@ -20001,6 +20031,7 @@ mod test {
             &[
                 AccessType::AccelerationStructureBuildRead,
                 AccessType::RayTracingShaderReadAccelerationStructure,
+                AccessType::ComputeShaderReadAccelerationStructure,
             ],
             "mixed acceleration-structure slices should preserve all accesses for next-state tracking"
         );
