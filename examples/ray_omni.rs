@@ -18,13 +18,12 @@ use {
     tobj::{GPU_LOAD_OPTIONS, load_obj},
     vk_graph::{
         Graph,
-        cmd::{BuildAccelerationStructureInfo, LoadOp, StoreOp},
+        cmd::{AccelerationStructureBuildGeometryInfo, LoadOp, StoreOp},
         driver::{
             DriverError,
             accel_struct::{
                 AccelerationStructure, AccelerationStructureGeometry,
-                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
-                AccelerationStructureInfo,
+                AccelerationStructureGeometryData, AccelerationStructureInfo,
             },
             buffer::{Buffer, BufferInfo},
             device::Device,
@@ -39,115 +38,6 @@ use {
     vk_shader_macros::glsl,
     vk_sync::AccessType,
 };
-
-fn main() -> anyhow::Result<()> {
-    pretty_env_logger::init();
-    profile_with_puffin::init();
-
-    let args = Args::parse();
-    let window = Window::builder().debug(args.debug).build()?;
-    let mut pool = LazyPool::new(&window.device);
-
-    let depth_fmt = best_2d_optimal_format(
-        &window.device,
-        &[vk::Format::D32_SFLOAT, vk::Format::D16_UNORM],
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-        vk::ImageCreateFlags::empty(),
-    );
-
-    let ground_mesh = load_ground_mesh(&window.device)?;
-    let model_path = download_model_from_github("happy.obj")?;
-    let model_mesh = load_model_mesh(&window.device, model_path)?;
-    let scene_blas = create_blas(&window.device, &[&ground_mesh, &model_mesh])?;
-    let gfx_pipeline = create_pipeline(&window.device)?;
-
-    let mut angle = 0f32;
-    let mut prev_frame_at = Instant::now();
-
-    window.run(|frame| {
-        let now = Instant::now();
-        let dt = now - prev_frame_at;
-        prev_frame_at = now;
-
-        angle += dt.as_secs_f32();
-
-        let scene_tlas = create_tlas(frame.device, &mut pool, frame.graph, &scene_blas).unwrap();
-
-        let ground_mesh_index_buf = frame.graph.bind_resource(&ground_mesh.index_buf);
-        let ground_mesh_vertex_buf = frame.graph.bind_resource(&ground_mesh.vertex_buf);
-        let model_mesh_index_buf = frame.graph.bind_resource(&model_mesh.index_buf);
-        let model_mesh_vertex_buf = frame.graph.bind_resource(&model_mesh.vertex_buf);
-
-        let depth_image = frame.graph.bind_resource(
-            pool.resource(ImageInfo::image_2d(
-                frame.width,
-                frame.height,
-                depth_fmt,
-                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-            ))
-            .unwrap(),
-        );
-        let camera_buf = frame.graph.bind_resource({
-            let mut buf = pool
-                .resource(BufferInfo::host_mem(
-                    size_of::<Camera>() as _,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                ))
-                .unwrap();
-            buf.copy_from_slice(
-                0,
-                bytes_of(&Camera {
-                    projection: Mat4::perspective_rh(
-                        45f32.to_radians(),
-                        frame.render_aspect_ratio(),
-                        0.1,
-                        100.0,
-                    ),
-                    view: Mat4::look_at_rh(vec3(0.0, 1.2, 1.0), vec3(0.0, 0.6, 0.0), -Vec3::Y),
-                    model: Mat4::IDENTITY,
-                    light_position: vec4(angle.cos() * 3.0, 2.0, angle.sin() * 3.0, 0.0),
-                }),
-            );
-
-            buf
-        });
-
-        frame
-            .graph
-            .begin_cmd()
-            .debug_name("Mesh with ray-query shadows")
-            .bind_pipeline(&gfx_pipeline)
-            .resource_access(ground_mesh_index_buf, AccessType::IndexBuffer)
-            .resource_access(ground_mesh_vertex_buf, AccessType::VertexBuffer)
-            .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
-            .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
-            .shader_resource_access(0, camera_buf, AccessType::AnyShaderReadUniformBuffer)
-            .shader_resource_access(1, scene_tlas, AccessType::FragmentShaderReadOther)
-            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
-            .depth_stencil_attachment_image(
-                depth_image,
-                LoadOp::CLEAR_ONE_STENCIL_ZERO,
-                StoreOp::DontCare,
-            )
-            .color_attachment_image(
-                0,
-                frame.swapchain_image,
-                LoadOp::CLEAR_WHITE_ALPHA_ONE,
-                StoreOp::Store,
-            )
-            .record_cmd(move |cmd| {
-                cmd.bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
-                    .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
-                    .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
-
-                cmd.bind_index_buffer(ground_mesh_index_buf, 0, vk::IndexType::UINT32)
-                    .bind_vertex_buffer(0, ground_mesh_vertex_buf, 0)
-                    .draw_indexed(ground_mesh.index_count, 1, 0, 0, 0);
-            });
-    })?;
-
-    Ok(())
-}
 
 fn best_2d_optimal_format(
     device: &Device,
@@ -176,37 +66,46 @@ fn create_blas(
     device: &Device,
     models: &[&Model],
 ) -> Result<Arc<AccelerationStructure>, DriverError> {
-    let info = AccelerationStructureGeometryInfo::blas(
-        models
-            .iter()
-            .map(|model| {
-                (
-                    AccelerationStructureGeometry {
-                        max_primitive_count: model.index_count / 3,
-                        flags: vk::GeometryFlagsKHR::OPAQUE,
-                        geometry: AccelerationStructureGeometryData::triangles(
-                            model.index_buf.device_address(),
-                            vk::IndexType::UINT32,
-                            model.vertex_count,
-                            None,
-                            model.vertex_buf.device_address(),
-                            vk::Format::R32G32B32_SFLOAT,
-                            24,
-                        ),
-                    },
-                    vk::AccelerationStructureBuildRangeInfoKHR::default()
-                        .primitive_count(model.index_count / 3),
-                )
-            })
-            .collect::<Box<_>>(),
-    )
-    .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
-    let size = AccelerationStructure::size_of(device, &info);
+    let geometries = models
+        .iter()
+        .map(|model| {
+            AccelerationStructureGeometry::opaque(AccelerationStructureGeometryData::triangles(
+                model.index_buf.device_address(),
+                vk::IndexType::UINT32,
+                model.vertex_count,
+                0,
+                model.vertex_buf.device_address(),
+                vk::Format::R32G32B32_SFLOAT,
+                24,
+            ))
+        })
+        .collect::<Box<_>>();
+    let max_counts = models
+        .iter()
+        .map(|model| model.index_count / 3)
+        .collect::<Box<_>>();
+    let ranges = max_counts
+        .iter()
+        .map(|&count| vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(count))
+        .collect::<Box<_>>();
+    let flags = vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE;
+
+    // Safety: Valid triangle metadata and primitive limits; no micromap handles are attached.
+    let size = unsafe {
+        AccelerationStructure::build_sizes(
+            device,
+            vk::AccelerationStructureBuildTypeKHR::DEVICE,
+            vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            flags,
+            &geometries,
+            &max_counts,
+        )
+    };
 
     let mut graph = Graph::default();
     let blas = graph.bind_resource(AccelerationStructure::create(
         device,
-        AccelerationStructureInfo::blas(size.create_size),
+        AccelerationStructureInfo::blas(size.acceleration_structure_size),
     )?);
 
     let accel_struct_scratch_offset_alignment = device
@@ -220,7 +119,7 @@ fn create_blas(
     let scratch_buf = graph.bind_resource(Buffer::create(
         device,
         BufferInfo::device_mem(
-            size.build_size,
+            size.build_scratch_size,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .into_builder()
@@ -234,18 +133,30 @@ fn create_blas(
         let index_buf = cmd.bind_resource(&model.index_buf);
         let vertex_buf = cmd.bind_resource(&model.vertex_buf);
 
-        cmd.set_resource_access(index_buf, AccessType::AccelerationStructureBuildRead);
-        cmd.set_resource_access(vertex_buf, AccessType::AccelerationStructureBuildRead);
+        cmd.set_resource_access(index_buf, AccessType::AccelerationStructureBuildInputRead);
+        cmd.set_resource_access(vertex_buf, AccessType::AccelerationStructureBuildInputRead);
     }
 
     cmd.resource_access(blas, AccessType::AccelerationStructureBuildWrite)
-        .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+        .resource_access(
+            scratch_buf,
+            AccessType::AccelerationStructureBuildScratchReadWrite,
+        )
         .record_cmd(move |cmd| {
-            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
-                blas,
-                scratch_addr,
-                info,
-            )]);
+            // Safety: The graph retains and synchronizes the mesh inputs, destination, and
+            // separate aligned scratch allocation; sizes and ranges match these geometries.
+            unsafe {
+                cmd.build_acceleration_structures(
+                    &[AccelerationStructureBuildGeometryInfo::build(
+                        vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+                        flags,
+                        blas,
+                        &geometries,
+                        scratch_addr,
+                    )],
+                    &[&ranges],
+                );
+            }
         });
 
     let blas = graph.resource(blas).clone();
@@ -395,17 +306,28 @@ fn create_tlas(
         buffer
     });
 
-    let info = AccelerationStructureGeometryInfo::tlas([(
-        AccelerationStructureGeometry::opaque(
-            2,
-            AccelerationStructureGeometryData::instances(instance_buf.device_address()),
-        ),
-        vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
-    )])
-    .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE);
-    let size = AccelerationStructure::size_of(device, &info);
-    let tlas =
-        graph.bind_resource(pool.resource(AccelerationStructureInfo::tlas(size.create_size))?);
+    let geometries = [AccelerationStructureGeometry::opaque(
+        AccelerationStructureGeometryData::instances(instance_buf.device_address()),
+    )];
+    let max_counts = [2];
+    let ranges = [vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1)];
+    let flags = vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE;
+
+    // Safety: Valid instance metadata and primitive limits; no micromap handles are attached.
+    let size = unsafe {
+        AccelerationStructure::build_sizes(
+            device,
+            vk::AccelerationStructureBuildTypeKHR::DEVICE,
+            vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            flags,
+            &geometries,
+            &max_counts,
+        )
+    };
+
+    let tlas = graph.bind_resource(pool.resource(AccelerationStructureInfo::tlas(
+        size.acceleration_structure_size,
+    ))?);
 
     let accel_struct_scratch_offset_alignment = device
         .physical
@@ -418,7 +340,7 @@ fn create_tlas(
     let scratch_buf = graph.bind_resource(
         pool.resource(
             BufferInfo::device_mem(
-                size.build_size,
+                size.build_scratch_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             )
             .into_builder()
@@ -433,15 +355,30 @@ fn create_tlas(
         .begin_cmd()
         .debug_name("Build TLAS")
         .resource_access(blas, AccessType::AccelerationStructureBuildRead)
-        .resource_access(instance_buf, AccessType::AccelerationStructureBuildRead)
-        .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+        .resource_access(
+            instance_buf,
+            AccessType::AccelerationStructureBuildInputRead,
+        )
+        .resource_access(
+            scratch_buf,
+            AccessType::AccelerationStructureBuildScratchReadWrite,
+        )
         .resource_access(tlas, AccessType::AccelerationStructureBuildWrite)
         .record_cmd(move |cmd| {
-            cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
-                tlas,
-                scratch_addr,
-                info,
-            )]);
+            // Safety: The graph retains and synchronizes the instance input, referenced BLAS,
+            // destination, and separate aligned scratch; the range fits the queried maximum.
+            unsafe {
+                cmd.build_acceleration_structures(
+                    &[AccelerationStructureBuildGeometryInfo::build(
+                        vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+                        flags,
+                        tlas,
+                        &geometries,
+                        scratch_addr,
+                    )],
+                    &[&ranges],
+                );
+            }
         });
 
     Ok(tlas)
@@ -512,6 +449,7 @@ where
     // Calculate AABB
     let mut min = Vec3::ZERO;
     let mut max = Vec3::ZERO;
+
     for model in &models {
         for n in 0..model.mesh.positions.len() / 3 {
             let idx = 3 * n;
@@ -607,6 +545,115 @@ fn load_model_mesh(device: &Device, path: impl AsRef<Path>) -> anyhow::Result<Mo
             },
         ]
     })
+}
+
+fn main() -> anyhow::Result<()> {
+    pretty_env_logger::init();
+    profile_with_puffin::init();
+
+    let args = Args::parse();
+    let window = Window::builder().debug(args.debug).build()?;
+    let mut pool = LazyPool::new(&window.device);
+
+    let depth_fmt = best_2d_optimal_format(
+        &window.device,
+        &[vk::Format::D32_SFLOAT, vk::Format::D16_UNORM],
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        vk::ImageCreateFlags::empty(),
+    );
+
+    let ground_mesh = load_ground_mesh(&window.device)?;
+    let model_path = download_model_from_github("happy.obj")?;
+    let model_mesh = load_model_mesh(&window.device, model_path)?;
+    let scene_blas = create_blas(&window.device, &[&ground_mesh, &model_mesh])?;
+    let gfx_pipeline = create_pipeline(&window.device)?;
+
+    let mut angle = 0f32;
+    let mut prev_frame_at = Instant::now();
+
+    window.run(|frame| {
+        let now = Instant::now();
+        let dt = now - prev_frame_at;
+        prev_frame_at = now;
+
+        angle += dt.as_secs_f32();
+
+        let scene_tlas = create_tlas(frame.device, &mut pool, frame.graph, &scene_blas).unwrap();
+
+        let ground_mesh_index_buf = frame.graph.bind_resource(&ground_mesh.index_buf);
+        let ground_mesh_vertex_buf = frame.graph.bind_resource(&ground_mesh.vertex_buf);
+        let model_mesh_index_buf = frame.graph.bind_resource(&model_mesh.index_buf);
+        let model_mesh_vertex_buf = frame.graph.bind_resource(&model_mesh.vertex_buf);
+
+        let depth_image = frame.graph.bind_resource(
+            pool.resource(ImageInfo::image_2d(
+                frame.width,
+                frame.height,
+                depth_fmt,
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            ))
+            .unwrap(),
+        );
+        let camera_buf = frame.graph.bind_resource({
+            let mut buf = pool
+                .resource(BufferInfo::host_mem(
+                    size_of::<Camera>() as _,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                ))
+                .unwrap();
+            buf.copy_from_slice(
+                0,
+                bytes_of(&Camera {
+                    projection: Mat4::perspective_rh(
+                        45f32.to_radians(),
+                        frame.render_aspect_ratio(),
+                        0.1,
+                        100.0,
+                    ),
+                    view: Mat4::look_at_rh(vec3(0.0, 1.2, 1.0), vec3(0.0, 0.6, 0.0), -Vec3::Y),
+                    model: Mat4::IDENTITY,
+                    light_position: vec4(angle.cos() * 3.0, 2.0, angle.sin() * 3.0, 0.0),
+                }),
+            );
+
+            buf
+        });
+
+        frame
+            .graph
+            .begin_cmd()
+            .debug_name("Mesh with ray-query shadows")
+            .bind_pipeline(&gfx_pipeline)
+            .resource_access(ground_mesh_index_buf, AccessType::IndexBuffer)
+            .resource_access(ground_mesh_vertex_buf, AccessType::VertexBuffer)
+            .resource_access(model_mesh_index_buf, AccessType::IndexBuffer)
+            .resource_access(model_mesh_vertex_buf, AccessType::VertexBuffer)
+            .shader_resource_access(0, camera_buf, AccessType::AnyShaderReadUniformBuffer)
+            .shader_resource_access(1, scene_tlas, AccessType::FragmentShaderReadOther)
+            .depth_stencil(DepthStencilInfo::DEPTH_WRITE_LESS)
+            .depth_stencil_attachment_image(
+                depth_image,
+                LoadOp::CLEAR_ONE_STENCIL_ZERO,
+                StoreOp::DontCare,
+            )
+            .color_attachment_image(
+                0,
+                frame.swapchain_image,
+                LoadOp::CLEAR_WHITE_ALPHA_ONE,
+                StoreOp::Store,
+            )
+            .record_cmd(move |cmd| {
+                cmd.bind_index_buffer(model_mesh_index_buf, 0, vk::IndexType::UINT32)
+                    .bind_vertex_buffer(0, model_mesh_vertex_buf, 0)
+                    .draw_indexed(model_mesh.index_count, 1, 0, 0, 0);
+
+                cmd.bind_index_buffer(ground_mesh_index_buf, 0, vk::IndexType::UINT32)
+                    .bind_vertex_buffer(0, ground_mesh_vertex_buf, 0)
+                    .draw_indexed(ground_mesh.index_count, 1, 0, 0, 0);
+            });
+    })?;
+
+    Ok(())
 }
 
 #[derive(Parser)]

@@ -1,7 +1,7 @@
 use {
     super::{
-        AccessType, Binding, Command, Graph, Node, Resource, Subresource, SubresourceRange,
-        ViewInfo,
+        AccessType, Binding, Command, Graph, Node, Resource, ResourceAccess, ResourceNode,
+        Subresource, SubresourceRange, ViewInfo,
     },
     crate::{
         ExecutionPipeline, TimestampQuery,
@@ -124,6 +124,47 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
+    /// Equivalent to [`Command::bind_pipeline`] for a command that already has a bound pipeline.
+    pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
+    where
+        P: Pipeline<'c>,
+    {
+        pipeline.bind_cmd(self.cmd)
+    }
+
+    /// Equivalent to [`Command::bind_resource`] for a command that already has a bound pipeline.
+    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
+    where
+        R: Resource,
+    {
+        self.cmd.bind_resource(resource)
+    }
+
+    /// Equivalent to [`Command::end_cmd`] for a command that already has a bound pipeline.
+    pub fn end_cmd(self) -> &'c mut Graph {
+        self.cmd.end_cmd()
+    }
+
+    /// Equivalent to [`Command::resource`] for a command that already has a bound pipeline.
+    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
+    where
+        N: ResourceNode,
+    {
+        self.cmd.resource(resource_node)
+    }
+
+    /// Informs the command that recorded work will read or write `resource_node` using `access`.
+    ///
+    /// An access function must be called for `resource_node` before it is used within a recording
+    /// function. The accepted access type is determined by the node.
+    pub fn resource_access<N>(mut self, resource_node: N, access: N::Access) -> Self
+    where
+        N: ResourceAccess,
+    {
+        self.cmd.set_resource_access(resource_node, access);
+        self
+    }
+
     /// Mutable-borrow form of [`Self::bind_descriptor_set`].
     pub fn set_descriptor_set(&mut self, descriptor_set: &DescriptorSet) -> &mut Self {
         let set = descriptor_set.info().set;
@@ -145,58 +186,10 @@ impl<'c, T> PipelineCommand<'c, T> {
         self
     }
 
-    /// Equivalent to [`Command::bind_pipeline`] for a command that already has a bound pipeline.
-    pub fn bind_pipeline<P>(self, pipeline: P) -> P::Command
-    where
-        P: Pipeline<'c>,
-    {
-        pipeline.bind_cmd(self.cmd)
-    }
-
-    /// Equivalent to [`Command::bind_resource`] for a command that already has a bound pipeline.
-    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
-    where
-        R: Resource,
-    {
-        self.cmd.bind_resource(resource)
-    }
-
-    /// Equivalent to [`Command::write_timestamp`] for a command that already has a bound pipeline.
-    pub fn write_timestamp(&mut self) -> TimestampQuery {
-        self.cmd.write_timestamp()
-    }
-
-    /// Equivalent to [`Command::end_cmd`] for a command that already has a bound pipeline.
-    pub fn end_cmd(self) -> &'c mut Graph {
-        self.cmd.end_cmd()
-    }
-
-    /// Equivalent to [`Command::resource`] for a command that already has a bound pipeline.
-    pub fn resource<N>(&self, resource_node: N) -> &N::Resource
-    where
-        N: Node,
-    {
-        self.cmd.resource(resource_node)
-    }
-
-    /// Informs the command that recorded work will read or write `resource_node` using `access`.
-    ///
-    /// An access function must be called for `resource_node` before it is used within a recording
-    /// function.
-    pub fn resource_access<N>(mut self, resource_node: N, access: AccessType) -> Self
-    where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
-    {
-        self.cmd.set_resource_access(resource_node, access);
-        self
-    }
-
     /// Mutable-borrow form of [`Self::resource_access`].
-    pub fn set_resource_access<N>(&mut self, resource_node: N, access: AccessType) -> &mut Self
+    pub fn set_resource_access<N>(&mut self, resource_node: N, access: N::Access) -> &mut Self
     where
-        N: Node + Subresource,
-        SubresourceRange: From<N::Range>,
+        N: ResourceAccess,
     {
         self.cmd.set_resource_access(resource_node, access);
         self
@@ -348,5 +341,10 @@ impl<'c, T> PipelineCommand<'c, T> {
         self.cmd
             .set_subresource_access(resource_node, subresource, access);
         self
+    }
+
+    /// Equivalent to [`Command::write_timestamp`] for a command with a bound pipeline.
+    pub fn write_timestamp(&mut self) -> TimestampQuery {
+        self.cmd.write_timestamp()
     }
 }

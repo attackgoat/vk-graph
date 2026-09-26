@@ -3,6 +3,7 @@
 use {
     super::{
         BufferHostMappingCompatibility, Cache, Lease, Pool, PoolConfig, compatible_buffer_info,
+        compatible_micromap_info,
         garbage_collector::{CollectResources, ResourceRequests},
         with_cache,
     },
@@ -14,6 +15,7 @@ use {
         descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         device::Device,
         image::{Image, ImageInfo, SampleCount},
+        micromap::{Micromap, MicromapInfo},
         render_pass::{RenderPass, RenderPassInfo},
     },
     ash::vk,
@@ -22,6 +24,7 @@ use {
 };
 
 type BufferKey = (bool, vk::DeviceSize, vk::SharingMode);
+type MicromapKey = (bool, vk::MicromapTypeEXT);
 
 fn buffer_key(info: &BufferInfo) -> BufferKey {
     (
@@ -96,6 +99,7 @@ fn compatible_lazy_image_info(item_info: &ImageInfo, requested_info: &ImageInfo)
 /// * Acceleration structures may be larger than requested
 /// * Buffers may be larger than requested or have additional usage flags
 /// * Images may have additional usage flags
+/// * Micromaps may be larger than requested, with matching type and memory visibility
 ///
 /// # Bucket Strategy
 ///
@@ -133,6 +137,7 @@ pub struct LazyPool {
     #[readonly]
     pub info: PoolConfig,
 
+    micromap_cache: HashMap<MicromapKey, Cache<Micromap>>,
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
 
@@ -151,10 +156,11 @@ impl LazyPool {
             accel_struct_cache: Default::default(),
             buffer_cache: Default::default(),
             command_buffer_cache: Default::default(),
-            descriptor_pool_cache: PoolConfig::default_cache(),
+            descriptor_pool_cache: PoolConfig::explicit_cache(info.descriptor_pool_capacity),
             device,
             image_cache: Default::default(),
             info,
+            micromap_cache: Default::default(),
             render_pass_cache: Default::default(),
         }
     }
@@ -164,6 +170,7 @@ impl LazyPool {
         self.clear_accel_structs();
         self.clear_buffers();
         self.clear_images();
+        self.clear_micromaps();
     }
 
     /// Clears the pool of acceleration structure resources.
@@ -192,6 +199,19 @@ impl LazyPool {
     /// Clears the pool of image resources matching the given information.
     pub fn clear_images_by_info(&mut self, info: impl Into<ImageInfo>) {
         self.image_cache.remove(&info.into().into());
+    }
+
+    /// Clears the pool of micromap resources.
+    pub fn clear_micromaps(&mut self) {
+        self.micromap_cache.clear();
+    }
+
+    /// Clears the pool of micromap resources matching the given information.
+    pub fn clear_micromaps_by_info(&mut self, info: impl Into<MicromapInfo>) {
+        let info = info.into();
+
+        self.micromap_cache
+            .remove(&(info.host_visible, info.micromap_type));
     }
 
     /// Retains only the acceleration structure resources specified by the predicate.
@@ -266,6 +286,26 @@ impl CollectResources for LazyPool {
                             .images
                             .iter()
                             .any(|info| compatible_lazy_image_info(&item.info, info))
+                    });
+                });
+            }
+
+            retain_bucket
+        });
+
+        self.micromap_cache.retain(|key, cache| {
+            let retain_bucket = requests
+                .micromaps
+                .iter()
+                .any(|info| (info.host_visible, info.micromap_type) == *key);
+
+            if retain_bucket {
+                with_cache(cache, |cache| {
+                    cache.retain(|item| {
+                        requests
+                            .micromaps
+                            .iter()
+                            .any(|info| compatible_micromap_info(&item.info, info))
                     });
                 });
             }
@@ -400,6 +440,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for LazyPool {
             for idx in 0..cache.len() {
                 let item = unsafe { cache.get_unchecked(idx) };
                 if item.info.max_sets >= info.max_sets
+                    && item.info.update_after_bind == info.update_after_bind
                     && item.info.acceleration_structure_count >= info.acceleration_structure_count
                     && item.info.combined_image_sampler_count >= info.combined_image_sampler_count
                     && item.info.input_attachment_count >= info.input_attachment_count
@@ -465,6 +506,43 @@ impl Pool<ImageInfo, Image> for LazyPool {
     }
 }
 
+impl Pool<MicromapInfo, Micromap> for LazyPool {
+    #[profiling::function]
+    fn resource(&mut self, info: MicromapInfo) -> Result<Lease<Micromap>, DriverError> {
+        let cache = self
+            .micromap_cache
+            .entry((info.host_visible, info.micromap_type))
+            .or_insert_with(|| PoolConfig::explicit_cache(self.info.micromap_capacity));
+        let cache_ref = Arc::downgrade(cache);
+
+        {
+            profiling::scope!("check cache");
+
+            #[cfg_attr(not(feature = "parking_lot"), allow(unused_mut))]
+            let mut cache = cache.lock();
+
+            #[cfg(not(feature = "parking_lot"))]
+            let mut cache = cache.expect("poisoned cache lock");
+
+            for idx in 0..cache.len() {
+                let item = unsafe { cache.get_unchecked(idx) };
+
+                if compatible_micromap_info(&item.info, &info) {
+                    let item = cache.swap_remove(idx);
+
+                    return Ok(Lease::new(cache_ref, item));
+                }
+            }
+        }
+
+        debug!("Creating new {}", stringify!(Micromap));
+
+        let item = Micromap::create(&self.device, info)?;
+
+        Ok(Lease::new(cache_ref, item))
+    }
+}
+
 impl Pool<RenderPassInfo, RenderPass> for LazyPool {
     #[profiling::function]
     fn resource(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
@@ -501,15 +579,55 @@ mod test {
     use {
         super::*,
         crate::{
-            driver::device::{Device, DeviceInfo},
             pool::garbage_collector::GarbageCollector,
+            test_support::{DeviceChecks, TestDevice},
         },
     };
 
     #[test]
     #[ignore = "requires Vulkan device"]
+    fn vulkan_cached_descriptor_pool_respects_update_after_bind() -> Result<(), DriverError> {
+        let device = TestDevice::with_checks(DeviceChecks {
+            validation: false,
+            disposal: true,
+        })?;
+        if !device
+            .physical
+            .features_v1_2
+            .descriptor_binding_storage_buffer_update_after_bind
+        {
+            return Ok(());
+        }
+
+        let mut pool = LazyPool::new(&device);
+        let basic = DescriptorPoolInfo {
+            max_sets: 1,
+            storage_buffer_count: 1,
+            ..Default::default()
+        };
+        drop(pool.resource(basic.clone())?);
+
+        let requested = DescriptorPoolInfo {
+            update_after_bind: true,
+            ..basic.clone()
+        };
+        let leased: Lease<DescriptorPool> = pool.resource(requested.clone())?;
+        assert!(leased.info.update_after_bind);
+        drop(leased);
+        drop(pool);
+
+        let mut pool = LazyPool::new(&device);
+        drop(pool.resource(requested)?);
+        let leased: Lease<DescriptorPool> = pool.resource(basic)?;
+        assert!(!leased.info.update_after_bind);
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
     fn vulkan_garbage_collector_retains_supported_lazy_resources() -> Result<(), DriverError> {
-        let device = Device::create(DeviceInfo::default())?;
+        let device = TestDevice::new()?;
         let mut collector = GarbageCollector::new(LazyPool::with_capacity(&device, 4));
         let retained_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::TRANSFER_SRC);
         let removed_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::STORAGE_BUFFER);

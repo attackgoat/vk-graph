@@ -7,13 +7,12 @@ use {
     std::sync::Arc,
     vk_graph::{
         Graph,
-        cmd::BuildAccelerationStructureInfo,
+        cmd::AccelerationStructureBuildGeometryInfo,
         driver::{
             DriverError,
             accel_struct::{
                 AccelerationStructure, AccelerationStructureGeometry,
-                AccelerationStructureGeometryData, AccelerationStructureGeometryInfo,
-                AccelerationStructureInfo,
+                AccelerationStructureGeometryData, AccelerationStructureInfo,
             },
             buffer::{Buffer, BufferInfo},
             device::Device,
@@ -245,6 +244,7 @@ fn main() -> anyhow::Result<()> {
             ),
         )?;
         buf.copy_from_slice(0, data);
+
         Arc::new(buf)
     };
 
@@ -259,6 +259,7 @@ fn main() -> anyhow::Result<()> {
             ),
         )?;
         buf.copy_from_slice(0, data);
+
         Arc::new(buf)
     };
 
@@ -266,25 +267,36 @@ fn main() -> anyhow::Result<()> {
     // Create the bottom-level acceleration structure
     // ------------------------------------------------------------------------------------------ //
 
-    let blas_geometry_info = AccelerationStructureGeometryInfo::blas([(
-        AccelerationStructureGeometry::opaque(
-            triangle_count,
-            AccelerationStructureGeometryData::triangles(
-                index_buf.device_address(),
-                vk::IndexType::UINT32,
-                vertex_count,
-                None,
-                vertex_buf.device_address(),
-                vk::Format::R32G32B32_SFLOAT,
-                12,
-            ),
+    let build_flags = vk::BuildAccelerationStructureFlagsKHR::empty();
+    let blas_geometries = [AccelerationStructureGeometry::opaque(
+        AccelerationStructureGeometryData::triangles(
+            index_buf.device_address(),
+            vk::IndexType::UINT32,
+            vertex_count - 1,
+            0,
+            vertex_buf.device_address(),
+            vk::Format::R32G32B32_SFLOAT,
+            12,
         ),
-        vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(triangle_count),
-    )]);
-    let blas_size = AccelerationStructure::size_of(&window.device, &blas_geometry_info);
+    )];
+    let blas_ranges =
+        [vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(triangle_count)];
+
+    // Safety: Triangle metadata and primitive limits are valid, with no raw micromap attachments.
+    let blas_size = unsafe {
+        AccelerationStructure::build_sizes(
+            &window.device,
+            vk::AccelerationStructureBuildTypeKHR::DEVICE,
+            vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            build_flags,
+            &blas_geometries,
+            &[triangle_count],
+        )
+    };
+
     let blas = Arc::new(AccelerationStructure::create(
         &window.device,
-        AccelerationStructureInfo::blas(blas_size.create_size),
+        AccelerationStructureInfo::blas(blas_size.acceleration_structure_size),
     )?);
     let blas_device_address = AccelerationStructure::device_address(&blas);
 
@@ -328,17 +340,26 @@ fn main() -> anyhow::Result<()> {
     // Create the top-level acceleration structure
     // ------------------------------------------------------------------------------------------ //
 
-    let tlas_geometry_info = AccelerationStructureGeometryInfo::tlas([(
-        AccelerationStructureGeometry::opaque(
-            1,
-            AccelerationStructureGeometryData::instances(instance_buf.device_address()),
-        ),
-        vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1),
-    )]);
-    let tlas_size = AccelerationStructure::size_of(&window.device, &tlas_geometry_info);
+    let tlas_geometries = [AccelerationStructureGeometry::opaque(
+        AccelerationStructureGeometryData::instances(instance_buf.device_address()),
+    )];
+    let tlas_ranges = [vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(1)];
+
+    // Safety: Single-instance metadata and limits are valid, with no raw micromap attachments.
+    let tlas_size = unsafe {
+        AccelerationStructure::build_sizes(
+            &window.device,
+            vk::AccelerationStructureBuildTypeKHR::DEVICE,
+            vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            build_flags,
+            &tlas_geometries,
+            &[1],
+        )
+    };
+
     let tlas = Arc::new(AccelerationStructure::create(
         &window.device,
-        AccelerationStructureInfo::tlas(tlas_size.create_size),
+        AccelerationStructureInfo::tlas(tlas_size.acceleration_structure_size),
     )?);
 
     // ------------------------------------------------------------------------------------------ //
@@ -364,7 +385,7 @@ fn main() -> anyhow::Result<()> {
             let scratch_buf = graph.bind_resource(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
-                    blas_size.build_size,
+                    blas_size.build_scratch_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
@@ -376,16 +397,29 @@ fn main() -> anyhow::Result<()> {
             graph
                 .begin_cmd()
                 .debug_name("Build BLAS")
-                .resource_access(index_node, AccessType::AccelerationStructureBuildRead)
-                .resource_access(vertex_node, AccessType::AccelerationStructureBuildRead)
-                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(index_node, AccessType::AccelerationStructureBuildInputRead)
+                .resource_access(vertex_node, AccessType::AccelerationStructureBuildInputRead)
+                .resource_access(
+                    scratch_buf,
+                    AccessType::AccelerationStructureBuildScratchReadWrite,
+                )
                 .resource_access(blas_node, AccessType::AccelerationStructureBuildWrite)
                 .record_cmd(move |cmd| {
-                    cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
-                        blas_node,
-                        scratch_addr,
-                        blas_geometry_info,
-                    )]);
+                    // Safety: The graph retains and synchronizes the index/vertex buffers,
+                    // BLAS and separate aligned scratch allocation through execution. Ranges
+                    // fit the uploaded data; storage sizes match this DEVICE build query.
+                    unsafe {
+                        cmd.build_acceleration_structures(
+                            &[AccelerationStructureBuildGeometryInfo::build(
+                                vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+                                build_flags,
+                                blas_node,
+                                &blas_geometries,
+                                scratch_addr,
+                            )],
+                            &[&blas_ranges],
+                        );
+                    }
                 });
         }
 
@@ -394,7 +428,7 @@ fn main() -> anyhow::Result<()> {
             let scratch_buf = graph.bind_resource(Buffer::create(
                 &window.device,
                 BufferInfo::device_mem(
-                    tlas_size.build_size,
+                    tlas_size.build_scratch_size,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::STORAGE_BUFFER,
                 )
@@ -408,15 +442,31 @@ fn main() -> anyhow::Result<()> {
                 .begin_cmd()
                 .debug_name("Build TLAS")
                 .resource_access(blas_node, AccessType::AccelerationStructureBuildRead)
-                .resource_access(instance_node, AccessType::AccelerationStructureBuildRead)
-                .resource_access(scratch_buf, AccessType::AccelerationStructureBufferWrite)
+                .resource_access(
+                    instance_node,
+                    AccessType::AccelerationStructureBuildInputRead,
+                )
+                .resource_access(
+                    scratch_buf,
+                    AccessType::AccelerationStructureBuildScratchReadWrite,
+                )
                 .resource_access(tlas_node, AccessType::AccelerationStructureBuildWrite)
                 .record_cmd(move |cmd| {
-                    cmd.build_accel_struct(&[BuildAccelerationStructureInfo::new(
-                        tlas_node,
-                        scratch_addr,
-                        tlas_geometry_info,
-                    )]);
+                    // Safety: The graph retains the one-instance buffer, referenced BLAS,
+                    // TLAS and separate aligned scratch allocation, and orders this after
+                    // the BLAS build. Storage sizes match this one-instance DEVICE query.
+                    unsafe {
+                        cmd.build_acceleration_structures(
+                            &[AccelerationStructureBuildGeometryInfo::build(
+                                vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+                                build_flags,
+                                tlas_node,
+                                &tlas_geometries,
+                                scratch_addr,
+                            )],
+                            &[&tlas_ranges],
+                        );
+                    }
                 });
         }
 

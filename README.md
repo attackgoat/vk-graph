@@ -11,8 +11,10 @@ real-world use, and supports modern Vulkan commands[^modern].
 
 ```toml
 [dependencies]
-vk-graph = "0.14"
+vk-graph = "0.15"
 ```
+
+Requires Rust 1.92 or newer.
 
 [*Changelog*](https://github.com/attackgoat/vk-graph/blob/main/CHANGELOG.md)
 
@@ -37,10 +39,10 @@ fn main() -> Result<(), WindowError> {
 
 ## Usage
 
-_vk-graph_ centers frame work around a `Graph`. Bind Vulkan smart-pointer resources such as
-buffers, images, acceleration structures, and swapchain images into the graph to get statically typed
-node handles. Commands then reference those nodes instead of raw Vulkan handles. When recording is
-complete, finalize the graph into a `Submission` and submit it with a pool.
+_vk-graph_ centers frame work around a `Graph`. Bind Vulkan smart-pointer resources such as buffers,
+images, micromaps, acceleration structures, and swapchain images into the graph to get statically
+typed node handles. Commands then reference those nodes instead of raw Vulkan handles. When
+recording is complete, finalize the graph into a `Submission` and submit it with a pool.
 
 The normal flow is:
 
@@ -76,6 +78,8 @@ if device.physical.vk_khr_synchronization2 {
  - Automatic render pass scheduling, re-ordering, merging, with resource aliasing
  - Interoperable with existing Vulkan code
  - Optional [shader hot-reload](crates/vk-graph-hot/README.md) from disk
+ - Optional [nvidia-rs crates](https://github.com/attackgoat/nvidia#renderer-integrations): DLSS,
+   denoising, additional SDKs
 
 Example code:
 
@@ -104,10 +108,11 @@ _vk-graph_ puts a lot of functionality behind optional features in order to opti
 compile time for the most common use cases. The following features are
 available.
 
-- **`checked`** *(enabled by default)* — Runtime validation of common misuse patterns
+- **`checked`** *(disabled by default)* — Runtime validation of common misuse patterns
   (missing access declarations, buffer bounds, image aspects) that the Vulkan Validation Layer
-  cannot catch, including cross-graph node ownership checks. Disable for zero-overhead in
-  validated releases.
+  cannot catch, including cross-graph node ownership checks. Enable explicitly with
+  `vk-graph = { version = "0.15", features = ["checked"] }` during validation. It applies in both
+  debug and release builds, independently of device debug mode or Vulkan validation layers.
 - **`loaded`** *(enabled by default)* — Support searching for the Vulkan loader manually at runtime.
 - **`linked`** — Link the Vulkan loader at compile time.
 - **`ash-molten`** — Enable `ash-molten` support for MoltenVK-based platforms.
@@ -170,6 +175,8 @@ Included are some examples you might find helpful:
 - [`hello_world.rs`](crates/vk-graph-window/examples/hello_world.rs) — Displays a window on the
   screen. Please start here.
 - [`triangle.rs`](examples/triangle.rs) — Shaders and full setup of index/vertex buffers; < 100 LOC.
+- [`opacity_micromap.rs`](examples/opacity_micromap.rs) — Headless, synchronized construction of a
+  two-state opacity micromap and attached BLAS; exits cleanly when unsupported.
 - [`shader-toy/`](examples/shader-toy) — Recreation of a two-pass Shadertoy using the original
   shader code.
 

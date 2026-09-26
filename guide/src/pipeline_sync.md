@@ -23,6 +23,17 @@ Type|Usage
 `AccessType::General`|Covers any access - useful for debug, generally avoid for performance reasons
 `AccessType::ColorAttachmentWrite`|Written as a color attachment during rendering
 `AccessType::ComputeShaderReadUniformBuffer`|Read as a uniform buffer in a compute shader
+`AccessType::AccelerationStructureBuildInputRead`|Read geometry or instance input buffers during AS build/update
+`AccessType::AccelerationStructureBuildScratchReadWrite`|Read and write AS build/update scratch storage
+`AccessType::AccelerationStructureBuildRead`|Read source or referenced acceleration structures
+`AccessType::AccelerationStructureBuildWrite`|Write destination acceleration structures
+`AccessType::MicromapBuildInputRead`|Read encoded opacity or triangle metadata during a micromap build
+`AccessType::MicromapBuildScratchReadWrite`|Read and write micromap build scratch storage
+`AccessType::MicromapBuildWrite`|Write a micromap during build, copy, or deserialization
+`AccessType::MicromapBuildRead`|Read a micromap during copy, serialization, or property query
+`AccessType::MicromapBuildBufferRead`|Read a serialized buffer during micromap deserialization
+`AccessType::MicromapBuildBufferWrite`|Write a serialized buffer during micromap serialization
+`AccessType::AccelerationStructureBuildMicromapRead`|Read a completed micromap during a BLAS build
 
 ([_Full list_](https://docs.rs/vk-graph/latest/vk_graph/driver/sync/enum.AccessType.html))
 
@@ -84,6 +95,24 @@ graph
     });
 # Ok(()) }
 ```
+
+AS and micromap build structs contain device addresses, which the graph cannot map to resources. Bind
+and declare the encoded-data, triangle-array, scratch, optional index, destination micromap, and BLAS
+resources. Put `build_micromaps` and the consuming BLAS build in separate recordings so the graph can
+insert the `MicromapBuildWrite` to `AccelerationStructureBuildMicromapRead` dependency.
+
+The unsafe `build_acceleration_structures` and `build_acceleration_structures_indirect` commands
+use the same declarations for BUILD and UPDATE. Declare both AS read and write access for in-place
+updates, and `AccessType::AccelerationStructureBuildIndirectRead` for indirect AS range buffers.
+`IndirectBuffer` maps to
+`DRAW_INDIRECT`, not the required `ACCELERATION_STRUCTURE_BUILD_KHR` / `INDIRECT_COMMAND_READ`
+combination. `General` remains a valid conservative fallback using `ALL_COMMANDS`
+with memory read/write access, but may synchronize more work than needed. No dependencies
+are inserted between entries of a build batch. Borrowed geometry and micromap usage slices must remain
+alive through recording; resources referenced by address must remain alive through GPU execution. Declarations
+do not validate address ranges, input contents, build flags, or non-overlap requirements. See the
+[AS command contracts](cmd_ray_trace.md#building-acceleration-structures) and
+[micromap lifetime rules](resource_micromap.md#device-operations), including `discardable`.
 
 ## Shader Resource Access
 

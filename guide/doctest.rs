@@ -7,6 +7,9 @@ pub mod cmd {}
 #[doc = include_str!("src/cmd_compute.md")]
 pub mod cmd_compute {}
 
+#[doc = include_str!("src/cmd_ray_trace.md")]
+pub mod cmd_ray_trace {}
+
 #[doc = include_str!("src/pipeline.md")]
 pub mod pipeline {}
 
@@ -30,6 +33,9 @@ pub mod resource_buffer {}
 
 #[doc = include_str!("src/resource_image.md")]
 pub mod resource_image {}
+
+#[doc = include_str!("src/resource_micromap.md")]
+pub mod resource_micromap {}
 
 #[doc = include_str!("src/usage.md")]
 pub mod usage {}

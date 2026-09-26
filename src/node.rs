@@ -1,6 +1,6 @@
 //! Handles for Vulkan smart-pointer resources.
 //!
-//! When you bind a resource to a [`Graph`](crate::Graph), you get back a node handle:
+//! When you bind a resource to a [`crate::Graph`], you get back a node handle:
 //!
 //! ```no_run
 //! # use std::sync::Arc;
@@ -24,8 +24,10 @@
 //! | [`ImageNode`] | Owned [`Image`] | Most common |
 //! | [`AccelerationStructureNode`] | Owned [`AccelerationStructure`] | Ray tracing |
 //! | [`SwapchainImageNode`] | [`SwapchainImage`] | Swapchain presentation |
+//! | [`AccelerationStructureSetNode`] | [`AccelerationStructureSet`] | Persistent acceleration structure collections |
+//! | [`ImageSetNode`] | [`ImageSet`] | Persistent sampled image arrays |
 //! | [`BufferLeaseNode`], [`ImageLeaseNode`], [`AccelerationStructureLeaseNode`] | Pool-leased resource | Pool-based allocation |
-//! | [`AnyBufferNode`], [`AnyImageNode`], [`AnyAccelerationStructureNode`] | Any of the above | Heterogeneous collections |
+//! | [`AnyBufferNode`], [`AnyImageNode`], [`AnyAccelerationStructureNode`] | Any of the above (except sets) | Heterogeneous collections |
 //!
 //! For most users, [`BufferNode`] and [`ImageNode`] are all you need. The `Lease` and
 //! `Any*` variants exist for advanced pooling and dynamic dispatch scenarios.
@@ -38,22 +40,96 @@
 use std::sync::Arc;
 
 use crate::{
-    Node,
+    Node, ResourceNode,
     driver::{
         accel_struct::{AccelerationStructure, AccelerationStructureSyncInfo},
         buffer::{Buffer, BufferSyncInfo},
         image::{Image, ImageSyncInfo},
+        micromap::{Micromap, MicromapSyncInfo},
         swapchain::SwapchainImage,
     },
     pool::Lease,
     private,
-    stream::{AccelerationStructureArg, BufferArg, ImageArg},
+    resource::{AccelerationStructureSet, ImageSet, ResourceSetIndex},
+    stream::{AccelerationStructureArg, BufferArg, ImageArg, MicromapArg},
 };
 
 #[cfg(feature = "checked")]
 use crate::GraphId;
 
 use super::{AnyResource, NodeIndex};
+
+/// A graph-local handle for a persistent acceleration structure set.
+///
+/// This aggregate handle is separate from the individual-resource [`Node`] trait. Use
+/// [`Command::resource_access`](crate::cmd::Command::resource_access) to declare one read-only
+/// access for all set members.
+///
+/// When the `checked` feature is enabled, using a node with a different graph will panic
+/// immediately.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AccelerationStructureSetNode {
+    index: ResourceSetIndex,
+
+    #[cfg(feature = "checked")]
+    graph_id: GraphId,
+}
+
+impl AccelerationStructureSetNode {
+    pub(crate) fn new(
+        index: ResourceSetIndex,
+        #[cfg(feature = "checked")] graph_id: GraphId,
+    ) -> Self {
+        Self {
+            index,
+
+            #[cfg(feature = "checked")]
+            graph_id,
+        }
+    }
+
+    #[cfg(feature = "checked")]
+    pub(crate) fn assert_owner(self, graph_id: GraphId) {
+        assert!(
+            self.graph_id == graph_id,
+            "node belongs to a different graph"
+        );
+    }
+
+    pub(crate) fn index(self) -> ResourceSetIndex {
+        self.index
+    }
+}
+
+impl private::ResourceNodeSealed for AccelerationStructureSetNode {
+    #[cfg(feature = "checked")]
+    fn assert_owner(&self, graph_id: GraphId) {
+        AccelerationStructureSetNode::assert_owner(*self, graph_id);
+    }
+
+    fn borrow_at<'a>(
+        self,
+        _resources: &'a [crate::AnyResource],
+        resource_sets: &'a crate::resource::ResourceSetMap,
+        index: private::ResourceNodeIndex,
+    ) -> &'a <Self as ResourceNode>::Resource {
+        let private::ResourceNodeIndex::ResourceSet(index) = index else {
+            unreachable!("resource set node type mismatch")
+        };
+
+        resource_sets
+            .get_acceleration_structure(index)
+            .expect("resource set node type mismatch")
+    }
+
+    fn resource_node_index(&self) -> private::ResourceNodeIndex {
+        private::ResourceNodeIndex::ResourceSet(self.index())
+    }
+}
+
+impl ResourceNode for AccelerationStructureSetNode {
+    type Resource = AccelerationStructureSet;
+}
 
 /// Specifies either an owned acceleration structure or one obtained from a pool.
 #[derive(Clone, Copy, Debug)]
@@ -66,24 +142,6 @@ pub enum AnyAccelerationStructureNode {
 
     /// An acceleration structure obtained from a pool.
     Pooled(AccelerationStructureLeaseNode),
-}
-
-impl From<AccelerationStructureNode> for AnyAccelerationStructureNode {
-    fn from(node: AccelerationStructureNode) -> Self {
-        Self::Owned(node)
-    }
-}
-
-impl From<AccelerationStructureArg> for AnyAccelerationStructureNode {
-    fn from(node: AccelerationStructureArg) -> Self {
-        Self::Arg(node)
-    }
-}
-
-impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
-    fn from(node: AccelerationStructureLeaseNode) -> Self {
-        Self::Pooled(node)
-    }
 }
 
 impl private::NodeSealed for AnyAccelerationStructureNode {
@@ -118,6 +176,24 @@ impl Node for AnyAccelerationStructureNode {
     }
 }
 
+impl From<AccelerationStructureNode> for AnyAccelerationStructureNode {
+    fn from(node: AccelerationStructureNode) -> Self {
+        Self::Owned(node)
+    }
+}
+
+impl From<AccelerationStructureArg> for AnyAccelerationStructureNode {
+    fn from(node: AccelerationStructureArg) -> Self {
+        Self::Arg(node)
+    }
+}
+
+impl From<AccelerationStructureLeaseNode> for AnyAccelerationStructureNode {
+    fn from(node: AccelerationStructureLeaseNode) -> Self {
+        Self::Pooled(node)
+    }
+}
+
 /// Specifies either an owned buffer or one obtained from a pool.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyBufferNode {
@@ -131,29 +207,12 @@ pub enum AnyBufferNode {
     Pooled(BufferLeaseNode),
 }
 
-impl From<BufferNode> for AnyBufferNode {
-    fn from(node: BufferNode) -> Self {
-        Self::Owned(node)
-    }
-}
-
-impl From<BufferArg> for AnyBufferNode {
-    fn from(node: BufferArg) -> Self {
-        Self::Arg(node)
-    }
-}
-
-impl From<BufferLeaseNode> for AnyBufferNode {
-    fn from(node: BufferLeaseNode) -> Self {
-        Self::Pooled(node)
-    }
-}
-
 impl private::NodeSealed for AnyBufferNode {
     fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
         resources[self.index()].expect_buffer()
     }
 
+    #[inline]
     fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
         resources[index].expect_buffer()
     }
@@ -181,6 +240,24 @@ impl Node for AnyBufferNode {
     }
 }
 
+impl From<BufferNode> for AnyBufferNode {
+    fn from(node: BufferNode) -> Self {
+        Self::Owned(node)
+    }
+}
+
+impl From<BufferArg> for AnyBufferNode {
+    fn from(node: BufferArg) -> Self {
+        Self::Arg(node)
+    }
+}
+
+impl From<BufferLeaseNode> for AnyBufferNode {
+    fn from(node: BufferLeaseNode) -> Self {
+        Self::Pooled(node)
+    }
+}
+
 /// Specifies either an owned image or one obtained from a pool.
 ///
 /// The image may also be a special swapchain type of image.
@@ -199,35 +276,12 @@ pub enum AnyImageNode {
     Swapchain(SwapchainImageNode),
 }
 
-impl From<ImageNode> for AnyImageNode {
-    fn from(node: ImageNode) -> Self {
-        Self::Owned(node)
-    }
-}
-
-impl From<ImageArg> for AnyImageNode {
-    fn from(node: ImageArg) -> Self {
-        Self::Arg(node)
-    }
-}
-
-impl From<ImageLeaseNode> for AnyImageNode {
-    fn from(node: ImageLeaseNode) -> Self {
-        Self::Pooled(node)
-    }
-}
-
-impl From<SwapchainImageNode> for AnyImageNode {
-    fn from(node: SwapchainImageNode) -> Self {
-        Self::Swapchain(node)
-    }
-}
-
 impl private::NodeSealed for AnyImageNode {
     fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
         resources[self.index()].expect_image()
     }
 
+    #[inline]
     fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
         resources[index].expect_image()
     }
@@ -257,7 +311,94 @@ impl Node for AnyImageNode {
     }
 }
 
-/// A type-erased graph node for any buffer, image, or acceleration structure.
+impl From<ImageNode> for AnyImageNode {
+    fn from(node: ImageNode) -> Self {
+        Self::Owned(node)
+    }
+}
+
+impl From<ImageArg> for AnyImageNode {
+    fn from(node: ImageArg) -> Self {
+        Self::Arg(node)
+    }
+}
+
+impl From<ImageLeaseNode> for AnyImageNode {
+    fn from(node: ImageLeaseNode) -> Self {
+        Self::Pooled(node)
+    }
+}
+
+impl From<SwapchainImageNode> for AnyImageNode {
+    fn from(node: SwapchainImageNode) -> Self {
+        Self::Swapchain(node)
+    }
+}
+
+/// Specifies either an owned micromap or one obtained from a pool.
+#[derive(Clone, Copy, Debug)]
+pub enum AnyMicromapNode {
+    /// A micromap supplied as a command stream argument.
+    Arg(MicromapArg),
+
+    /// An owned micromap.
+    Owned(MicromapNode),
+
+    /// A micromap obtained from a pool.
+    Pooled(MicromapLeaseNode),
+}
+
+impl private::NodeSealed for AnyMicromapNode {
+    fn borrow(self, resources: &[AnyResource]) -> &<Self as Node>::Resource {
+        resources[self.index()].expect_micromap()
+    }
+
+    fn borrow_at(self, resources: &[AnyResource], index: usize) -> &<Self as Node>::Resource {
+        resources[index].expect_micromap()
+    }
+
+    #[cfg(feature = "checked")]
+    fn assert_owner(&self, graph_id: GraphId) {
+        match self {
+            Self::Arg(node) => node.assert_owner(graph_id),
+            Self::Owned(node) => node.assert_owner(graph_id),
+            Self::Pooled(node) => node.assert_owner(graph_id),
+        }
+    }
+}
+
+impl Node for AnyMicromapNode {
+    type Resource = Micromap;
+    type SyncInfo = MicromapSyncInfo;
+
+    fn index(&self) -> usize {
+        match self {
+            Self::Arg(node) => node.index(),
+            Self::Owned(node) => node.index(),
+            Self::Pooled(node) => node.index(),
+        }
+    }
+}
+
+impl From<MicromapArg> for AnyMicromapNode {
+    fn from(node: MicromapArg) -> Self {
+        Self::Arg(node)
+    }
+}
+
+impl From<MicromapNode> for AnyMicromapNode {
+    fn from(node: MicromapNode) -> Self {
+        Self::Owned(node)
+    }
+}
+
+impl From<MicromapLeaseNode> for AnyMicromapNode {
+    fn from(node: MicromapLeaseNode) -> Self {
+        Self::Pooled(node)
+    }
+}
+
+/// A type-erased graph node for any buffer, image, acceleration structure, or micromap.
 #[derive(Clone, Copy, Debug)]
 pub enum AnyNode {
     /// An acceleration-structure node.
@@ -268,6 +409,9 @@ pub enum AnyNode {
 
     /// An image node, including swapchain image nodes.
     Image(AnyImageNode),
+
+    /// A micromap node.
+    Micromap(AnyMicromapNode),
 }
 
 macro_rules! any_node_from {
@@ -283,6 +427,7 @@ macro_rules! any_node_from {
 any_node_from!(AnyAccelerationStructureNode => AccelerationStructure);
 any_node_from!(AnyBufferNode => Buffer);
 any_node_from!(AnyImageNode => Image);
+any_node_from!(AnyMicromapNode => Micromap);
 
 any_node_from!(AccelerationStructureNode => AccelerationStructure);
 any_node_from!(AccelerationStructureLeaseNode => AccelerationStructure);
@@ -290,7 +435,82 @@ any_node_from!(BufferNode => Buffer);
 any_node_from!(BufferLeaseNode => Buffer);
 any_node_from!(ImageNode => Image);
 any_node_from!(ImageLeaseNode => Image);
+any_node_from!(MicromapNode => Micromap);
+any_node_from!(MicromapLeaseNode => Micromap);
 any_node_from!(SwapchainImageNode => Image);
+
+/// A graph-local handle for a persistent image set.
+///
+/// This aggregate handle is separate from the individual-resource [`Node`] trait. Use
+/// [`Command::resource_access`](crate::cmd::Command::resource_access) with
+/// [`ImageAccessType::SampledRead`](crate::resource::ImageAccessType::SampledRead) to declare one
+/// sampled read-only access for all set members.
+///
+/// When the `checked` feature is enabled, using a node with a different graph will panic
+/// immediately.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ImageSetNode {
+    index: ResourceSetIndex,
+
+    #[cfg(feature = "checked")]
+    graph_id: GraphId,
+}
+
+impl ImageSetNode {
+    pub(crate) fn new(
+        index: ResourceSetIndex,
+        #[cfg(feature = "checked")] graph_id: GraphId,
+    ) -> Self {
+        Self {
+            index,
+
+            #[cfg(feature = "checked")]
+            graph_id,
+        }
+    }
+
+    #[cfg(feature = "checked")]
+    pub(crate) fn assert_owner(self, graph_id: GraphId) {
+        assert!(
+            self.graph_id == graph_id,
+            "node belongs to a different graph"
+        );
+    }
+
+    pub(crate) fn index(self) -> ResourceSetIndex {
+        self.index
+    }
+}
+
+impl private::ResourceNodeSealed for ImageSetNode {
+    #[cfg(feature = "checked")]
+    fn assert_owner(&self, graph_id: GraphId) {
+        ImageSetNode::assert_owner(*self, graph_id);
+    }
+
+    fn borrow_at<'a>(
+        self,
+        _resources: &'a [crate::AnyResource],
+        resource_sets: &'a crate::resource::ResourceSetMap,
+        index: private::ResourceNodeIndex,
+    ) -> &'a <Self as ResourceNode>::Resource {
+        let private::ResourceNodeIndex::ResourceSet(index) = index else {
+            unreachable!("resource set node type mismatch")
+        };
+
+        resource_sets
+            .get_image(index)
+            .expect("resource set node type mismatch")
+    }
+
+    fn resource_node_index(&self) -> private::ResourceNodeIndex {
+        private::ResourceNodeIndex::ResourceSet(self.index())
+    }
+}
+
+impl ResourceNode for ImageSetNode {
+    type Resource = ImageSet;
+}
 
 macro_rules! node {
     ($name:ident, $resource:ty, $sync_info:ty, $fn_name:ident) => {
@@ -335,6 +555,7 @@ macro_rules! node {
                     res
                 }
 
+                #[inline]
                 fn borrow_at(
                     self,
                     resources: &[AnyResource],
@@ -382,6 +603,13 @@ node!(Buffer, Arc<Buffer>, BufferSyncInfo, as_buffer);
 node!(BufferLease, Arc<Lease<Buffer>>, BufferSyncInfo, as_buffer);
 node!(Image, Arc<Image>, ImageSyncInfo, as_image);
 node!(ImageLease, Arc<Lease<Image>>, ImageSyncInfo, as_image);
+node!(Micromap, Arc<Micromap>, MicromapSyncInfo, as_micromap);
+node!(
+    MicromapLease,
+    Arc<Lease<Micromap>>,
+    MicromapSyncInfo,
+    as_micromap
+);
 node!(
     SwapchainImage,
     SwapchainImage,

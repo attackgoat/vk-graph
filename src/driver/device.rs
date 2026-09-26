@@ -3,6 +3,7 @@
 use {
     super::{
         DriverError,
+        fence::{FencePayloads, drop_fence_payloads},
         instance::{ApiVersion, Instance, InstanceInfoBuilder},
         physical_device::PhysicalDevice,
     },
@@ -20,19 +21,63 @@ use {
         fmt::{Debug, Formatter},
         mem::{ManuallyDrop, forget},
         ops::Deref,
+        panic::{AssertUnwindSafe, catch_unwind},
         slice,
-        sync::Arc,
-        sync::atomic::{AtomicU64, Ordering},
-        thread::panicking,
-        time::Instant,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+            mpsc::{self, Receiver, SyncSender, TrySendError},
+        },
+        thread::{self, JoinHandle, ThreadId, panicking},
     },
 };
+
+#[cfg(debug_assertions)]
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
 
+#[cfg(test)]
+use crate::test_support::disposal::{DisposalReport, DisposalTracker};
+
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
+
+const DROP_WORKER_QUEUE_CAPACITY: usize = 64;
+
+#[cfg(debug_assertions)]
+const DEFAULT_SLOW_FENCE_WARNING_NS: u64 = 100_000_000;
+
+fn run_drop_worker<T>(queue_rx: Receiver<DropWorkerMessage<T>>, drop_value: fn(T) -> bool) {
+    profiling::register_thread!();
+
+    let mut had_failure = false;
+
+    while let Ok(message) = queue_rx.recv() {
+        match message {
+            DropWorkerMessage::Drop(value) => {
+                profiling::scope!("drop fence payloads");
+
+                match catch_unwind(AssertUnwindSafe(|| drop_value(value))) {
+                    Ok(true) => {}
+                    Ok(false) => had_failure = true,
+                    Err(_) => {
+                        had_failure = true;
+
+                        error!("fence payload batch panicked while being dropped");
+                    }
+                }
+            }
+            DropWorkerMessage::Barrier(reply_tx) => {
+                profiling::scope!("wait for fence cleanup");
+
+                let _ = reply_tx.send(!had_failure);
+                had_failure = false;
+            }
+        }
+    }
+}
 
 fn select_physical_device(
     instance: &Instance,
@@ -56,6 +101,48 @@ fn select_physical_device(
     Ok(physical_device)
 }
 
+/// Keeps background cleanup of completed fence payloads enabled for a device.
+///
+/// Guards active at the same time share a device worker. Dropping the final guard signals that
+/// worker to drain and detaches it, after which newly completed fence payloads are dropped
+/// synchronously. Re-enabling cleanup may start another worker while the detached worker drains.
+#[must_use = "dropping the final guard disables background fence cleanup"]
+pub struct BackgroundFenceCleanupGuard {
+    device: Device,
+}
+
+impl BackgroundFenceCleanupGuard {
+    /// Waits until fence payloads previously queued to the current worker are dropped.
+    ///
+    /// This does not poll or wait for fences. A fence must first be observed as signaled before its
+    /// payload is queued for background cleanup.
+    ///
+    /// Returns [`DriverError::InvalidData`] if the worker reports a payload-drop failure since its
+    /// previous wait or cannot complete this wait. Failure reporting is shared and best-effort;
+    /// concurrent waiters are not guaranteed to observe the same failure. Failures during
+    /// synchronous queue-full fallback are logged but are not reported here.
+    #[profiling::function]
+    pub fn wait_for_pending_cleanup(&self) -> Result<(), DriverError> {
+        Device::fence_cleanup_worker_handle(&self.device).map_or(Ok(()), |worker| {
+            worker
+                .wait_for_pending_drops()
+                .map_err(|()| DriverError::InvalidData)
+        })
+    }
+}
+
+impl Drop for BackgroundFenceCleanupGuard {
+    fn drop(&mut self) {
+        Device::release_background_fence_cleanup(&self.device);
+    }
+}
+
+#[derive(Default)]
+struct BackgroundFenceCleanupState {
+    guard_count: usize,
+    worker: Option<DropWorker<FencePayloads>>,
+}
+
 /// Opaque handle to a device object.
 #[read_only::embed]
 #[derive(Clone)]
@@ -76,6 +163,90 @@ pub struct Device {
 }
 
 impl Device {
+    /// Sets the warning threshold for completed fence waits on this device.
+    ///
+    /// `None` disables slow-fence warnings. This does not change how long Vulkan waits for a fence.
+    #[cfg(debug_assertions)]
+    pub fn set_slow_fence_warning_threshold(this: &Self, threshold: Option<Duration>) {
+        let nanoseconds = threshold.map_or(u64::MAX, |duration| {
+            u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX - 1)
+        });
+        this.inner
+            .slow_fence_warning_ns
+            .store(nanoseconds, Ordering::Relaxed);
+    }
+
+    /// Observes completed device destruction without retaining the device or its instance.
+    ///
+    /// All device clones and resources must be released before destruction can complete.
+    /// Observe [`Instance::disposal_report`] separately to check instance destruction as well.
+    #[cfg(test)]
+    pub(crate) fn disposal_report(this: &Self) -> DisposalReport {
+        this.inner.disposal.report()
+    }
+
+    /// Constructs a new device using the given configuration.
+    ///
+    /// Intended for headless or manually managed setups. Does not infer or enable platform-specific
+    /// surface extensions. Use [`Self::try_from_display`] if you need to create surfaces later.
+    #[profiling::function]
+    pub fn create(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
+        let DeviceInfo {
+            debug,
+            physical_device_index,
+        } = info.into();
+        let instance_info = InstanceInfoBuilder::default().debug(debug);
+        let instance = Instance::create(instance_info)?;
+        let physical_device = select_physical_device(&instance, physical_device_index)?;
+
+        Self::try_from_physical_device(physical_device)
+    }
+
+    /// Creates a device with the given configuration, enabling the display's required surface
+    /// extensions on its instance.
+    #[profiling::function]
+    pub fn try_from_display(
+        display: impl HasDisplayHandle,
+        info: impl Into<DeviceInfo>,
+    ) -> Result<Self, DriverError> {
+        let DeviceInfo {
+            debug,
+            physical_device_index,
+        } = info.into();
+        let instance_info = InstanceInfoBuilder::default().debug(debug);
+        let instance = Instance::try_from_display(display, instance_info)?;
+        let physical_device = select_physical_device(&instance, physical_device_index)?;
+
+        Self::try_from_physical_device(physical_device)
+    }
+
+    /// Constructs a new device using the given physical device.
+    #[profiling::function]
+    pub fn try_from_physical_device(physical_device: PhysicalDevice) -> Result<Self, DriverError> {
+        let device = unsafe {
+            physical_device.create_ash_device(|device_create_info| {
+                physical_device.instance.create_device(
+                    physical_device.handle,
+                    &device_create_info,
+                    None,
+                )
+            })
+        }
+        .map_err(|err| {
+            error!("unable to create device: {err}");
+
+            DriverError::Unsupported
+        })?;
+
+        info!("created {}", physical_device.properties_v1_0.device_name);
+
+        unsafe { Self::try_from_ash(device, physical_device) }
+    }
+
+    pub(crate) fn background_fence_cleanup_enabled(this: &Self) -> bool {
+        this.inner.fence_cleanup_enabled.load(Ordering::Acquire)
+    }
+
     /// Begins recording a command buffer on this device.
     ///
     /// This is a thin wrapper around [`ash::Device::begin_command_buffer`] that maps Vulkan errors
@@ -215,24 +386,6 @@ impl Device {
         }
     }
 
-    /// Constructs a new device using the given configuration.
-    ///
-    /// This constructor is intended for headless or manually managed setups. It does not infer or
-    /// enable display platform surface extensions. Use [`Self::try_from_display`] when the
-    /// resulting device must be capable of later surface creation.
-    #[profiling::function]
-    pub fn create(info: impl Into<DeviceInfo>) -> Result<Self, DriverError> {
-        let DeviceInfo {
-            debug,
-            physical_device_index,
-        } = info.into();
-        let instance_info = InstanceInfoBuilder::default().debug(debug);
-        let instance = Instance::create(instance_info)?;
-        let physical_device = select_physical_device(&instance, physical_device_index)?;
-
-        Self::try_from_physical_device(physical_device)
-    }
-
     /// Creates a Vulkan fence on this device.
     ///
     /// Pass `true` for `signaled` when the fence should begin in the signaled state.
@@ -275,6 +428,49 @@ impl Device {
         }
     }
 
+    /// Enables background cleanup of completed fence payloads on this device.
+    ///
+    /// Once enabled, payloads whose fences have been observed signaled are queued for destruction on
+    /// a device-owned worker thread. This includes returning command buffers to their pools. Fence
+    /// status checks, waits, and completion hooks remain on the calling thread. Guards active at the
+    /// same time share a worker; dropping the final guard signals it to drain and detaches it without
+    /// blocking. Re-enabling cleanup may start another worker while the detached worker drains. If
+    /// the bounded worker queue is full, payloads are dropped synchronously on the calling thread;
+    /// any resulting payload-drop panic is caught and logged.
+    #[profiling::function]
+    pub fn enable_background_fence_cleanup(
+        this: &Self,
+    ) -> Result<BackgroundFenceCleanupGuard, DriverError> {
+        let state = this.inner.fence_cleanup.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let mut state = state.unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        #[cfg(feature = "parking_lot")]
+        let mut state = state;
+
+        if state.worker.is_none() {
+            state.worker = Some(
+                DropWorker::spawn_with("vk-graph-fence-cleanup", drop_fence_payloads).map_err(
+                    |err| {
+                        error!("unable to start background fence cleanup: {err}");
+
+                        DriverError::Unsupported
+                    },
+                )?,
+            );
+            this.inner
+                .fence_cleanup_enabled
+                .store(true, Ordering::Release);
+        }
+
+        state.guard_count += 1;
+
+        Ok(BackgroundFenceCleanupGuard {
+            device: this.clone(),
+        })
+    }
+
     /// Ends recording a command buffer on this device.
     ///
     /// This is a thin wrapper around [`ash::Device::end_command_buffer`] that maps Vulkan errors
@@ -314,6 +510,19 @@ impl Device {
         }
 
         Ok(())
+    }
+
+    /// Helper for times when you already know that opacity micromap support is enabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `VK_EXT_opacity_micromap` support was not enabled for this device.
+    #[allow(dead_code)]
+    pub(crate) fn expect_vk_ext_opacity_micromap(this: &Self) -> &ext::opacity_micromap::Device {
+        this.inner
+            .vk_ext_opacity_micromap
+            .as_ref()
+            .expect("missing VK_EXT_opacity_micromap")
     }
 
     /// Helper for times when you already know that the device supports the acceleration
@@ -393,6 +602,15 @@ impl Device {
             .vk_khr_swapchain
             .as_ref()
             .expect("missing VK_KHR_swapchain")
+    }
+
+    fn fence_cleanup_worker_handle(this: &Self) -> Option<DropWorkerHandle<FencePayloads>> {
+        let fence_cleanup = this.inner.fence_cleanup.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let fence_cleanup = fence_cleanup.expect("poisoned fence cleanup lock");
+
+        fence_cleanup.worker.as_ref().and_then(DropWorker::handle)
     }
 
     /// Removes local Vulkan private-data metadata without touching the Vulkan object.
@@ -578,6 +796,41 @@ impl Device {
         }
     }
 
+    #[profiling::function]
+    fn release_background_fence_cleanup(this: &Self) {
+        let state = this.inner.fence_cleanup.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let mut state = state.unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        #[cfg(feature = "parking_lot")]
+        let mut state = state;
+
+        debug_assert!(state.guard_count > 0);
+        state.guard_count -= 1;
+
+        if state.guard_count != 0 {
+            return;
+        }
+
+        this.inner
+            .fence_cleanup_enabled
+            .store(false, Ordering::Release);
+
+        let mut worker = state.worker.take();
+        drop(state);
+
+        if panicking() {
+            if let Some(worker) = worker.as_mut() {
+                worker.close_and_detach();
+            }
+
+            return;
+        }
+
+        drop(worker);
+    }
+
     /// Resets one or more fences to the unsignaled state.
     ///
     /// See [`vkResetFences`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkResetFences.html).
@@ -722,6 +975,21 @@ impl Device {
         Ok(())
     }
 
+    #[profiling::function]
+    pub(crate) fn try_enqueue_fence_cleanup(
+        this: &Self,
+        payloads: FencePayloads,
+    ) -> Result<(), FencePayloads> {
+        if !Self::background_fence_cleanup_enabled(this) {
+            return Err(payloads);
+        }
+
+        match Self::fence_cleanup_worker_handle(this) {
+            Some(worker) => worker.try_enqueue(payloads),
+            None => Err(payloads),
+        }
+    }
+
     /// Loads an existing `ash` Vulkan device that may have been created by other means.
     ///
     /// # Safety
@@ -804,6 +1072,11 @@ impl Device {
                     })
             })
             .transpose()?;
+        let vk_ext_opacity_micromap = physical_device
+            .vk_ext_opacity_micromap
+            .as_ref()
+            .is_some_and(|ext| ext.features.micromap)
+            .then(|| ext::opacity_micromap::Device::new(&physical_device.instance, &device));
         let vk_khr_present_wait = physical_device
             .vk_khr_present_wait
             .is_some()
@@ -839,11 +1112,16 @@ impl Device {
         Ok(Self {
             read_only: ReadOnlyDevice {
                 inner: Arc::new(DeviceInner {
+                    #[cfg(test)]
+                    disposal: DisposalTracker::default(),
                     allocator: ManuallyDrop::new(Mutex::new(allocator)),
                     device,
                     pipeline_cache,
                     queues: queues.into_boxed_slice(),
+                    fence_cleanup: Mutex::new(BackgroundFenceCleanupState::default()),
+                    fence_cleanup_enabled: AtomicBool::new(false),
                     vk_ext_debug_utils,
+                    vk_ext_opacity_micromap,
                     vk_ext_private_data,
                     vk_khr_acceleration_structure,
                     vk_khr_present_wait,
@@ -854,50 +1132,12 @@ impl Device {
                     private_data_slot: vk_ext_private_data_slot,
                     private_data_name_id: AtomicU64::new(0),
                     private_data_metadata: Mutex::new(Default::default()),
+                    #[cfg(debug_assertions)]
+                    slow_fence_warning_ns: AtomicU64::new(DEFAULT_SLOW_FENCE_WARNING_NS),
                 }),
                 physical: Box::new(physical_device),
             },
         })
-    }
-
-    /// Constructs a new device using the given configuration.
-    #[profiling::function]
-    pub fn try_from_display(
-        display: impl HasDisplayHandle,
-        info: impl Into<DeviceInfo>,
-    ) -> Result<Self, DriverError> {
-        let DeviceInfo {
-            debug,
-            physical_device_index,
-        } = info.into();
-        let instance_info = InstanceInfoBuilder::default().debug(debug);
-        let instance = Instance::try_from_display(display, instance_info)?;
-        let physical_device = select_physical_device(&instance, physical_device_index)?;
-
-        Self::try_from_physical_device(physical_device)
-    }
-
-    /// Constructs a new device using the given physical device.
-    #[profiling::function]
-    pub fn try_from_physical_device(physical_device: PhysicalDevice) -> Result<Self, DriverError> {
-        let device = unsafe {
-            physical_device.create_ash_device(|device_create_info| {
-                physical_device.instance.create_device(
-                    physical_device.handle,
-                    &device_create_info,
-                    None,
-                )
-            })
-        }
-        .map_err(|err| {
-            error!("unable to create device: {err}");
-
-            DriverError::Unsupported
-        })?;
-
-        info!("created {}", physical_device.properties_v1_0.device_name);
-
-        unsafe { Self::try_from_ash(device, physical_device) }
     }
 
     pub(crate) fn try_clear_private_data_object_name<T>(
@@ -981,7 +1221,8 @@ impl Device {
                 }
             }
 
-            let started = cfg!(debug_assertions).then(Instant::now);
+            #[cfg(debug_assertions)]
+            let started = Instant::now();
 
             match this.wait_for_fences(fences, true, u64::MAX) {
                 Ok(_) => (),
@@ -997,12 +1238,13 @@ impl Device {
                 }
             }
 
-            if let Some(started) = started {
-                let elapsed = Instant::now() - started;
-                let elapsed_millis = elapsed.as_millis();
-
-                if elapsed_millis > 0 {
-                    warn!("slow fence wait: {} ms", elapsed_millis);
+            #[cfg(debug_assertions)]
+            {
+                let elapsed = started.elapsed();
+                if elapsed.as_nanos()
+                    > u128::from(this.inner.slow_fence_warning_ns.load(Ordering::Relaxed))
+                {
+                    warn!("slow fence wait: {} ms", elapsed.as_millis());
                 }
             }
         }
@@ -1051,10 +1293,12 @@ impl Device {
         this: &Self,
         f: impl FnOnce(&mut PrivateDataMetadata) -> R,
     ) -> R {
-        let mut metadata = this.inner.private_data_metadata.lock();
+        let metadata = this.inner.private_data_metadata.lock();
 
         #[cfg(not(feature = "parking_lot"))]
-        let mut metadata = metadata.expect("poisoned private data metadata");
+        let metadata = metadata.expect("poisoned private data metadata");
+
+        let mut metadata = metadata;
 
         f(&mut metadata)
     }
@@ -1127,7 +1371,8 @@ impl PartialEq for Device {
 pub struct DeviceInfo {
     /// Enables the Vulkan validation layers.
     ///
-    /// This requires a Vulkan SDK installation and will panic when validation errors happen. See
+    /// This requires a Vulkan SDK installation. Errors are recorded in the instance's
+    /// [`ValidationReport`](super::instance::ValidationReport), independently of logging. See
     /// the LunarG [Vulkan Validation Layers] documentation for setup and behavior details.
     ///
     /// When `stderr` is attached to an interactive terminal, validation errors will park the
@@ -1182,11 +1427,16 @@ impl DeviceInfoBuilder {
 }
 
 struct DeviceInner {
+    #[cfg(test)]
+    disposal: DisposalTracker,
     allocator: ManuallyDrop<Mutex<Allocator>>,
     device: ash::Device,
     pipeline_cache: vk::PipelineCache,
     queues: Box<[Box<[Mutex<vk::Queue>]>]>,
+    fence_cleanup: Mutex<BackgroundFenceCleanupState>,
+    fence_cleanup_enabled: AtomicBool,
     vk_ext_debug_utils: Option<ext::debug_utils::Device>,
+    vk_ext_opacity_micromap: Option<ext::opacity_micromap::Device>,
     vk_ext_private_data: Option<ext::private_data::Device>,
     vk_khr_acceleration_structure: Option<khr::acceleration_structure::Device>,
     vk_khr_present_wait: Option<khr::present_wait::Device>,
@@ -1197,24 +1447,40 @@ struct DeviceInner {
     private_data_slot: Option<vk::PrivateDataSlot>,
     private_data_name_id: AtomicU64,
     private_data_metadata: Mutex<PrivateDataMetadata>,
-}
-
-#[derive(Default)]
-struct PrivateDataMetadata {
-    object_metadata_ids: HashMap<(vk::ObjectType, u64), u64>,
-    names: HashMap<u64, String>,
+    #[cfg(debug_assertions)]
+    slow_fence_warning_ns: AtomicU64,
 }
 
 impl Drop for DeviceInner {
     #[profiling::function]
     fn drop(&mut self) {
+        #[cfg(feature = "parking_lot")]
+        let fence_cleanup = self.fence_cleanup.get_mut();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let fence_cleanup = self
+            .fence_cleanup
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        debug_assert_eq!(fence_cleanup.guard_count, 0);
+        let mut cleanup_worker = fence_cleanup.worker.take();
+
         if panicking() {
+            if let Some(cleanup_worker) = cleanup_worker.as_mut() {
+                cleanup_worker.close_and_detach();
+            }
+
             // When panicking we don't want the GPU allocator to complain about leaks
             unsafe {
                 forget(ManuallyDrop::take(&mut self.allocator));
             }
 
             return;
+        }
+
+        if let Some(cleanup_worker) = cleanup_worker.as_mut() {
+            cleanup_worker.close_and_join();
         }
 
         // trace!("drop");
@@ -1240,7 +1506,129 @@ impl Drop for DeviceInner {
         unsafe {
             self.device.destroy_device(None);
         }
+        #[cfg(test)]
+        self.disposal.complete();
     }
+}
+
+struct DropWorker<T: Send + 'static> {
+    queue_tx: Option<SyncSender<DropWorkerMessage<T>>>,
+    join_handle: Option<JoinHandle<()>>,
+}
+
+impl<T: Send + 'static> DropWorker<T> {
+    #[cfg(test)]
+    #[profiling::function]
+    fn spawn_dropping(name: &str) -> std::io::Result<Self> {
+        Self::spawn_with(name, |value| {
+            drop(value);
+
+            true
+        })
+    }
+
+    fn spawn_with(name: &str, drop_value: fn(T) -> bool) -> std::io::Result<Self> {
+        let (queue_tx, queue_rx) = mpsc::sync_channel(DROP_WORKER_QUEUE_CAPACITY);
+        let join_handle = thread::Builder::new()
+            .name(name.into())
+            .spawn(move || run_drop_worker(queue_rx, drop_value))?;
+
+        Ok(Self {
+            queue_tx: Some(queue_tx),
+            join_handle: Some(join_handle),
+        })
+    }
+
+    fn close_and_detach(&mut self) {
+        self.queue_tx.take();
+        self.join_handle.take();
+    }
+
+    #[profiling::function]
+    fn close_and_join(&mut self) {
+        self.queue_tx.take();
+
+        let Some(join_handle) = self.join_handle.take() else {
+            return;
+        };
+
+        if join_handle.thread().id() == thread::current().id() {
+            return;
+        }
+
+        if join_handle.join().is_err() {
+            error!("fence cleanup worker panicked");
+        }
+    }
+
+    fn handle(&self) -> Option<DropWorkerHandle<T>> {
+        Some(DropWorkerHandle {
+            queue_tx: self.queue_tx.as_ref()?.clone(),
+            worker_id: self.join_handle.as_ref()?.thread().id(),
+        })
+    }
+}
+
+impl<T: Send + 'static> Drop for DropWorker<T> {
+    fn drop(&mut self) {
+        self.close_and_detach();
+    }
+}
+
+struct DropWorkerHandle<T> {
+    queue_tx: SyncSender<DropWorkerMessage<T>>,
+    worker_id: ThreadId,
+}
+
+impl<T: Send + 'static> DropWorkerHandle<T> {
+    #[profiling::function]
+    fn try_enqueue(&self, value: T) -> Result<(), T> {
+        self.queue_tx
+            .try_send(DropWorkerMessage::Drop(value))
+            .map_err(|err| match err {
+                TrySendError::Full(DropWorkerMessage::Drop(value))
+                | TrySendError::Disconnected(DropWorkerMessage::Drop(value)) => value,
+                TrySendError::Full(DropWorkerMessage::Barrier(_))
+                | TrySendError::Disconnected(DropWorkerMessage::Barrier(_)) => unreachable!(),
+            })
+    }
+
+    #[profiling::function]
+    fn wait_for_pending_drops(&self) -> Result<(), ()> {
+        if self.worker_id == thread::current().id() {
+            warn!("unable to wait for pending drops from their worker");
+
+            return Err(());
+        }
+
+        let (reply_tx, reply_rx) = mpsc::sync_channel(0);
+
+        self.queue_tx
+            .send(DropWorkerMessage::Barrier(reply_tx))
+            .map_err(|_| ())?;
+
+        reply_rx.recv().map_err(|_| ())?.then_some(()).ok_or(())
+    }
+}
+
+impl<T> Clone for DropWorkerHandle<T> {
+    fn clone(&self) -> Self {
+        Self {
+            queue_tx: self.queue_tx.clone(),
+            worker_id: self.worker_id,
+        }
+    }
+}
+
+enum DropWorkerMessage<T> {
+    Drop(T),
+    Barrier(SyncSender<bool>),
+}
+
+#[derive(Default)]
+struct PrivateDataMetadata {
+    object_metadata_ids: HashMap<(vk::ObjectType, u64), u64>,
+    names: HashMap<u64, String>,
 }
 
 #[doc(hidden)]
@@ -1264,7 +1652,10 @@ impl Deref for ReadOnlyDevice {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use {
+        super::*,
+        crate::{driver::fence::Fence, test_support::TestDevice},
+    };
 
     type Info = DeviceInfo;
     type Builder = DeviceInfoBuilder;
@@ -1277,5 +1668,318 @@ mod test {
     #[test]
     pub fn device_info_builder() {
         Builder::default().build();
+    }
+
+    #[derive(Debug)]
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn background_cleanup_waits_for_signaled_fence_payloads() -> Result<(), DriverError> {
+        let device = TestDevice::new()?;
+        let first_cleanup_guard = Device::enable_background_fence_cleanup(&device)?;
+        let cleanup_guard = Device::enable_background_fence_cleanup(&device)?;
+        drop(first_cleanup_guard);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let fence = Fence::create(&device, true)?;
+        fence.drop_when_signaled(DropFlag(Arc::clone(&dropped)));
+
+        assert!(fence.status()?);
+        cleanup_guard.wait_for_pending_cleanup()?;
+        assert!(dropped.load(Ordering::Acquire));
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn vulkan_disposal_checks_require_background_cleanup_completion() -> Result<(), DriverError> {
+        use {
+            crate::test_support::DeviceChecks,
+            std::{
+                sync::mpsc::{Receiver, Sender, channel},
+                time::Duration,
+            },
+        };
+
+        #[derive(Debug)]
+        struct DelayedOwner {
+            device: Option<Device>,
+            started: Sender<()>,
+            release: Receiver<()>,
+            done: Sender<()>,
+        }
+        impl Drop for DelayedOwner {
+            fn drop(&mut self) {
+                self.started.send(()).unwrap();
+                self.release.recv().unwrap();
+                drop(self.device.take());
+                self.done.send(()).unwrap();
+            }
+        }
+
+        for drain_first in [false, true] {
+            let device = TestDevice::with_checks(DeviceChecks {
+                validation: false,
+                disposal: true,
+            })?;
+            let device_report = Device::disposal_report(&device);
+            let instance_report = Instance::disposal_report(&device.physical.instance).unwrap();
+            let cleanup = Device::enable_background_fence_cleanup(&device)?;
+            let fence = Fence::create(&device, true)?;
+            let (started_tx, started_rx) = channel();
+            let (release_tx, release_rx) = channel();
+            let (done_tx, done_rx) = channel();
+            fence.drop_when_signaled(DelayedOwner {
+                device: Some(device.clone()),
+                started: started_tx,
+                release: release_rx,
+                done: done_tx,
+            });
+            assert!(fence.status()?);
+            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            drop(fence);
+            if drain_first {
+                release_tx.send(()).unwrap();
+                cleanup.wait_for_pending_cleanup()?;
+            }
+            drop(cleanup);
+            let result = catch_unwind(AssertUnwindSafe(|| device.finish()));
+            if !drain_first {
+                // Always unblock the detached worker before asserting the result.
+                release_tx.send(()).unwrap();
+            }
+            done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(result.is_err(), !drain_first);
+            assert!(device_report.is_disposed());
+            assert!(instance_report.is_disposed());
+        }
+        Ok(())
+    }
+
+    mod drop_worker {
+        use {
+            super::super::{
+                DROP_WORKER_QUEUE_CAPACITY, DropWorker, DropWorkerHandle, DropWorkerMessage,
+            },
+            std::{
+                sync::mpsc::{self, Receiver, Sender, channel},
+                thread::{self, ThreadId},
+                time::Duration,
+            },
+        };
+
+        enum BlockingDropProbe {
+            Block {
+                started: Sender<()>,
+                release: Receiver<()>,
+            },
+            Immediate,
+        }
+
+        impl Drop for BlockingDropProbe {
+            fn drop(&mut self) {
+                if let Self::Block { started, release } = self {
+                    started.send(()).unwrap();
+                    release.recv().unwrap();
+                }
+            }
+        }
+
+        struct DropProbe {
+            notification_tx: Option<Sender<ThreadId>>,
+            should_panic: bool,
+        }
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                if self.should_panic {
+                    panic!("expected test panic");
+                }
+
+                self.notification_tx
+                    .as_ref()
+                    .unwrap()
+                    .send(thread::current().id())
+                    .unwrap();
+            }
+        }
+
+        struct DropThreadNotifier(Sender<ThreadId>);
+
+        impl Drop for DropThreadNotifier {
+            fn drop(&mut self) {
+                self.0.send(thread::current().id()).unwrap();
+            }
+        }
+
+        struct WaitDuringDrop {
+            handle: DropWorkerHandle<Self>,
+            result_tx: Sender<bool>,
+        }
+
+        impl Drop for WaitDuringDrop {
+            fn drop(&mut self) {
+                self.result_tx
+                    .send(self.handle.wait_for_pending_drops().is_err())
+                    .unwrap();
+            }
+        }
+
+        #[test]
+        fn wait_for_pending_drops_waits_for_worker() {
+            let caller_thread = thread::current().id();
+            let (notification_tx, notification_rx) = channel();
+            let worker = DropWorker::spawn_dropping("vk-graph-drop-test").unwrap();
+            let handle = worker.handle().unwrap();
+
+            assert!(
+                handle
+                    .try_enqueue(DropThreadNotifier(notification_tx))
+                    .is_ok()
+            );
+            assert!(handle.wait_for_pending_drops().is_ok());
+            assert_ne!(notification_rx.recv().unwrap(), caller_thread);
+        }
+
+        #[test]
+        fn joining_worker_drains_cleanup_queue() {
+            let (notification_tx, notification_rx) = channel();
+            let mut worker = DropWorker::spawn_dropping("vk-graph-drop-drain-test").unwrap();
+            let handle = worker.handle().unwrap();
+
+            assert!(
+                handle
+                    .try_enqueue(DropThreadNotifier(notification_tx))
+                    .is_ok()
+            );
+            drop(handle);
+            worker.close_and_join();
+
+            notification_rx.recv().unwrap();
+        }
+
+        #[test]
+        fn dropping_worker_does_not_wait_for_blocked_payload() {
+            let (started_tx, started_rx) = channel();
+            let (release_tx, release_rx) = channel();
+            let worker: DropWorker<BlockingDropProbe> =
+                DropWorker::spawn_dropping("vk-graph-drop-detach-test").unwrap();
+            let handle = worker.handle().unwrap();
+
+            assert!(
+                handle
+                    .try_enqueue(BlockingDropProbe::Block {
+                        started: started_tx,
+                        release: release_rx,
+                    })
+                    .is_ok()
+            );
+            started_rx.recv().unwrap();
+            drop(handle);
+
+            let (dropped_tx, dropped_rx) = channel();
+            let drop_thread = thread::spawn(move || {
+                drop(worker);
+                dropped_tx.send(()).unwrap();
+            });
+            let dropped_without_waiting = dropped_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+
+            release_tx.send(()).unwrap();
+            drop_thread.join().unwrap();
+
+            assert!(dropped_without_waiting);
+        }
+
+        #[test]
+        fn worker_continues_after_payload_drop_panics() {
+            let (notification_tx, notification_rx) = channel();
+            let worker = DropWorker::spawn_dropping("vk-graph-drop-panic-test").unwrap();
+            let handle = worker.handle().unwrap();
+
+            assert!(
+                handle
+                    .try_enqueue(DropProbe {
+                        notification_tx: None,
+                        should_panic: true,
+                    })
+                    .is_ok()
+            );
+            assert!(
+                handle
+                    .try_enqueue(DropProbe {
+                        notification_tx: Some(notification_tx),
+                        should_panic: false,
+                    })
+                    .is_ok()
+            );
+            assert!(handle.wait_for_pending_drops().is_err());
+            assert!(handle.wait_for_pending_drops().is_ok());
+
+            notification_rx.recv().unwrap();
+        }
+
+        #[test]
+        fn wait_from_worker_returns_error() {
+            let (queue_tx, _queue_rx) = mpsc::sync_channel::<DropWorkerMessage<()>>(1);
+            let handle = DropWorkerHandle {
+                queue_tx,
+                worker_id: thread::current().id(),
+            };
+
+            assert!(handle.wait_for_pending_drops().is_err());
+        }
+
+        #[test]
+        fn reentrant_wait_during_drop_returns_error() {
+            let (result_tx, result_rx) = channel();
+            let worker: DropWorker<WaitDuringDrop> =
+                DropWorker::spawn_dropping("vk-graph-drop-reentrant-test").unwrap();
+            let handle = worker.handle().unwrap();
+
+            assert!(
+                handle
+                    .try_enqueue(WaitDuringDrop {
+                        handle: handle.clone(),
+                        result_tx,
+                    })
+                    .is_ok()
+            );
+            assert!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        }
+
+        #[test]
+        fn try_enqueue_returns_payload_when_queue_is_full() {
+            let (started_tx, started_rx) = channel();
+            let (release_tx, release_rx) = channel();
+            let worker: DropWorker<BlockingDropProbe> =
+                DropWorker::spawn_dropping("vk-graph-drop-capacity-test").unwrap();
+            let handle = worker.handle().unwrap();
+
+            assert!(
+                handle
+                    .try_enqueue(BlockingDropProbe::Block {
+                        started: started_tx,
+                        release: release_rx,
+                    })
+                    .is_ok()
+            );
+            started_rx.recv().unwrap();
+
+            for _ in 0..DROP_WORKER_QUEUE_CAPACITY {
+                assert!(handle.try_enqueue(BlockingDropProbe::Immediate).is_ok());
+            }
+
+            assert!(handle.try_enqueue(BlockingDropProbe::Immediate).is_err());
+
+            release_tx.send(()).unwrap();
+            assert!(handle.wait_for_pending_drops().is_ok());
+        }
     }
 }

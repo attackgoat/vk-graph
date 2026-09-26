@@ -9,33 +9,49 @@ execution. Start with [`Graph`] — bind resources, record commands, and submit 
 
 For installation, guides, and examples see the [Guide Book](https://attackgoat.github.io/vk-graph).
 
+For optional DLSS Ray Reconstruction and NRD denoising adapters, see the independently maintained
+[nvidia-rs integrations](https://github.com/attackgoat/nvidia#renderer-integrations).
+
 */
 
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+#[cfg(test)]
+extern crate self as vk_graph;
+
 pub mod cmd;
 pub mod driver;
 pub mod node;
 pub mod pool;
+pub mod resource;
 pub mod stream;
 pub mod submission;
 
-#[doc(hidden)]
-pub use self::fixture::Fixture;
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+pub(crate) mod test_support;
 
 mod fixture;
 mod lazy_str;
 
 pub use self::lazy_str::LazyStr;
 
+#[doc(hidden)]
+pub use self::fixture::Fixture;
+
 use {
     self::{
         cmd::{AttachmentIndex, Binding, Command, SubresourceAccess, ViewInfo},
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
-            AnyAccelerationStructureNode, AnyBufferNode, AnyImageNode, BufferLeaseNode, BufferNode,
-            ImageLeaseNode, ImageNode, SwapchainImageNode,
+            AccelerationStructureSetNode, AnyAccelerationStructureNode, AnyBufferNode,
+            AnyImageNode, AnyMicromapNode, BufferLeaseNode, BufferNode, ImageLeaseNode, ImageNode,
+            ImageSetNode, MicromapLeaseNode, MicromapNode, SwapchainImageNode,
+        },
+        resource::{
+            AccelerationStructureSet, ImageSet, ResourceSetAccessType, ResourceSetIndex,
+            ResourceSetMap,
         },
     },
     crate::{
@@ -49,6 +65,7 @@ use {
             format_aspect_mask,
             graphics::{DepthStencilInfo, GraphicsPipeline},
             image::{ImageInfo, ImageViewInfo, SampleCount},
+            micromap::{Micromap, MicromapInfo},
             ray_tracing::RayTracingPipeline,
             render_pass::ResolveMode,
             shader::PipelineDescriptorInfo,
@@ -79,6 +96,14 @@ use {
 };
 
 #[cfg(feature = "checked")]
+use self::resource::{
+    PhysicalAccelerationStructureId, PhysicalImageId, PhysicalMicromapId, ResourceSet,
+};
+
+#[cfg(feature = "checked")]
+use std::collections::HashSet;
+
+#[cfg(feature = "checked")]
 use std::sync::atomic::AtomicU64;
 
 type CommandFn = Arc<dyn for<'a> Fn(CommandRef<'a>) + Send + Sync>;
@@ -92,27 +117,38 @@ impl AtomicCommandExecution {
     const PENDING: u8 = 0xf0;
     const EXECUTED: u8 = 0xf1;
     const ABANDONED: u8 = 0xf2;
+    const SUBMITTED: u8 = 0xf3;
+    const SUBMITTED_ABANDONED: u8 = 0xf4;
 
     fn new_pending() -> Arc<Self> {
         Arc::new(Self(AtomicU8::new(Self::PENDING)))
     }
 
     fn compare_pending_exchange_abandoned(&self) {
+        let _ = self
+            .0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
+                Self::PENDING => Some(Self::ABANDONED),
+                Self::SUBMITTED => Some(Self::SUBMITTED_ABANDONED),
+                _ => None,
+            });
+    }
+
+    fn signal_submitted(&self) {
         let _ = self.0.compare_exchange(
             Self::PENDING,
-            Self::ABANDONED,
+            Self::SUBMITTED,
             Ordering::AcqRel,
             Ordering::Acquire,
         );
     }
 
     fn compare_pending_exchange_executed(&self) {
-        let _ = self.0.compare_exchange(
-            Self::PENDING,
-            Self::EXECUTED,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        let _ = self
+            .0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                matches!(state, Self::PENDING | Self::SUBMITTED).then_some(Self::EXECUTED)
+            });
     }
 
     fn load(&self) -> u8 {
@@ -131,13 +167,26 @@ impl Drop for AtomicCommandExecution {
 pub struct CommandExecution(Arc<AtomicCommandExecution>);
 
 impl CommandExecution {
+    /// Returns `true` after a successful Vulkan queue submission of this command.
+    /// This milestone is sticky, including if completion is later abandoned. It does not
+    /// imply fence completion or replace queue ordering and resource barriers. Never waits.
+    /// Returns `Ok(false)` while unsubmitted, or [`CommandExecutionAbandoned`] if discarded
+    /// before submission. A failed submit attempt leaves a retained recording unsubmitted.
+    pub fn has_submitted(&self) -> Result<bool, CommandExecutionAbandoned> {
+        match self.0.load() {
+            AtomicCommandExecution::PENDING => Ok(false),
+            AtomicCommandExecution::ABANDONED => Err(CommandExecutionAbandoned),
+            _ => Ok(true),
+        }
+    }
+
     /// Returns `true` when the tracked command has completed device execution.
     ///
     /// Returns [`CommandExecutionAbandoned`] if the graph command can no longer execute, such as
     /// when the graph, submission, or queued work was dropped before successful completion.
     pub fn has_executed(&self) -> Result<bool, CommandExecutionAbandoned> {
         match self.0.load() {
-            AtomicCommandExecution::PENDING => Ok(false),
+            AtomicCommandExecution::PENDING | AtomicCommandExecution::SUBMITTED => Ok(false),
             AtomicCommandExecution::EXECUTED => Ok(true),
             _ => Err(CommandExecutionAbandoned),
         }
@@ -169,14 +218,6 @@ impl Clone for CommandExecutions {
 }
 
 impl CommandExecutions {
-    fn signal_abandoned(&self) {
-        self.for_each(AtomicCommandExecution::compare_pending_exchange_abandoned);
-    }
-
-    fn signal_executed(&self) {
-        self.for_each(AtomicCommandExecution::compare_pending_exchange_executed);
-    }
-
     fn extend(&mut self, other: Self) {
         match (mem::take(self), other) {
             (Self::None, rhs) => *self = rhs,
@@ -215,25 +256,24 @@ impl CommandExecutions {
         }
     }
 
+    fn signal_abandoned(&self) {
+        self.for_each(AtomicCommandExecution::compare_pending_exchange_abandoned);
+    }
+
+    fn signal_executed(&self) {
+        self.for_each(AtomicCommandExecution::compare_pending_exchange_executed);
+    }
+
+    fn signal_submitted(&self) {
+        self.for_each(AtomicCommandExecution::signal_submitted);
+    }
+
     fn track(&mut self) -> CommandExecution {
         let tracker = AtomicCommandExecution::new_pending();
         let cmd_exec = CommandExecution(tracker.clone());
         self.extend(Self::One(tracker));
 
         cmd_exec
-    }
-}
-
-#[cfg(feature = "checked")]
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct GraphId(u64);
-
-#[cfg(feature = "checked")]
-impl GraphId {
-    fn next() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -248,7 +288,103 @@ enum AnyResource {
     Image(Arc<Image>),
     ImageArg(ImageInfo),
     ImageLease(Arc<Lease<Image>>),
+    Micromap(Arc<Micromap>),
+    MicromapArg(MicromapInfo),
+    MicromapLease(Arc<Lease<Micromap>>),
     SwapchainImage(Box<SwapchainImage>),
+}
+
+impl AnyResource {
+    fn as_accel_struct(&self) -> Option<&AccelerationStructure> {
+        Some(match self {
+            Self::AccelerationStructure(resource) => resource,
+            Self::AccelerationStructureLease(resource) => resource,
+            _ => return None,
+        })
+    }
+
+    fn as_buffer(&self) -> Option<&Buffer> {
+        Some(match self {
+            Self::Buffer(resource) => resource,
+            Self::BufferLease(resource) => resource,
+            _ => return None,
+        })
+    }
+
+    fn as_image(&self) -> Option<&Image> {
+        Some(match self {
+            Self::Image(resource) => resource,
+            Self::ImageLease(resource) => resource,
+            Self::SwapchainImage(resource) => resource,
+            _ => return None,
+        })
+    }
+
+    fn as_micromap(&self) -> Option<&Micromap> {
+        Some(match self {
+            Self::Micromap(resource) => resource,
+            Self::MicromapLease(resource) => resource,
+            _ => return None,
+        })
+    }
+
+    fn expect_accel_struct(&self) -> &AccelerationStructure {
+        self.as_accel_struct()
+            .expect("missing acceleration structure resource")
+    }
+
+    pub(crate) fn expect_accel_struct_info(
+        &self,
+    ) -> crate::driver::accel_struct::AccelerationStructureInfo {
+        match self {
+            Self::AccelerationStructure(resource) => resource.info,
+            Self::AccelerationStructureArg(info) => *info,
+            Self::AccelerationStructureLease(resource) => resource.info,
+            _ => panic!("missing acceleration structure resource"),
+        }
+    }
+
+    #[inline]
+    fn expect_buffer(&self) -> &Buffer {
+        self.as_buffer().expect("missing buffer resource")
+    }
+
+    pub(crate) fn expect_buffer_info(&self) -> crate::driver::buffer::BufferInfo {
+        match self {
+            Self::Buffer(resource) => resource.info,
+            Self::BufferArg(info) => *info,
+            Self::BufferLease(resource) => resource.info,
+            _ => panic!("missing buffer resource"),
+        }
+    }
+
+    #[inline]
+    fn expect_image(&self) -> &Image {
+        self.as_image().expect("missing image resource")
+    }
+
+    pub(crate) fn expect_image_info(&self) -> ImageInfo {
+        match self {
+            Self::Image(resource) => resource.info,
+            Self::ImageArg(info) => *info,
+            Self::ImageLease(resource) => resource.info,
+            Self::SwapchainImage(resource) => resource.info,
+            _ => panic!("missing image resource"),
+        }
+    }
+
+    fn expect_micromap(&self) -> &Micromap {
+        self.as_micromap().expect("missing micromap resource")
+    }
+
+    pub(crate) fn expect_micromap_info(&self) -> MicromapInfo {
+        match self {
+            Self::Micromap(resource) => resource.info,
+            Self::MicromapArg(info) => *info,
+            Self::MicromapLease(resource) => resource.info,
+            _ => panic!("missing micromap resource"),
+        }
+    }
 }
 
 impl Clone for AnyResource {
@@ -267,6 +403,9 @@ impl Clone for AnyResource {
             Self::Image(resource) => Self::Image(Arc::clone(resource)),
             Self::ImageArg(info) => Self::ImageArg(*info),
             Self::ImageLease(resource) => Self::ImageLease(Arc::clone(resource)),
+            Self::Micromap(resource) => Self::Micromap(Arc::clone(resource)),
+            Self::MicromapArg(info) => Self::MicromapArg(*info),
+            Self::MicromapLease(resource) => Self::MicromapLease(Arc::clone(resource)),
             Self::SwapchainImage(resource) => {
                 Self::SwapchainImage(Box::new(unsafe { resource.to_detached() }))
             }
@@ -295,76 +434,7 @@ macro_rules! any_resource_from_arc {
 any_resource_from_arc!(AccelerationStructure);
 any_resource_from_arc!(Buffer);
 any_resource_from_arc!(Image);
-
-impl AnyResource {
-    fn as_accel_struct(&self) -> Option<&AccelerationStructure> {
-        Some(match self {
-            Self::AccelerationStructure(resource) => resource,
-            Self::AccelerationStructureLease(resource) => resource,
-            _ => return None,
-        })
-    }
-
-    fn as_buffer(&self) -> Option<&Buffer> {
-        Some(match self {
-            Self::Buffer(resource) => resource,
-            Self::BufferLease(resource) => resource,
-            _ => return None,
-        })
-    }
-
-    fn as_image(&self) -> Option<&Image> {
-        Some(match self {
-            Self::Image(resource) => resource,
-            Self::ImageLease(resource) => resource,
-            Self::SwapchainImage(resource) => resource,
-            _ => return None,
-        })
-    }
-
-    fn expect_accel_struct(&self) -> &AccelerationStructure {
-        self.as_accel_struct()
-            .expect("missing acceleration structure resource")
-    }
-
-    pub(crate) fn expect_accel_struct_info(
-        &self,
-    ) -> crate::driver::accel_struct::AccelerationStructureInfo {
-        match self {
-            Self::AccelerationStructure(resource) => resource.info,
-            Self::AccelerationStructureArg(info) => *info,
-            Self::AccelerationStructureLease(resource) => resource.info,
-            _ => panic!("missing acceleration structure resource"),
-        }
-    }
-
-    fn expect_buffer(&self) -> &Buffer {
-        self.as_buffer().expect("missing buffer resource")
-    }
-
-    pub(crate) fn expect_buffer_info(&self) -> crate::driver::buffer::BufferInfo {
-        match self {
-            Self::Buffer(resource) => resource.info,
-            Self::BufferArg(info) => *info,
-            Self::BufferLease(resource) => resource.info,
-            _ => panic!("missing buffer resource"),
-        }
-    }
-
-    fn expect_image(&self) -> &Image {
-        self.as_image().expect("missing image resource")
-    }
-
-    pub(crate) fn expect_image_info(&self) -> ImageInfo {
-        match self {
-            Self::Image(resource) => resource.info,
-            Self::ImageArg(info) => *info,
-            Self::ImageLease(resource) => resource.info,
-            Self::SwapchainImage(resource) => resource.info,
-            _ => panic!("missing image resource"),
-        }
-    }
-}
+any_resource_from_arc!(Micromap);
 
 #[derive(Clone, Copy, Debug)]
 struct Attachment {
@@ -560,17 +630,22 @@ struct CommandData {
 }
 
 impl CommandData {
-    fn descriptor_pools_sizes(
+    fn descriptor_pool_sizes(
         &self,
-    ) -> impl Iterator<Item = impl Iterator<Item = (&vk::DescriptorType, &u32)>> {
+    ) -> impl Iterator<Item = (bool, &HashMap<vk::DescriptorType, u32>)> {
         self.execs.iter().flat_map(|exec| {
-            exec.pipeline.iter().map(move |pipeline| {
-                pipeline
-                    .descriptor_info()
-                    .pool_sizes
+            exec.pipeline.iter().flat_map(move |pipeline| {
+                let descriptor_info = pipeline.descriptor_info();
+                descriptor_info
+                    .layouts
                     .iter()
                     .filter(move |(set, _)| !exec.descriptor_sets.contains_key(set))
-                    .flat_map(|(_, pool)| pool.iter())
+                    .map(move |(set, layout)| {
+                        (
+                            layout.info().update_after_bind(),
+                            &descriptor_info.pool_sizes[set],
+                        )
+                    })
             })
         })
     }
@@ -619,6 +694,12 @@ impl CommandData {
             exec.remap_nodes(node_map);
         }
     }
+
+    fn remap_resource_sets(&mut self, resource_set_map: &[ResourceSetIndex]) {
+        for exec in &mut self.execs {
+            exec.remap_resource_sets(resource_set_map);
+        }
+    }
 }
 
 impl Drop for CommandData {
@@ -633,6 +714,7 @@ enum CommandFunction {
 }
 
 impl CommandFunction {
+    #[cfg(feature = "checked")]
     fn is_reusable(&self) -> bool {
         matches!(self, Self::Reusable(_))
     }
@@ -692,11 +774,11 @@ impl ExecutionAccess {
     }
 
     fn freeze(&mut self) {
-        let Self::Building(builder) = mem::take(self) else {
+        let Self::Building(builder) = self else {
             return;
         };
 
-        let ExecutionAccessBuilder { entries, lookup } = builder;
+        let ExecutionAccessBuilder { entries, lookup } = mem::take(builder);
         let entries = entries
             .into_iter()
             .map(|entry| NodeAccess {
@@ -836,6 +918,7 @@ struct Execution {
     attachments: ExecutionAttachmentMap,
     bindings: BTreeMap<Binding, (NodeIndex, ViewInfo)>,
     descriptor_sets: BTreeMap<u32, DescriptorSet>,
+    resource_set_accesses: SmallVec<[ResourceSetAccess; 1]>,
 
     correlated_view_mask: u32,
     depth_stencil: Option<DepthStencilInfo>,
@@ -845,14 +928,32 @@ struct Execution {
     func: Option<CommandFunction>,
     node_map: Option<Arc<[NodeIndex]>>,
     pipeline: Option<ExecutionPipeline>,
+    resource_set_map: Option<Arc<[ResourceSetIndex]>>,
+    stream_values: Option<Arc<stream::StreamValues>>,
 
     #[cfg(feature = "checked")]
     stream_graph_id: Option<GraphId>,
 }
 
 impl Execution {
+    fn push_resource_set_access(&mut self, access: ResourceSetAccess) {
+        if self.resource_set_accesses.contains(&access) {
+            return;
+        }
+
+        self.resource_set_accesses.push(access);
+    }
+
     fn remap_nodes(&mut self, node_map: &[NodeIndex]) {
-        let original_node_map = Arc::<[NodeIndex]>::from(node_map.to_vec());
+        let original_node_map = self.node_map.as_ref().map_or_else(
+            || Arc::from(node_map),
+            |previous| {
+                previous
+                    .iter()
+                    .map(|&node_idx| node_map[node_idx])
+                    .collect()
+            },
+        );
         self.accesses.remap_nodes(node_map);
         self.attachments.remap_nodes(node_map);
 
@@ -861,6 +962,23 @@ impl Execution {
             .map(|(binding, (node_idx, view))| (binding, (node_map[node_idx], view)))
             .collect();
         self.node_map = Some(original_node_map);
+    }
+
+    fn remap_resource_sets(&mut self, resource_set_map: &[ResourceSetIndex]) {
+        let original_resource_set_map = self.resource_set_map.as_ref().map_or_else(
+            || Arc::from(resource_set_map),
+            |previous| {
+                previous
+                    .iter()
+                    .map(|&index| resource_set_map[index.as_usize()])
+                    .collect()
+            },
+        );
+        for access in &mut self.resource_set_accesses {
+            access.resource_set_idx = resource_set_map[access.resource_set_idx.as_usize()];
+        }
+
+        self.resource_set_map = Some(original_resource_set_map);
     }
 }
 
@@ -873,6 +991,7 @@ impl Debug for Execution {
             .field("attachments", &self.attachments)
             .field("bindings", &self.bindings)
             .field("descriptor_sets", &self.descriptor_sets)
+            .field("resource_set_accesses", &self.resource_set_accesses)
             .field("correlated_view_mask", &self.correlated_view_mask)
             .field("depth_stencil", &self.depth_stencil)
             .field("render_area", &self.render_area)
@@ -965,154 +1084,24 @@ struct FrozenExecutionAccess {
 /// [`PassBuilder`](https://github.com/EmbarkStudios/kajiya/blob/main/crates/lib/kajiya-rg/src/pass_builder.rs)
 /// and
 /// [`graph.cpp`](https://github.com/Themaister/Granite/blob/master/renderer/graph.cpp).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Graph {
     cmds: Vec<CommandData>,
+    resource_sets: ResourceSetMap,
     resources: ResourceMap,
     timestamp_queries: Option<Vec<Option<TimestampQueryData>>>,
 
     #[cfg(feature = "checked")]
     graph_id: GraphId,
-}
 
-/// Builder for incrementally constructing a [`Graph`].
-pub struct GraphBuilder {
-    graph: Graph,
-}
+    #[cfg(feature = "checked")]
+    prepared_stream_acceleration_structure_accesses: HashSet<PhysicalAccelerationStructureId>,
 
-impl GraphBuilder {
-    /// Creates an empty graph builder.
-    pub fn new() -> Self {
-        Self {
-            graph: Graph::new(),
-        }
-    }
+    #[cfg(feature = "checked")]
+    prepared_stream_image_accesses: HashSet<PhysicalImageId>,
 
-    /// Builds the graph.
-    pub fn build(self) -> Graph {
-        self.graph
-    }
-
-    /// Binds a Vulkan buffer, image, or acceleration structure resource to this graph.
-    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
-    where
-        R: Resource,
-    {
-        self.graph.bind_resource(resource)
-    }
-
-    /// Copies an image, potentially performing format conversion.
-    pub fn blit_image(
-        mut self,
-        src: impl Into<AnyImageNode>,
-        dst: impl Into<AnyImageNode>,
-        filter: vk::Filter,
-    ) -> Self {
-        self.graph.blit_image(src, dst, filter);
-        self
-    }
-
-    /// Clears a color image.
-    pub fn clear_color_image(
-        mut self,
-        image: impl Into<AnyImageNode>,
-        color: impl Into<ClearColorValue>,
-    ) -> Self {
-        self.graph.clear_color_image(image, color);
-        self
-    }
-
-    /// Clears a depth/stencil image.
-    pub fn clear_depth_stencil_image(
-        mut self,
-        image: impl Into<AnyImageNode>,
-        depth: f32,
-        stencil: u32,
-    ) -> Self {
-        self.graph.clear_depth_stencil_image(image, depth, stencil);
-        self
-    }
-
-    /// Copies data between buffers.
-    pub fn copy_buffer(
-        mut self,
-        src: impl Into<AnyBufferNode>,
-        dst: impl Into<AnyBufferNode>,
-    ) -> Self {
-        self.graph.copy_buffer(src, dst);
-        self
-    }
-
-    /// Copies data from a buffer into an image.
-    pub fn copy_buffer_to_image(
-        mut self,
-        src: impl Into<AnyBufferNode>,
-        dst: impl Into<AnyImageNode>,
-    ) -> Self {
-        self.graph.copy_buffer_to_image(src, dst);
-        self
-    }
-
-    /// Copies all layers of a source image to a destination image.
-    pub fn copy_image(
-        mut self,
-        src: impl Into<AnyImageNode>,
-        dst: impl Into<AnyImageNode>,
-    ) -> Self {
-        self.graph.copy_image(src, dst);
-        self
-    }
-
-    /// Copies image data into a buffer.
-    pub fn copy_image_to_buffer(
-        mut self,
-        src: impl Into<AnyImageNode>,
-        dst: impl Into<AnyBufferNode>,
-    ) -> Self {
-        self.graph.copy_image_to_buffer(src, dst);
-        self
-    }
-
-    /// Fills a region of a buffer with a fixed value.
-    pub fn fill_buffer(
-        mut self,
-        buffer: impl Into<AnyBufferNode>,
-        region: Range<vk::DeviceSize>,
-        data: u32,
-    ) -> Self {
-        self.graph.fill_buffer(buffer, region, data);
-        self
-    }
-
-    /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html) command.
-    pub fn update_buffer(
-        mut self,
-        buffer: impl Into<AnyBufferNode>,
-        offset: vk::DeviceSize,
-        data: impl AsRef<[u8]> + 'static + Send,
-    ) -> Self {
-        self.graph.update_buffer(buffer, offset, data);
-        self
-    }
-}
-
-impl Default for GraphBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Default for Graph {
-    fn default() -> Self {
-        Self {
-            cmds: Default::default(),
-            resources: Default::default(),
-            timestamp_queries: Default::default(),
-
-            #[cfg(feature = "checked")]
-            graph_id: GraphId::next(),
-        }
-    }
+    #[cfg(feature = "checked")]
+    prepared_stream_micromap_accesses: HashSet<PhysicalMicromapId>,
 }
 
 impl Graph {
@@ -1126,11 +1115,6 @@ impl Graph {
         GraphBuilder::new()
     }
 
-    /// Converts this graph into a builder.
-    pub fn into_builder(self) -> GraphBuilder {
-        GraphBuilder { graph: self }
-    }
-
     pub(crate) fn assert_node_owner<N>(&self, _resource_node: &N)
     where
         N: Node,
@@ -1140,8 +1124,98 @@ impl Graph {
     }
 
     #[cfg(feature = "checked")]
-    pub(crate) fn graph_id(&self) -> GraphId {
-        self.graph_id
+    fn assert_resource_set_members_are_not_accessed_directly(&self) {
+        let mut accessed_resource_sets = HashSet::with_capacity(self.resource_sets.len());
+        let mut member_acceleration_structures =
+            HashMap::<PhysicalAccelerationStructureId, usize>::new();
+        let mut member_images = HashMap::<PhysicalImageId, usize>::new();
+
+        for access in self
+            .cmds
+            .iter()
+            .flat_map(|cmd| &cmd.execs)
+            .flat_map(|exec| &exec.resource_set_accesses)
+        {
+            if !accessed_resource_sets.insert(access.resource_set_idx) {
+                continue;
+            }
+
+            match self.resource_sets.get(access.resource_set_idx) {
+                ResourceSet::AccelerationStructure(resource_set) => {
+                    member_acceleration_structures
+                        .reserve(resource_set.physical_acceleration_structure_count());
+                    for member in resource_set.unique_members() {
+                        let acceleration_structure = member.acceleration_structure();
+                        let physical_id =
+                            PhysicalAccelerationStructureId::of(acceleration_structure);
+                        let resource_addr = acceleration_structure as *const _ as usize;
+
+                        if let Some(previous_addr) =
+                            member_acceleration_structures.insert(physical_id, resource_addr)
+                        {
+                            assert!(
+                                previous_addr == resource_addr,
+                                "acceleration structure sets contain incompatible resource aliases"
+                            );
+                        }
+                    }
+                }
+                ResourceSet::Image(resource_set) => {
+                    member_images.reserve(resource_set.physical_image_count());
+                    for member in resource_set.unique_members() {
+                        let image = member.image();
+                        let image_id = PhysicalImageId::of(image);
+                        let image_addr = member.addr();
+
+                        if let Some(previous_addr) = member_images.insert(image_id, image_addr) {
+                            assert!(
+                                previous_addr == image_addr,
+                                "image sets contain incompatible image aliases"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if member_acceleration_structures.is_empty() && member_images.is_empty() {
+            return;
+        }
+
+        for physical_id in &self.prepared_stream_acceleration_structure_accesses {
+            assert!(
+                !member_acceleration_structures.contains_key(physical_id),
+                "acceleration structure set member cannot also be accessed directly"
+            );
+        }
+
+        for physical_id in &self.prepared_stream_image_accesses {
+            assert!(
+                !member_images.contains_key(physical_id),
+                "image set member cannot also be accessed directly"
+            );
+        }
+
+        for (node_idx, _) in self
+            .cmds
+            .iter()
+            .flat_map(|cmd| &cmd.execs)
+            .flat_map(|exec| exec.accesses.iter())
+        {
+            if let Some(acceleration_structure) = self.resources[node_idx].as_accel_struct() {
+                assert!(
+                    !member_acceleration_structures
+                        .contains_key(&PhysicalAccelerationStructureId::of(acceleration_structure)),
+                    "acceleration structure set member cannot also be accessed directly"
+                );
+            }
+            if let Some(image) = self.resources[node_idx].as_image() {
+                assert!(
+                    !member_images.contains_key(&PhysicalImageId::of(image)),
+                    "image set member cannot also be accessed directly"
+                );
+            }
+        }
     }
 
     /// Allocates and begins writing a new command.
@@ -1149,10 +1223,10 @@ impl Graph {
         Command::new(self)
     }
 
-    /// Binds a Vulkan buffer, image, or acceleration structure resource to this graph.
+    /// Binds a Vulkan resource or persistent resource set to this graph.
     ///
-    /// Bound resource nodes may be used in commands for shader pipeline operations and other
-    /// general functions.
+    /// Individual resources are inserted into the graph's resource map. Persistent set members
+    /// remain in a separate table and are represented by one aggregate graph-local handle.
     pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
     where
         R: Resource,
@@ -1563,6 +1637,12 @@ impl Graph {
 
     /// Finalizes the graph and provides an object with functions for submitting the resulting
     /// commands.
+    ///
+    /// # Panics
+    ///
+    /// With the `checked` feature enabled, panics if a member of an accessed resource set is also
+    /// accessed through an ordinary node or if accessed sets contain incompatible wrappers for the
+    /// same native resource.
     #[profiling::function]
     pub fn finalize(mut self) -> Submission {
         thread_local! {
@@ -1608,11 +1688,24 @@ impl Graph {
             }
         });
 
+        #[cfg(feature = "checked")]
+        self.assert_resource_set_members_are_not_accessed_directly();
+
         if let Some(timestamp_queries) = &self.timestamp_queries {
             stat::sample_timestamp_queries_len(timestamp_queries.iter().flatten().count());
         }
 
         Submission::new(self)
+    }
+
+    #[cfg(feature = "checked")]
+    pub(crate) fn graph_id(&self) -> GraphId {
+        self.graph_id
+    }
+
+    /// Converts this graph into a builder.
+    pub fn into_builder(self) -> GraphBuilder {
+        GraphBuilder { graph: self }
     }
 
     /// Returns a borrow of the Vulkan resource represented by `resource_node`.
@@ -1625,6 +1718,8 @@ impl Graph {
     /// - Erased nodes such as [`AnyBufferNode`] and [`AnyImageNode`] return a borrow of the
     ///   underlying resource,
     ///   such as `&Buffer` or `&Image`.
+    /// - Persistent resource-set nodes return their corresponding [`AccelerationStructureSet`] or
+    ///   [`ImageSet`].
     ///
     /// This distinction lets erased node enums unify owned, leased, and swapchain-backed resources
     /// behind a single resource view.
@@ -1633,10 +1728,12 @@ impl Graph {
     /// disabled, callers must ensure `resource_node` came from this graph.
     pub fn resource<N>(&self, resource_node: N) -> &N::Resource
     where
-        N: Node,
+        N: ResourceNode,
     {
-        self.assert_node_owner(&resource_node);
-        resource_node.borrow(&self.resources)
+        #[cfg(feature = "checked")]
+        resource_node.assert_owner(self.graph_id);
+
+        resource_node.borrow(&self.resources, &self.resource_sets)
     }
 
     /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html)
@@ -1735,6 +1832,166 @@ impl Graph {
     }
 }
 
+/// Builder for incrementally constructing a [`Graph`].
+pub struct GraphBuilder {
+    graph: Graph,
+}
+
+impl GraphBuilder {
+    /// Creates an empty graph builder.
+    pub fn new() -> Self {
+        Self {
+            graph: Graph::new(),
+        }
+    }
+
+    /// Binds a Vulkan resource or persistent resource set to this graph.
+    pub fn bind_resource<R>(&mut self, resource: R) -> R::Node
+    where
+        R: Resource,
+    {
+        self.graph.bind_resource(resource)
+    }
+
+    /// Copies an image, potentially performing format conversion.
+    pub fn blit_image(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
+        filter: vk::Filter,
+    ) -> Self {
+        self.graph.blit_image(src, dst, filter);
+
+        self
+    }
+
+    /// Builds the graph.
+    pub fn build(self) -> Graph {
+        self.graph
+    }
+
+    /// Clears a color image.
+    pub fn clear_color_image(
+        mut self,
+        image: impl Into<AnyImageNode>,
+        color: impl Into<ClearColorValue>,
+    ) -> Self {
+        self.graph.clear_color_image(image, color);
+
+        self
+    }
+
+    /// Clears a depth/stencil image.
+    pub fn clear_depth_stencil_image(
+        mut self,
+        image: impl Into<AnyImageNode>,
+        depth: f32,
+        stencil: u32,
+    ) -> Self {
+        self.graph.clear_depth_stencil_image(image, depth, stencil);
+
+        self
+    }
+
+    /// Copies data between buffers.
+    pub fn copy_buffer(
+        mut self,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyBufferNode>,
+    ) -> Self {
+        self.graph.copy_buffer(src, dst);
+
+        self
+    }
+
+    /// Copies data from a buffer into an image.
+    pub fn copy_buffer_to_image(
+        mut self,
+        src: impl Into<AnyBufferNode>,
+        dst: impl Into<AnyImageNode>,
+    ) -> Self {
+        self.graph.copy_buffer_to_image(src, dst);
+
+        self
+    }
+
+    /// Copies all layers of a source image to a destination image.
+    pub fn copy_image(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyImageNode>,
+    ) -> Self {
+        self.graph.copy_image(src, dst);
+
+        self
+    }
+
+    /// Copies image data into a buffer.
+    pub fn copy_image_to_buffer(
+        mut self,
+        src: impl Into<AnyImageNode>,
+        dst: impl Into<AnyBufferNode>,
+    ) -> Self {
+        self.graph.copy_image_to_buffer(src, dst);
+
+        self
+    }
+
+    /// Fills a region of a buffer with a fixed value.
+    pub fn fill_buffer(
+        mut self,
+        buffer: impl Into<AnyBufferNode>,
+        region: Range<vk::DeviceSize>,
+        data: u32,
+    ) -> Self {
+        self.graph.fill_buffer(buffer, region, data);
+
+        self
+    }
+
+    /// Records a [`vkCmdUpdateBuffer`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdUpdateBuffer.html) command.
+    pub fn update_buffer(
+        mut self,
+        buffer: impl Into<AnyBufferNode>,
+        offset: vk::DeviceSize,
+        data: impl AsRef<[u8]> + 'static + Send,
+    ) -> Self {
+        self.graph.update_buffer(buffer, offset, data);
+
+        self
+    }
+}
+
+impl Default for GraphBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "checked")]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct GraphId(u64);
+
+#[cfg(feature = "checked")]
+impl GraphId {
+    fn next() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+        Self(
+            NEXT_ID
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .expect("graph identity overflow"),
+        )
+    }
+}
+
+#[cfg(feature = "checked")]
+impl Default for GraphId {
+    fn default() -> Self {
+        Self::next()
+    }
+}
+
 /// Specifies the state of a color or combined depth and stencil attachment image during graphics
 /// render pass framebuffer load operations.
 ///
@@ -1784,7 +2041,7 @@ struct NodeAccessBuilder {
 }
 
 mod private {
-    use super::{AnyResource, Node};
+    use super::{AnyResource, Node, NodeIndex, ResourceNode, ResourceSetIndex, ResourceSetMap};
 
     #[cfg(feature = "checked")]
     use super::GraphId;
@@ -1807,11 +2064,73 @@ mod private {
         fn assert_owner(&self, _graph_id: GraphId) {}
     }
 
+    #[derive(Clone, Copy)]
+    pub(crate) enum ResourceNodeIndex {
+        Resource(NodeIndex),
+        ResourceSet(ResourceSetIndex),
+    }
+
+    pub(crate) trait ResourceNodeSealed: Sized {
+        #[cfg(feature = "checked")]
+        fn assert_owner(&self, graph_id: GraphId);
+
+        fn borrow<'a>(
+            self,
+            resources: &'a [AnyResource],
+            resource_sets: &'a ResourceSetMap,
+        ) -> &'a <Self as ResourceNode>::Resource
+        where
+            Self: ResourceNode,
+        {
+            let index = self.resource_node_index();
+
+            self.borrow_at(resources, resource_sets, index)
+        }
+
+        fn borrow_at<'a>(
+            self,
+            resources: &'a [AnyResource],
+            resource_sets: &'a ResourceSetMap,
+            index: ResourceNodeIndex,
+        ) -> &'a <Self as ResourceNode>::Resource
+        where
+            Self: ResourceNode;
+
+        fn resource_node_index(&self) -> ResourceNodeIndex;
+    }
+
+    impl<T> ResourceNodeSealed for T
+    where
+        T: Node,
+    {
+        #[cfg(feature = "checked")]
+        fn assert_owner(&self, graph_id: GraphId) {
+            <Self as NodeSealed>::assert_owner(self, graph_id);
+        }
+
+        fn borrow_at<'a>(
+            self,
+            resources: &'a [AnyResource],
+            _resource_sets: &'a ResourceSetMap,
+            index: ResourceNodeIndex,
+        ) -> &'a <Self as ResourceNode>::Resource {
+            let ResourceNodeIndex::Resource(index) = index else {
+                unreachable!("resource node type mismatch")
+            };
+
+            <Self as NodeSealed>::borrow_at(self, resources, index)
+        }
+
+        fn resource_node_index(&self) -> ResourceNodeIndex {
+            ResourceNodeIndex::Resource(self.index())
+        }
+    }
+
     /// Prevents external implementations of [`Resource`](super::Resource).
     pub(crate) trait ResourceSealed {}
 }
 
-/// A Vulkan resource which may be bound to a [`Graph`].
+/// A Vulkan resource or persistent resource set which may be bound to a [`Graph`].
 ///
 /// See [`Graph::bind_resource`] and
 /// [`Command::bind_resource`](crate::cmd::Command::bind_resource).
@@ -1819,11 +2138,39 @@ mod private {
 /// This trait is sealed and cannot be implemented outside of `vk-graph`.
 #[allow(private_bounds)]
 pub trait Resource: private::ResourceSealed {
-    /// The resource handle type.
+    /// The graph-local handle type.
     type Node;
 
     #[doc(hidden)]
     fn bind_graph(self, _: &mut Graph) -> Self::Node;
+}
+
+impl private::ResourceSealed for &AccelerationStructureSet {}
+
+impl Resource for &AccelerationStructureSet {
+    type Node = AccelerationStructureSetNode;
+
+    fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+        Self::Node::new(
+            graph.resource_sets.bind_acceleration_structure(self),
+            #[cfg(feature = "checked")]
+            graph.graph_id,
+        )
+    }
+}
+
+impl private::ResourceSealed for &ImageSet {}
+
+impl Resource for &ImageSet {
+    type Node = ImageSetNode;
+
+    fn bind_graph(self, graph: &mut Graph) -> Self::Node {
+        Self::Node::new(
+            graph.resource_sets.bind_image(self),
+            #[cfg(feature = "checked")]
+            graph.graph_id,
+        )
+    }
 }
 
 impl private::ResourceSealed for SwapchainImage {}
@@ -1860,7 +2207,6 @@ macro_rules! resource {
             impl Resource for $name {
                 type Node = [<$name Node>];
 
-                #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // Bind a new owned resource, such as Image or Buffer.
 
@@ -1872,7 +2218,6 @@ macro_rules! resource {
             impl Resource for Arc<$name> {
                 type Node = [<$name Node>];
 
-                #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // Bind an existing shared resource, such as Arc<Image> or Arc<Buffer>.
 
@@ -1898,7 +2243,6 @@ macro_rules! resource {
             impl Resource for Lease<$name> {
                 type Node = [<$name LeaseNode>];
 
-                #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // Bind a new pooled resource, such as Lease<Image> or Lease<Buffer>.
 
@@ -1910,7 +2254,6 @@ macro_rules! resource {
             impl Resource  for Arc<Lease<$name>> {
                 type Node = [<$name LeaseNode>];
 
-                #[profiling::function]
                 fn bind_graph(self, graph: &mut Graph) -> Self::Node {
                     // Bind an existing shared pooled resource, such as Arc<Lease<Image>> or
                     // Arc<Lease<Buffer>>.
@@ -1939,8 +2282,9 @@ macro_rules! resource {
 }
 
 resource!(AccelerationStructure);
-resource!(Image);
 resource!(Buffer);
+resource!(Image);
+resource!(Micromap);
 
 #[derive(Debug, Default)]
 struct ResourceMap {
@@ -1989,6 +2333,36 @@ impl Deref for ResourceMap {
 impl DerefMut for ResourceMap {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.resources
+    }
+}
+
+/// A graph-local handle whose bound resource can be borrowed from a [`Graph`].
+///
+/// This includes Vulkan resource nodes and persistent resource-set nodes. The trait is
+/// sealed and cannot be implemented outside of `vk-graph`.
+#[allow(private_bounds)]
+pub trait ResourceNode: private::ResourceNodeSealed {
+    /// The resource returned by [`Graph::resource`].
+    type Resource;
+}
+
+impl<T> ResourceNode for T
+where
+    T: Node,
+{
+    type Resource = <T as Node>::Resource;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResourceSetAccess {
+    resource_set_idx: ResourceSetIndex,
+    access_type: ResourceSetAccessType,
+}
+
+impl ResourceSetAccess {
+    const fn acquisition_index(self, resource_set_count: usize) -> usize {
+        self.access_type.acquisition_offset() * resource_set_count
+            + self.resource_set_idx.as_usize()
     }
 }
 
@@ -2077,22 +2451,66 @@ pub mod stat {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
-    use ash::vk;
-
-    use super::{
-        AnyResource, CommandExecutionAbandoned, CommandExecutions, Graph, Node, ResourceMap,
+    use {
+        super::{
+            AnyResource, CommandExecutionAbandoned, CommandExecutions, Graph, Node, ResourceMap,
+        },
+        crate::{
+            driver::{
+                DriverError,
+                accel_struct::{AccelerationStructure, AccelerationStructureInfo},
+                buffer::{Buffer, BufferInfo},
+                image::{Image, ImageInfo},
+                swapchain::SwapchainImage,
+            },
+            pool::{Pool, hash::HashPool},
+            test_support::TestDevice,
+        },
+        ash::vk,
+        std::sync::Arc,
     };
-    use crate::driver::{
-        DriverError,
-        accel_struct::{AccelerationStructure, AccelerationStructureInfo},
-        buffer::{Buffer, BufferInfo},
-        device::{Device, DeviceInfo},
-        image::{Image, ImageInfo},
-        swapchain::SwapchainImage,
-    };
-    use crate::pool::{Pool, hash::HashPool};
+
+    #[test]
+    fn freezing_stream_accesses_again_preserves_declarations_and_remapping() {
+        use {
+            super::ExecutionAccess,
+            crate::cmd::{SubresourceAccess, SubresourceRange},
+            vk_sync::AccessType,
+        };
+
+        let mut accesses = ExecutionAccess::default();
+        for access in [AccessType::VertexBuffer, AccessType::IndirectBuffer] {
+            accesses.push(
+                3,
+                SubresourceAccess {
+                    access,
+                    subresource: SubresourceRange::Buffer((0..64).into()),
+                },
+            );
+        }
+        for _ in 0..3 {
+            accesses.freeze();
+            assert!(accesses.contains(3));
+            assert_eq!(accesses.iter().len(), 1);
+            let (node, ranges) = accesses.iter().next().unwrap();
+            assert_eq!(node, 3);
+            assert_eq!(ranges.len(), 2);
+            assert_eq!(ranges[0].access, AccessType::VertexBuffer);
+            assert_eq!(ranges[1].access, AccessType::IndirectBuffer);
+            assert!(
+                matches!(ranges[0].subresource, SubresourceRange::Buffer(range)
+                if range.start == 0 && range.end == 64)
+            );
+        }
+
+        let mut rebound = accesses.clone();
+        rebound.remap_nodes(&[0, 1, 2, 9]);
+        rebound.freeze();
+        assert!(accesses.contains(3));
+        assert!(rebound.contains(9));
+        assert!(!rebound.contains(3));
+        assert_eq!(rebound.iter().next().unwrap().1.len(), 2);
+    }
 
     #[test]
     fn command_execution_starts_pending() {
@@ -2101,6 +2519,7 @@ mod test {
         let execution = cmd.track_execution();
 
         assert_eq!(execution.has_executed(), Ok(false));
+        assert_eq!(execution.has_submitted(), Ok(false));
     }
 
     #[test]
@@ -2113,6 +2532,38 @@ mod test {
         };
 
         assert_eq!(execution.has_executed(), Err(CommandExecutionAbandoned));
+        assert_eq!(execution.has_submitted(), Err(CommandExecutionAbandoned));
+    }
+
+    #[test]
+    fn command_execution_submission_is_sticky_without_claiming_completion() {
+        let mut executions = CommandExecutions::default();
+        let execution = executions.track();
+        executions.signal_submitted();
+        assert_eq!(execution.has_submitted(), Ok(true));
+        assert_eq!(execution.has_executed(), Ok(false));
+        executions.signal_abandoned();
+        assert_eq!(execution.has_submitted(), Ok(true));
+        assert_eq!(execution.has_executed(), Err(CommandExecutionAbandoned));
+    }
+
+    #[test]
+    fn command_execution_submission_then_completion() {
+        let mut executions = CommandExecutions::default();
+        let execution = executions.track();
+        executions.signal_submitted();
+        executions.signal_executed();
+        executions.signal_abandoned();
+        assert_eq!(execution.has_submitted(), Ok(true));
+        assert_eq!(execution.has_executed(), Ok(true));
+    }
+
+    #[test]
+    #[cfg(feature = "checked")]
+    fn graph_identity_is_stable_and_unique() {
+        let graph = Graph::new();
+        assert_eq!(graph.graph_id(), graph.graph_id());
+        assert_ne!(graph.graph_id(), Graph::new().graph_id());
     }
 
     #[test]
@@ -2165,17 +2616,13 @@ mod test {
     mod integration {
         use super::*;
 
-        fn test_device() -> Result<Device, DriverError> {
-            Device::create(DeviceInfo::default())
-        }
-
         mod resource_map {
             use super::*;
 
             #[test]
             #[ignore = "requires Vulkan device"]
             fn bind_assigns_a_new_node_index_every_time() -> Result<(), DriverError> {
-                let device = test_device()?;
+                let device = TestDevice::new()?;
                 let buffer = Arc::new(Buffer::create(
                     &device,
                     BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
@@ -2202,7 +2649,7 @@ mod test {
             #[ignore = "requires Vulkan device"]
             fn bind_shared_reuses_the_existing_node_index_for_the_same_address()
             -> Result<(), DriverError> {
-                let device = test_device()?;
+                let device = TestDevice::new()?;
                 let buffer = Arc::new(Buffer::create(
                     &device,
                     BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
@@ -2220,7 +2667,7 @@ mod test {
             #[ignore = "requires Vulkan device"]
             fn bind_shared_creates_distinct_node_indices_for_different_addresses()
             -> Result<(), DriverError> {
-                let device = test_device()?;
+                let device = TestDevice::new()?;
                 let buffer = Arc::new(Buffer::create(
                     &device,
                     BufferInfo::device_mem(4, vk::BufferUsageFlags::STORAGE_BUFFER),
@@ -2296,7 +2743,7 @@ mod test {
                     *state
                 }
 
-                let device = test_device()?;
+                let device = TestDevice::new()?;
                 let mut pool = HashPool::new(&device);
                 let mut graph = Graph::new();
 

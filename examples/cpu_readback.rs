@@ -11,6 +11,7 @@ use {
         },
         pool::hash::HashPool,
     },
+    vk_sync::AccessType,
 };
 
 /// Example demonstrating the steps to take when reading the results of buffer or image operations
@@ -43,6 +44,12 @@ fn main() -> Result<(), DriverError> {
     the result.
     */
     graph.copy_buffer(src_buf, dst_buf);
+
+    // Declare the transition for CPU access; read the data after the fence signals.
+    graph
+        .begin_cmd()
+        .resource_access(dst_buf, AccessType::HostRead)
+        .record_cmd(|_| {});
 
     // This line is optional - just bind a borrow of Arc<Buffer> or a leased buffer so you retain
     // the actual buffer for later use and you could then remove this line

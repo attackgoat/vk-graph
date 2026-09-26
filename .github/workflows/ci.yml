@@ -14,6 +14,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+
+      - name: Check workspace on MSRV
+        run: cargo check --workspace --all-targets
+
+      - name: Check unchecked library without parking_lot
+        run: cargo check -p vk-graph --lib --no-default-features --features loaded
+
+      - name: Check checked library without parking_lot
+        run: cargo check -p vk-graph --lib --no-default-features --features checked,loaded
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -26,7 +49,7 @@ jobs:
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: "1.92.0" # Keep in sync with workspace.package.rust-version.
           components: rustfmt, clippy
           cache: false
 

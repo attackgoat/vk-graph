@@ -7,6 +7,72 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `bindless_update_after_bind` for compute, graphics, and ray-tracing pipelines.
+- Opt-in background fence cleanup with `Device::enable_background_fence_cleanup` and
+  `BackgroundFenceCleanupGuard` to manage the worker's lifetime.
+- `PoolConfig::descriptor_pool_capacity` for cached descriptor pools.
+- Persistent read-only `ImageSet` and `AccelerationStructureSet` resources with aggregate
+  synchronization for large resource collections.
+- `VK_EXT_opacity_micromap` support, including pooled resources, host/device operations,
+  triangle attachments, and a headless example.
+- Typed per-invocation command-stream values through `StreamValueArg<T>` and batched resource
+  binding through `CommandStreamRun::with_args`.
+- Stream shader-resource and image-view declarations, plus populated descriptor-set binding
+  through `StreamPipelineCommand::bind_descriptor_set`.
+- `CommandExecution::has_submitted` distinguishes successful queue submission from recording,
+  abandonment, and fence completion, including partial submissions, without a CPU wait.
+- Caller-owned command streams retain callback captures through GPU completion, supporting
+  external query-pool lifetime management with declared attachments and shader resources.
+- Separate acceleration-structure build-input and scratch-buffer access types.
+- `AccelerationStructureBuildIndirectRead` for exact indirect-range synchronization, with read-only
+  tracking and legacy/synchronization2 mappings; `General` remains a conservative fallback.
+
+### Changed
+
+- Testing now requires and automatically-enables Vulkan SDK validation layers during test runs.
+- Continue compatible graphics executions as shared subpasses while preserving per-execution
+  descriptors, callbacks, state, and timestamps.
+- **`checked` is disabled by default.** Default features are now `loaded` and `parking_lot`.
+  Enable it for graph/stream validation in debug or release builds. Vulkan validation layers
+  are separate, and API preconditions still apply without checks.
+- **Redesign the acceleration-structure API.** Geometry borrows metadata and uses device addresses,
+  with primitive counts and build ranges supplied separately. Replace `size_of` and the old
+  size/geometry/build descriptors, `DeviceOrHostAddress`, and separate build/update commands with
+  unsafe `build_sizes`, `build_acceleration_structures`, and `build_acceleration_structures_indirect`.
+  Builds use `AccelerationStructureBuildGeometryInfo` with explicit BUILD or UPDATE mode.
+  Geometry data no longer implements equality, hashing, or the old Vulkan conversion traits.
+  See the [geometry](guide/src/resource_accel_struct.md) and [command](guide/src/cmd_ray_trace.md)
+  migration guides.
+- Reduce scheduling overhead for resource-heavy graphs by combining duplicate resource-use chains.
+- Reduce image ownership-tracking overhead and skip redundant sampled-read barriers when layout
+  and queue ownership are unchanged.
+- Cache prepared-stream argument lookups and reduce temporary allocations in batch validation.
+- Reject prepared-stream invocations nested inside reusable streams when `checked` is enabled.
+  This nesting is unsupported with or without checks; unprepared streams can still be nested.
+- Set and inherit a workspace Rust requirement of 1.92, with CI checks for that version.
+
+### Fixed
+
+- Correct sampled-image access declarations in `min_max` and `mip_compute`, and use 2D-array image
+  views for the `vsm_omni` blur passes.
+- Fix missing stencil synchronization when depth layers or mip levels have different prior accesses.
+- Correct subpass synchronization for multiple resource accesses, uniform-buffer reads, and
+  depth/stencil resolves.
+- Do not enable presentation extensions on headless devices without their swapchain dependency.
+- Preserve already-frozen resource accesses when an unprepared stream is inserted and the
+  parent graph is finalized; repeated freezing no longer clears the access declarations.
+- Prefer cached coherent host memory for readable/read-write buffers.
+- Prevent prepared-stream invocations from overwriting automatic descriptor sets still used by
+  earlier submissions.
+- Preserve buffer and acceleration-structure write dependencies across subsequent reads, and
+  correct acceleration-structure scratch synchronization masks.
+- Correct image ownership-transfer layout pairing and acquire stages for the destination queue.
+- Fix builds without `checked` and/or `parking_lot`.
+- Correct maximum vertex indices in ray-tracing examples and acceleration-structure storage
+  sizing in the guide.
+
 ## [0.14.8] - 2026-09-14
 
 ### Fixed

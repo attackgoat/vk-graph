@@ -1,7 +1,9 @@
 //! Buffer resource types
 
 use {
-    super::{DriverError, SharingMode, device::Device, pipeline_stage_access_flags},
+    super::{
+        DriverError, SharingMode, device::Device, is_write_access, pipeline_stage_access_flags,
+    },
     ash::vk,
     derive_builder::Builder,
     gpu_allocator::{
@@ -16,7 +18,7 @@ use {
         iter::once,
         mem::{ManuallyDrop, take},
         ops::{DerefMut, Range},
-        sync::atomic::{AtomicU8, AtomicU64, Ordering},
+        sync::atomic::{AtomicU64, Ordering},
         thread::panicking,
     },
     vk_sync::AccessType,
@@ -29,6 +31,14 @@ use parking_lot::{Mutex, MutexGuard};
 use std::sync::{Mutex, MutexGuard};
 
 type AccessRuns = RunMap<AccessType>;
+
+const fn tracked_access_after(previous: AccessType, next: AccessType) -> AccessType {
+    if is_write_access(previous) && !is_write_access(next) {
+        AccessType::General
+    } else {
+        next
+    }
+}
 
 /// Smart pointer handle to a [buffer] object.
 ///
@@ -133,10 +143,13 @@ impl Buffer {
         } else {
             AllocationScheme::GpuAllocatorManaged
         };
-        let location = if info.host_writable {
-            MemoryLocation::CpuToGpu
-        } else if info.host_readable {
+
+        // Read/write buffers need the cached host-memory preference too. CpuToGpu
+        // prefers uncached device-local mappings, where CPU memcpy can be very slow.
+        let location = if info.host_readable {
             MemoryLocation::GpuToCpu
+        } else if info.host_writable {
+            MemoryLocation::CpuToGpu
         } else {
             MemoryLocation::GpuOnly
         };
@@ -263,6 +276,17 @@ impl Buffer {
     /// ```
     #[profiling::function]
     pub fn copy_from_slice(&mut self, offset: vk::DeviceSize, data: &[u8]) {
+        profiling::scope!(
+            "Mapped Upload",
+            format!(
+                "bytes={} buffer={} allocation={} flags={:?}",
+                data.len(),
+                self.info.size,
+                self.allocation.size(),
+                self.allocation.memory_properties()
+            )
+            .as_str()
+        );
         let range = offset as _..offset as usize + data.len();
         let mapped_data = self.mapped_slice_mut();
 
@@ -506,8 +530,10 @@ impl Buffer {
             fn next(&mut self) -> Option<Self::Item> {
                 loop {
                     if let Some((next_access, cursor)) = &mut self.current {
-                        if let Some((prev_access, range)) =
-                            cursor.next(&mut self.access_runs, *next_access)
+                        if let Some((prev_access, range)) = cursor
+                            .next_with(&mut self.access_runs, |prev_access| {
+                                tracked_access_after(prev_access, *next_access)
+                            })
                         {
                             return Some((*next_access, prev_access, range));
                         }
@@ -785,7 +811,9 @@ impl BufferInfo {
 
     /// Specifies a mappable buffer with the given `size` and `usage` values.
     ///
-    /// Host-local memory (located in CPU-accessible RAM) is used.
+    /// Cached, coherent host-visible memory is preferred. Coherent host-visible memory
+    /// is used when cached memory is unavailable. For upload-only device-local memory
+    /// preference, use the builder with `host_writable(true)` and `host_readable(false)`.
     ///
     /// # Note
     ///
@@ -1010,27 +1038,21 @@ impl BufferSyncInfo {
 #[derive(Debug)]
 struct ExclusiveSharing {
     sharing_runs: Mutex<RunMap<SharingMode>>,
-    sharing_runs_state: AtomicU8,
     uniform: AtomicU64,
 }
 
 impl ExclusiveSharing {
+    // Distinct from Concurrent/Unknown; its family is QUEUE_FAMILY_IGNORED,
+    // which cannot identify a real queue.
+    const DENSE: u64 = u64::MAX - 2;
+
     fn new(size: vk::DeviceSize) -> Self {
         let sharing = SharingMode::Exclusive(None);
 
         Self {
             sharing_runs: Mutex::new(RunMap::new(size, sharing)),
-            sharing_runs_state: AtomicU8::new(RunTrackingState::Uniform as _),
             uniform: AtomicU64::new(sharing.encode()),
         }
-    }
-
-    fn is_sharing_runs_active(&self) -> bool {
-        self.sharing_runs_state() == RunTrackingState::Dense
-    }
-
-    fn is_promoting(&self) -> bool {
-        self.sharing_runs_state() == RunTrackingState::Promoting
     }
 
     fn promote_and_set_ranges<I>(
@@ -1041,6 +1063,15 @@ impl ExclusiveSharing {
     ) where
         I: Iterator<Item = BufferSubresourceRange>,
     {
+        // A no-op linearizes at this load. A concurrent ownership change can follow it;
+        // no release is needed because this operation publishes no new ownership state.
+        if self.uniform.load(Ordering::Acquire) == sharing.encode() {
+            return;
+        }
+
+        #[cfg(test)]
+        test::before_sharing_lock();
+
         let sharing_runs = self.sharing_runs.lock();
 
         #[cfg(not(feature = "parking_lot"))]
@@ -1050,39 +1081,60 @@ impl ExclusiveSharing {
         let mut sharing_runs = sharing_runs;
 
         let (min_ranges, _) = sharing_ranges.size_hint();
-        sharing_runs.runs.reserve(min_ranges.saturating_mul(2));
 
-        if self.is_sharing_runs_active() {
-            for sharing_range in sharing_ranges {
-                RunMapIter::new(&mut *sharing_runs, sharing, sharing_range).finish();
-            }
+        // A uniform writer either precedes this swap and is captured here, or its
+        // CAS fails and it takes the locked path. Readers also lock on the marker.
+        // Under the mutex, DENSE cannot change: all writers that observe it must lock.
+        // Only actual promotion needs an exchange to capture a racing uniform writer.
+        if self.uniform.load(Ordering::Acquire) != Self::DENSE {
+            let current = self.uniform.swap(Self::DENSE, Ordering::AcqRel);
 
-            return;
+            // Keep the old allocation, but never its stale ownership after demotion.
+            // Every publication of uniform state leaves exactly one run starting at zero.
+            debug_assert_eq!(sharing_runs.runs.len(), 1);
+            debug_assert_eq!(sharing_runs.size, size);
+
+            sharing_runs.runs[0].0 = SharingMode::decode(current);
         }
 
-        self.set_promoting();
-        let current = SharingMode::decode(self.uniform.load(Ordering::Acquire));
-        *sharing_runs = RunMap::new(size, current);
-        sharing_runs.runs.reserve(min_ranges.saturating_mul(2));
+        if min_ranges > 1 {
+            sharing_runs.runs.reserve(min_ranges.saturating_mul(2));
+        }
 
         for sharing_range in sharing_ranges {
-            RunMapIter::new(&mut *sharing_runs, sharing, sharing_range).finish();
+            sharing_runs.set_range(sharing, sharing_range);
         }
 
-        self.set_dense();
+        if sharing_runs.runs.len() == 1 {
+            self.uniform
+                .store(sharing_runs.runs[0].0.encode(), Ordering::Release);
+        }
     }
 
+    #[inline]
     fn ranges_in(&self, query_range: BufferSubresourceRange) -> SharingRunIter<'_> {
-        if !self.uses_sharing_runs() {
-            let sharing = SharingMode::decode(self.uniform.load(Ordering::Acquire));
-
-            return SharingRunIter::Constant(Some((sharing, query_range)));
+        let current = self.uniform.load(Ordering::Acquire);
+        if current != Self::DENSE {
+            return SharingRunIter::Constant(Some((current, query_range)));
         }
+
+        self.ranges_in_dense(query_range)
+    }
+
+    fn ranges_in_dense(&self, query_range: BufferSubresourceRange) -> SharingRunIter<'_> {
+        #[cfg(test)]
+        test::before_sharing_lock();
 
         let sharing_runs = self.sharing_runs.lock();
 
         #[cfg(not(feature = "parking_lot"))]
         let sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
+
+        // A writer may have demoted, then changed the atomic owner while we waited.
+        let current = self.uniform.load(Ordering::Acquire);
+        if current != Self::DENSE {
+            return SharingRunIter::Constant(Some((current, query_range)));
+        }
 
         let run_idx = sharing_runs.run_index_at(query_range.start);
 
@@ -1093,16 +1145,6 @@ impl ExclusiveSharing {
         }
     }
 
-    fn set_promoting(&self) {
-        self.sharing_runs_state
-            .store(RunTrackingState::Promoting as _, Ordering::Release);
-    }
-
-    fn set_dense(&self) {
-        self.sharing_runs_state
-            .store(RunTrackingState::Dense as _, Ordering::Release);
-    }
-
     fn set_range(
         &self,
         size: vk::DeviceSize,
@@ -1110,29 +1152,11 @@ impl ExclusiveSharing {
         sharing_range: BufferSubresourceRange,
     ) {
         if sharing_range.start == 0 && sharing_range.end == size {
-            self.set_uniform_or_dense(sharing, sharing_range);
+            self.set_uniform_or_dense(sharing);
             return;
         }
 
-        let sharing_runs = self.sharing_runs.lock();
-
-        #[cfg(not(feature = "parking_lot"))]
-        let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
-
-        #[cfg(feature = "parking_lot")]
-        let mut sharing_runs = sharing_runs;
-
-        if self.is_sharing_runs_active() {
-            RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
-
-            return;
-        }
-
-        self.set_promoting();
-        let current = SharingMode::decode(self.uniform.load(Ordering::Acquire));
-        *sharing_runs = RunMap::new(size, current);
-        RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
-        self.set_dense();
+        self.promote_and_set_ranges(size, sharing, once(sharing_range));
     }
 
     fn set_ranges<I>(&self, size: vk::DeviceSize, sharing: SharingMode, sharing_ranges: I)
@@ -1157,63 +1181,54 @@ impl ExclusiveSharing {
         );
     }
 
-    fn set_uniform_or_dense(&self, sharing: SharingMode, sharing_range: BufferSubresourceRange) {
+    fn set_uniform_or_dense(&self, sharing: SharingMode) {
         let encoded_sharing = sharing.encode();
 
+        debug_assert_ne!(encoded_sharing, Self::DENSE);
+
+        let mut current = self.uniform.load(Ordering::Acquire);
+
         loop {
-            if self.uses_sharing_runs() {
-                let sharing_runs = self.sharing_runs.lock();
-
-                #[cfg(not(feature = "parking_lot"))]
-                let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
-
-                #[cfg(feature = "parking_lot")]
-                let sharing_runs = sharing_runs;
-
-                RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
+            if current == Self::DENSE {
+                self.set_whole_locked(sharing);
 
                 return;
             }
 
-            let current = self.uniform.load(Ordering::Acquire);
-            if self
-                .uniform
-                .compare_exchange(
-                    current,
-                    encoded_sharing,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                if self.is_promoting() {
-                    let sharing_runs = self.sharing_runs.lock();
+            #[cfg(test)]
+            if let Some(before_cas) = test::BEFORE_SHARING_CAS.with(|hook| hook.take()) {
+                before_cas();
+            }
 
-                    #[cfg(not(feature = "parking_lot"))]
-                    let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
-
-                    #[cfg(feature = "parking_lot")]
-                    let sharing_runs = sharing_runs;
-
-                    RunMapIter::new(sharing_runs, sharing, sharing_range).finish();
-                }
-
-                return;
+            match self.uniform.compare_exchange(
+                current,
+                encoded_sharing,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(observed) => current = observed,
             }
         }
     }
 
-    fn sharing_runs_state(&self) -> RunTrackingState {
-        match self.sharing_runs_state.load(Ordering::Acquire) {
-            0 => RunTrackingState::Uniform,
-            1 => RunTrackingState::Promoting,
-            2 => RunTrackingState::Dense,
-            _ => unreachable!("invalid buffer sharing_runs_state"),
-        }
-    }
+    fn set_whole_locked(&self, sharing: SharingMode) {
+        #[cfg(test)]
+        test::before_sharing_lock();
 
-    fn uses_sharing_runs(&self) -> bool {
-        self.sharing_runs_state() != RunTrackingState::Uniform
+        let sharing_runs = self.sharing_runs.lock();
+
+        #[cfg(not(feature = "parking_lot"))]
+        let mut sharing_runs = sharing_runs.expect("poisoned buffer sharing lock");
+
+        #[cfg(feature = "parking_lot")]
+        let mut sharing_runs = sharing_runs;
+
+        // A whole-resource assignment needs no previous owner. If another writer demoted
+        // while we waited, this store simply orders after its latest atomic assignment.
+        sharing_runs.reset_uniform(sharing);
+
+        self.uniform.store(sharing.encode(), Ordering::Release);
     }
 }
 
@@ -1231,7 +1246,20 @@ impl<V> RunMap<V> {
         }
     }
 
+    fn reset_uniform(&mut self, value: V) {
+        self.runs.truncate(1);
+        self.runs[0] = (value, 0);
+    }
+
     fn run_index_at(&self, offset: vk::DeviceSize) -> usize {
+        match self.runs.len() {
+            1 => 0,
+            n if n <= 6 => self.run_index_linear(offset),
+            _ => self.run_index_binary(offset),
+        }
+    }
+
+    fn run_index_binary(&self, offset: vk::DeviceSize) -> usize {
         let needle = (offset << 1) | 1;
         let run_idx = self
             .runs
@@ -1253,10 +1281,91 @@ impl<V> RunMap<V> {
 
         run_idx.saturating_sub(1)
     }
+
+    fn run_index_linear(&self, offset: vk::DeviceSize) -> usize {
+        let mut index = 0;
+        for (i, &(_, start)) in self.runs.iter().enumerate().skip(1) {
+            if start > offset {
+                break;
+            }
+
+            index = i;
+        }
+
+        index
+    }
+
+    /// Assigns without visiting old values, retaining only the boundary runs.
+    fn set_range(&mut self, value: V, range: BufferSubresourceRange)
+    where
+        V: Copy + PartialEq,
+    {
+        debug_assert!(range.start < range.end && range.end <= self.size);
+
+        if range.start == 0 && range.end == self.size {
+            self.reset_uniform(value);
+
+            return;
+        }
+
+        // A split of uniform state has at most three runs. Avoid two binary searches
+        // and tail movement, retaining spilled capacity for repeated split/reset cycles.
+        if self.runs.len() == 1 {
+            let previous = self.runs[0].0;
+            if previous != value {
+                if range.start == 0 {
+                    self.runs[0].0 = value;
+                } else {
+                    self.runs.push((value, range.start));
+                }
+
+                if range.end < self.size {
+                    self.runs.push((previous, range.end));
+                }
+            }
+
+            return;
+        }
+
+        let start_idx = self.run_index_at(range.start);
+        if self.runs[start_idx].0 == value
+            && self
+                .runs
+                .get(start_idx + 1)
+                .is_none_or(|(_, start)| range.end <= *start)
+        {
+            return;
+        }
+
+        let end_idx = self.run_index_at(range.end);
+        let right = (range.end < self.size).then(|| self.runs[end_idx].0);
+        let mut insert_idx = start_idx + usize::from(self.runs[start_idx].1 < range.start);
+        let removed = end_idx + 1 - insert_idx;
+
+        #[cfg(test)]
+        if removed != 0 {
+            test::SET_RANGE_SHIFTED_RUNS.with(|count| {
+                count.set(count.get() + self.runs.len() - (end_idx + 1));
+            });
+        }
+
+        self.runs.copy_within(end_idx + 1.., insert_idx);
+        self.runs.truncate(self.runs.len() - removed);
+
+        if insert_idx == 0 || self.runs[insert_idx - 1].0 != value {
+            self.runs.insert(insert_idx, (value, range.start));
+            insert_idx += 1;
+        }
+
+        if let Some(right) = right.filter(|right| *right != value) {
+            self.runs.insert(insert_idx, (right, range.end));
+        }
+    }
 }
 
 struct RunMapCursor {
     run_idx: usize,
+    write_idx: usize,
     remaining_range: BufferSubresourceRange,
 }
 
@@ -1286,38 +1395,21 @@ impl RunMapCursor {
             }
         };
 
-        // The needle will always be odd, and the probe always even, the result will always be err
-        let needle = (remaining_range.start << 1) | 1;
-        let run_idx = map
-            .runs
-            .binary_search_by(|(_, probe)| (probe << 1).cmp(&needle));
-
-        debug_assert!(run_idx.is_err());
-
-        let mut run_idx = {
-            #[cfg(feature = "checked")]
-            {
-                run_idx.unwrap_err()
-            }
-
-            #[cfg(not(feature = "checked"))]
-            unsafe {
-                run_idx.unwrap_err_unchecked()
-            }
-        };
-
-        // The first access will always be at start == 0, which is even, so run_idx cannot be 0
-        debug_assert_ne!(run_idx, 0);
-
-        run_idx -= 1;
+        debug_assert_eq!(map.runs[0].1, 0);
+        let run_idx = map.run_index_at(remaining_range.start);
 
         Self {
             remaining_range,
             run_idx,
+            write_idx: run_idx,
         }
     }
 
-    fn next<V>(&mut self, map: &mut RunMap<V>, new_value: V) -> Option<(V, BufferSubresourceRange)>
+    fn next_with<V>(
+        &mut self,
+        map: &mut RunMap<V>,
+        new_value: impl FnOnce(V) -> V,
+    ) -> Option<(V, BufferSubresourceRange)>
     where
         V: Copy + PartialEq + Debug,
     {
@@ -1331,124 +1423,84 @@ impl RunMapCursor {
         debug_assert!(map.runs.get(self.run_idx).is_some());
 
         let (old_value, old_start) = unsafe { *map.runs.get_unchecked(self.run_idx) };
+
+        let new_value = new_value(old_value);
         let old_end = map
             .runs
             .get(self.run_idx + 1)
             .map(|(_, start)| *start)
             .unwrap_or(map.size);
+        if new_value == old_value
+            && self.remaining_range.end <= old_end
+            && self.run_idx == self.write_idx
+            && (self.write_idx == 0 || map.runs[self.write_idx - 1].0 != old_value)
+        {
+            // Nothing to split, merge, or compact; the entire remaining range is
+            // inside this unchanged run.
+            let range = self.remaining_range;
+            self.remaining_range.start = range.end;
+
+            return Some((old_value, range));
+        }
+
         let mut remaining_range = self.remaining_range;
 
         remaining_range.end = remaining_range.end.min(old_end);
         self.remaining_range.start = remaining_range.end;
 
-        if old_value == new_value {
-            self.run_idx += 1;
-        } else if old_start < remaining_range.start {
-            if let Some((_, start)) = map
-                .runs
-                .get_mut(self.run_idx + 1)
-                .filter(|(value, _)| *value == new_value && old_end == remaining_range.end)
-            {
-                *start = remaining_range.start;
-                self.run_idx += 1;
+        let mut new_start = remaining_range.start;
+        if old_start < new_start {
+            if old_value == new_value {
+                new_start = old_start;
             } else {
+                // Only the first run can need a left-boundary split.
                 self.run_idx += 1;
-                map.runs
-                    .insert(self.run_idx, (new_value, remaining_range.start));
+                self.write_idx += 1;
+                map.runs.insert(self.run_idx, (old_value, new_start));
+            }
+        }
 
-                if old_end > remaining_range.end {
+        // Compact behind the read index without shifting unvisited old values.
+        // The gap is private to this cursor until its final next (also on Drop).
+        if self.write_idx == 0 || map.runs[self.write_idx - 1].0 != new_value {
+            map.runs[self.write_idx] = (new_value, new_start);
+            self.write_idx += 1;
+        }
+
+        self.run_idx += 1;
+
+        if self.remaining_range.start == self.remaining_range.end {
+            if old_end > remaining_range.end && old_value != new_value {
+                if self.write_idx < self.run_idx {
+                    map.runs[self.write_idx] = (old_value, remaining_range.end);
+                    self.write_idx += 1;
+                } else {
                     map.runs
-                        .insert(self.run_idx + 1, (old_value, remaining_range.end));
+                        .insert(self.run_idx, (old_value, remaining_range.end));
                 }
-
-                self.run_idx += 1;
             }
-        } else if self.run_idx > 0 {
-            if map
-                .runs
-                .get(self.run_idx - 1)
-                .filter(|(value, _)| *value == new_value)
-                .is_some()
-            {
-                if old_end == remaining_range.end {
-                    map.runs.remove(self.run_idx);
-
-                    if map
-                        .runs
-                        .get(self.run_idx)
-                        .filter(|(value, _)| *value == new_value)
-                        .is_some()
-                    {
-                        map.runs.remove(self.run_idx);
-                        self.run_idx -= 1;
-                    }
-                } else {
-                    debug_assert!(map.runs.get(self.run_idx).is_some());
-
-                    let (_, start) = unsafe { map.runs.get_unchecked_mut(self.run_idx) };
-                    *start = remaining_range.end;
-                }
-            } else if old_end == remaining_range.end {
-                debug_assert!(map.runs.get(self.run_idx).is_some());
-
-                let (value, _) = unsafe { map.runs.get_unchecked_mut(self.run_idx) };
-                *value = new_value;
-
-                if map
-                    .runs
-                    .get(self.run_idx + 1)
-                    .filter(|(value, _)| *value == new_value)
-                    .is_some()
-                {
-                    map.runs.remove(self.run_idx + 1);
-                } else {
-                    self.run_idx += 1;
-                }
-            } else {
-                if let Some((_, start)) = map.runs.get_mut(self.run_idx) {
-                    *start = remaining_range.end;
-                }
-
-                map.runs
-                    .insert(self.run_idx, (new_value, remaining_range.start));
-                self.run_idx += 2;
-            }
-        } else if let Some((_, start)) = map
-            .runs
-            .get_mut(1)
-            .filter(|(value, _)| *value == new_value && old_end == remaining_range.end)
-        {
-            *start = 0;
-            map.runs.remove(0);
-        } else if old_end > remaining_range.end {
-            map.runs.insert(0, (new_value, 0));
-
-            debug_assert!(map.runs.get(1).is_some());
-
-            let (_, start) = unsafe { map.runs.get_unchecked_mut(1) };
-            *start = remaining_range.end;
-        } else {
-            debug_assert!(!map.runs.is_empty());
-
-            let (value, _) = unsafe { map.runs.get_unchecked_mut(0) };
-            *value = new_value;
 
             if map
                 .runs
-                .get(1)
-                .filter(|(value, _)| *value == new_value)
-                .is_some()
+                .get(self.run_idx)
+                .is_some_and(|(value, _)| *value == map.runs[self.write_idx - 1].0)
             {
-                map.runs.remove(1);
-            } else {
                 self.run_idx += 1;
             }
+
+            let removed = self.run_idx - self.write_idx;
+            map.runs.copy_within(self.run_idx.., self.write_idx);
+            map.runs.truncate(map.runs.len() - removed);
         }
 
         Some((old_value, remaining_range))
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "The single-range access path is currently only used in tests"
+)]
 struct RunMapIter<M, V>
 where
     M: DerefMut<Target = RunMap<V>>,
@@ -1464,6 +1516,10 @@ where
     M: DerefMut<Target = RunMap<V>>,
     V: Copy + PartialEq + Debug,
 {
+    #[allow(
+        dead_code,
+        reason = "The single-range access path is currently only used in tests"
+    )]
     fn new(map: M, new_value: V, remaining_range: BufferSubresourceRange) -> Self {
         let cursor = RunMapCursor::new(&map, remaining_range);
 
@@ -1473,8 +1529,6 @@ where
             new_value,
         }
     }
-
-    fn finish(self) {}
 }
 
 impl<M, V> Iterator for RunMapIter<M, V>
@@ -1485,7 +1539,7 @@ where
     type Item = (V, BufferSubresourceRange);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.cursor.next(&mut self.map, self.new_value)
+        self.cursor.next_with(&mut self.map, |_| self.new_value)
     }
 }
 
@@ -1497,14 +1551,6 @@ where
     fn drop(&mut self) {
         while self.next().is_some() {}
     }
-}
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RunTrackingState {
-    Uniform = 0,
-    Promoting = 1,
-    Dense = 2,
 }
 
 #[derive(Debug)]
@@ -1524,7 +1570,9 @@ impl Sharing {
 
     fn ranges_in(&self, range: BufferSubresourceRange) -> SharingRunIter<'_> {
         match self {
-            Self::Concurrent => SharingRunIter::Constant(Some((SharingMode::Concurrent, range))),
+            Self::Concurrent => {
+                SharingRunIter::Constant(Some((SharingMode::Concurrent.encode(), range)))
+            }
             Self::Exclusive(sharing) => sharing.ranges_in(range),
         }
     }
@@ -1540,7 +1588,9 @@ impl Sharing {
 }
 
 enum SharingRunIter<'a> {
-    Constant(Option<(SharingMode, BufferSubresourceRange)>),
+    // Keep the atomic representation until iteration, so the fast and rechecked paths
+    // join without materializing and copying the larger SharingMode enum.
+    Constant(Option<(u64, BufferSubresourceRange)>),
     Dense {
         query_range: BufferSubresourceRange,
         run_idx: usize,
@@ -1553,7 +1603,9 @@ impl Iterator for SharingRunIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Constant(range) => range.take(),
+            Self::Constant(range) => range
+                .take()
+                .map(|(owner, range)| (SharingMode::decode(owner), range)),
             Self::Dense {
                 query_range,
                 run_idx,
@@ -1580,10 +1632,156 @@ impl Iterator for SharingRunIter<'_> {
     }
 }
 
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod bench {
+    //! CPU-only access to the production ownership tracker for benchmarks.
+    use super::*;
+
+    /// Isolates run lookup from mutex and iterator overhead for threshold selection.
+    pub struct RunLookupBenchHarness {
+        runs: RunMap<AccessType>,
+    }
+
+    impl RunLookupBenchHarness {
+        pub fn new(count: usize) -> Self {
+            assert!(count >= 2);
+            let mut runs = RunMap::new(count as u64 * 64, AccessType::TransferRead);
+            for i in 1..count {
+                runs.runs.push((
+                    if i % 2 == 0 {
+                        AccessType::TransferRead
+                    } else {
+                        AccessType::TransferWrite
+                    },
+                    i as u64 * 64,
+                ));
+            }
+            Self { runs }
+        }
+
+        pub fn binary(&self, offset: u64) -> usize {
+            self.runs.run_index_binary(offset)
+        }
+
+        pub fn linear(&self, offset: u64) -> usize {
+            self.runs.run_index_linear(offset)
+        }
+    }
+
+    /// CPU-only buffer access tracking through the same cursor as `Buffer::swap_access`.
+    pub struct AccessBenchHarness {
+        access_runs: Mutex<AccessRuns>,
+        size: u64,
+    }
+
+    impl AccessBenchHarness {
+        pub fn new(size: u64) -> Self {
+            Self {
+                access_runs: Mutex::new(AccessRuns::new(size, AccessType::Nothing)),
+                size,
+            }
+        }
+
+        pub fn with_runs(count: usize) -> Self {
+            let size = count as u64 * 64;
+            let mut runs = AccessRuns::new(size, AccessType::TransferRead);
+            for i in 1..count {
+                runs.runs.push((
+                    if i % 2 == 0 {
+                        AccessType::TransferRead
+                    } else {
+                        AccessType::TransferWrite
+                    },
+                    i as u64 * 64,
+                ));
+            }
+            Self {
+                access_runs: Mutex::new(runs),
+                size,
+            }
+        }
+
+        pub fn swap(&self, access: AccessType, start: u64, end: u64) -> (u64, usize) {
+            let runs = self.access_runs.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let runs = runs.expect("poisoned buffer access lock");
+
+            RunMapIter::new(runs, access, (start..end.min(self.size)).into()).fold(
+                (0, 0),
+                |(checksum, count), (previous, range)| {
+                    (
+                        checksum ^ (previous as u64) ^ range.start ^ range.end,
+                        count + 1,
+                    )
+                },
+            )
+        }
+
+        pub fn swap_binary(&self, access: AccessType, start: u64, end: u64) -> (u64, usize) {
+            let runs = self.access_runs.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let runs = runs.expect("poisoned buffer access lock");
+            let run_idx = runs.run_index_binary(start);
+            let cursor = RunMapCursor {
+                run_idx,
+                write_idx: run_idx,
+                remaining_range: (start..end.min(self.size)).into(),
+            };
+            RunMapIter {
+                cursor,
+                map: runs,
+                new_value: access,
+            }
+            .fold((0, 0), |(checksum, count), (previous, range)| {
+                (
+                    checksum ^ (previous as u64) ^ range.start ^ range.end,
+                    count + 1,
+                )
+            })
+        }
+    }
+
+    pub struct OwnershipBenchHarness {
+        sharing: ExclusiveSharing,
+        size: u64,
+    }
+
+    impl OwnershipBenchHarness {
+        pub fn new(size: u32) -> Self {
+            Self {
+                sharing: ExclusiveSharing::new(size as u64),
+                size: size as u64,
+            }
+        }
+
+        pub fn set(&self, owner: u32, start: u32, count: u32) {
+            self.sharing.set_range(
+                self.size,
+                SharingMode::Exclusive(Some((owner, 0))),
+                (start as u64..(start + count) as u64).into(),
+            );
+        }
+
+        pub fn read(&self) -> (u64, usize) {
+            self.sharing.ranges_in((0..self.size).into()).fold(
+                (0, 0),
+                |(checksum, count), (owner, range)| {
+                    (
+                        checksum ^ owner.encode() ^ range.start ^ range.end,
+                        count + 1,
+                    )
+                },
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use {
         super::*,
+        crate::test_support::TestDevice,
         rand::{Rng, SeedableRng, rngs::SmallRng},
     };
 
@@ -1591,6 +1789,430 @@ mod test {
     type Builder = BufferInfoBuilder;
 
     const FUZZ_COUNT: usize = 100_000;
+
+    std::thread_local! {
+        // Count entries shifted by set_range's tail removal, not comparisons or elapsed time.
+        pub(super) static SET_RANGE_SHIFTED_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub(super) static BEFORE_SHARING_CAS: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+        static BEFORE_SHARING_LOCK: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+        static SHARING_LOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn before_sharing_lock() {
+        SHARING_LOCKS.with(|count| count.set(count.get() + 1));
+        if let Some(hook) = BEFORE_SHARING_LOCK.with(|hook| hook.take()) {
+            hook();
+        }
+    }
+
+    #[test]
+    fn buffer_sharing_equalization_restores_atomic_paths() {
+        let sharing = ExclusiveSharing::new(16);
+        let owner = SharingMode::Exclusive(Some((2, 1)));
+        for _ in 0..8 {
+            sharing.set_range(16, SharingMode::Exclusive(None), (0..16).into());
+            sharing.set_range(16, owner, (0..8).into());
+            assert_eq!(
+                sharing.uniform.load(Ordering::Acquire),
+                ExclusiveSharing::DENSE
+            );
+            sharing.set_range(16, owner, (8..16).into());
+            assert_eq!(sharing.uniform.load(Ordering::Acquire), owner.encode());
+            SHARING_LOCKS.with(|count| count.set(0));
+            sharing.set_ranges(16, owner, [(1..3).into(), (7..9).into()]);
+            assert_eq!(
+                sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                vec![(owner, (0..16).into())]
+            );
+            sharing.set_range(16, SharingMode::Exclusive(Some((2, 0))), (0..16).into());
+            SHARING_LOCKS.with(|count| assert_eq!(count.get(), 0));
+        }
+    }
+
+    #[test]
+    fn buffer_sharing_waiters_recheck_after_demotion() {
+        for writer in 0..3 {
+            let sharing = std::sync::Arc::new(ExclusiveSharing::new(16));
+            let owner = SharingMode::Exclusive(Some((2, 1)));
+            let latest = SharingMode::Exclusive(Some((2, 0)));
+            sharing.set_range(16, owner, (0..8).into());
+            let other = sharing.clone();
+            BEFORE_SHARING_LOCK.with(|hook| {
+                hook.set(Some(Box::new(move || {
+                    other.set_range(16, owner, (8..16).into());
+                    other.set_range(16, latest, (0..16).into());
+                })))
+            });
+            if writer == 2 {
+                sharing.set_range(16, owner, (0..16).into());
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![(owner, (0..16).into())]
+                );
+            } else if writer == 1 {
+                sharing.set_range(16, owner, (4..8).into());
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![
+                        (latest, (0..4).into()),
+                        (owner, (4..8).into()),
+                        (latest, (8..16).into()),
+                    ]
+                );
+            } else {
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![(latest, (0..16).into())]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn buffer_sharing_repromotion_retains_capacity_and_refreshes_owner() {
+        let sharing = ExclusiveSharing::new(256);
+        let owner = SharingMode::Exclusive(Some((2, 1)));
+        let latest = SharingMode::Exclusive(Some((2, 0)));
+        sharing.set_ranges(
+            256,
+            owner,
+            (0..128).step_by(2).map(|start| (start..start + 1).into()),
+        );
+        let capacity = {
+            let map = sharing.sharing_runs.lock();
+            #[cfg(not(feature = "parking_lot"))]
+            let map = map.unwrap();
+            assert!(map.runs.spilled());
+            map.runs.capacity()
+        };
+        sharing.set_range(256, owner, (0..256).into());
+        // Leave the inactive map stale before reusing its allocation.
+        sharing.set_range(256, latest, (0..256).into());
+        sharing.set_range(256, owner, (80..160).into());
+        assert_eq!(
+            sharing.ranges_in((0..256).into()).collect::<Vec<_>>(),
+            vec![
+                (latest, (0..80).into()),
+                (owner, (80..160).into()),
+                (latest, (160..256).into()),
+            ]
+        );
+        let map = sharing.sharing_runs.lock();
+        #[cfg(not(feature = "parking_lot"))]
+        let map = map.unwrap();
+        assert_eq!(map.runs.capacity(), capacity);
+    }
+
+    #[test]
+    fn buffer_sharing_whole_update_retries_after_promotion() {
+        for bulk in [false, true] {
+            let sharing = std::sync::Arc::new(ExclusiveSharing::new(16));
+            let whole_owner = SharingMode::Exclusive(Some((1, 0)));
+            let partial_owner = SharingMode::Exclusive(Some((2, 1)));
+            let promoter = sharing.clone();
+            BEFORE_SHARING_CAS.with(|hook| {
+                hook.set(Some(Box::new(move || {
+                    // Complete promotion after the whole-buffer writer has loaded its
+                    // expected owner, but before it attempts the CAS.
+                    if bulk {
+                        promoter.set_ranges(16, partial_owner, [(4..8).into(), (10..12).into()]);
+                    } else {
+                        promoter.set_range(16, partial_owner, (4..8).into());
+                    }
+                })));
+            });
+            sharing.set_range(16, whole_owner, (0..16).into());
+            assert_eq!(
+                sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                vec![(whole_owner, (0..16).into())],
+                "bulk={bulk}"
+            );
+        }
+    }
+
+    #[test]
+    fn buffer_sharing_uniform_updates_survive_promotion() {
+        for bulk in [false, true] {
+            for whole_owner in [
+                SharingMode::Exclusive(None),
+                SharingMode::Concurrent,
+                SharingMode::Exclusive(Some((1, 0))),
+            ] {
+                let sharing = ExclusiveSharing::new(16);
+                let partial_owner = SharingMode::Exclusive(Some((2, 1)));
+                sharing.set_range(16, whole_owner, (0..16).into());
+                assert_eq!(
+                    sharing.uniform.load(Ordering::Acquire),
+                    whole_owner.encode()
+                );
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![(whole_owner, (0..16).into())]
+                );
+
+                if bulk {
+                    sharing.set_ranges(16, partial_owner, [(4..6).into(), (6..8).into()]);
+                } else {
+                    sharing.set_range(16, partial_owner, (4..8).into());
+                }
+                assert_eq!(
+                    sharing.ranges_in((0..16).into()).collect::<Vec<_>>(),
+                    vec![
+                        (whole_owner, (0..4).into()),
+                        (partial_owner, (4..8).into()),
+                        (whole_owner, (8..16).into()),
+                    ],
+                    "bulk={bulk}, whole_owner={whole_owner:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn run_map_set_range_noops_do_not_shift_tail() {
+        let mut map = RunMap {
+            runs: (0..1024).map(|idx| ((idx % 2) as u8, idx * 4)).collect(),
+            size: 4096,
+        };
+        let expected = map.runs.clone();
+        SET_RANGE_SHIFTED_RUNS.with(|count| count.set(0));
+        for _ in 0..128 {
+            for range in [8..9, 9..11, 8..12, 9..12] {
+                map.set_range(0, range.into());
+            }
+        }
+        assert_eq!(map.runs, expected);
+        SET_RANGE_SHIFTED_RUNS.with(|count| assert_eq!(count.get(), 0));
+    }
+
+    #[test]
+    fn run_lookup_linear_and_cursor_match_binary_at_boundaries() {
+        for count in 1..=16 {
+            let map = RunMap {
+                runs: (0..count).map(|i| ((i % 2) as u8, i as u64 * 4)).collect(),
+                size: count as u64 * 4,
+            };
+            for offset in 0..map.size {
+                let expected = (offset / 4) as usize;
+                assert_eq!(map.run_index_linear(offset), expected);
+                assert_eq!(map.run_index_binary(offset), expected);
+                assert_eq!(map.run_index_at(offset), expected);
+                assert_eq!(
+                    RunMapCursor::new(&map, (offset..offset + 1).into()).run_idx,
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn run_map_set_range_matches_exhaustive_oracle() {
+        const SIZE: usize = 8;
+        let compact = |data: &[u8]| -> SmallVec<[(u8, vk::DeviceSize); 4]> {
+            data.iter()
+                .copied()
+                .enumerate()
+                .filter(|&(idx, value)| idx == 0 || data[idx - 1] != value)
+                .map(|(idx, value)| (value, idx as vk::DeviceSize))
+                .collect()
+        };
+        for bits in 0..1 << SIZE {
+            let data: [u8; SIZE] = std::array::from_fn(|idx| ((bits >> idx) & 1) as u8);
+            for start in 0..SIZE {
+                for end in start + 1..=SIZE {
+                    for value in 0..3 {
+                        let mut map = RunMap {
+                            runs: compact(&data),
+                            size: SIZE as vk::DeviceSize,
+                        };
+                        let mut expected = data;
+                        expected[start..end].fill(value);
+                        let expected = compact(&expected);
+                        for _ in 0..2 {
+                            map.set_range(
+                                value,
+                                (start as vk::DeviceSize..end as vk::DeviceSize).into(),
+                            );
+                            assert_eq!(
+                                map.runs, expected,
+                                "bits={bits} range={start}..{end} value={value}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fragmented_cursor_defers_tail_shifts() {
+        let mut map = RunMap {
+            runs: (0..1024).map(|idx| ((idx % 2) as u8, idx)).collect(),
+            size: 1024,
+        };
+        let mut iter = RunMapIter::new(&mut map, 2, (0..1024).into());
+        assert_eq!(iter.map.runs[0], (0, 0));
+        for idx in 0..128 {
+            assert_eq!(iter.next(), Some(((idx % 2) as u8, (idx..idx + 1).into())));
+        }
+        // Unvisited entries stay in place until the cursor finishes, rather than
+        // shifting the entire tail once for every merged run.
+        assert_eq!(iter.map.runs.len(), 1024);
+        assert_eq!(iter.map.runs[128], (0, 128));
+        drop(iter);
+        assert_eq!(map.runs.as_slice(), &[(2, 0)]);
+    }
+
+    #[test]
+    fn fragmented_cursor_partial_drop_preserves_boundaries() {
+        for consumed in [0, 1, 17, 63] {
+            let mut map = RunMap {
+                runs: (0..64).map(|idx| ((idx % 2) as u8, idx * 4)).collect(),
+                size: 256,
+            };
+            let mut iter = RunMapIter::new(&mut map, 2, (2..254).into());
+            for idx in 0..consumed {
+                assert_eq!(
+                    iter.next(),
+                    Some((
+                        (idx % 2) as u8,
+                        ((idx * 4).max(2)..(idx * 4 + 4).min(254)).into()
+                    ))
+                );
+            }
+            drop(iter);
+            assert_eq!(map.runs.as_slice(), &[(0, 0), (2, 2), (1, 254)]);
+        }
+    }
+
+    #[test]
+    fn fragmented_cursor_transforms_each_old_value_lazily() {
+        let mut map = AccessRuns {
+            runs: (0..64)
+                .map(|idx| {
+                    (
+                        if idx % 2 == 0 {
+                            AccessType::TransferWrite
+                        } else {
+                            AccessType::TransferRead
+                        },
+                        idx * 4,
+                    )
+                })
+                .collect(),
+            size: 256,
+        };
+        let mut cursor = RunMapCursor::new(&map, (2..254).into());
+        let mut calls = 0;
+        for idx in 0..64 {
+            let expected = if idx % 2 == 0 {
+                AccessType::TransferWrite
+            } else {
+                AccessType::TransferRead
+            };
+            assert_eq!(
+                cursor.next_with(&mut map, |old| {
+                    calls += 1;
+                    assert_eq!(old, expected);
+                    tracked_access_after(old, AccessType::HostRead)
+                }),
+                Some((expected, ((idx * 4).max(2)..(idx * 4 + 4).min(254)).into()))
+            );
+            assert_eq!(calls, idx + 1);
+        }
+        assert!(
+            cursor
+                .next_with(&mut map, |_| panic!("exhausted cursor transformed a value"))
+                .is_none()
+        );
+        let mut expected = vec![(AccessType::TransferWrite, 0)];
+        expected.extend((0..64).map(|idx| {
+            (
+                if idx % 2 == 0 {
+                    AccessType::General
+                } else {
+                    AccessType::HostRead
+                },
+                (idx * 4).max(2),
+            )
+        }));
+        expected.push((AccessType::TransferRead, 254));
+        assert_eq!(map.runs.as_slice(), expected);
+    }
+
+    #[test]
+    fn fragmented_ownership_bulk_assignment_preserves_gaps_and_resets() {
+        let sharing = ExclusiveSharing::new(256);
+        let owner_a = SharingMode::Exclusive(Some((1, 0)));
+        let owner_b = SharingMode::Exclusive(Some((2, 1)));
+        sharing.set_ranges(
+            256,
+            owner_a,
+            (0..128).map(|idx| (idx * 2..idx * 2 + 1).into()),
+        );
+        sharing.set_ranges(
+            256,
+            owner_b,
+            [(3..101).into(), (99..201).into(), (220..240).into()],
+        );
+        for offset in 0..256 {
+            let expected = if (3..201).contains(&offset) || (220..240).contains(&offset) {
+                owner_b
+            } else if offset % 2 == 0 {
+                owner_a
+            } else {
+                SharingMode::Exclusive(None)
+            };
+            assert_eq!(
+                sharing
+                    .ranges_in((offset..offset + 1).into())
+                    .collect::<Vec<_>>(),
+                vec![(expected, (offset..offset + 1).into())]
+            );
+        }
+        for ranges in [
+            vec![(0..256).into()],
+            vec![(0..128).into(), (128..256).into()],
+        ] {
+            sharing.set_ranges(256, owner_a, ranges);
+            assert_eq!(
+                sharing.ranges_in((0..256).into()).collect::<Vec<_>>(),
+                vec![(owner_a, (0..256).into())]
+            );
+            assert_eq!(sharing.uniform.load(Ordering::Acquire), owner_a.encode());
+            sharing.set_range(256, owner_b, (80..160).into());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a Vulkan device"]
+    fn mapped_upload_payloads() {
+        let device = TestDevice::new().unwrap();
+        let info = BufferInfo::host_mem(65536, vk::BufferUsageFlags::STORAGE_BUFFER);
+        let readback = Buffer::create(&device, info.into_builder().host_writable(false)).unwrap();
+        let mut buf = Buffer::create(&device, info).unwrap();
+
+        assert_eq!(
+            buf.allocation.memory_properties(),
+            readback.allocation.memory_properties()
+        );
+        assert!(
+            buf.allocation
+                .memory_properties()
+                .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+        );
+
+        for (size, offset) in [(0, 65536), (384, 0), (33792, 0), (34560, 16)] {
+            let data = (0..size).map(|idx| (idx % 251) as u8).collect::<Vec<_>>();
+            buf.mapped_slice_mut().fill(0xa5);
+            buf.copy_from_slice(offset as u64, &data);
+            let mapped = buf.mapped_slice();
+
+            assert_eq!(&mapped[offset..offset + size], data);
+            assert!(mapped[..offset].iter().all(|byte| *byte == 0xa5));
+            assert!(mapped[offset + size..].iter().all(|byte| *byte == 0xa5));
+        }
+    }
 
     fn buffer_sync_info(range: Range<vk::DeviceSize>) -> BufferSubresourceSyncInfo {
         BufferSubresourceSyncInfo {
@@ -1603,6 +2225,28 @@ mod test {
 
     fn assert_access_runs_eq(access_runs: &AccessRuns, expected: &[(AccessType, vk::DeviceSize)]) {
         assert_eq!(access_runs.runs.as_slice(), expected);
+    }
+
+    #[test]
+    fn tracked_access_preserves_write_and_later_read_dependencies() {
+        let write = AccessType::TransferWrite;
+
+        assert_eq!(
+            tracked_access_after(write, AccessType::ComputeShaderReadOther),
+            AccessType::General
+        );
+        assert_eq!(
+            tracked_access_after(AccessType::General, AccessType::TransferRead),
+            AccessType::General
+        );
+        assert_eq!(
+            tracked_access_after(write, AccessType::ComputeShaderWrite),
+            AccessType::ComputeShaderWrite
+        );
+        assert_eq!(
+            tracked_access_after(AccessType::ComputeShaderReadOther, AccessType::TransferRead),
+            AccessType::TransferRead
+        );
     }
 
     #[test]
@@ -1699,7 +2343,12 @@ mod test {
             );
             assert_access_runs_eq(
                 accesses.map,
-                &[(AccessType::HostRead, 0), (AccessType::Nothing, 15)],
+                &[
+                    (AccessType::HostRead, 0),
+                    // Compaction leaves a gap until the last old run is visited.
+                    (AccessType::TransferRead, 5),
+                    (AccessType::Nothing, 15),
+                ],
             );
             assert_eq!(
                 accesses.next().unwrap(),
@@ -2097,15 +2746,12 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Alignment must be a power of two")]
+    #[cfg_attr(
+        feature = "checked",
+        should_panic(expected = "Alignment must be a power of two")
+    )]
     pub fn buffer_info_builder_alignment_0() {
         Builder::default().size(0).alignment(0).build();
-    }
-
-    #[test]
-    #[should_panic(expected = "Alignment must be a power of two")]
-    pub fn buffer_info_builder_alignment_42() {
-        Builder::default().size(0).alignment(42).build();
     }
 
     #[test]
@@ -2116,6 +2762,15 @@ mod test {
         let builder = Builder::default().size(42).alignment(256).build();
 
         assert_eq!(info, builder);
+    }
+
+    #[test]
+    #[cfg_attr(
+        feature = "checked",
+        should_panic(expected = "Alignment must be a power of two")
+    )]
+    pub fn buffer_info_builder_alignment_42() {
+        Builder::default().size(0).alignment(42).build();
     }
 
     #[test]

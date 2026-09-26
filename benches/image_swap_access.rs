@@ -5,36 +5,6 @@ use {
     vk_sync::AccessType,
 };
 
-fn full_range(layers: u32, mips: u32) -> vk::ImageSubresourceRange {
-    vk::ImageSubresourceRange {
-        aspect_mask: vk::ImageAspectFlags::COLOR,
-        base_array_layer: 0,
-        layer_count: layers,
-        base_mip_level: 0,
-        level_count: mips,
-    }
-}
-
-fn full_dual_range(layers: u32, mips: u32) -> vk::ImageSubresourceRange {
-    vk::ImageSubresourceRange {
-        aspect_mask: vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
-        base_array_layer: 0,
-        layer_count: layers,
-        base_mip_level: 0,
-        level_count: mips,
-    }
-}
-
-fn single_subresource(layer: u32, mip: u32) -> vk::ImageSubresourceRange {
-    vk::ImageSubresourceRange {
-        aspect_mask: vk::ImageAspectFlags::COLOR,
-        base_array_layer: layer,
-        layer_count: 1,
-        base_mip_level: mip,
-        level_count: 1,
-    }
-}
-
 fn dual_single_subresource(
     aspect: vk::ImageAspectFlags,
     layer: u32,
@@ -49,29 +19,23 @@ fn dual_single_subresource(
     }
 }
 
-fn subresource_block(
-    aspect: vk::ImageAspectFlags,
-    start_layer: u32,
-    start_mip: u32,
-    count_layers: u32,
-    count_mips: u32,
-) -> vk::ImageSubresourceRange {
+fn full_dual_range(layers: u32, mips: u32) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange {
-        aspect_mask: aspect,
-        base_array_layer: start_layer,
-        layer_count: count_layers,
-        base_mip_level: start_mip,
-        level_count: count_mips,
+        aspect_mask: vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
+        base_array_layer: 0,
+        layer_count: layers,
+        base_mip_level: 0,
+        level_count: mips,
     }
 }
 
-fn remaining_range() -> vk::ImageSubresourceRange {
+fn full_range(layers: u32, mips: u32) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange {
         aspect_mask: vk::ImageAspectFlags::COLOR,
         base_array_layer: 0,
-        layer_count: vk::REMAINING_ARRAY_LAYERS,
+        layer_count: layers,
         base_mip_level: 0,
-        level_count: vk::REMAINING_MIP_LEVELS,
+        level_count: mips,
     }
 }
 
@@ -232,6 +196,44 @@ fn image_swap_access_bench(c: &mut Criterion) {
         b.iter(|| black_box(h.swap_access(AccessType::AnyShaderWrite, full_range(1, 1))));
     });
 
+    let compute_read = AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer;
+    let ray_read = AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer;
+
+    // Sampled-reader accumulation is the synchronization optimization's primary path.
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    h.swap_access(compute_read, full_range(1, 1));
+    group.bench_function("uniform_sampled_compute_steady", |b| {
+        b.iter(|| black_box(h.swap_access(compute_read, full_range(1, 1))));
+    });
+
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    h.swap_access(compute_read, full_range(1, 1));
+    group.bench_function("uniform_sampled_epoch_steady", |b| {
+        b.iter(|| black_box(h.swap_accesses([(compute_read, full_range(1, 1))], false)));
+    });
+
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    h.swap_access(compute_read, full_range(1, 1));
+    group.bench_function("uniform_sampled_elided_steady", |b| {
+        b.iter(|| black_box(h.swap_accesses([(ray_read, full_range(1, 1))], true)));
+    });
+
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    group.bench_function("uniform_sampled_compute_ray", |b| {
+        b.iter(|| {
+            black_box(h.swap_access(compute_read, full_range(1, 1)));
+            black_box(h.swap_access(ray_read, full_range(1, 1)));
+        });
+    });
+
+    let h = SwapAccessBenchHarness::new(1, 1, vk::Format::R8G8B8A8_UNORM);
+    group.bench_function("uniform_sampled_read_write", |b| {
+        b.iter(|| {
+            black_box(h.swap_access(compute_read, full_range(1, 1)));
+            black_box(h.swap_access(AccessType::ComputeShaderWrite, full_range(1, 1)));
+        });
+    });
+
     // 18. Batch 4 swaps on dense 4x4 — mix of single and multi-subresource ranges
     let h = SwapAccessBenchHarness::new(4, 4, vk::Format::R8G8B8A8_UNORM);
     group.bench_function("batch_4_swaps", |b| {
@@ -284,6 +286,42 @@ fn image_swap_access_bench(c: &mut Criterion) {
     });
 
     group.finish();
+}
+
+fn remaining_range() -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_array_layer: 0,
+        layer_count: vk::REMAINING_ARRAY_LAYERS,
+        base_mip_level: 0,
+        level_count: vk::REMAINING_MIP_LEVELS,
+    }
+}
+
+fn single_subresource(layer: u32, mip: u32) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_array_layer: layer,
+        layer_count: 1,
+        base_mip_level: mip,
+        level_count: 1,
+    }
+}
+
+fn subresource_block(
+    aspect: vk::ImageAspectFlags,
+    start_layer: u32,
+    start_mip: u32,
+    count_layers: u32,
+    count_mips: u32,
+) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: aspect,
+        base_array_layer: start_layer,
+        layer_count: count_layers,
+        base_mip_level: start_mip,
+        level_count: count_mips,
+    }
 }
 
 criterion_group!(benches, image_swap_access_bench);

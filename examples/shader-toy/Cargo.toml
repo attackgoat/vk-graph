@@ -3,6 +3,7 @@ name = "shader-toy"
 authors = ["John Wells <john@attackgoat.com>"]
 description = "Example API usage"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 readme.workspace = true
