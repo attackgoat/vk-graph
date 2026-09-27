@@ -1,11 +1,6 @@
 Vulkan Graph Driver
 ===================
 
-<figure>
-  <img src=".github/img/banner.jpg" alt="GitHub Logo">
-  <figcaption><a href="https://leartesstudios.com/1950s-nyc-megapack">1950s NYC</a> by Leartes using path-tracing; ~700 μs (<i>i7-11700K</i>)</figcaption>
-</figure>
-
 [![Crates.io](https://img.shields.io/crates/v/vk-graph.svg)](https://crates.io/crates/vk-graph)
 [![Docs.rs](https://docs.rs/vk-graph/badge.svg)](https://docs.rs/vk-graph)
 [![Guide Book](https://img.shields.io/badge/vk--graph-Guide_Book-blue?link=https%3A%2F%2Fattackgoat.github.io%2Fvk-graph%2F)](https://attackgoat.github.io/vk-graph)
@@ -26,6 +21,12 @@ Requires Rust 1.92 or newer.
 <br>
 
 ## Overview
+
+<p align="center">
+  <img src=".github/img/banner.jpg" alt="GitHub Logo">
+  <br>
+  <sub><a href="https://leartesstudios.com/1950s-nyc-megapack">1950s NYC</a> by Leartes using path-tracing; ~700 μs (<i>i7-11700K</i>)</sub>
+</p>
 
 _vk-graph_ supports desktop, mobile, and AR/VR platforms in headless, windowed, or full-screen
 modes. An [accessory crate](crates/vk-graph-window/README.md) is provided for `winit` support:
