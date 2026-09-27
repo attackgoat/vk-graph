@@ -220,7 +220,11 @@ fn reduce_depth_image(
             )
             .image_sampler(0, SamplerInfo::LINEAR.reduction_mode(reduction_mode)),
         )?)
-        .shader_resource_access(0, depth_image, AccessType::ComputeShaderReadOther)
+        .shader_resource_access(
+            0,
+            depth_image,
+            AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+        )
         .shader_resource_access(1, reduced_image, AccessType::ComputeShaderWrite)
         .record_cmd(move |cmd| {
             cmd.dispatch(reduced_info.width, reduced_info.height, 1);

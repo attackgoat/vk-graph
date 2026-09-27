@@ -111,7 +111,7 @@ fn main() -> Result<(), DriverError> {
                     .into_builder()
                     .base_mip_level(mip_level - 1)
                     .mip_level_count(1),
-                AccessType::ComputeShaderReadOther,
+                AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
             )
             .shader_subresource_access(
                 1,

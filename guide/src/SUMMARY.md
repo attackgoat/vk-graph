@@ -21,6 +21,7 @@
     1. [Buffers](./resource_buffer.md)
     1. [Images](./resource_image.md)
     1. [Acceleration Structures](./resource_accel_struct.md)
+    1. [Opacity Micromaps](./resource_micromap.md)
 1. [Pipelines](./pipeline.md)
     1. [Hot Reload](./pipeline_hot_reload.md)
     1. [Push Constants](./pipeline_push_const.md)

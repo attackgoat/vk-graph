@@ -3,6 +3,7 @@
 use {
     super::{
         BufferHostMappingCompatibility, Cache, Lease, Pool, PoolConfig, compatible_buffer_info,
+        compatible_micromap_info,
         garbage_collector::{CollectResources, ResourceRequests},
         with_cache,
     },
@@ -14,6 +15,7 @@ use {
         descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         device::Device,
         image::{Image, ImageInfo},
+        micromap::{Micromap, MicromapInfo},
         render_pass::{RenderPass, RenderPassInfo},
     },
     log::debug,
@@ -92,6 +94,7 @@ pub struct FifoPool {
     #[readonly]
     pub info: PoolConfig,
 
+    micromap_cache: Cache<Micromap>,
     render_pass_cache: HashMap<RenderPassInfo, Cache<RenderPass>>,
 }
 
@@ -110,10 +113,11 @@ impl FifoPool {
             accel_struct_cache: PoolConfig::explicit_cache(info.accel_struct_capacity),
             buffer_cache: PoolConfig::explicit_cache(info.buffer_capacity),
             command_buffer_cache: Default::default(),
-            descriptor_pool_cache: PoolConfig::default_cache(),
+            descriptor_pool_cache: PoolConfig::explicit_cache(info.descriptor_pool_capacity),
             device,
             image_cache: PoolConfig::explicit_cache(info.image_capacity),
             info,
+            micromap_cache: PoolConfig::explicit_cache(info.micromap_capacity),
             render_pass_cache: Default::default(),
         }
     }
@@ -123,6 +127,7 @@ impl FifoPool {
         self.clear_accel_structs();
         self.clear_buffers();
         self.clear_images();
+        self.clear_micromaps();
     }
 
     /// Clears the pool of acceleration structure resources.
@@ -138,6 +143,11 @@ impl FifoPool {
     /// Clears the pool of image resources.
     pub fn clear_images(&mut self) {
         self.image_cache = PoolConfig::explicit_cache(self.info.image_capacity);
+    }
+
+    /// Clears the pool of micromap resources.
+    pub fn clear_micromaps(&mut self) {
+        self.micromap_cache = PoolConfig::explicit_cache(self.info.micromap_capacity);
     }
 }
 
@@ -181,6 +191,19 @@ impl CollectResources for FifoPool {
                         .images
                         .iter()
                         .any(|info| compatible_fifo_image_info(&item.info, info))
+                });
+            });
+        }
+
+        if requests.micromaps.is_empty() {
+            self.clear_micromaps();
+        } else {
+            with_cache(&self.micromap_cache, |cache| {
+                cache.retain(|item| {
+                    requests
+                        .micromaps
+                        .iter()
+                        .any(|info| compatible_micromap_info(&item.info, info))
                 });
             });
         }
@@ -295,6 +318,7 @@ impl Pool<DescriptorPoolInfo, DescriptorPool> for FifoPool {
                 for idx in 0..cache.len() {
                     let item = unsafe { cache.get_unchecked(idx) };
                     if item.info.max_sets >= info.max_sets
+                        && item.info.update_after_bind == info.update_after_bind
                         && item.info.acceleration_structure_count
                             >= info.acceleration_structure_count
                         && item.info.combined_image_sampler_count
@@ -366,6 +390,39 @@ impl Pool<ImageInfo, Image> for FifoPool {
     }
 }
 
+impl Pool<MicromapInfo, Micromap> for FifoPool {
+    #[profiling::function]
+    fn resource(&mut self, info: MicromapInfo) -> Result<Lease<Micromap>, DriverError> {
+        let cache_ref = Arc::downgrade(&self.micromap_cache);
+
+        {
+            profiling::scope!("check cache");
+
+            if let Some(item) = with_cache(&self.micromap_cache, |cache| {
+                for idx in 0..cache.len() {
+                    let item = unsafe { cache.get_unchecked(idx) };
+
+                    if compatible_micromap_info(&item.info, &info) {
+                        let item = cache.swap_remove(idx);
+
+                        return Some(Lease::new(cache_ref.clone(), item));
+                    }
+                }
+
+                None
+            }) {
+                return Ok(item);
+            }
+        }
+
+        debug!("Creating new {}", stringify!(Micromap));
+
+        let item = Micromap::create(&self.device, info)?;
+
+        Ok(Lease::new(cache_ref, item))
+    }
+}
+
 impl Pool<RenderPassInfo, RenderPass> for FifoPool {
     #[profiling::function]
     fn resource(&mut self, info: RenderPassInfo) -> Result<Lease<RenderPass>, DriverError> {
@@ -394,16 +451,56 @@ mod test {
     use {
         super::*,
         crate::{
-            driver::device::{Device, DeviceInfo},
             pool::garbage_collector::GarbageCollector,
+            test_support::{DeviceChecks, TestDevice},
         },
         ash::vk,
     };
 
     #[test]
     #[ignore = "requires Vulkan device"]
+    fn vulkan_cached_descriptor_pool_respects_update_after_bind() -> Result<(), DriverError> {
+        let device = TestDevice::with_checks(DeviceChecks {
+            validation: false,
+            disposal: true,
+        })?;
+        if !device
+            .physical
+            .features_v1_2
+            .descriptor_binding_storage_buffer_update_after_bind
+        {
+            return Ok(());
+        }
+
+        let mut pool = FifoPool::new(&device);
+        let basic = DescriptorPoolInfo {
+            max_sets: 1,
+            storage_buffer_count: 1,
+            ..Default::default()
+        };
+        drop(pool.resource(basic.clone())?);
+
+        let requested = DescriptorPoolInfo {
+            update_after_bind: true,
+            ..basic.clone()
+        };
+        let leased: Lease<DescriptorPool> = pool.resource(requested.clone())?;
+        assert!(leased.info.update_after_bind);
+        drop(leased);
+        drop(pool);
+
+        let mut pool = FifoPool::new(&device);
+        drop(pool.resource(requested)?);
+        let leased: Lease<DescriptorPool> = pool.resource(basic)?;
+        assert!(!leased.info.update_after_bind);
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
     fn vulkan_garbage_collector_retains_supported_fifo_resources() -> Result<(), DriverError> {
-        let device = Device::create(DeviceInfo::default())?;
+        let device = TestDevice::new()?;
         let mut collector = GarbageCollector::new(FifoPool::with_capacity(&device, 4));
         let retained_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::TRANSFER_SRC);
         let removed_info = BufferInfo::device_mem(64, vk::BufferUsageFlags::STORAGE_BUFFER);

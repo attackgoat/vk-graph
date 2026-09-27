@@ -398,6 +398,9 @@ fn main() -> anyhow::Result<()> {
             }
 
             if BLUR_RADIUS > 0 {
+                let mut blur_view_info = shadow_faces_info.into_image_view();
+                blur_view_info.view_type = vk::ImageViewType::TYPE_2D_ARRAY;
+
                 for _ in 0..BLUR_PASSES {
                     // Flip-flop between the shadow image and a temporary image using a
                     // separable box blur filter which approximates a gaussian blur
@@ -406,12 +409,18 @@ fn main() -> anyhow::Result<()> {
                         .begin_cmd()
                         .debug_name("Blur X")
                         .bind_pipeline(&blur_x_pipeline)
-                        .shader_resource_access(
+                        .shader_subresource_access(
                             0,
                             shadow_faces_node,
+                            blur_view_info,
                             AccessType::ComputeShaderReadOther,
                         )
-                        .shader_resource_access(1, temp_image, AccessType::ComputeShaderWrite)
+                        .shader_subresource_access(
+                            1,
+                            temp_image,
+                            blur_view_info,
+                            AccessType::ComputeShaderWrite,
+                        )
                         .record_cmd(move |cmd| {
                             cmd.dispatch(1, CUBEMAP_SIZE, 6);
                         })
@@ -419,10 +428,16 @@ fn main() -> anyhow::Result<()> {
                         .begin_cmd()
                         .debug_name("Blur Y")
                         .bind_pipeline(&blur_y_pipeline)
-                        .shader_resource_access(0, temp_image, AccessType::ComputeShaderReadOther)
-                        .shader_resource_access(
+                        .shader_subresource_access(
+                            0,
+                            temp_image,
+                            blur_view_info,
+                            AccessType::ComputeShaderReadOther,
+                        )
+                        .shader_subresource_access(
                             1,
                             shadow_faces_node,
+                            blur_view_info,
                             AccessType::ComputeShaderWrite,
                         )
                         .record_cmd(move |cmd| {

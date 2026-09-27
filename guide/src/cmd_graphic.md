@@ -3,10 +3,38 @@
 Graphics commands are recorded after binding a `GraphicsPipeline` and declaring attachments such as
 `color_attachment_image` or `depth_stencil_attachment_image`.
 
+Adjacent graphics commands in a submitted graph can share a Vulkan subpass when their attachments,
+layouts, sample counts, and multiview masks agree and non-attachment resources are read-only.
+Changing uniform buffers, sampled textures, descriptor sets, or compatible pipelines does not by
+itself cause another subpass. Each command still has its own bindings, recording callbacks, dynamic
+state setup, and timestamp positions.
+
+> [!NOTE]
+> Input attachments, resolves, shader writes, non-sampled image reads, later clears/discards, and
+> incompatible attachment configurations cause subpasses to conservatively retain command-defined
+> boundaries.
+
+> [!WARNING]
+> Recording callback boundaries are not guaranteed Vulkan subpass boundaries; raw Vulkan
+> calls within callbacks must not advance or end the graph-managed render pass.
+
+The first declaration of an attachment supplies its render-pass load operation. A later
+`LoadOp::Clear` explicitly clears that attachment before the execution's callback, over the full
+graph-managed render-pass area, regardless of the callback's viewport or scissor. `DontCare`
+permits undefined contents; it does not request a zero fill.
+
 API docs: [`GraphicsCommandRef::draw`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw),
 [`GraphicsCommandRef::draw_indexed`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw_indexed),
 [`GraphicsCommandRef::draw_indirect`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.draw_indirect),
 [`GraphicsCommandRef::push_constants`](https://docs.rs/vk-graph/latest/vk_graph/cmd/graphic/struct.GraphicsCommandRef.html#method.push_constants).
+
+For external objects such as debug pipeline-statistics query pools, capture their owner in a
+caller-owned `CommandStream` graphics `record_cmd` callback. Build an unprepared stream with
+`CommandStream::finalize(...).into_stream()`, declare attachments and shader-resource accesses
+using stream arguments, then bind parent graph resources with `insert_cmd_stream(...).with_arg(...)`.
+The inserted callbacks retain their captures through submission completion even after the caller
+drops its stream and owner handles. Ordinary graph `record_cmd` callbacks are one-shot and do not
+provide that lifetime.
 
 ## Available Commands
 

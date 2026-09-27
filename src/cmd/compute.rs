@@ -140,6 +140,7 @@ impl ComputeCommandRef<'_> {
     ///
     /// See [`vkCmdDispatch`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdDispatch.html).
     #[profiling::function]
+    #[inline]
     pub fn dispatch(&self, group_count_x: u32, group_count_y: u32, group_count_z: u32) -> &Self {
         unsafe {
             self.cmd.device.cmd_dispatch(
@@ -165,6 +166,7 @@ impl ComputeCommandRef<'_> {
     ///
     /// See [`vkCmdDispatchBase`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdDispatchBase.html).
     #[profiling::function]
+    #[inline]
     pub fn dispatch_base(
         &self,
         base_group_x: u32,

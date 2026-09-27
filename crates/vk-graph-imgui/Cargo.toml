@@ -8,6 +8,7 @@ homepage = "https://github.com/attackgoat/vk-graph/tree/main/crates/vk-graph-img
 keywords = ["imgui", "gamedev", "vulkan"]
 categories = ["game-development", "multimedia::images", "rendering::engine"]
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 readme = "README.md"
 repository.workspace = true

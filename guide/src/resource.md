@@ -8,8 +8,8 @@ API docs: [`Graph::bind_resource`](https://docs.rs/vk-graph/latest/vk_graph/stru
 [`GarbageCollector`](https://docs.rs/vk-graph/latest/vk_graph/pool/garbage_collector/struct.GarbageCollector.html).
 
 > [!CAUTION]
-> All pipelines and resources (_buffers, images, and acceleration structures_) used in a `Graph`
-> must have been created using the same `Device`.
+> All pipelines and resources (_buffers, images, micromaps, and acceleration structures_) used in a
+> `Graph` must have been created using the same `Device`.
 
 Owned resources are created from `Device` references. They may be bound directly to graphs.
 
@@ -29,6 +29,11 @@ Example for buffers using `Graph::bind_resource<R>(&mut self, resource: R) -> R:
 `Arc<Buffer>`|`BufferNode`
 `Lease<Buffer>`|`BufferLeaseNode`
 `Arc<Lease<Buffer>>`|`BufferLeaseNode`
+
+Micromaps follow the same pattern with `MicromapNode` and `MicromapLeaseNode`. They are whole-object
+resources: bind them to retain their lifetime and declare each build, copy, or acceleration-structure
+build access. A device address stored in a Vulkan structure does not retain or graph-bind the buffer
+or micromap behind it.
 
 ## Borrowing
 

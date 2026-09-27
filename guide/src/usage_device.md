@@ -29,6 +29,39 @@ assert_eq!(device.physical.instance.info.debug, false);
 # Ok(()) }
 ```
 
+## Background Fence Cleanup
+
+Fence payloads are normally dropped on the thread that observes completion. A device can instead
+queue that destruction, including returning command buffers to their pools, on a background worker:
+
+```rust
+# use vk_graph::driver::DriverError;
+# use vk_graph::driver::device::{Device, DeviceInfo};
+# fn test() -> Result<(), DriverError> {
+let device = Device::create(DeviceInfo::default())?;
+let fence_cleanup = Device::enable_background_fence_cleanup(&device)?;
+
+// Payloads are queued for background cleanup after a fence operation observes completion.
+
+fence_cleanup.wait_for_pending_cleanup()?;
+# Ok(()) }
+```
+
+`BackgroundFenceCleanupGuard::wait_for_pending_cleanup` waits for fence payloads queued to the
+guard's current worker before the call. It does not poll or wait for fences: `Fence::status`,
+`Fence::wait`, `Fence::reset`, or fence destruction must first observe completion and queue the
+payload. Fence waits and payload completion hooks remain synchronous. The method returns
+`DriverError::InvalidData` if the worker reports a payload-drop failure since its previous wait or
+cannot complete the wait. Failure reporting is shared and best-effort, so concurrent waiters are not
+guaranteed to observe the same failure.
+
+Guards active at the same time for a device share a worker. Dropping the final guard signals that
+worker to drain and detaches it without blocking, after which newly completed fence payloads are
+dropped synchronously. Re-enabling cleanup can start a new worker while a detached worker finishes
+draining; waits apply only to the current worker. The worker queue is bounded; when it is full,
+payloads fall back to being dropped synchronously rather than accumulating without limit. Panics
+during synchronous fallback are caught and logged rather than reported by a later cleanup wait.
+
 ## Windowed Operation
 
 Prototype and demo code might use the built-in window handler, which creates a `Device` during

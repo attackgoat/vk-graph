@@ -66,6 +66,9 @@
 //! repeat sampler by default. [`SamplerInfo`] and [`SamplerInfoBuilder`] expose the full Vulkan
 //! sampler state when the inferred defaults are not appropriate.
 //!
+//! When a pipeline enables `bindless_update_after_bind`, unbounded sampler-only arrays instead
+//! use mutable samplers supplied through Vulkan descriptor writes.
+//!
 //! # Specialization Constants
 //!
 //! Specialization constants are supplied with [`ShaderBuilder::specialization`] using a
@@ -283,6 +286,7 @@ impl PipelineDescriptorInfo {
         device: &Device,
         descriptor_bindings: &DescriptorBindingMap,
         bindless_descriptors: &HashSet<Descriptor>,
+        bindless_update_after_bind: bool,
     ) -> Result<Self, DriverError> {
         let descriptor_set_count = descriptor_bindings
             .keys()
@@ -306,21 +310,68 @@ impl PipelineDescriptorInfo {
                 let descriptor_ty = descriptor_info.descriptor_type();
                 *binding_counts.entry(descriptor_ty).or_default() +=
                     descriptor_info.binding_count();
+                let mut binding_flags = vk::DescriptorBindingFlags::empty();
+                if bindless_descriptors.contains(descriptor) {
+                    let features = &device.physical.features_v1_2;
+                    if features.descriptor_binding_partially_bound {
+                        binding_flags |= vk::DescriptorBindingFlags::PARTIALLY_BOUND;
+                    }
+
+                    if bindless_update_after_bind {
+                        let supported = match descriptor_ty {
+                            vk::DescriptorType::COMBINED_IMAGE_SAMPLER
+                            | vk::DescriptorType::SAMPLED_IMAGE
+                            | vk::DescriptorType::SAMPLER => {
+                                features.descriptor_binding_sampled_image_update_after_bind
+                            }
+                            vk::DescriptorType::STORAGE_BUFFER => {
+                                features.descriptor_binding_storage_buffer_update_after_bind
+                            }
+                            vk::DescriptorType::STORAGE_IMAGE => {
+                                features.descriptor_binding_storage_image_update_after_bind
+                            }
+                            vk::DescriptorType::STORAGE_TEXEL_BUFFER => {
+                                features.descriptor_binding_storage_texel_buffer_update_after_bind
+                            }
+                            vk::DescriptorType::UNIFORM_BUFFER => {
+                                features.descriptor_binding_uniform_buffer_update_after_bind
+                            }
+                            vk::DescriptorType::UNIFORM_TEXEL_BUFFER => {
+                                features.descriptor_binding_uniform_texel_buffer_update_after_bind
+                            }
+                            vk::DescriptorType::ACCELERATION_STRUCTURE_KHR => device
+                                .physical
+                                .vk_khr_acceleration_structure
+                                .as_ref()
+                                .is_some_and(|ext| {
+                                    ext.features
+                                        .descriptor_binding_acceleration_structure_update_after_bind
+                                }),
+                            _ => false,
+                        };
+                        if !supported {
+                            warn!("update-after-bind not supported for {descriptor_ty:?}");
+                            return Err(DriverError::Unsupported);
+                        }
+
+                        binding_flags |= vk::DescriptorBindingFlags::UPDATE_AFTER_BIND;
+                    }
+                }
+
                 bindings.push(DescriptorSetLayoutBindingInfo {
                     binding: descriptor.binding,
-                    binding_flags: if bindless_descriptors.contains(descriptor)
-                        && device
-                            .physical
-                            .features_v1_2
-                            .descriptor_binding_partially_bound
-                    {
-                        vk::DescriptorBindingFlags::PARTIALLY_BOUND
-                    } else {
-                        vk::DescriptorBindingFlags::empty()
-                    },
+                    binding_flags,
                     descriptor_count: descriptor_info.binding_count(),
                     descriptor_type: descriptor_ty,
-                    immutable_sampler: descriptor_info.sampler_info(),
+                    // Immutable samplers cannot be updated, even on update-after-bind bindings.
+                    immutable_sampler: if bindless_update_after_bind
+                        && bindless_descriptors.contains(descriptor)
+                        && descriptor_ty == vk::DescriptorType::SAMPLER
+                    {
+                        None
+                    } else {
+                        descriptor_info.sampler_info()
+                    },
                     stage_flags: *stage_flags,
                 });
             }
@@ -1459,6 +1510,8 @@ impl ShaderBuilder {
     ///
     /// _NOTE:_ When defining image samplers which are used in multiple stages of a single pipeline
     /// you must only call this function on one of the shader stages; it does not matter which one.
+    /// This setting is ignored for unbounded sampler-only arrays when the pipeline enables
+    /// `bindless_update_after_bind`; write those sampler descriptors through Vulkan instead.
     ///
     /// # Panics
     ///
@@ -1618,7 +1671,10 @@ impl<'a> From<&'a SpecializationMap> for vk::SpecializationInfo<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use {
+        super::*,
+        crate::test_support::{DeviceChecks, TestDevice},
+    };
 
     type Info = SamplerInfo;
     type Builder = SamplerInfoBuilder;
@@ -1637,6 +1693,71 @@ mod test {
         let builder = Builder::default().build();
 
         assert_eq!(info, builder);
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn vulkan_bindless_update_after_bind_is_opt_in() -> Result<(), DriverError> {
+        let device = TestDevice::with_checks(DeviceChecks {
+            validation: false,
+            disposal: true,
+        })?;
+        let descriptor = Descriptor::from(0);
+        let bindings = DescriptorBindingMap::from([(
+            descriptor,
+            (
+                DescriptorInfo::StorageBuffer(1),
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+        )]);
+        let bindless = HashSet::from([descriptor]);
+
+        let normal = PipelineDescriptorInfo::create(&device, &bindings, &bindless, false)?;
+        assert!(!normal.layouts[&0].info().update_after_bind());
+
+        let update = PipelineDescriptorInfo::create(&device, &bindings, &bindless, true);
+        if device
+            .physical
+            .features_v1_2
+            .descriptor_binding_storage_buffer_update_after_bind
+        {
+            assert!(update?.layouts[&0].info().update_after_bind());
+        } else {
+            assert!(matches!(update, Err(DriverError::Unsupported)));
+        }
+
+        let sampler_bindings = DescriptorBindingMap::from([(
+            descriptor,
+            (
+                DescriptorInfo::Sampler(1, SamplerInfo::default(), false),
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+        )]);
+        let normal = PipelineDescriptorInfo::create(&device, &sampler_bindings, &bindless, false)?;
+        assert!(
+            normal.layouts[&0].info().bindings[0]
+                .immutable_sampler
+                .is_some()
+        );
+
+        let update = PipelineDescriptorInfo::create(&device, &sampler_bindings, &bindless, true);
+        if device
+            .physical
+            .features_v1_2
+            .descriptor_binding_sampled_image_update_after_bind
+        {
+            let update = update?;
+            assert!(update.layouts[&0].info().update_after_bind());
+            assert!(
+                update.layouts[&0].info().bindings[0]
+                    .immutable_sampler
+                    .is_none()
+            );
+        } else {
+            assert!(matches!(update, Err(DriverError::Unsupported)));
+        }
+
+        Ok(())
     }
 
     #[test]

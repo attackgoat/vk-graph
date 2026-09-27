@@ -130,6 +130,7 @@ impl CommandBuffer {
     }
 
     /// Ends recording a render pass.
+    #[inline]
     pub fn end_render_pass(&self) {
         unsafe {
             self.device.cmd_end_render_pass(self.handle);

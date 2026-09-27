@@ -40,12 +40,6 @@ fail() {
     exit "${2-1}"
 }
 
-run() {
-    printf '==> %s\n' "$1"
-    shift
-    "$@"
-}
-
 install_mdbook() {
     version=$(mdbook --version 2>/dev/null | awk '{print $2}' || true)
 
@@ -54,21 +48,38 @@ install_mdbook() {
     fi
 }
 
+run() {
+    printf '==> %s\n' "$1"
+    shift
+    "$@"
+}
+
 if [ "$ALLOW_DIRTY" -ne 1 ]; then
     git diff --no-ext-diff --quiet || fail "uncommitted changes (pass --allow-dirty to skip this check)"
 fi
 
 # Rust code checks
 run "format check" cargo fmt --all --check
-run "workspace target check" env RUSTFLAGS="-D warnings" cargo check $PROFILE --all-targets --workspace --no-default-features --features loaded
-run "workspace target check (parking_lot)" env RUSTFLAGS="-D warnings" cargo check $PROFILE --all-targets --workspace --features parking_lot
-run "workspace clippy" cargo clippy $PROFILE --all-targets --workspace --no-default-features --features loaded -- -D warnings
-run "workspace clippy (parking_lot)" cargo clippy $PROFILE --all-targets --workspace --features parking_lot -- -D warnings
-run "workspace clippy (no checked)" cargo clippy $PROFILE --all-targets --workspace --no-default-features --features "loaded,parking_lot" -- -D warnings
-run "workspace tests" env RUSTFLAGS="-D warnings" cargo test $PROFILE --all-targets --workspace --no-default-features --features loaded
+
+for features in loaded,parking_lot loaded,parking_lot,checked; do
+    run "workspace target check ($features)" env RUSTFLAGS="-D warnings" cargo check $PROFILE --all-targets --workspace --no-default-features --features "$features"
+    run "workspace clippy ($features)" cargo clippy $PROFILE --all-targets --workspace --no-default-features --features "$features" -- -D warnings
+    run "workspace tests ($features)" env RUSTFLAGS="-D warnings" cargo test $PROFILE --all-targets --workspace --no-default-features --features "$features"
+done
+
+# Workspace dev-dependencies can re-enable parking_lot; check std synchronization separately.
+for features in loaded loaded,checked; do
+    run "library check ($features)" env RUSTFLAGS="-D warnings" cargo check $PROFILE -p vk-graph --lib --no-default-features --features "$features"
+done
 
 if [ "$RUN_VULKAN" -eq 1 ]; then
-    run "vulkan tests" env RUSTFLAGS="-D warnings" cargo test $PROFILE --workspace vulkan -- --ignored --test-threads=1
+    for features in loaded,parking_lot loaded,parking_lot,checked; do
+        run "vulkan tests ($features)" env RUSTFLAGS="-D warnings" \
+            VK_GRAPH_SKIP_VALIDATION_PARK=1 \
+            cargo test $PROFILE --workspace --tests --no-default-features --features "$features" \
+            -- --ignored --test-threads=1 --nocapture \
+            --skip subpass_planning_benchmark --skip binding_metadata_benchmark
+    done
 fi
 
 run "workspace doctests" env RUSTFLAGS="-D warnings" cargo test $PROFILE --workspace --doc

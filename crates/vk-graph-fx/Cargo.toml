@@ -8,6 +8,7 @@ keywords = ["gamedev", "vulkan"]
 categories = ["game-development", "multimedia::images", "rendering::engine"]
 description = "A bunch of pre-built utilities that are helpful when using vk-graph"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 readme = "README.md"
 repository.workspace = true

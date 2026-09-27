@@ -110,6 +110,18 @@ impl RayTracingPipeline {
         }
 
         let info = info.into();
+        if info.opacity_micromap
+            && !device
+                .physical
+                .vk_ext_opacity_micromap
+                .as_ref()
+                .is_some_and(|extension| extension.features.micromap)
+        {
+            warn!("unsupported ray tracing pipeline creation: missing opacity micromaps");
+
+            return Err(DriverError::Unsupported);
+        }
+
         let shader_groups = shader_groups
             .into_iter()
             .map(|shader_group| shader_group.into())
@@ -138,8 +150,12 @@ impl RayTracingPipeline {
             }
         }
 
-        let descriptor_info =
-            PipelineDescriptorInfo::create(device, &descriptor_bindings, &bindless_descriptors)?;
+        let descriptor_info = PipelineDescriptorInfo::create(
+            device,
+            &descriptor_bindings,
+            &bindless_descriptors,
+            info.bindless_update_after_bind,
+        )?;
         let layouts = descriptor_info
             .layouts
             .values()
@@ -219,6 +235,11 @@ impl RayTracingPipeline {
                 vk::DeferredOperationKHR::null(),
                 Device::pipeline_cache(device),
                 &[vk::RayTracingPipelineCreateInfoKHR::default()
+                    .flags(if info.opacity_micromap {
+                        vk::PipelineCreateFlags::RAY_TRACING_OPACITY_MICROMAP_EXT
+                    } else {
+                        vk::PipelineCreateFlags::empty()
+                    })
                     .stages(&shader_stages)
                     .groups(&shader_groups)
                     .max_pipeline_ray_recursion_depth(
@@ -464,6 +485,13 @@ pub struct RayTracingPipelineInfo {
     #[builder(default = "8192")]
     pub bindless_descriptor_count: u32,
 
+    /// Allows unsized descriptor-array bindings to be updated after their set is bound.
+    /// Requires update-after-bind support for every such binding's descriptor type.
+    /// Unsized sampler arrays use mutable samplers and require Vulkan descriptor writes.
+    /// Defaults to `false`.
+    #[builder(default)]
+    pub bindless_update_after_bind: bool,
+
     /// Allow [setting the stack size dynamically] for a ray tracing pipeline.
     ///
     /// When set, you must manually set the stack size during ray tracing commands using
@@ -480,6 +508,12 @@ pub struct RayTracingPipelineInfo {
     /// See [`VkRayTracingPipelineCreateInfoKHR`](https://registry.khronos.org/vulkan/specs/latest/man/html/VkRayTracingPipelineCreateInfoKHR.html).
     #[builder(default = "16")]
     pub max_ray_recursion_depth: u32,
+
+    /// Allow this pipeline to trace acceleration structures which use opacity micromaps.
+    ///
+    /// This requires [`VK_EXT_opacity_micromap`](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_EXT_opacity_micromap.html).
+    #[builder(default)]
+    pub opacity_micromap: bool,
 }
 
 impl RayTracingPipelineInfo {
@@ -492,8 +526,10 @@ impl RayTracingPipelineInfo {
     pub fn into_builder(self) -> RayTracingPipelineInfoBuilder {
         RayTracingPipelineInfoBuilder {
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
+            bindless_update_after_bind: Some(self.bindless_update_after_bind),
             dynamic_stack_size: Some(self.dynamic_stack_size),
             max_ray_recursion_depth: Some(self.max_ray_recursion_depth),
+            opacity_micromap: Some(self.opacity_micromap),
         }
     }
 }
@@ -502,8 +538,10 @@ impl Default for RayTracingPipelineInfo {
     fn default() -> Self {
         Self {
             bindless_descriptor_count: 8192,
+            bindless_update_after_bind: false,
             dynamic_stack_size: false,
             max_ray_recursion_depth: 16,
+            opacity_micromap: false,
         }
     }
 }

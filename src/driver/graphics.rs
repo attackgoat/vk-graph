@@ -486,8 +486,12 @@ impl GraphicsPipeline {
             }
         }
 
-        let descriptor_info =
-            PipelineDescriptorInfo::create(&device, &descriptor_bindings, &bindless_descriptors)?;
+        let descriptor_info = PipelineDescriptorInfo::create(
+            &device,
+            &descriptor_bindings,
+            &bindless_descriptors,
+            info.bindless_update_after_bind,
+        )?;
         let descriptor_sets_layouts = descriptor_info
             .layouts
             .values()
@@ -763,6 +767,13 @@ pub struct GraphicsPipelineInfo {
     #[builder(default = "8192")]
     pub bindless_descriptor_count: u32,
 
+    /// Allows unsized descriptor-array bindings to be updated after their set is bound.
+    /// Requires update-after-bind support for every such binding's descriptor type.
+    /// Unsized sampler arrays use mutable samplers and require Vulkan descriptor writes.
+    /// Defaults to `false`.
+    #[builder(default)]
+    pub bindless_update_after_bind: bool,
+
     /// Specifies color blend state used when rasterization is enabled for any color attachments
     /// accessed during rendering.
     ///
@@ -819,6 +830,7 @@ impl GraphicsPipelineInfo {
             alpha_to_coverage: Some(self.alpha_to_coverage),
             alpha_to_one: Some(self.alpha_to_one),
             bindless_descriptor_count: Some(self.bindless_descriptor_count),
+            bindless_update_after_bind: Some(self.bindless_update_after_bind),
             blend: Some(self.blend),
             cull_mode: Some(self.cull_mode),
             front_face: Some(self.front_face),
@@ -836,6 +848,7 @@ impl Default for GraphicsPipelineInfo {
             alpha_to_coverage: false,
             alpha_to_one: false,
             bindless_descriptor_count: 8192,
+            bindless_update_after_bind: false,
             blend: BlendInfo::REPLACE,
             cull_mode: vk::CullModeFlags::BACK,
             front_face: vk::FrontFace::COUNTER_CLOCKWISE,

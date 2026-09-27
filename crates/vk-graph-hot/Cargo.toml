@@ -8,6 +8,7 @@ keywords = ["gamedev", "vulkan"]
 categories = ["game-development", "multimedia::images", "rendering::engine"]
 description = "Hot-reloading shader pipelines for vk-graph"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 readme = "README.md"
 repository.workspace = true

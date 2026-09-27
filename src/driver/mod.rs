@@ -24,8 +24,8 @@
 //! [`DescriptorSet`](descriptor_set::DescriptorSet) is instead a shared immutable wrapper and
 //! exposes the same information through `device()`, `handle()`, and `info()` methods.
 //!
-//! Graph-tracked resources use atomic [`AccessType`](sync::AccessType) values to maintain
-//! consistency and track changes. Descriptor contents do not declare graph synchronization.
+//! Graph-tracked resources use atomic synchronization state to maintain consistency and track
+//! access changes. Descriptor contents do not declare graph synchronization.
 //!
 //! # Pipelines
 //!
@@ -57,6 +57,7 @@ pub mod fence;
 pub mod graphics;
 pub mod image;
 pub mod instance;
+pub mod micromap;
 pub mod physical_device;
 pub mod ray_tracing;
 pub mod render_pass;
@@ -209,6 +210,17 @@ access_type_u8_map! {
     65 => TaskShaderReadOther,
     66 => MeshShaderWrite,
     67 => TaskShaderWrite,
+    68 => AccelerationStructureBuildInputRead,
+    69 => AccelerationStructureBuildScratchReadWrite,
+    70 => MicromapBuildInputRead,
+    71 => MicromapBuildScratchReadWrite,
+    72 => MicromapBuildWrite,
+    73 => MicromapBuildRead,
+    74 => AccelerationStructureBuildMicromapRead,
+    75 => MicromapBuildBufferRead,
+    76 => MicromapBuildBufferWrite,
+    77 => AccelerationStructureBuildIndirectRead,
+    78 => ComputeShaderReadAccelerationStructure,
 }
 
 pub(super) const fn format_aspect_mask(fmt: vk::Format) -> vk::ImageAspectFlags {
@@ -798,7 +810,8 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | TransferWrite
         | HostWrite
         | AccelerationStructureBuildWrite
-        | AccelerationStructureBufferWrite
+        | MicromapBuildWrite
+        | MicromapBuildBufferWrite
         | MeshShaderWrite
         | TaskShaderWrite => false,
         CommandBufferReadNVX
@@ -827,6 +840,7 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | ComputeShaderReadUniformBuffer
         | ComputeShaderReadSampledImageOrUniformTexelBuffer
         | ComputeShaderReadOther
+        | ComputeShaderReadAccelerationStructure
         | AnyShaderReadUniformBuffer
         | AnyShaderReadUniformBufferOrVertexBuffer
         | AnyShaderReadSampledImageOrUniformTexelBuffer
@@ -840,6 +854,15 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | RayTracingShaderReadAccelerationStructure
         | RayTracingShaderReadOther
         | AccelerationStructureBuildRead
+        | AccelerationStructureBufferWrite
+        | AccelerationStructureBuildInputRead
+        | AccelerationStructureBuildIndirectRead
+        | AccelerationStructureBuildScratchReadWrite
+        | MicromapBuildInputRead
+        | MicromapBuildScratchReadWrite
+        | MicromapBuildRead
+        | MicromapBuildBufferRead
+        | AccelerationStructureBuildMicromapRead
         | MeshShaderReadUniformBuffer
         | MeshShaderReadSampledImageOrUniformTexelBuffer
         | MeshShaderReadOther
@@ -853,6 +876,40 @@ pub(super) const fn is_read_access(ty: self::sync::AccessType) -> bool {
         | General
         | ComputeShaderReadWrite => true,
     }
+}
+
+pub(super) const fn is_write_access(ty: self::sync::AccessType) -> bool {
+    use self::sync::AccessType::*;
+
+    matches!(
+        ty,
+        CommandBufferWriteNVX
+            | VertexShaderWrite
+            | TessellationControlShaderWrite
+            | TessellationEvaluationShaderWrite
+            | GeometryShaderWrite
+            | FragmentShaderWrite
+            | ColorAttachmentWrite
+            | DepthStencilAttachmentWrite
+            | DepthStencilAttachmentReadWrite
+            | DepthAttachmentWriteStencilReadOnly
+            | StencilAttachmentWriteDepthReadOnly
+            | ComputeShaderWrite
+            | ComputeShaderReadWrite
+            | AnyShaderWrite
+            | TransferWrite
+            | HostWrite
+            | ColorAttachmentReadWrite
+            | General
+            | AccelerationStructureBuildWrite
+            | AccelerationStructureBufferWrite
+            | AccelerationStructureBuildScratchReadWrite
+            | MicromapBuildScratchReadWrite
+            | MicromapBuildWrite
+            | MicromapBuildBufferWrite
+            | MeshShaderWrite
+            | TaskShaderWrite
+    )
 }
 
 // Convert overlapping push constant regions such as this:
@@ -972,9 +1029,13 @@ pub(super) const fn pipeline_stage_access_flags(
             access::COMMAND_PREPROCESS_READ_NV,
         ),
         ty::IndirectBuffer => (stage::DRAW_INDIRECT, access::INDIRECT_COMMAND_READ),
+        ty::AccelerationStructureBuildIndirectRead => (
+            stage::ACCELERATION_STRUCTURE_BUILD_KHR,
+            access::INDIRECT_COMMAND_READ,
+        ),
         ty::IndexBuffer => (stage::VERTEX_INPUT, access::INDEX_READ),
         ty::VertexBuffer => (stage::VERTEX_INPUT, access::VERTEX_ATTRIBUTE_READ),
-        ty::VertexShaderReadUniformBuffer => (stage::VERTEX_SHADER, access::SHADER_READ),
+        ty::VertexShaderReadUniformBuffer => (stage::VERTEX_SHADER, access::UNIFORM_READ),
         ty::VertexShaderReadSampledImageOrUniformTexelBuffer => {
             (stage::VERTEX_SHADER, access::SHADER_READ)
         }
@@ -1129,6 +1190,10 @@ pub(super) const fn pipeline_stage_access_flags(
             stage::RAY_TRACING_SHADER_KHR,
             access::ACCELERATION_STRUCTURE_READ_KHR,
         ),
+        ty::ComputeShaderReadAccelerationStructure => (
+            stage::COMPUTE_SHADER,
+            access::ACCELERATION_STRUCTURE_READ_KHR,
+        ),
         ty::RayTracingShaderReadOther => (stage::RAY_TRACING_SHADER_KHR, access::SHADER_READ),
         ty::AccelerationStructureBuildWrite => (
             stage::ACCELERATION_STRUCTURE_BUILD_KHR,
@@ -1138,16 +1203,37 @@ pub(super) const fn pipeline_stage_access_flags(
             stage::ACCELERATION_STRUCTURE_BUILD_KHR,
             access::ACCELERATION_STRUCTURE_READ_KHR,
         ),
-        ty::AccelerationStructureBufferWrite => (
+        ty::AccelerationStructureBufferWrite | ty::AccelerationStructureBuildScratchReadWrite => (
             stage::ACCELERATION_STRUCTURE_BUILD_KHR,
-            access::TRANSFER_WRITE,
+            access::from_raw(
+                access::ACCELERATION_STRUCTURE_READ_KHR.as_raw()
+                    | access::ACCELERATION_STRUCTURE_WRITE_KHR.as_raw(),
+            ),
         ),
-        ty::MeshShaderReadUniformBuffer => (stage::MESH_SHADER_EXT, access::SHADER_READ),
+        ty::AccelerationStructureBuildInputRead => {
+            (stage::ACCELERATION_STRUCTURE_BUILD_KHR, access::SHADER_READ)
+        }
+        // Micromap stage/access bits exist only in synchronization2. These conservative legacy
+        // values are used by buffer tracking; MicromapSyncInfo exposes the exact 64-bit masks.
+        ty::MicromapBuildInputRead | ty::MicromapBuildRead | ty::MicromapBuildBufferRead => {
+            (stage::ALL_COMMANDS, access::MEMORY_READ)
+        }
+        ty::MicromapBuildScratchReadWrite => (
+            stage::ALL_COMMANDS,
+            access::from_raw(access::MEMORY_READ.as_raw() | access::MEMORY_WRITE.as_raw()),
+        ),
+        ty::MicromapBuildWrite | ty::MicromapBuildBufferWrite => {
+            (stage::ALL_COMMANDS, access::MEMORY_WRITE)
+        }
+        ty::AccelerationStructureBuildMicromapRead => {
+            (stage::ACCELERATION_STRUCTURE_BUILD_KHR, access::MEMORY_READ)
+        }
+        ty::MeshShaderReadUniformBuffer => (stage::MESH_SHADER_EXT, access::UNIFORM_READ),
         ty::MeshShaderReadSampledImageOrUniformTexelBuffer => {
             (stage::MESH_SHADER_EXT, access::SHADER_READ)
         }
         ty::MeshShaderReadOther => (stage::MESH_SHADER_EXT, access::SHADER_READ),
-        ty::TaskShaderReadUniformBuffer => (stage::TASK_SHADER_EXT, access::SHADER_READ),
+        ty::TaskShaderReadUniformBuffer => (stage::TASK_SHADER_EXT, access::UNIFORM_READ),
         ty::TaskShaderReadSampledImageOrUniformTexelBuffer => {
             (stage::TASK_SHADER_EXT, access::SHADER_READ)
         }
@@ -1241,7 +1327,109 @@ impl SharingMode {
 
 #[cfg(test)]
 mod test {
-    use {super::merge_push_constant_ranges, ash::vk};
+    use {
+        super::{
+            access_type_from_u8, access_type_into_u8, is_read_access, is_write_access,
+            merge_push_constant_ranges, pipeline_stage_access_flags,
+        },
+        ash::vk,
+        vk_sync::AccessType,
+    };
+
+    #[test]
+    fn acceleration_structure_build_buffer_accesses_are_precise() {
+        let indirect = AccessType::AccelerationStructureBuildIndirectRead;
+        assert_eq!(access_type_into_u8(indirect), 77);
+        assert_eq!(access_type_from_u8(77), indirect);
+        assert!(is_read_access(indirect));
+        assert!(!is_write_access(indirect));
+        assert_eq!(
+            pipeline_stage_access_flags(indirect),
+            (
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                vk::AccessFlags::INDIRECT_COMMAND_READ,
+            )
+        );
+        assert_eq!(
+            pipeline_stage_access_flags(AccessType::IndirectBuffer),
+            (
+                vk::PipelineStageFlags::DRAW_INDIRECT,
+                vk::AccessFlags::INDIRECT_COMMAND_READ
+            )
+        );
+        assert_eq!(
+            pipeline_stage_access_flags(AccessType::General),
+            (
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+            )
+        );
+
+        let input = AccessType::AccelerationStructureBuildInputRead;
+        assert_eq!(access_type_into_u8(input), 68);
+        assert_eq!(access_type_from_u8(68), input);
+        assert!(is_read_access(input));
+        assert!(!is_write_access(input));
+        assert_eq!(
+            pipeline_stage_access_flags(input),
+            (
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                vk::AccessFlags::SHADER_READ,
+            )
+        );
+
+        let scratch = AccessType::AccelerationStructureBuildScratchReadWrite;
+        assert_eq!(access_type_into_u8(scratch), 69);
+        assert_eq!(access_type_from_u8(69), scratch);
+        assert!(is_read_access(scratch));
+        assert!(is_write_access(scratch));
+        let expected_scratch = (
+            vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+            vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
+                | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR,
+        );
+        assert_eq!(pipeline_stage_access_flags(scratch), expected_scratch);
+
+        let legacy = AccessType::AccelerationStructureBufferWrite;
+        assert!(is_read_access(legacy));
+        assert!(is_write_access(legacy));
+        assert_eq!(pipeline_stage_access_flags(legacy), expected_scratch);
+    }
+
+    #[test]
+    fn compute_acceleration_structure_read_is_packed_and_precise() {
+        let access = AccessType::ComputeShaderReadAccelerationStructure;
+        assert_eq!(access_type_into_u8(access), 78);
+        assert_eq!(access_type_from_u8(78), access);
+        assert_eq!(
+            access_type_from_u8(55),
+            AccessType::RayTracingShaderReadAccelerationStructure
+        );
+        assert!(is_read_access(access));
+        assert!(!is_write_access(access));
+        assert_eq!(
+            pipeline_stage_access_flags(access),
+            (
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
+            )
+        );
+    }
+
+    #[test]
+    fn micromap_buffer_access_ids_are_append_only_and_classified() {
+        let read = AccessType::MicromapBuildBufferRead;
+        assert_eq!(access_type_into_u8(read), 75);
+        assert_eq!(access_type_from_u8(75), read);
+        assert!(is_read_access(read));
+        assert!(!is_write_access(read));
+
+        let write = AccessType::MicromapBuildBufferWrite;
+        assert_eq!(access_type_into_u8(write), 76);
+        assert_eq!(access_type_from_u8(76), write);
+        assert!(!is_read_access(write));
+        assert!(is_write_access(write));
+    }
 
     macro_rules! assert_pcr_eq {
         ($lhs: expr, $rhs: expr,) => {

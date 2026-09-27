@@ -9,6 +9,7 @@ use {
         cmd_buf::{CommandBuffer, CommandBufferInfo},
         descriptor_set::{DescriptorPool, DescriptorPoolInfo},
         image::{Image, ImageInfo},
+        micromap::{Micromap, MicromapInfo},
         render_pass::{RenderPass, RenderPassInfo},
     },
     std::{
@@ -17,28 +18,13 @@ use {
     },
 };
 
-#[derive(Default)]
-pub(super) struct ResourceRequests {
-    pub(super) accel_structs: HashSet<AccelerationStructureInfo>,
-    pub(super) buffers: HashSet<BufferInfo>,
-    pub(super) images: HashSet<ImageInfo>,
-}
-
-impl ResourceRequests {
-    fn clear(&mut self) {
-        self.accel_structs.clear();
-        self.buffers.clear();
-        self.images.clear();
-    }
-}
-
 pub(super) trait CollectResources {
     fn collect_resources(&mut self, requests: &ResourceRequests);
 }
 
 /// A request-aware garbage collector for built-in [`Pool`] types.
 ///
-/// Successful acceleration-structure, buffer, and image requests are recorded until
+/// Successful acceleration-structure, buffer, image, and micromap requests are recorded until
 /// [`GarbageCollector::collect_resources`] is called. Collection retains only cached resources that
 /// the wrapped pool could use to satisfy those requests, then begins a new observation interval.
 /// Calling `collect_resources` without making any requests clears all managed resources.
@@ -93,9 +79,9 @@ where
 {
     /// Collects cached resources and begins a new request observation interval.
     ///
-    /// Only acceleration structures, buffers, and images supporting successful requests made since
-    /// the previous call are retained. If there were no such requests, all managed resources are
-    /// removed.
+    /// Only acceleration structures, buffers, images, and micromaps supporting successful requests
+    /// made since the previous call are retained. If there were no such requests, all managed
+    /// resources are removed.
     pub fn collect_resources(&mut self) {
         self.pool.collect_resources(&self.requests);
         self.requests.clear();
@@ -121,6 +107,7 @@ macro_rules! tracked_pool {
 tracked_pool!(AccelerationStructureInfo => AccelerationStructure, accel_structs);
 tracked_pool!(BufferInfo => Buffer, buffers);
 tracked_pool!(ImageInfo => Image, images);
+tracked_pool!(MicromapInfo => Micromap, micromaps);
 
 macro_rules! forwarded_pool {
     ($info:ty => $item:ty) => {
@@ -153,6 +140,23 @@ impl<T> DerefMut for GarbageCollector<T> {
     }
 }
 
+#[derive(Default)]
+pub(super) struct ResourceRequests {
+    pub(super) accel_structs: HashSet<AccelerationStructureInfo>,
+    pub(super) buffers: HashSet<BufferInfo>,
+    pub(super) images: HashSet<ImageInfo>,
+    pub(super) micromaps: HashSet<MicromapInfo>,
+}
+
+impl ResourceRequests {
+    fn clear(&mut self) {
+        self.accel_structs.clear();
+        self.buffers.clear();
+        self.images.clear();
+        self.micromaps.clear();
+    }
+}
+
 #[cfg(test)]
 mod test {
     use {
@@ -160,7 +164,7 @@ mod test {
         crate::{
             driver::{
                 accel_struct::AccelerationStructureInfoBuilder, buffer::BufferInfoBuilder,
-                image::ImageInfoBuilder,
+                image::ImageInfoBuilder, micromap::MicromapInfoBuilder,
             },
             pool::{SubmissionPool, fifo::FifoPool, hash::HashPool, lazy::LazyPool},
         },
@@ -169,7 +173,7 @@ mod test {
 
     #[derive(Default)]
     struct CollectSpy {
-        calls: Vec<(usize, usize, usize)>,
+        calls: Vec<(usize, usize, usize, usize)>,
     }
 
     impl CollectResources for CollectSpy {
@@ -178,6 +182,7 @@ mod test {
                 requests.accel_structs.len(),
                 requests.buffers.len(),
                 requests.images.len(),
+                requests.micromaps.len(),
             ));
         }
     }
@@ -198,6 +203,8 @@ mod test {
             + Pool<BufferInfoBuilder, Buffer>
             + Pool<ImageInfo, Image>
             + Pool<ImageInfoBuilder, Image>
+            + Pool<MicromapInfo, Micromap>
+            + Pool<MicromapInfoBuilder, Micromap>
             + Pool<CommandBufferInfo, CommandBuffer>
             + SubmissionPool,
     {
@@ -215,7 +222,7 @@ mod test {
         collector.collect_resources();
         collector.collect_resources();
 
-        assert_eq!(collector.pool.calls, [(0, 1, 0), (0, 0, 0)]);
+        assert_eq!(collector.pool.calls, [(0, 1, 0, 0), (0, 0, 0, 0)]);
     }
 
     #[test]
