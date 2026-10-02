@@ -1253,7 +1253,28 @@ impl Device {
     }
 
     /// Waits for device idle.
+    ///
+    /// Serializes the wait with host access to every device queue. Do not call this from a
+    /// [`Self::with_queue`] callback, which already holds one of these locks.
     pub fn wait_idle(this: &Self) -> Result<(), DriverError> {
+        // vkDeviceWaitIdle requires external synchronization for every queue. Acquire the
+        // same locks as submissions, in stable family/index order, for the whole Vulkan call.
+        let _queue_guards = this
+            .inner
+            .queues
+            .iter()
+            .flatten()
+            .map(|queue| {
+                #[cfg(not(feature = "parking_lot"))]
+                let guard = queue.lock().expect("poisoned queue lock");
+
+                #[cfg(feature = "parking_lot")]
+                let guard = queue.lock();
+
+                guard
+            })
+            .collect::<Box<_>>();
+
         unsafe {
             this.device_wait_idle().map_err(|err| {
                 warn!("unable to wait for device idle: {err}");
@@ -1668,6 +1689,42 @@ mod test {
     #[test]
     pub fn device_info_builder() {
         Builder::default().build();
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn wait_idle_waits_for_queue_host_access() -> Result<(), DriverError> {
+        use std::{sync::mpsc::channel, time::Duration};
+
+        let device = TestDevice::new()?;
+        for (family, queues) in device.inner.queues.iter().enumerate() {
+            for index in 0..queues.len() {
+                let (waiter, finished, early_result) =
+                    Device::with_queue(&device, family as u32, index as u32, |_| {
+                        let worker_device = device.clone();
+                        let (started_tx, started_rx) = channel();
+                        let (finished_tx, finished_rx) = channel();
+                        let waiter = thread::spawn(move || {
+                            started_tx.send(()).unwrap();
+                            let result = Device::wait_idle(&worker_device);
+                            finished_tx.send(result).unwrap();
+                        });
+                        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                        let early_result = finished_rx.recv_timeout(Duration::from_millis(100));
+                        (waiter, finished_rx, early_result)
+                    });
+                let completed_early = early_result.is_ok();
+                let result = early_result
+                    .unwrap_or_else(|_| finished.recv_timeout(Duration::from_secs(10)).unwrap());
+                waiter.join().unwrap();
+                result?;
+                assert!(
+                    !completed_early,
+                    "device idle overlapped queue host access for queue {family}:{index}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[derive(Debug)]

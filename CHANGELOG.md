@@ -55,6 +55,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Fix `Device::wait_idle` to safely handle other threads submitting work at the same time.
 - Correct sampled-image access declarations in `min_max` and `mip_compute`, and use 2D-array image
   views for the `vsm_omni` blur passes.
 - Fix missing stencil synchronization when depth layers or mip levels have different prior accesses.
