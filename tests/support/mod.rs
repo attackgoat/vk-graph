@@ -6,6 +6,7 @@
 mod buffer_ownership;
 mod device;
 pub(crate) mod disposal;
+mod optimized_shaders;
 mod ownership;
 mod pipeline_statistics;
 mod smoke;

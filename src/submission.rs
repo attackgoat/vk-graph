@@ -7645,14 +7645,9 @@ impl Submission {
                     set: descriptor_set_idx,
                     binding: dst_binding,
                 }) else {
-                    warn!(
-                        "binding {}.{}[{}] not found in shader reflection for command \"{}\"",
-                        descriptor_set_idx,
-                        dst_binding,
-                        binding_offset,
-                        pass.name(),
-                    );
-                    return Err(DriverError::InvalidData);
+                    // Optimization can remove unused bindings. Their declared accesses
+                    // still participate in synchronization and resource retention.
+                    continue;
                 };
                 if exec.descriptor_sets.contains_key(&descriptor_set_idx) {
                     continue;

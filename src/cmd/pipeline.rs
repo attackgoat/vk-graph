@@ -276,6 +276,9 @@ impl<'c, T> PipelineCommand<'c, T> {
     /// Informs the command that recorded work will read or write the `resource_node` at the
     /// specified shader `binding` using `access`.
     ///
+    /// Bindings absent from shader reflection, for example after optimization, do not produce
+    /// descriptor writes. Their declared resource accesses and lifetimes are still tracked.
+    ///
     /// If the same `binding` slot is used more than once, the last call wins and the previous
     /// binding is silently overwritten.
     ///
@@ -300,6 +303,9 @@ impl<'c, T> PipelineCommand<'c, T> {
     /// Informs the command that recorded work will read or write the `resource_node` at the
     /// specified shader `binding` using `access`. The resource will be interpreted using
     /// `view_info`.
+    ///
+    /// Bindings absent from shader reflection do not produce descriptor writes. Their declared
+    /// resource accesses and lifetimes are still tracked.
     ///
     /// If the same `binding` slot is used more than once, the last call wins and the previous
     /// binding is silently overwritten.
