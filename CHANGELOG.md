@@ -28,6 +28,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Separate acceleration-structure build-input and scratch-buffer access types.
 - `AccelerationStructureBuildIndirectRead` for exact indirect-range synchronization, with read-only
   tracking and legacy/synchronization2 mappings; `General` remains a conservative fallback.
+- `vk-graph-imgui`: `ImGui::set_font_size`, `Frame::image_nearest`.
 
 ### Changed
 
@@ -52,6 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Reject prepared-stream invocations nested inside reusable streams when `checked` is enabled.
   This nesting is unsupported with or without checks; unprepared streams can still be nested.
 - Set and inherit a workspace Rust requirement of 1.92, with CI checks for that version.
+- `vk-graph-imgui`: Pack draw lists to reduce memory usage and remove hitches from large UIs.
 
 ### Fixed
 
@@ -73,6 +75,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fix builds without `checked` and/or `parking_lot`.
 - Correct maximum vertex indices in ray-tracing examples and acceleration-structure storage
   sizing in the guide.
+- `vk-graph-imgui`: Support empty frames and frames that produce no vertices.
 
 ## [0.14.8] - 2026-09-14
 

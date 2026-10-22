@@ -3,6 +3,8 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+mod geometry;
+
 /// Common imports for applications using the ImGui integration.
 pub mod prelude {
     pub use super::{Condition, Frame, ImGui, Image, ImageSource, Ui, imgui};
@@ -13,7 +15,7 @@ pub use imgui::{self, Condition, Ui};
 type DrawCmdInfo = (usize, [f32; 4], usize, usize, TextureId);
 
 use {
-    bytemuck::cast_slice,
+    self::geometry::{GeometryCapacity, GeometryOffsets, draw_list_geometry},
     imgui::{Context, DrawCmd, DrawCmdParams, TextureId},
     imgui_winit_support::{
         winit::{event::Event, window::Window},
@@ -30,7 +32,7 @@ use {
             device::Device,
             graphics::{BlendInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image as DriverImage, ImageInfo},
-            shader::Shader,
+            shader::{SamplerInfo, Shader},
             sync::AccessType,
         },
         node::{AnyImageNode, ImageLeaseNode, ImageNode},
@@ -44,16 +46,19 @@ use {
 pub struct ImGui {
     context: Context,
     font_atlas_image: Option<Arc<Lease<DriverImage>>>,
+    font_size: f32,
+    geometry_capacity: GeometryCapacity,
+    nearest_pipeline: GraphicsPipeline,
     next_texture_id: usize,
     pipeline: GraphicsPipeline,
     platform: WinitPlatform,
-    user_images: HashMap<TextureId, AnyImageNode>,
+    user_images: HashMap<TextureId, ImageSource>,
 }
 
 /// Frame-scoped helper for registering user images with ImGui draw commands.
 pub struct Frame<'a> {
     next_texture_id: &'a mut usize,
-    user_images: &'a mut HashMap<TextureId, AnyImageNode>,
+    user_images: &'a mut HashMap<TextureId, ImageSource>,
 }
 
 /// A frame-scoped ImGui image registration.
@@ -70,6 +75,7 @@ pub struct Image<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct ImageSource {
     image: AnyImageNode,
+    nearest: bool,
 }
 
 fn supported_draw_cmd(draw_cmd: DrawCmd) -> Option<DrawCmdInfo> {
@@ -101,12 +107,20 @@ impl<'a> Frame<'a> {
     pub fn image(&mut self, image: impl Into<ImageSource>) -> Image<'_> {
         let id = TextureId::new(*self.next_texture_id);
         *self.next_texture_id += 1;
-        self.user_images.insert(id, image.into().image);
+        self.user_images.insert(id, image.into());
 
         Image {
             id,
             _frame: PhantomData,
         }
+    }
+
+    /// Registers an image using nearest sampling without changing font or other image sampling.
+    pub fn image_nearest(&mut self, image: impl Into<ImageSource>) -> Image<'_> {
+        self.image(ImageSource {
+            nearest: true,
+            ..image.into()
+        })
     }
 }
 
@@ -123,7 +137,10 @@ impl Drop for Image<'_> {
 
 impl From<AnyImageNode> for ImageSource {
     fn from(image: AnyImageNode) -> Self {
-        Self { image }
+        Self {
+            image,
+            nearest: false,
+        }
     }
 }
 
@@ -131,6 +148,7 @@ impl From<ImageLeaseNode> for ImageSource {
     fn from(image: ImageLeaseNode) -> Self {
         Self {
             image: image.into(),
+            nearest: false,
         }
     }
 }
@@ -139,6 +157,7 @@ impl From<ImageNode> for ImageSource {
     fn from(image: ImageNode) -> Self {
         Self {
             image: image.into(),
+            nearest: false,
         }
     }
 }
@@ -159,14 +178,50 @@ impl ImGui {
             ],
         )
         .expect("invalid imgui pipeline");
+        let nearest_pipeline = GraphicsPipeline::create(
+            device,
+            GraphicsPipelineInfo::builder()
+                .blend(BlendInfo::PRE_MULTIPLIED_ALPHA)
+                .cull_mode(vk::CullModeFlags::NONE),
+            [
+                Shader::new_vertex(include_glsl!("res/shader/imgui.vert").as_slice()),
+                Shader::new_fragment(include_glsl!("res/shader/imgui.frag").as_slice())
+                    .image_sampler(
+                        0,
+                        SamplerInfo::NEAREST
+                            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
+                    ),
+            ],
+        )
+        .expect("invalid nearest imgui pipeline");
 
         Self {
             context,
             font_atlas_image: None,
+            font_size: 14.0,
+            geometry_capacity: GeometryCapacity::default(),
+            nearest_pipeline,
             next_texture_id: 1,
             pipeline,
             platform,
             user_images: Default::default(),
+        }
+    }
+
+    /// Sets the logical font size, rebuilding the atlas before the next frame when it changes.
+    /// Existing graphs retain the previous atlas until their image leases are released.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `size` is not finite or is not positive.
+    pub fn set_font_size(&mut self, size: f32) {
+        assert!(size.is_finite() && size > 0.0, "invalid imgui font size");
+
+        if self.font_size != size {
+            self.font_size = size;
+            self.font_atlas_image = None;
         }
     }
 
@@ -175,6 +230,10 @@ impl ImGui {
     here and should instead ask the user what settings to give the output image.
     */
     /// Builds a frame, records the necessary draw commands, and returns the rendered image.
+    ///
+    /// Draw lists share one pooled vertex/index buffer pair. Requested capacities
+    /// grow geometrically and do not shrink during this renderer's lifetime;
+    /// each graph retains its own leases until execution has completed.
     pub fn draw<P>(
         &mut self,
         dt: f32,
@@ -244,45 +303,29 @@ impl ImGui {
 
         graph.clear_color_image(image, [0f32; 4]);
 
-        if draw_data.draw_lists_count() == 0 {
+        let Some(geometry) = self
+            .geometry_capacity
+            .lease(pool, draw_data)
+            .expect("missing imgui geometry buffers")
+        else {
+            self.user_images.clear();
+            self.next_texture_id = 1;
+
             return image;
-        }
+        };
+        let index_buf = graph.bind_resource(geometry.indices);
+        let vertex_buf = graph.bind_resource(geometry.vertices);
+        let mut offsets = GeometryOffsets::default();
 
         for draw_list in draw_data.draw_lists() {
-            let indices = cast_slice(draw_list.idx_buffer());
-            let mut index_buf = pool
-                .resource(BufferInfo::host_mem(
-                    indices.len() as _,
-                    vk::BufferUsageFlags::INDEX_BUFFER,
-                ))
-                .expect("missing imgui index buffer");
-
-            {
-                Buffer::mapped_slice_mut(&mut index_buf)[0..indices.len()].copy_from_slice(indices);
-            }
-
-            let index_buf = graph.bind_resource(index_buf);
-
-            let vertices = draw_list.vtx_buffer();
-            let vertex_buf_len = vertices.len() * 20;
-            let mut vertex_buf = pool
-                .resource(BufferInfo::host_mem(
-                    vertex_buf_len as _,
-                    vk::BufferUsageFlags::VERTEX_BUFFER,
-                ))
-                .expect("missing imgui vertex buffer");
-
-            {
-                let vertex_buf = Buffer::mapped_slice_mut(&mut vertex_buf);
-                for (idx, vertex) in vertices.iter().enumerate() {
-                    let offset = idx * 20;
-                    vertex_buf[offset..offset + 8].copy_from_slice(cast_slice(&vertex.pos));
-                    vertex_buf[offset + 8..offset + 16].copy_from_slice(cast_slice(&vertex.uv));
-                    vertex_buf[offset + 16..offset + 20].copy_from_slice(&vertex.col);
-                }
-            }
-
-            let vertex_buf = graph.bind_resource(vertex_buf);
+            let Some((indices, vertices)) = draw_list_geometry(draw_list) else {
+                continue;
+            };
+            let start = offsets
+                .push(indices.len(), vertices.len())
+                .expect("invalid imgui geometry offsets");
+            let index_offset = start.indices as vk::DeviceSize;
+            let vertex_offset_bytes = start.vertices as vk::DeviceSize;
 
             let draw_cmds = draw_list
                 .commands()
@@ -295,11 +338,16 @@ impl ImGui {
                 self.platform.hidpi_factor() as f32 / window.inner_size().height as f32;
 
             for (index_count, clip_rect, first_index, vertex_offset, texture_id) in draw_cmds {
-                let texture = self
+                let (texture, nearest) = self
                     .user_images
                     .get(&texture_id)
-                    .copied()
-                    .unwrap_or_else(|| font_atlas_image.into());
+                    .map(|source| (source.image, source.nearest))
+                    .unwrap_or_else(|| (font_atlas_image.into(), false));
+                let pipeline = if nearest {
+                    &self.nearest_pipeline
+                } else {
+                    &self.pipeline
+                };
                 let clip_rect = [
                     (clip_rect[0] - display_pos[0]) * framebuffer_scale[0],
                     (clip_rect[1] - display_pos[1]) * framebuffer_scale[1],
@@ -314,7 +362,7 @@ impl ImGui {
                 graph
                     .begin_cmd()
                     .debug_name("imgui")
-                    .bind_pipeline(&self.pipeline)
+                    .bind_pipeline(pipeline)
                     .resource_access(index_buf, AccessType::IndexBuffer)
                     .resource_access(vertex_buf, AccessType::VertexBuffer)
                     .shader_resource_access(
@@ -326,8 +374,9 @@ impl ImGui {
                     .record_cmd(move |cmd| {
                         cmd.push_constants(0, &window_width.to_ne_bytes())
                             .push_constants(4, &window_height.to_ne_bytes())
-                            .bind_index_buffer(index_buf, 0, vk::IndexType::UINT16)
-                            .bind_vertex_buffer(0, vertex_buf, 0)
+                            // Each list keeps its local indices and command offsets.
+                            .bind_index_buffer(index_buf, index_offset, vk::IndexType::UINT16)
+                            .bind_vertex_buffer(0, vertex_buf, vertex_offset_bytes)
                             .set_scissor(
                                 0,
                                 &[vk::Rect2D {
@@ -361,9 +410,10 @@ impl ImGui {
         let hidpi_factor = self.platform.hidpi_factor();
         self.context.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
 
-        let font_size = (14.0 * hidpi_factor) as f32;
+        let font_size = (self.font_size as f64 * hidpi_factor) as f32;
         let fonts = self.context.fonts();
-        fonts.clear_fonts();
+        // Clear input configurations too, so previous font sizes are not reused.
+        fonts.clear();
         fonts.add_font(&[
             FontSource::TtfData {
                 data: include_bytes!("../res/font/roboto/roboto-regular.ttf"),
@@ -424,8 +474,19 @@ impl ImGui {
 
 #[cfg(test)]
 mod test {
-    use super::supported_draw_cmd;
-    use imgui::{DrawCmd, DrawCmdParams, TextureId};
+    use {
+        super::{Frame, ImGui, supported_draw_cmd},
+        imgui::{DrawCmd, DrawCmdParams, TextureId},
+        std::sync::{Arc, Mutex},
+        vk_graph::{
+            Graph, Node as _,
+            driver::device::{Device, DeviceInfo},
+            pool::hash::HashPool,
+        },
+    };
+
+    // Dear ImGui permits only one active context per process.
+    pub(super) static CONTEXT: Mutex<()> = Mutex::new(());
 
     #[test]
     fn supported_draw_cmd_extracts_element_draws() {
@@ -448,5 +509,62 @@ mod test {
     #[test]
     fn supported_draw_cmd_skips_reset_render_state() {
         assert_eq!(supported_draw_cmd(DrawCmd::ResetRenderState), None);
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan device"]
+    fn font_resize_retains_in_flight_atlas_and_nearest_sampling_is_per_image()
+    -> Result<(), vk_graph::driver::DriverError> {
+        fn assert_font_size(renderer: &mut ImGui, expected: f32) {
+            let fonts = renderer.context.fonts();
+            let font_ids = fonts.fonts();
+            assert_eq!(font_ids.len(), 1);
+            assert_eq!(fonts.get_font(font_ids[0]).unwrap().font_size, expected);
+        }
+
+        let device = Device::create(DeviceInfo::default())?;
+        let mut pool = HashPool::new(&device);
+        let _context = CONTEXT.lock().unwrap();
+        let mut renderer = ImGui::new(&device);
+        renderer.context.set_ini_filename(None);
+        let mut graph = Graph::default();
+        renderer.lease_font_atlas_image(&mut pool, &mut graph);
+        assert_font_size(&mut renderer, 14.0);
+        let old = Arc::downgrade(renderer.font_atlas_image.as_ref().unwrap());
+        let old_handle = old.upgrade().unwrap().handle;
+        renderer.set_font_size(20.0);
+        assert!(renderer.font_atlas_image.is_none());
+        assert!(old.upgrade().is_some(), "in-flight graph lost its atlas");
+        renderer.lease_font_atlas_image(&mut pool, &mut graph);
+        assert_font_size(&mut renderer, 20.0);
+        let atlas = renderer.font_atlas_image.as_ref().unwrap();
+        let handle = atlas.handle;
+        assert_ne!(old_handle, handle);
+        let node = graph.bind_resource(atlas);
+        renderer.set_font_size(20.0);
+        assert_eq!(renderer.font_atlas_image.as_ref().unwrap().handle, handle);
+
+        let mut frame = Frame {
+            next_texture_id: &mut renderer.next_texture_id,
+            user_images: &mut renderer.user_images,
+        };
+        let nearest = frame.image_nearest(node).id();
+        let regular = frame.image(node).id();
+        assert!(frame.user_images[&nearest].nearest);
+        assert!(!frame.user_images[&regular].nearest);
+        assert_eq!(
+            frame.user_images[&nearest].image.index(),
+            frame.user_images[&regular].image.index()
+        );
+
+        for size in [28.0, 14.0] {
+            renderer.set_font_size(size);
+            renderer.lease_font_atlas_image(&mut pool, &mut graph);
+            assert_font_size(&mut renderer, size);
+        }
+
+        drop(graph);
+        assert!(old.upgrade().is_none());
+        Ok(())
     }
 }
