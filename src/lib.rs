@@ -127,7 +127,7 @@ impl AtomicCommandExecution {
     fn compare_pending_exchange_abandoned(&self) {
         let _ = self
             .0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
                 Self::PENDING => Some(Self::ABANDONED),
                 Self::SUBMITTED => Some(Self::SUBMITTED_ABANDONED),
                 _ => None,
@@ -146,7 +146,7 @@ impl AtomicCommandExecution {
     fn compare_pending_exchange_executed(&self) {
         let _ = self
             .0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
                 matches!(state, Self::PENDING | Self::SUBMITTED).then_some(Self::EXECUTED)
             });
     }
@@ -1979,7 +1979,7 @@ impl GraphId {
 
         Self(
             NEXT_ID
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .expect("graph identity overflow"),
         )
     }

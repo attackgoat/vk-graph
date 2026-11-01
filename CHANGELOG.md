@@ -52,11 +52,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Cache prepared-stream argument lookups and reduce temporary allocations in batch validation.
 - Reject prepared-stream invocations nested inside reusable streams when `checked` is enabled.
   This nesting is unsupported with or without checks; unprepared streams can still be nested.
-- Set and inherit a workspace Rust requirement of 1.92, with CI checks for that version.
+- Set and inherit a workspace Rust requirement of 1.95, with CI checks for that version.
 - `vk-graph-imgui`: Pack draw lists to reduce memory usage and remove hitches from large UIs.
 
 ### Fixed
 
+- Replace deprecated atomic `fetch_update` calls with `try_update`.
 - Fix `Device::wait_idle` to safely handle other threads submitting work at the same time.
 - Correct sampled-image access declarations in `min_max` and `mip_compute`, and use 2D-array image
   views for the `vsm_omni` blur passes.

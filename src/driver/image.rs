@@ -235,7 +235,7 @@ impl Access {
         update: impl Fn(ImageAccessSet) -> ImageAccessSet,
     ) {
         let update_atomic = |atomic: &AtomicU16| {
-            let _ = atomic.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            let _ = atomic.try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 Some(update(ImageAccessSet::from_raw(current)).raw())
             });
         };
@@ -252,7 +252,7 @@ impl Access {
             Self::Dense(access) => {
                 if access
                     .0
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                         // A promotion observed on retry must take the locked path instead.
                         if current & DenseAccess::STATE_MASK != 0 {
                             return None;

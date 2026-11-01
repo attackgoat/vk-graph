@@ -14,7 +14,7 @@ real-world use, and supports modern Vulkan commands[^modern].
 vk-graph = "0.15"
 ```
 
-Requires Rust 1.92 or newer.
+Requires Rust 1.95 or newer.
 
 [*Changelog*](https://github.com/attackgoat/vk-graph/blob/main/CHANGELOG.md)
 
