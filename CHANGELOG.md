@@ -54,6 +54,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   This nesting is unsupported with or without checks; unprepared streams can still be nested.
 - Set and inherit a workspace Rust requirement of 1.95, with CI checks for that version.
 - `vk-graph-imgui`: Pack draw lists to reduce memory usage and remove hitches from large UIs.
+- Optimize recording of workloads with many buffer-subrange accesses.
 
 ### Fixed
 

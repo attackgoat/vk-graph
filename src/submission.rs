@@ -243,6 +243,159 @@ impl AccessClass {
     }
 }
 
+// Each variant stores an exact union of disjoint, nonadjacent half-open ranges.
+#[derive(Debug)]
+enum BufferClaim {
+    Indexed(BTreeMap<vk::DeviceSize, vk::DeviceSize>),
+    Ordered {
+        ranges: Vec<BufferSubresourceRange>,
+        shifted_ranges: usize,
+    },
+}
+
+impl BufferClaim {
+    fn claim(&mut self, range: BufferSubresourceRange) -> SmallVec<[BufferSubresourceRange; 4]> {
+        debug_assert!(range.start <= range.end);
+
+        if range.start == range.end {
+            return SmallVec::new();
+        }
+
+        let (ranges, shifted_ranges) = match self {
+            Self::Indexed(ranges) => return Self::claim_indexed(ranges, range),
+            Self::Ordered {
+                ranges,
+                shifted_ranges,
+            } => (ranges, shifted_ranges),
+        };
+        let Some(last) = ranges.last_mut() else {
+            ranges.push(range);
+            return SmallVec::from_slice(&[range]);
+        };
+
+        if last.end <= range.start {
+            if last.end == range.start {
+                last.end = range.end;
+            } else {
+                ranges.push(range);
+            }
+
+            return SmallVec::from_slice(&[range]);
+        } else if last.contains(range) {
+            return SmallVec::new();
+        }
+
+        let first = ranges.partition_point(|old| old.end < range.start);
+        if ranges.get(first).is_some_and(|old| old.contains(range)) {
+            return SmallVec::new();
+        }
+
+        let end = first + ranges[first..].partition_point(|old| old.start <= range.end);
+        let moved = if end - first == 1 {
+            0
+        } else {
+            ranges.len() - end
+        };
+        let total = shifted_ranges.saturating_add(moved);
+
+        // Bound cumulative tail movement by peak vector length. Never replenish this
+        // allowance after compaction, and promote at most once per recording.
+        if moved != 0 && total > ranges.len() {
+            let mut indexed = take(ranges)
+                .into_iter()
+                .map(|range| (range.start, range.end))
+                .collect();
+            let unclaimed = Self::claim_indexed(&mut indexed, range);
+            *self = Self::Indexed(indexed);
+
+            return unclaimed;
+        }
+
+        *shifted_ranges = total;
+
+        let mut unclaimed = SmallVec::new();
+        let mut cursor = range.start;
+        for old in &ranges[first..end] {
+            if cursor < old.start && cursor < range.end {
+                unclaimed.push(BufferSubresourceRange {
+                    start: cursor,
+                    end: old.start.min(range.end),
+                });
+            }
+            cursor = cursor.max(old.end).min(range.end);
+        }
+
+        if cursor < range.end {
+            unclaimed.push(BufferSubresourceRange {
+                start: cursor,
+                end: range.end,
+            });
+        }
+
+        if first == end {
+            ranges.insert(first, range);
+        } else {
+            ranges[first] = BufferSubresourceRange {
+                start: range.start.min(ranges[first].start),
+                end: range.end.max(ranges[end - 1].end),
+            };
+            ranges.drain(first + 1..end);
+        }
+        unclaimed
+    }
+
+    fn claim_indexed(
+        ranges: &mut BTreeMap<vk::DeviceSize, vk::DeviceSize>,
+        range: BufferSubresourceRange,
+    ) -> SmallVec<[BufferSubresourceRange; 4]> {
+        let mut merged = range;
+        let mut cursor = range.start;
+        let mut unclaimed = SmallVec::new();
+        if let Some((&start, &end)) = ranges.range(..=range.start).next_back() {
+            if range.end <= end {
+                return unclaimed;
+            } else if range.start <= end {
+                merged.start = start;
+                cursor = end;
+                ranges.remove(&start);
+            }
+        }
+
+        while let Some((&start, &end)) = ranges.range(merged.start..=merged.end).next() {
+            if cursor < start && cursor < range.end {
+                unclaimed.push(BufferSubresourceRange {
+                    start: cursor,
+                    end: start.min(range.end),
+                });
+            }
+
+            cursor = cursor.max(end).min(range.end);
+            merged.end = merged.end.max(end);
+            ranges.remove(&start);
+        }
+
+        if cursor < range.end {
+            unclaimed.push(BufferSubresourceRange {
+                start: cursor,
+                end: range.end,
+            });
+        }
+
+        ranges.insert(merged.start, merged.end);
+
+        unclaimed
+    }
+}
+
+impl Default for BufferClaim {
+    fn default() -> Self {
+        Self::Ordered {
+            ranges: Vec::new(),
+            shifted_ranges: 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct BufferQueueOwnershipTransfer {
     range: BufferSubresourceRange,
@@ -1945,7 +2098,7 @@ impl RecordingDescriptorSet {
 struct RecordingOwnership {
     // These ranges are effectively owned by this recording, but global ownership is not updated
     // until its command buffer is submitted successfully.
-    buffers: HashMap<usize, Vec<BufferSubresourceRange>>,
+    buffers: HashMap<usize, BufferClaim>,
     images: HashMap<usize, ImageOwnership>,
     image_set_images: HashMap<PhysicalImageId, ImageOwnership>,
 }
@@ -1956,40 +2109,7 @@ impl RecordingOwnership {
         node_idx: usize,
         range: BufferSubresourceRange,
     ) -> SmallVec<[BufferSubresourceRange; 4]> {
-        let claimed = self.buffers.entry(node_idx).or_default();
-        let mut unclaimed = SmallVec::<[BufferSubresourceRange; 4]>::from_slice(&[range]);
-
-        for &claimed_range in claimed.iter() {
-            let mut remaining = SmallVec::<[BufferSubresourceRange; 4]>::new();
-
-            for range in unclaimed.drain(..) {
-                let Some(overlap) = range.intersection(claimed_range) else {
-                    remaining.push(range);
-                    continue;
-                };
-
-                if range.start < overlap.start {
-                    remaining.push(BufferSubresourceRange {
-                        start: range.start,
-                        end: overlap.start,
-                    });
-                }
-                if overlap.end < range.end {
-                    remaining.push(BufferSubresourceRange {
-                        start: overlap.end,
-                        end: range.end,
-                    });
-                }
-            }
-
-            unclaimed = remaining;
-            if unclaimed.is_empty() {
-                break;
-            }
-        }
-
-        claimed.extend(unclaimed.iter().copied());
-        unclaimed
+        self.buffers.entry(node_idx).or_default().claim(range)
     }
 
     fn claim_image(
@@ -9376,12 +9496,12 @@ pub mod fuzz {
 #[cfg(test)]
 mod test {
     use super::{
-        BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData, CommandRecordingResources,
-        GraphicsExecutionInfo, ImageOwnership, ImageOwnershipLayouts, ImageOwnershipTransfer,
-        ImageQueueOwnershipRelease, NodeIndex, PipelineStageAccessFlags, PreparedStreamRecording,
-        QueueSubmitInfo, RecordSelection, RecordedSubmission, RecordedSubmissionState,
-        RecordingOwnership, ResourceSetSynchronization, Schedule, SemaphoreSubmitInfo, Submission,
-        SubresourceAccess, SubresourceRange, fuzz,
+        BufferClaim, BufferQueueOwnershipTransfer, CommandAccessIndex, CommandData,
+        CommandRecordingResources, GraphicsExecutionInfo, ImageOwnership, ImageOwnershipLayouts,
+        ImageOwnershipTransfer, ImageQueueOwnershipRelease, NodeIndex, PipelineStageAccessFlags,
+        PreparedStreamRecording, QueueSubmitInfo, RecordSelection, RecordedSubmission,
+        RecordedSubmissionState, RecordingOwnership, ResourceSetSynchronization, Schedule,
+        SemaphoreSubmitInfo, Submission, SubresourceAccess, SubresourceRange, fuzz,
     };
 
     use crate::{
@@ -10162,6 +10282,291 @@ mod test {
 
         fn uniform_color(index: usize) -> [u32; 4] {
             [index as u32 & 255, (index as u32 >> 8) * 47, 19, 0]
+        }
+    }
+
+    #[test]
+    fn buffer_claims_keep_movement_budget_after_compaction() {
+        let mut claims = BufferClaim::default();
+        for range in [8..16, 24..32, 40..48, 0..4] {
+            claims.claim(range.into());
+        }
+        claims.claim((0..48).into());
+        assert!(matches!(
+            &claims,
+            BufferClaim::Ordered { ranges, shifted_ranges: 3 } if ranges.len() == 1
+        ));
+        claims.claim((64..72).into());
+        claims.claim((56..60).into());
+        assert!(matches!(claims, BufferClaim::Indexed(_)));
+    }
+
+    #[test]
+    fn buffer_claims_keep_strided_uploads_ordered_and_buffers_independent() {
+        let mut ownership = RecordingOwnership::default();
+        for row in 0..4096 {
+            for (node_idx, start) in [(0, row * 8), (1, row * 96 + 88), (2, row * 64 + 56)] {
+                let range = BufferSubresourceRange::from(start..start + 8);
+                assert_eq!(ownership.claim_buffer(node_idx, range).as_slice(), &[range]);
+            }
+        }
+        for (node_idx, count) in [(0, 1), (1, 4096), (2, 4096)] {
+            let BufferClaim::Ordered {
+                ranges,
+                shifted_ranges,
+            } = &ownership.buffers[&node_idx]
+            else {
+                panic!("ordered upload promoted unnecessarily");
+            };
+            assert_eq!(ranges.len(), count);
+            assert_eq!(*shifted_ranges, 0);
+        }
+        assert!(ownership.claim_buffer(0, (88..96).into()).is_empty());
+        assert!(ownership.claim_buffer(1, (88..96).into()).is_empty());
+        assert_eq!(
+            ownership.claim_buffer(3, (88..96).into()).as_slice(),
+            &[BufferSubresourceRange::from(88..96)]
+        );
+        for (node_idx, stride) in [(1, 96), (2, 64)] {
+            let size = 4096 * stride;
+            let unclaimed = ownership.claim_buffer(node_idx, (0..size).into());
+            assert_eq!(unclaimed.len(), 4096);
+            assert_eq!(
+                unclaimed
+                    .iter()
+                    .map(|range| range.end - range.start)
+                    .sum::<u64>(),
+                4096 * (stride - 8)
+            );
+            assert!(matches!(
+                &ownership.buffers[&node_idx],
+                BufferClaim::Ordered { ranges, shifted_ranges: 0 }
+                    if ranges.as_slice() == [BufferSubresourceRange::from(0..size)]
+            ));
+        }
+    }
+
+    #[test]
+    fn buffer_claims_match_bitmap_for_seeded_sequences() {
+        for indexed in [false, true] {
+            for seed in 1..=64u64 {
+                let mut state = seed;
+                let mut random = || {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state
+                };
+                let mut claims = if indexed {
+                    BufferClaim::Indexed(Default::default())
+                } else {
+                    BufferClaim::default()
+                };
+                let mut claimed = [false; 256];
+                for step in 0..=256 {
+                    let a = random() as usize % claimed.len();
+                    let b = random() as usize % claimed.len();
+                    let query = if step < 128 {
+                        a..a + 1
+                    } else if step == 256 {
+                        0..claimed.len()
+                    } else {
+                        a.min(b)..a.max(b) + 1
+                    };
+                    let mut actual = [false; 256];
+                    let mut previous_end = query.start as u64;
+                    for gap in claims.claim((query.start as u64..query.end as u64).into()) {
+                        assert!(previous_end <= gap.start && gap.start < gap.end);
+                        assert!(gap.end <= query.end as u64);
+                        previous_end = gap.end;
+                        for byte in gap.start as usize..gap.end as usize {
+                            assert!(!actual[byte]);
+                            actual[byte] = true;
+                        }
+                    }
+                    for byte in 0..claimed.len() {
+                        let touched = query.contains(&byte);
+                        assert_eq!(
+                            actual[byte],
+                            touched && !claimed[byte],
+                            "seed {seed} step {step} byte {byte}"
+                        );
+                        claimed[byte] |= touched;
+                    }
+                    let ranges = match &claims {
+                        BufferClaim::Indexed(ranges) => ranges
+                            .iter()
+                            .map(|(&start, &end)| BufferSubresourceRange { start, end })
+                            .collect::<Vec<_>>(),
+                        BufferClaim::Ordered { ranges, .. } => ranges.clone(),
+                    };
+                    let mut coverage = [false; 256];
+                    for (index, range) in ranges.iter().enumerate() {
+                        assert!(range.start < range.end);
+                        if index != 0 {
+                            assert!(
+                                ranges[index - 1].end < range.start,
+                                "adjacent claims must merge"
+                            );
+                        }
+                        coverage[range.start as usize..range.end as usize].fill(true);
+                    }
+                    assert_eq!(coverage, claimed, "seed {seed} step {step}");
+                }
+                assert!(claims.claim((0..256).into()).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn buffer_claims_merge_adjacent_ranges_without_claiming_holes() {
+        for indexed in [false, true] {
+            let mut claims = if indexed {
+                BufferClaim::Indexed(Default::default())
+            } else {
+                BufferClaim::default()
+            };
+            for range in [0..8, 8..16, 32..40] {
+                let range = BufferSubresourceRange::from(range);
+                assert_eq!(claims.claim(range).as_slice(), &[range]);
+            }
+            assert_eq!(
+                claims.claim((12..36).into()).as_slice(),
+                &[BufferSubresourceRange::from(16..32)]
+            );
+            assert!(claims.claim((4..12).into()).is_empty());
+            assert!(claims.claim((0..40).into()).is_empty());
+            assert!(claims.claim((24..24).into()).is_empty());
+            match claims {
+                BufferClaim::Indexed(ranges) => {
+                    assert_eq!(ranges.into_iter().collect::<Vec<_>>(), [(0, 40)]);
+                }
+                BufferClaim::Ordered {
+                    ranges,
+                    shifted_ranges,
+                } => {
+                    assert_eq!(ranges, [BufferSubresourceRange::from(0..40)]);
+                    assert_eq!(shifted_ranges, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn buffer_claims_merge_indexed_neighbors_and_return_only_gaps() {
+        let mut claims = BufferClaim::Indexed([(8, 16), (24, 32), (40, 48)].into_iter().collect());
+        assert_eq!(
+            claims.claim((12..44).into()).as_slice(),
+            &[
+                BufferSubresourceRange::from(16..24),
+                BufferSubresourceRange::from(32..40)
+            ]
+        );
+        assert_eq!(
+            claims.claim((0..8).into()).as_slice(),
+            &[BufferSubresourceRange::from(0..8)]
+        );
+        assert_eq!(
+            claims.claim((48..56).into()).as_slice(),
+            &[BufferSubresourceRange::from(48..56)]
+        );
+        let BufferClaim::Indexed(ranges) = claims else {
+            unreachable!()
+        };
+        assert_eq!(ranges.into_iter().collect::<Vec<_>>(), [(0, 56)]);
+    }
+
+    #[test]
+    fn buffer_claims_preserve_wide_offsets_and_resolved_whole_ranges() {
+        for indexed in [false, true] {
+            let mut claims = if indexed {
+                BufferClaim::Indexed(Default::default())
+            } else {
+                BufferClaim::default()
+            };
+            let base = 1 << 40;
+            let first = BufferSubresourceRange::from(base..base + 8);
+            assert_eq!(claims.claim(first).as_slice(), &[first]);
+            assert_eq!(
+                claims.claim((base + 4..base + 24).into()).as_slice(),
+                &[BufferSubresourceRange::from(base + 8..base + 24)]
+            );
+            let end = vk::WHOLE_SIZE - 1;
+            let last = BufferSubresourceRange::from(end - 8..end);
+            assert_eq!(claims.claim(last).as_slice(), &[last]);
+            assert!(claims.claim(last).is_empty());
+        }
+        let mut ownership = RecordingOwnership::default();
+        ownership.claim_buffer(0, (16..24).into());
+        let whole = BufferSubresourceRange::from(0..vk::WHOLE_SIZE).resolve_whole(64);
+        assert_eq!(
+            ownership.claim_buffer(0, whole).as_slice(),
+            &[
+                BufferSubresourceRange::from(0..16),
+                BufferSubresourceRange::from(24..64)
+            ]
+        );
+        assert!(ownership.claim_buffer(0, whole).is_empty());
+    }
+
+    #[test]
+    fn buffer_claims_promote_before_repeated_tail_moves_and_never_demote() {
+        let mut claims = BufferClaim::default();
+        for row in 0..128 {
+            claims.claim((row * 96 + 88..row * 96 + 96).into());
+        }
+        assert!(claims.claim((88..96).into()).is_empty());
+        assert_eq!(
+            claims.claim((0..8).into()).as_slice(),
+            &[BufferSubresourceRange::from(0..8)]
+        );
+        assert!(matches!(
+            claims,
+            BufferClaim::Ordered {
+                shifted_ranges: 128,
+                ..
+            }
+        ));
+        assert_eq!(
+            claims.claim((16..24).into()).as_slice(),
+            &[BufferSubresourceRange::from(16..24)]
+        );
+        assert!(matches!(&claims, BufferClaim::Indexed(ranges) if ranges.len() == 130));
+        claims.claim((0..128 * 96).into());
+        assert!(matches!(
+            &claims,
+            BufferClaim::Indexed(ranges) if ranges.len() == 1 && ranges.get(&0) == Some(&(128 * 96))
+        ));
+        assert!(claims.claim((0..128 * 96).into()).is_empty());
+    }
+
+    #[test]
+    fn buffer_claims_promote_reverse_and_shuffled_strided_uploads() {
+        for shuffled in [false, true] {
+            let mut rows = (0..4096u64).collect::<Vec<_>>();
+            if shuffled {
+                let mut state = 1701u64;
+                for index in (1..rows.len()).rev() {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    rows.swap(index, state as usize % (index + 1));
+                }
+            } else {
+                rows.reverse();
+            }
+            let mut claims = BufferClaim::default();
+            for row in rows {
+                let range = BufferSubresourceRange::from(row * 96 + 88..row * 96 + 96);
+                assert_eq!(claims.claim(range).as_slice(), &[range]);
+            }
+            let BufferClaim::Indexed(ranges) = claims else {
+                panic!("unordered upload did not promote");
+            };
+            assert_eq!(ranges.len(), 4096);
+            for (row, (start, end)) in ranges.into_iter().enumerate() {
+                assert_eq!((start, end), (row as u64 * 96 + 88, row as u64 * 96 + 96));
+            }
         }
     }
 
