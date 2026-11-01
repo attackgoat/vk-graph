@@ -38,7 +38,6 @@ pub struct Graphchain {
     frames: Box<[FrameSlot]>,
     image_frames: Vec<usize>,
     last_present_queue_index: u32,
-    queue_family_index: u32,
     recreate_pending: bool,
     requested_info: GraphchainInfo,
     strategy: PresentRetirementStrategy,
@@ -140,6 +139,7 @@ impl Graphchain {
                 image_count: swapchain.info.image_count as usize,
                 min_image_count,
                 present_mode,
+                queue_family_index,
                 surface,
                 width,
             }
@@ -150,7 +150,6 @@ impl Graphchain {
             frames: frames.into_boxed_slice(),
             image_frames: Vec::new(),
             last_present_queue_index: 0,
-            queue_family_index,
             recreate_pending: false,
             requested_info: info,
             strategy,
@@ -440,8 +439,11 @@ impl Graphchain {
             wait_semaphores: slice::from_ref(&rendered),
         };
 
-        let present =
-            Swapchain::queue_present(self.queue_family_index, queue_index, [present_info]);
+        let present = Swapchain::queue_present(
+            self.read_only.info.queue_family_index,
+            queue_index,
+            [present_info],
+        );
         let present_result = match &present {
             Ok(results) => Some(results.first().copied().expect("missing present result")),
             Err(err) => err.results.first().copied().flatten(),
@@ -516,8 +518,10 @@ impl Graphchain {
         let mut frames = take(&mut self.frames).into_vec();
 
         for _ in frames.len()..self.read_only.info.frame_count {
-            let cmd_buf =
-                CommandBuffer::create(&device, CommandBufferInfo::new(self.queue_family_index))?;
+            let cmd_buf = CommandBuffer::create(
+                &device,
+                CommandBufferInfo::new(self.read_only.info.queue_family_index),
+            )?;
             let fence = Fence::create(&device, false)?;
             let swapchain_acquired = Device::create_semaphore(&device)?;
             Device::try_set_debug_utils_object_name(
@@ -596,7 +600,7 @@ impl Drop for Graphchain {
 
         if Device::with_queue(
             &device,
-            self.queue_family_index,
+            self.read_only.info.queue_family_index,
             self.last_present_queue_index,
             |queue| Device::queue_wait_idle(&device, queue),
         )
@@ -753,6 +757,9 @@ pub struct EffectiveGraphchainInfo {
     /// `vk::PresentModeKHR` determines timing and queueing with which frames are displayed.
     pub present_mode: vk::PresentModeKHR,
 
+    /// Queue family selected for graph submission and presentation.
+    pub queue_family_index: u32,
+
     /// The format and color space of the surface.
     pub surface: vk::SurfaceFormatKHR,
 
@@ -826,6 +833,7 @@ impl EffectiveGraphchainInfo {
             image_count: _,
             min_image_count,
             present_mode,
+            queue_family_index: _,
             surface,
             width,
         } = self;
@@ -1348,6 +1356,7 @@ mod test {
             image_count: 7,
             min_image_count: 3,
             present_mode: vk::PresentModeKHR::FIFO,
+            queue_family_index: 2,
             surface: vk::SurfaceFormatKHR::default()
                 .format(vk::Format::B8G8R8A8_UNORM)
                 .color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR),
