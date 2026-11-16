@@ -601,15 +601,9 @@ impl<'a> Command<'a> {
         let regions = Arc::<[vk::BufferImageCopy]>::from(regions.as_ref());
 
         for region in regions.iter() {
-            let block_bytes_size = format_texel_block_size(dst_info.format);
-            let (block_height, block_width) = format_texel_block_extent(dst_info.format);
-            let data_size = block_bytes_size
-                * (region.buffer_row_length / block_width)
-                * (region.buffer_image_height / block_height);
-
             self.set_subresource_access(
                 src,
-                region.buffer_offset..region.buffer_offset + data_size as vk::DeviceSize,
+                buffer_image_copy_range(dst_info.format, region),
                 AccessType::TransferRead,
             );
             self.set_subresource_access(
@@ -691,12 +685,6 @@ impl<'a> Command<'a> {
         let regions = Arc::<[vk::BufferImageCopy]>::from(regions.as_ref());
 
         for region in regions.iter() {
-            let block_bytes_size = format_texel_block_size(src_info.format);
-            let (block_height, block_width) = format_texel_block_extent(src_info.format);
-            let data_size = block_bytes_size
-                * (region.buffer_row_length / block_width)
-                * (region.buffer_image_height / block_height);
-
             self.set_subresource_access(
                 src,
                 image_subresource_range_from_layers(region.image_subresource),
@@ -704,7 +692,7 @@ impl<'a> Command<'a> {
             );
             self.set_subresource_access(
                 dst,
-                region.buffer_offset..region.buffer_offset + data_size as vk::DeviceSize,
+                buffer_image_copy_range(src_info.format, region),
                 AccessType::TransferWrite,
             );
         }
@@ -1304,6 +1292,111 @@ impl From<Range<vk::DeviceSize>> for ViewInfo {
     }
 }
 
+fn buffer_image_copy_format(format: vk::Format, aspect: vk::ImageAspectFlags) -> vk::Format {
+    match aspect {
+        vk::ImageAspectFlags::DEPTH => match format {
+            vk::Format::D16_UNORM_S8_UINT => vk::Format::D16_UNORM,
+            vk::Format::D24_UNORM_S8_UINT => vk::Format::X8_D24_UNORM_PACK32,
+            vk::Format::D32_SFLOAT_S8_UINT => vk::Format::D32_SFLOAT,
+            _ => format,
+        },
+        vk::ImageAspectFlags::STENCIL => vk::Format::S8_UINT,
+        vk::ImageAspectFlags::PLANE_0
+        | vk::ImageAspectFlags::PLANE_1
+        | vk::ImageAspectFlags::PLANE_2 => match format {
+            vk::Format::G8_B8_R8_3PLANE_420_UNORM
+            | vk::Format::G8_B8_R8_3PLANE_422_UNORM
+            | vk::Format::G8_B8_R8_3PLANE_444_UNORM => vk::Format::R8_UNORM,
+            vk::Format::G8_B8R8_2PLANE_420_UNORM
+            | vk::Format::G8_B8R8_2PLANE_422_UNORM
+            | vk::Format::G8_B8R8_2PLANE_444_UNORM => {
+                if aspect == vk::ImageAspectFlags::PLANE_1 {
+                    vk::Format::R8G8_UNORM
+                } else {
+                    vk::Format::R8_UNORM
+                }
+            }
+            vk::Format::G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16
+            | vk::Format::G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16
+            | vk::Format::G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16 => {
+                vk::Format::R10X6_UNORM_PACK16
+            }
+            vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
+            | vk::Format::G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16
+            | vk::Format::G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16 => {
+                if aspect == vk::ImageAspectFlags::PLANE_1 {
+                    vk::Format::R10X6G10X6_UNORM_2PACK16
+                } else {
+                    vk::Format::R10X6_UNORM_PACK16
+                }
+            }
+            vk::Format::G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16
+            | vk::Format::G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16
+            | vk::Format::G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16 => {
+                vk::Format::R12X4_UNORM_PACK16
+            }
+            vk::Format::G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16
+            | vk::Format::G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16
+            | vk::Format::G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16 => {
+                if aspect == vk::ImageAspectFlags::PLANE_1 {
+                    vk::Format::R12X4G12X4_UNORM_2PACK16
+                } else {
+                    vk::Format::R12X4_UNORM_PACK16
+                }
+            }
+            vk::Format::G16_B16_R16_3PLANE_420_UNORM
+            | vk::Format::G16_B16_R16_3PLANE_422_UNORM
+            | vk::Format::G16_B16_R16_3PLANE_444_UNORM => vk::Format::R16_UNORM,
+            vk::Format::G16_B16R16_2PLANE_420_UNORM
+            | vk::Format::G16_B16R16_2PLANE_422_UNORM
+            | vk::Format::G16_B16R16_2PLANE_444_UNORM => {
+                if aspect == vk::ImageAspectFlags::PLANE_1 {
+                    vk::Format::R16G16_UNORM
+                } else {
+                    vk::Format::R16_UNORM
+                }
+            }
+            _ => format,
+        },
+        _ => format,
+    }
+}
+
+fn buffer_image_copy_range(
+    format: vk::Format,
+    region: &vk::BufferImageCopy,
+) -> Range<vk::DeviceSize> {
+    let format = buffer_image_copy_format(format, region.image_subresource.aspect_mask);
+    let block_bytes = vk::DeviceSize::from(format_texel_block_size(format));
+    let (block_width, block_height) = format_texel_block_extent(format);
+    let extent = region.image_extent;
+
+    let row_blocks = vk::DeviceSize::from(
+        region
+            .buffer_row_length
+            .max(extent.width)
+            .div_ceil(block_width),
+    );
+    let image_rows = vk::DeviceSize::from(
+        region
+            .buffer_image_height
+            .max(extent.height)
+            .div_ceil(block_height),
+    );
+
+    let copied_columns = vk::DeviceSize::from(extent.width.div_ceil(block_width));
+    let copied_rows = vk::DeviceSize::from(extent.height.div_ceil(block_height));
+    let slices = vk::DeviceSize::from(extent.depth)
+        * vk::DeviceSize::from(region.image_subresource.layer_count);
+
+    // Include padding between rows and slices, but stop at the last copied block.
+    let data_size =
+        ((slices - 1) * image_rows * row_blocks + (copied_rows - 1) * row_blocks + copied_columns)
+            * block_bytes;
+
+    region.buffer_offset..region.buffer_offset + data_size
+}
+
 mod private {
     use crate::{
         AnyResource, Node,
@@ -1330,5 +1423,334 @@ mod private {
         fn range(&self, resources: &[AnyResource]) -> <Self as super::Subresource>::Range
         where
             Self: Node + super::Subresource;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use {
+        super::*,
+        crate::{
+            driver::{buffer::BufferInfo, image::ImageInfo},
+            stream::CommandStream,
+        },
+    };
+
+    fn assert_buffer_image_copy_accesses(
+        info: ImageInfo,
+        region: vk::BufferImageCopy,
+        expected: Range<vk::DeviceSize>,
+    ) {
+        CommandStream::finalize(|stream| {
+            let buffer = stream.arg(BufferInfo::host_mem(
+                expected.end,
+                vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
+            ));
+            let image = stream.arg(info);
+            stream
+                .graph
+                .begin_cmd()
+                .copy_buffer_to_image(buffer, image, [region])
+                .end_cmd();
+            stream
+                .graph
+                .begin_cmd()
+                .copy_image_to_buffer(image, buffer, [region])
+                .end_cmd();
+
+            for (cmd, expected_access) in stream
+                .graph
+                .cmds
+                .iter()
+                .zip([AccessType::TransferRead, AccessType::TransferWrite])
+            {
+                let (_, accesses) = cmd
+                    .expect_first_exec()
+                    .accesses
+                    .iter()
+                    .find(|(node_idx, _)| *node_idx == buffer.index())
+                    .expect("missing buffer copy access");
+                assert_eq!(accesses.len(), 1);
+                assert_eq!(accesses[0].access, expected_access);
+                let SubresourceRange::Buffer(range) = accesses[0].subresource else {
+                    panic!("expected buffer copy range");
+                };
+                assert_eq!(range, expected.clone().into());
+            }
+        });
+    }
+
+    fn image_info(width: u32, height: u32, format: vk::Format) -> ImageInfo {
+        ImageInfo::image_2d(
+            width,
+            height,
+            format,
+            vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+        )
+    }
+
+    fn region(width: u32, height: u32) -> vk::BufferImageCopy {
+        vk::BufferImageCopy::default()
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .layer_count(1),
+            )
+            .image_extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+    }
+
+    #[test]
+    fn buffer_image_copies_resolve_tightly_packed_strides() {
+        for row_length in [0, 1920] {
+            for image_height in [0, 1080] {
+                assert_buffer_image_copy_accesses(
+                    image_info(1920, 1080, vk::Format::R8G8B8A8_UNORM),
+                    region(1920, 1080)
+                        .buffer_row_length(row_length)
+                        .buffer_image_height(image_height),
+                    0..1920 * 1080 * 4,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn buffer_image_copies_exclude_trailing_padding() {
+        assert_buffer_image_copy_accesses(
+            image_info(3, 2, vk::Format::R8G8B8A8_UNORM),
+            region(3, 2)
+                .buffer_offset(16)
+                .buffer_row_length(5)
+                .buffer_image_height(4),
+            16..48,
+        );
+    }
+
+    #[test]
+    fn buffer_image_copies_include_all_array_layers() {
+        let mut info = image_info(3, 2, vk::Format::R8G8B8A8_UNORM);
+        info.array_layer_count = 3;
+        let mut region = region(3, 2)
+            .buffer_offset(16)
+            .buffer_row_length(5)
+            .buffer_image_height(4);
+        region.image_subresource.layer_count = 3;
+        assert_buffer_image_copy_accesses(info, region, 16..208);
+    }
+
+    #[test]
+    fn buffer_image_copies_include_all_depth_slices() {
+        let mut info = image_info(3, 2, vk::Format::R8G8B8A8_UNORM);
+        info.image_type = vk::ImageType::TYPE_3D;
+        info.depth = 3;
+        let mut region = region(3, 2)
+            .buffer_offset(16)
+            .buffer_row_length(5)
+            .buffer_image_height(4);
+        region.image_extent.depth = 3;
+        assert_buffer_image_copy_accesses(info, region, 16..208);
+    }
+
+    #[test]
+    fn buffer_image_copies_round_up_partial_compressed_blocks() {
+        for (format, size) in [
+            (vk::Format::BC1_RGBA_UNORM_BLOCK, 32),
+            (vk::Format::ASTC_5X4_UNORM_BLOCK, 64),
+        ] {
+            assert_buffer_image_copy_accesses(
+                image_info(7, 5, format),
+                region(7, 5).buffer_offset(16),
+                16..16 + size,
+            );
+        }
+    }
+
+    #[test]
+    fn buffer_image_copies_use_device_size_arithmetic() {
+        assert_buffer_image_copy_accesses(
+            image_info(32768, 32768, vk::Format::R8G8B8A8_UNORM),
+            region(32768, 32768)
+                .buffer_row_length(32768)
+                .buffer_image_height(32768),
+            0..1 << 32,
+        );
+    }
+
+    #[test]
+    fn buffer_image_copies_use_depth_stencil_aspect_sizes() {
+        for (format, aspect, texel_bytes) in [
+            (vk::Format::D16_UNORM, vk::ImageAspectFlags::DEPTH, 2),
+            (
+                vk::Format::X8_D24_UNORM_PACK32,
+                vk::ImageAspectFlags::DEPTH,
+                4,
+            ),
+            (vk::Format::D32_SFLOAT, vk::ImageAspectFlags::DEPTH, 4),
+            (vk::Format::S8_UINT, vk::ImageAspectFlags::STENCIL, 1),
+            (
+                vk::Format::D16_UNORM_S8_UINT,
+                vk::ImageAspectFlags::DEPTH,
+                2,
+            ),
+            (
+                vk::Format::D24_UNORM_S8_UINT,
+                vk::ImageAspectFlags::DEPTH,
+                4,
+            ),
+            (
+                vk::Format::D32_SFLOAT_S8_UINT,
+                vk::ImageAspectFlags::DEPTH,
+                4,
+            ),
+            (
+                vk::Format::D16_UNORM_S8_UINT,
+                vk::ImageAspectFlags::STENCIL,
+                1,
+            ),
+            (
+                vk::Format::D24_UNORM_S8_UINT,
+                vk::ImageAspectFlags::STENCIL,
+                1,
+            ),
+            (
+                vk::Format::D32_SFLOAT_S8_UINT,
+                vk::ImageAspectFlags::STENCIL,
+                1,
+            ),
+        ] {
+            for (row_length, image_height, texels) in [(0, 0, 6), (5, 4, 8)] {
+                let mut region = region(3, 2)
+                    .buffer_offset(16)
+                    .buffer_row_length(row_length)
+                    .buffer_image_height(image_height);
+                region.image_subresource.aspect_mask = aspect;
+                assert_buffer_image_copy_accesses(
+                    image_info(3, 2, format),
+                    region,
+                    16..16 + texels * texel_bytes,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn buffer_image_copies_use_three_plane_aspect_sizes() {
+        for (formats, texel_bytes) in [
+            (
+                [
+                    vk::Format::G8_B8_R8_3PLANE_420_UNORM,
+                    vk::Format::G8_B8_R8_3PLANE_422_UNORM,
+                    vk::Format::G8_B8_R8_3PLANE_444_UNORM,
+                ],
+                1,
+            ),
+            (
+                [
+                    vk::Format::G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16,
+                    vk::Format::G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16,
+                    vk::Format::G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16,
+                ],
+                2,
+            ),
+            (
+                [
+                    vk::Format::G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16,
+                    vk::Format::G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16,
+                    vk::Format::G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16,
+                ],
+                2,
+            ),
+            (
+                [
+                    vk::Format::G16_B16_R16_3PLANE_420_UNORM,
+                    vk::Format::G16_B16_R16_3PLANE_422_UNORM,
+                    vk::Format::G16_B16_R16_3PLANE_444_UNORM,
+                ],
+                2,
+            ),
+        ] {
+            for format in formats {
+                for aspect in [
+                    vk::ImageAspectFlags::PLANE_0,
+                    vk::ImageAspectFlags::PLANE_1,
+                    vk::ImageAspectFlags::PLANE_2,
+                ] {
+                    for (row_length, image_height, texels) in [(0, 0, 6), (5, 4, 8)] {
+                        let mut region = region(3, 2)
+                            .buffer_offset(16)
+                            .buffer_row_length(row_length)
+                            .buffer_image_height(image_height);
+                        region.image_subresource.aspect_mask = aspect;
+                        assert_buffer_image_copy_accesses(
+                            image_info(6, 4, format),
+                            region,
+                            16..16 + texels * texel_bytes,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn buffer_image_copies_use_two_plane_aspect_sizes() {
+        for (formats, component_bytes) in [
+            (
+                [
+                    vk::Format::G8_B8R8_2PLANE_420_UNORM,
+                    vk::Format::G8_B8R8_2PLANE_422_UNORM,
+                    vk::Format::G8_B8R8_2PLANE_444_UNORM,
+                ],
+                1,
+            ),
+            (
+                [
+                    vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+                    vk::Format::G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16,
+                    vk::Format::G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16,
+                ],
+                2,
+            ),
+            (
+                [
+                    vk::Format::G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16,
+                    vk::Format::G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16,
+                    vk::Format::G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16,
+                ],
+                2,
+            ),
+            (
+                [
+                    vk::Format::G16_B16R16_2PLANE_420_UNORM,
+                    vk::Format::G16_B16R16_2PLANE_422_UNORM,
+                    vk::Format::G16_B16R16_2PLANE_444_UNORM,
+                ],
+                2,
+            ),
+        ] {
+            for format in formats {
+                for (aspect, components) in [
+                    (vk::ImageAspectFlags::PLANE_0, 1),
+                    (vk::ImageAspectFlags::PLANE_1, 2),
+                ] {
+                    for (row_length, image_height, texels) in [(0, 0, 6), (5, 4, 8)] {
+                        let mut region = region(3, 2)
+                            .buffer_offset(16)
+                            .buffer_row_length(row_length)
+                            .buffer_image_height(image_height);
+                        region.image_subresource.aspect_mask = aspect;
+                        assert_buffer_image_copy_accesses(
+                            image_info(6, 4, format),
+                            region,
+                            16..16 + texels * component_bytes * components,
+                        );
+                    }
+                }
+            }
+        }
     }
 }

@@ -58,6 +58,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Fix panic while computing buffer/image copy synchronization ranges for compressed blocks.
+- Fix depth/stencil and multiplanar buffer/image copy helper-provided ranges.
 - Replace deprecated atomic `fetch_update` calls with `try_update`.
 - Fix `Device::wait_idle` to safely handle other threads submitting work at the same time.
 - Correct sampled-image access declarations in `min_max` and `mip_compute`, and use 2D-array image
