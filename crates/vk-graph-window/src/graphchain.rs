@@ -173,6 +173,36 @@ impl Graphchain {
                 .retire_pending(&mut self.read_only.swapchain)?;
 
             if self.read_only.swapchain.recreate_pending {
+                // Workaround for Nvidia Linux driver 595.x: destroying the old swapchain
+                // before `vkQueuePresentKHR` finishes triggers VUID-vkDestroySemaphore-semaphore-05149.
+                #[cfg(target_os = "linux")]
+                {
+                    const NVIDIA_VENDOR_ID: u32 = 0x10DE;
+
+                    let device = &self.read_only.swapchain.surface.device;
+                    let props = &device.physical.properties_v1_0;
+
+                    let is_nvidia = props.vendor_id == NVIDIA_VENDOR_ID;
+                    // Nvidia encodes driver version as: (major << 22) | (minor << 14) | ...
+                    let driver_major = props.driver_version >> 22;
+
+                    if is_nvidia && driver_major == 595 {
+                        log::debug!(
+                            "Applying resize synchronization workaround for Nvidia driver 595.x \
+                            (vendor_id=0x{:X}, driver_version=0x{:X})",
+                            props.vendor_id,
+                            props.driver_version
+                        );
+
+                        Device::with_queue(
+                            device,
+                            self.read_only.info.queue_family_index,
+                            self.last_present_queue_index,
+                            |queue| Device::queue_wait_idle(device, queue),
+                        )?;
+                    }
+                }
+
                 self.read_only.swapchain.recreate()?;
             }
 
