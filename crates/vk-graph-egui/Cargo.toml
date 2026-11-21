@@ -1,6 +1,6 @@
 [package]
 name = "vk-graph-egui"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["Christian Döring <christian.doering@tum.de>"]
 description = "egui renderer integration for vk-graph"
 documentation = "https://docs.rs/vk-graph-egui"
@@ -18,5 +18,4 @@ bytemuck = "1.25"
 egui = "0.34.3"
 egui-winit = "0.34.3"
 vk-graph.workspace = true
-vk-graph-fx.workspace = true
 vk-shader-macros = "0.2"

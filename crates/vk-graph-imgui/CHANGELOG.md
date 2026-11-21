@@ -6,6 +6,15 @@ This crate is versioned independently from `vk-graph`.
 
 ## [Unreleased]
 
+## [0.2.0]
+
+- Requires `vk-graph` `0.15.1` or later in the `0.15` series and Rust 1.95 or newer.
+  The public API uses `vk-graph` types and is not compatible with `vk-graph` `0.14`.
+- Adds `ImGui::set_font_size`, which rebuilds the font atlas at the next draw.
+- Adds `Frame::image_nearest` for per-image nearest sampling.
+- Packs draw-list geometry into a shared vertex/index buffer pair and handles frames
+  without drawable geometry.
+
 ## [0.1.2] - 2026-06-25
 
 - Supports `vk-graph` `0.14.3`.
@@ -19,3 +28,5 @@ This crate is versioned independently from `vk-graph`.
 
 - Initial release.
 - Supports `vk-graph` `0.14`.
+
+[0.2.0]: https://crates.io/crates/vk-graph-imgui/0.2.0
