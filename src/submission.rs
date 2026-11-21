@@ -17694,9 +17694,10 @@ mod test {
                 .record_cmd(|_| {});
             graph.finalize().queue_submit(&mut pool, 0, 0)?.wait()?;
             producer.wait()?;
-            for (pixel, bytes) in Buffer::mapped_slice(&output).chunks_exact(4).enumerate() {
+            let (pixels, _) = Buffer::mapped_slice(&output).as_chunks::<4>();
+            for (pixel, &bytes) in pixels.iter().enumerate() {
                 assert_eq!(
-                    f32::from_ne_bytes(bytes.try_into().unwrap()),
+                    f32::from_ne_bytes(bytes),
                     if pixel % 2 == 0 { 0.25 } else { 1.0 }
                 );
             }
@@ -18001,9 +18002,10 @@ mod test {
                         for (aspect, output) in outputs {
                             let bytes = Buffer::mapped_slice(&output);
                             if aspect == vk::ImageAspectFlags::DEPTH {
-                                for (pixel, value) in bytes[..16].chunks_exact(4).enumerate() {
+                                let (pixels, _) = bytes[..16].as_chunks::<4>();
+                                for (pixel, &value) in pixels.iter().enumerate() {
                                     assert_eq!(
-                                        f32::from_ne_bytes(value.try_into().unwrap()),
+                                        f32::from_ne_bytes(value),
                                         if pixel % 2 == 0 {
                                             0.75 - last_resolve as f32 * 0.125
                                         } else if late_clear {
@@ -18174,9 +18176,8 @@ mod test {
                         }
                         graph.finalize().queue_submit(&mut pool, 0, 0)?.wait()?;
                         for (slot, output) in outputs.iter().enumerate() {
-                            for (pixel, bytes) in
-                                Buffer::mapped_slice(output).chunks_exact(16).enumerate()
-                            {
+                            let (pixels, _) = Buffer::mapped_slice(output).as_chunks::<16>();
+                            for (pixel, bytes) in pixels.iter().enumerate() {
                                 // A callback scissor must not clip either attachment clear.
                                 let expected = if slot == 1 {
                                     if !clear_only && pixel % 2 == 0 {
@@ -18190,7 +18191,7 @@ mod test {
                                     later
                                 };
                                 assert_eq!(
-                                    bytes,
+                                    bytes.as_slice(),
                                     bytemuck::cast_slice::<_, u8>(&expected),
                                     "layers={layers} repeated={repeated} clear_only={clear_only} slot={slot} pixel={pixel}"
                                 );
@@ -18762,7 +18763,8 @@ mod test {
             }
             submission.recorded_commands.clear();
             submission.queue_submit(&mut pool, 0, 0)?.wait()?;
-            for pixel in Buffer::mapped_slice(&output).chunks_exact(4) {
+            let (pixels, _) = Buffer::mapped_slice(&output).as_chunks::<4>();
+            for &pixel in pixels {
                 assert_eq!(
                     pixel,
                     [0, 255, 0, 255],
@@ -18934,7 +18936,8 @@ mod test {
                     SubpassFixture::expected(1, 1, 18),
                     SubpassFixture::expected(0, 1, 19),
                 ];
-                for (pixel, actual) in Buffer::mapped_slice(&output).chunks_exact(4).enumerate() {
+                let (pixels, _) = Buffer::mapped_slice(&output).as_chunks::<4>();
+                for (pixel, &actual) in pixels.iter().enumerate() {
                     assert_eq!(
                         actual,
                         expected[pixel % 4 / 2],
@@ -19118,7 +19121,8 @@ mod test {
             let check = |output: &Buffer, shift: usize, salt: u32| {
                 let uniform = SubpassFixture::uniform_color(shift % 2);
                 let texture = SubpassFixture::texture_color(shift % 2);
-                for (pixel, actual) in Buffer::mapped_slice(output).chunks_exact(4).enumerate() {
+                let (pixels, _) = Buffer::mapped_slice(output).as_chunks::<4>();
+                for (pixel, &actual) in pixels.iter().enumerate() {
                     let tile = pixel % 4 / 2;
                     let mut expected = SubpassFixture::expected(
                         (tile + shift) % 2,
@@ -19629,8 +19633,8 @@ mod test {
                         assert_eq!(barrier.dst_queue_family_index, vk::QUEUE_FAMILY_IGNORED);
                     }
                     uploaded.wait()?;
-                    for (pixel, actual) in Buffer::mapped_slice(&output).chunks_exact(4).enumerate()
-                    {
+                    let (pixels, _) = Buffer::mapped_slice(&output).as_chunks::<4>();
+                    for (pixel, &actual) in pixels.iter().enumerate() {
                         let tile = pixel % 8 / 2;
                         let uniform = match tile {
                             0 => 0,

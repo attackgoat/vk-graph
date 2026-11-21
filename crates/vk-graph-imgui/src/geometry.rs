@@ -85,10 +85,11 @@ impl GeometryCapacity {
                 };
                 let start = end.push(list_indices.len(), list_vertices.len())?;
                 indices[start.indices..end.indices].copy_from_slice(cast_slice(list_indices));
-                for (dst, vertex) in vertices[start.vertices..end.vertices]
-                    .chunks_exact_mut(VERTEX_STRIDE)
-                    .zip(list_vertices)
-                {
+                let (packed_vertices, remainder) =
+                    vertices[start.vertices..end.vertices].as_chunks_mut::<VERTEX_STRIDE>();
+                debug_assert!(remainder.is_empty());
+
+                for (dst, vertex) in packed_vertices.iter_mut().zip(list_vertices) {
                     dst[..8].copy_from_slice(cast_slice(&vertex.pos));
                     dst[8..16].copy_from_slice(cast_slice(&vertex.uv));
                     dst[16..20].copy_from_slice(&vertex.col);

@@ -73,8 +73,19 @@ for features in loaded loaded,checked; do
 done
 
 if [ "$RUN_VULKAN" -eq 1 ]; then
+    # Reopening Vulkan instances can exhaust glibc's static TLS reserve for the NVIDIA ICD.
+    # Increase it only for the live tests, unless the caller already set it.
+    vulkan_tunables=${GLIBC_TUNABLES:-}
+    case "$(getconf GNU_LIBC_VERSION 2>/dev/null || true):$vulkan_tunables:" in
+        *:glibc.rtld.optional_static_tls=*: ) ;;
+        glibc\ *)
+            vulkan_tunables="${vulkan_tunables:+$vulkan_tunables:}glibc.rtld.optional_static_tls=65536"
+            ;;
+    esac
+
     for features in loaded,parking_lot loaded,parking_lot,checked; do
         run "vulkan tests ($features)" env RUSTFLAGS="-D warnings" \
+            GLIBC_TUNABLES="$vulkan_tunables" \
             VK_GRAPH_SKIP_VALIDATION_PARK=1 \
             cargo test $PROFILE --workspace --tests --no-default-features --features "$features" \
             -- --ignored --test-threads=1 --nocapture \

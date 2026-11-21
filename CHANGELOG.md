@@ -7,7 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.15.0]
+## [0.15.1]
+
+### Fixed
+
+- `vk-graph-window`: Fix a window-resize crash on NVIDIA 595.x Linux drivers
+  ([#120](https://github.com/attackgoat/vk-graph/pull/120)).
+
+## [0.15.0] - 2026-11-21 [YANKED]
+
+The yanked release did not include the window-resize fix from #120.
 
 ### Added
 
@@ -870,8 +879,9 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
   platforms and require no bare-metal graphics API knowledge
 - "Hello, world!" example using a bitmapped font
 
-[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.15.0...HEAD
-[0.15.0]: https://github.com/attackgoat/vk-graph/compare/v0.14.8...v0.15.0
+[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.15.1...HEAD
+[0.15.1]: https://crates.io/crates/vk-graph/0.15.1
+[0.15.0]: https://crates.io/crates/vk-graph/0.15.0
 [0.14.8]: https://crates.io/crates/vk-graph/0.14.8
 [0.14.7]: https://crates.io/crates/vk-graph/0.14.7
 [0.14.6]: https://crates.io/crates/vk-graph/0.14.6

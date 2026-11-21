@@ -4,7 +4,6 @@ use {
     ash::vk,
     bytemuck::{Pod, Zeroable, bytes_of},
     clap::Parser,
-    core::f32,
     glam::{Vec4, vec3},
     std::sync::Arc,
     vk_graph::{

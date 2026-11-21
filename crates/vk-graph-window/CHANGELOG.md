@@ -6,6 +6,17 @@ This crate is versioned independently from `vk-graph`.
 
 ## [Unreleased]
 
+## [0.2.0]
+
+- Requires `vk-graph` `0.15.1` or later in the `0.15` series and Rust 1.95 or newer. The public
+  API uses `vk-graph` types and is not compatible with `vk-graph` `0.14`.
+- Fix a window-resize crash on NVIDIA 595.x Linux drivers by waiting for the presentation queue
+  before recreating the swapchain ([#120](https://github.com/attackgoat/vk-graph/pull/120)).
+- Use per-image semaphores in `MAILBOX` mode instead of waiting on the previous presentation
+  for each frame slot. Reevaluate the semaphore strategy when the swapchain is recreated.
+- Expose the selected queue family in `EffectiveGraphchainInfo` and add
+  `Graphchain::wait_for_in_flight_limit` to cap overlapping submissions.
+
 ## [0.1.4] - 2026-07-14
 
 - Fixed built-in profiling feature
