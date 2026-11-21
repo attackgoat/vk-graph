@@ -4,7 +4,11 @@
 //! address, which [`BufferInfo`] cannot currently request.
 
 use {
-    super::{Buffer, BufferInfo, DriverError, device::Device},
+    super::{
+        Buffer, BufferInfo, DriverError,
+        device::Device,
+        sync::{AccessType, get_access_info2},
+    },
     ash::vk,
     derive_builder::Builder,
     log::warn,
@@ -14,7 +18,6 @@ use {
         ptr,
         thread::panicking,
     },
-    vk_sync::AccessType,
 };
 
 #[cfg(feature = "parking_lot")]
@@ -41,7 +44,7 @@ fn map_vk_result(result: vk::Result) -> Result<(), DriverError> {
 pub(crate) fn micromap_sync_flags_for_access(
     access: AccessType,
 ) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
-    let info = vk_sync::get_access_info2(access);
+    let info = get_access_info2(access);
 
     (info.stage_mask, info.access_mask)
 }

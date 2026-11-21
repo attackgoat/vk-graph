@@ -14,11 +14,11 @@ use {
             device::Device,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             shader::{Shader, ShaderBuilder},
+            sync::AccessType,
         },
     },
     vk_graph_window::{FrameContext, Window},
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 /// This example draws two triangles using two different vertex formats.

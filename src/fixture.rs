@@ -9,6 +9,7 @@ use {
             image::{ImageInfo, SampleCount},
             is_read_access,
             micromap::MicromapInfo,
+            sync::AccessType,
         },
     },
     ash::vk,
@@ -19,7 +20,6 @@ use {
         io::{self, ErrorKind},
         path::Path,
     },
-    vk_sync::AccessType,
 };
 
 const MAGIC: &[u8; 8] = b"VKGRFXT1";

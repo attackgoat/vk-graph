@@ -5,7 +5,8 @@ execution. Start with [`Graph`] — bind resources, record commands, and submit 
 
 - **Beginner**: [`Graph`], [`cmd`], [`node`], [`pool`] — the high-level graph API
 - **Intermediate**: [`driver`] — smart-pointer Vulkan wrappers (resources, pipelines, device)
-- **Expert**: [`driver`] re-exports `ash` and `vk_sync` — raw Vulkan bindings
+- **Expert**: [`driver::ash`] exposes raw Vulkan bindings, and [`driver::sync`] provides
+  synchronization types and barrier helpers.
 
 For installation, guides, and examples see the [Guide Book](https://attackgoat.github.io/vk-graph).
 
@@ -69,6 +70,7 @@ use {
             ray_tracing::RayTracingPipeline,
             render_pass::ResolveMode,
             shader::PipelineDescriptorInfo,
+            sync::AccessType,
         },
         driver::{
             accel_struct::AccelerationStructure, buffer::Buffer, image::Image,
@@ -92,7 +94,6 @@ use {
             atomic::{AtomicU8, Ordering},
         },
     },
-    vk_sync::AccessType,
 };
 
 #[cfg(feature = "checked")]
@@ -2474,8 +2475,10 @@ mod test {
     fn freezing_stream_accesses_again_preserves_declarations_and_remapping() {
         use {
             super::ExecutionAccess,
-            crate::cmd::{SubresourceAccess, SubresourceRange},
-            vk_sync::AccessType,
+            crate::{
+                cmd::{SubresourceAccess, SubresourceRange},
+                driver::sync::AccessType,
+            },
         };
 
         let mut accesses = ExecutionAccess::default();

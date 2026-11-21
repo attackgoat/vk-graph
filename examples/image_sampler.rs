@@ -19,12 +19,12 @@ use {
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             shader::{SamplerInfo, Shader},
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
     vk_graph_window::Window,
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 /// Displays a sequence of image samplers.

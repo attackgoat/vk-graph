@@ -12,13 +12,13 @@ use {
             image::ImageInfo,
             physical_device::Vulkan11Properties,
             shader::{Shader, SpecializationMap},
+            sync::AccessType,
         },
         pool::{Pool as _, hash::HashPool},
     },
     vk_graph_fx::*,
     vk_graph_window::Window,
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 fn main() -> anyhow::Result<()> {

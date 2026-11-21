@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0]
+
 ### Added
 
 - Opt-in `bindless_update_after_bind` for compute, graphics, and ray-tracing pipelines.
@@ -55,6 +57,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Set and inherit a workspace Rust requirement of 1.95, with CI checks for that version.
 - `vk-graph-imgui`: Pack draw lists to reduce memory usage and remove hitches from large UIs.
 - Optimize recording of workloads with many buffer-subrange accesses.
+- Move the synchronization fork into `vk_graph::driver::sync`.
 
 ### Fixed
 
@@ -867,7 +870,8 @@ _See [#25](https://github.com/attackgoat/screen-13/pull/25) for migration detail
   platforms and require no bare-metal graphics API knowledge
 - "Hello, world!" example using a bitmapped font
 
-[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.14.8...HEAD
+[Unreleased]: https://github.com/attackgoat/vk-graph/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/attackgoat/vk-graph/compare/v0.14.8...v0.15.0
 [0.14.8]: https://crates.io/crates/vk-graph/0.14.8
 [0.14.7]: https://crates.io/crates/vk-graph/0.14.7
 [0.14.6]: https://crates.io/crates/vk-graph/0.14.6

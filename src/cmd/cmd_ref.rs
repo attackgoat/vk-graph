@@ -223,7 +223,8 @@ impl<'a> CommandRef<'a> {
     /// `accelerationStructureIndirectBuild` feature must be enabled. Indirect buffers must remain
     /// alive, bound, and unchanged during reads, with `INDIRECT_BUFFER` and `SHADER_DEVICE_ADDRESS` usage. Addresses and
     /// strides must be multiples of four, and each range's primitive count must not exceed its
-    /// corresponding maximum. Declare [`vk_sync::AccessType::AccelerationStructureBuildIndirectRead`]
+    /// corresponding maximum. Declare
+    /// [`AccelerationStructureBuildIndirectRead`](crate::driver::sync::AccessType::AccelerationStructureBuildIndirectRead)
     /// for range buffers and synchronize their producers. This uses `ACCELERATION_STRUCTURE_BUILD_KHR`
     /// and `INDIRECT_COMMAND_READ`; `IndirectBuffer` uses the wrong stage for these reads.
     /// `General` remains a valid conservative fallback (`ALL_COMMANDS`, `MEMORY_READ | MEMORY_WRITE`).
@@ -284,12 +285,14 @@ impl<'a> CommandRef<'a> {
     /// [`vk::BuildMicromapModeEXT::BUILD`]. There is no ordering or synchronization implied between
     /// entries in the batch.
     ///
-    /// Graph users must separately declare [`vk_sync::AccessType::MicromapBuildWrite`] for each
-    /// destination micromap, [`vk_sync::AccessType::MicromapBuildInputRead`] for the buffers backing
-    /// `data` and `triangle_array`, and
-    /// [`vk_sync::AccessType::MicromapBuildScratchReadWrite`] for the scratch buffer. Device
-    /// addresses do not identify graph resources, so declaring only the micromap access is not
-    /// sufficient.
+    /// Graph users must separately declare
+    /// [`MicromapBuildWrite`](crate::driver::sync::AccessType::MicromapBuildWrite) for each
+    /// destination micromap,
+    /// [`MicromapBuildInputRead`](crate::driver::sync::AccessType::MicromapBuildInputRead) for the
+    /// buffers backing `data` and `triangle_array`, and
+    /// [`MicromapBuildScratchReadWrite`](crate::driver::sync::AccessType::MicromapBuildScratchReadWrite)
+    /// for the scratch buffer. Device addresses do not identify graph resources, so declaring only
+    /// the micromap access is not sufficient.
     ///
     /// See [`vkCmdBuildMicromapsEXT`](https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdBuildMicromapsEXT.html).
     ///
@@ -400,8 +403,9 @@ impl<'a> CommandRef<'a> {
 
     /// Clones or compacts one micromap into another.
     ///
-    /// Graph users must declare [`vk_sync::AccessType::MicromapBuildRead`] on `source` and
-    /// [`vk_sync::AccessType::MicromapBuildWrite`] on `destination`.
+    /// Graph users must declare
+    /// [`MicromapBuildRead`](crate::driver::sync::AccessType::MicromapBuildRead) on `source` and
+    /// [`MicromapBuildWrite`](crate::driver::sync::AccessType::MicromapBuildWrite) on `destination`.
     ///
     /// # Safety
     ///
@@ -437,8 +441,10 @@ impl<'a> CommandRef<'a> {
 
     /// Deserializes a buffer device address into a micromap.
     ///
-    /// Graph users must declare [`vk_sync::AccessType::MicromapBuildBufferRead`] on the source
-    /// buffer and [`vk_sync::AccessType::MicromapBuildWrite`] on `destination` separately.
+    /// Graph users must declare
+    /// [`MicromapBuildBufferRead`](crate::driver::sync::AccessType::MicromapBuildBufferRead) on the
+    /// source buffer and [`MicromapBuildWrite`](crate::driver::sync::AccessType::MicromapBuildWrite)
+    /// on `destination` separately.
     ///
     /// # Safety
     ///
@@ -517,9 +523,11 @@ impl<'a> CommandRef<'a> {
 
     /// Serializes a micromap to a buffer device address.
     ///
-    /// Graph users must declare [`vk_sync::AccessType::MicromapBuildRead`] on `source` and
-    /// [`vk_sync::AccessType::MicromapBuildBufferWrite`] on the destination buffer separately. The
-    /// destination address must have enough storage for the serialization-size property.
+    /// Graph users must declare
+    /// [`MicromapBuildRead`](crate::driver::sync::AccessType::MicromapBuildRead) on `source` and
+    /// [`MicromapBuildBufferWrite`](crate::driver::sync::AccessType::MicromapBuildBufferWrite)
+    /// on the destination buffer separately. The destination address must have enough storage for
+    /// the serialization-size property.
     ///
     /// # Safety
     ///
@@ -597,7 +605,8 @@ impl<'a> CommandRef<'a> {
 
     /// Writes micromap properties to consecutive query-pool slots.
     ///
-    /// Graph users must declare [`vk_sync::AccessType::MicromapBuildRead`] for every micromap. The
+    /// Graph users must declare
+    /// [`MicromapBuildRead`](crate::driver::sync::AccessType::MicromapBuildRead) for every micromap. The
     /// query pool is a raw Vulkan object and is not tracked by the graph; it must match `query_type`,
     /// have enough unavailable slots starting at `first_query`, and be reset as required by Vulkan.
     ///
@@ -1303,9 +1312,11 @@ mod test {
 
     #[test]
     fn general_access_conservatively_covers_indirect_build_ranges() {
-        let (src_stage, dst_stage, legacy) = vk_sync::get_memory_barrier(&vk_sync::GlobalBarrier {
-            previous_accesses: &[vk_sync::AccessType::General],
-            next_accesses: &[vk_sync::AccessType::General],
+        use crate::driver::sync::{self, AccessType, GlobalBarrier};
+
+        let (src_stage, dst_stage, legacy) = sync::get_memory_barrier(&GlobalBarrier {
+            previous_accesses: &[AccessType::General],
+            next_accesses: &[AccessType::General],
         });
 
         assert_eq!(src_stage, vk::PipelineStageFlags::ALL_COMMANDS);
@@ -1318,7 +1329,7 @@ mod test {
             legacy.dst_access_mask,
             vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE
         );
-        let sync2 = vk_sync::get_access_info2(vk_sync::AccessType::General);
+        let sync2 = sync::get_access_info2(AccessType::General);
 
         assert_eq!(sync2.stage_mask, vk::PipelineStageFlags2::ALL_COMMANDS);
         assert_eq!(

@@ -15,12 +15,12 @@ use {
             device::Device,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
+            sync::AccessType,
         },
         pool::lazy::LazyPool,
     },
     vk_graph_window::{Window, WindowError},
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
     winit::dpi::LogicalSize,
 };
 

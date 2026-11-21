@@ -45,12 +45,12 @@ fn vulkan_validation_settings_control_hazard_detection() -> Result<(), DriverErr
                 cmd_buf::{CommandBuffer, CommandBufferInfo},
                 compute::{ComputePipeline, ComputePipelineInfo},
                 shader::Shader,
+                sync::AccessType,
             },
             pool::hash::HashPool,
             submission::RecordSelection,
         },
         vk_shader_macros::glsl,
-        vk_sync::AccessType,
     };
 
     let settings = ValidationSettings::from_env();
@@ -340,10 +340,10 @@ fn vulkan_acceleration_structure_commands() -> Result<(), DriverError> {
                 buffer::{Buffer, BufferInfo},
                 compute::{ComputePipeline, ComputePipelineInfo},
                 shader::Shader,
+                sync::AccessType,
             },
             pool::hash::HashPool,
         },
-        vk_sync::AccessType,
     };
 
     let device = TestDevice::new()?;

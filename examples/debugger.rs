@@ -3,8 +3,8 @@ use vk_graph::driver::{
     compute::{ComputePipeline, ComputePipelineInfo},
     image::{Image, ImageInfo},
     shader::Shader,
+    sync::AccessType,
 };
-use vk_sync::AccessType;
 
 /*
     This example details some common debugging techniques you might find helpful

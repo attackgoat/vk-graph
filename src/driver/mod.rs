@@ -64,6 +64,7 @@ pub mod render_pass;
 pub mod shader;
 pub mod surface;
 pub mod swapchain;
+pub mod sync;
 
 pub(crate) mod query_pool;
 
@@ -81,18 +82,6 @@ mod descriptor_set_layout;
 /// `vk-graph`'s documentation. It is intentionally public and stable — not deprecated.
 #[doc(hidden)]
 pub use ash::{self};
-
-/// Re-export of [`vk_sync`] under the `sync` alias — Vulkan synchronization primitives.
-///
-/// Provides [`AccessType`](sync::AccessType) and related types that are the foundation of
-/// `vk-graph`'s automatic resource tracking.
-///
-/// # Hidden from docs
-///
-/// This re-export is `#[doc(hidden)]` to avoid duplicating the entire `vk_sync` API surface in
-/// `vk-graph`'s documentation. It is intentionally public and stable — not deprecated.
-#[doc(hidden)]
-pub use vk_sync::{self as sync};
 
 pub(crate) use self::{
     descriptor_set::RawDescriptorSet,
@@ -1015,11 +1004,11 @@ fn merge_push_constant_ranges(pcr: &[vk::PushConstantRange]) -> Vec<vk::PushCons
 }
 
 pub(super) const fn pipeline_stage_access_flags(
-    access_type: vk_sync::AccessType,
+    access_type: sync::AccessType,
 ) -> (vk::PipelineStageFlags, vk::AccessFlags) {
     use {
+        self::sync::AccessType as ty,
         vk::{AccessFlags as access, PipelineStageFlags as stage},
-        vk_sync::AccessType as ty,
     };
 
     match access_type {
@@ -1330,10 +1319,9 @@ mod test {
     use {
         super::{
             access_type_from_u8, access_type_into_u8, is_read_access, is_write_access,
-            merge_push_constant_ranges, pipeline_stage_access_flags,
+            merge_push_constant_ranges, pipeline_stage_access_flags, sync::AccessType,
         },
         ash::vk,
-        vk_sync::AccessType,
     };
 
     #[test]

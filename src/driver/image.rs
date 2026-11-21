@@ -3,7 +3,7 @@
 use {
     super::{
         DriverError, SharingMode, access_type_from_u8, access_type_into_u8, device::Device,
-        format_aspect_mask, pipeline_stage_access_flags,
+        format_aspect_mask, pipeline_stage_access_flags, sync::AccessType,
     },
     ash::vk::{self, ImageCreateInfo},
     derive_builder::Builder,
@@ -24,7 +24,6 @@ use {
         },
         thread::panicking,
     },
-    vk_sync::AccessType,
 };
 
 #[cfg(feature = "parking_lot")]
@@ -1354,7 +1353,7 @@ impl ExclusiveSharing {
 ///
 /// ```no_run
 /// # use ash::vk;
-/// # use vk_sync::AccessType;
+/// # use vk_graph::driver::sync::AccessType;
 /// # use vk_graph::driver::DriverError;
 /// # use vk_graph::driver::device::{Device, DeviceInfo};
 /// # use vk_graph::driver::image::{Image, ImageInfo};

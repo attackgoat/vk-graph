@@ -1,8 +1,7 @@
 use {
     ash::vk,
     criterion::{Criterion, black_box, criterion_group, criterion_main},
-    vk_graph::driver::image::bench::SwapAccessBenchHarness,
-    vk_sync::AccessType,
+    vk_graph::driver::{image::bench::SwapAccessBenchHarness, sync::AccessType},
 };
 
 fn dual_single_subresource(

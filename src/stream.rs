@@ -15,7 +15,7 @@
 //! # use vk_graph::driver::graphics::GraphicsPipeline;
 //! # use vk_graph::driver::image::ImageInfo;
 //! # use vk_graph::stream::CommandStream;
-//! # use vk_sync::AccessType;
+//! # use vk_graph::driver::sync::AccessType;
 //! # let mut pool: HashPool = todo!();
 //! # let pipeline: GraphicsPipeline = todo!();
 //! # let swapchain_image: ImageNode = todo!();
@@ -74,6 +74,7 @@ use {
             image::{Image, ImageInfo, ImageInfoBuilder, ImageViewInfo},
             micromap::{Micromap, MicromapInfo, MicromapInfoBuilder},
             ray_tracing::RayTracingPipeline,
+            sync::AccessType,
         },
         node::{
             AccelerationStructureLeaseNode, AccelerationStructureNode,
@@ -96,7 +97,6 @@ use {
             atomic::{AtomicU64, Ordering},
         },
     },
-    vk_sync::AccessType,
 };
 
 #[cfg(feature = "checked")]
@@ -337,13 +337,13 @@ pub(crate) struct CommandStreamInner {
 ///
 /// ```no_run
 /// # use ash::vk;
-/// # use vk_graph::{driver::buffer::BufferInfo, stream::CommandStream};
+/// # use vk_graph::{driver::{buffer::BufferInfo, sync::AccessType}, stream::CommandStream};
 /// let stream = CommandStream::finalize(|stream| {
 ///     let staging = stream.arg(BufferInfo::host_mem(
 ///         1024,
 ///         vk::BufferUsageFlags::TRANSFER_SRC,
 ///     ));
-///     stream.begin_cmd().resource_access(staging, vk_sync::AccessType::TransferRead);
+///     stream.begin_cmd().resource_access(staging, AccessType::TransferRead);
 ///     staging
 /// })
 /// .into_stream();
@@ -2086,15 +2086,15 @@ mod test {
 
             stream
                 .begin_cmd()
-                .resource_access(first, vk_sync::AccessType::TransferRead)
+                .resource_access(first, AccessType::TransferRead)
                 .record_cmd(|_| {});
             stream
                 .begin_cmd()
-                .resource_access(second, vk_sync::AccessType::TransferWrite)
+                .resource_access(second, AccessType::TransferWrite)
                 .record_cmd(|_| {});
             stream
                 .begin_cmd()
-                .resource_access(first, vk_sync::AccessType::TransferRead)
+                .resource_access(first, AccessType::TransferRead)
                 .record_cmd(|_| {});
 
             (first, second)
@@ -2466,7 +2466,7 @@ mod test {
 
             stream
                 .begin_cmd()
-                .resource_access(micromap, vk_sync::AccessType::MicromapBuildRead)
+                .resource_access(micromap, AccessType::MicromapBuildRead)
                 .record_cmd(|_| {});
 
             micromap

@@ -13,11 +13,11 @@ use {
             device::{Device, DeviceInfo},
             image::{Image, ImageInfo},
             shader::{SamplerInfo, Shader},
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 /// This program demonstrates a single compute command which uses multiple executions to record a

@@ -41,7 +41,7 @@ Building and submitting a graph typically takes only a few hundred microseconds.
 Vulkan is hard. Synchronization is _extremely_ hard. `vk-graph` makes Vulkan *less painful* to write
 and *a joy* to maintain.
 
-The driver is based off the popular `ash` crate and `vk-sync`; reasoned as follows:
+The driver uses the `ash` crate and incorporates synchronization helpers from `vk-sync`.
 - _Everything_ is constructed from "`Info`" structs; all info is `Copy`
 - Match the naming described in the specification
 - Support all modern Vulkan usage[^modern] except video[^video]

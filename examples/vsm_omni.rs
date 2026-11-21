@@ -26,12 +26,12 @@ use {
             image::ImageInfo,
             physical_device::Vulkan10Features,
             shader::{Shader, SpecializationMap},
+            sync::AccessType,
         },
         pool::{Lease, Pool, fifo::FifoPool},
     },
     vk_graph_window::Window,
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
     winit::{dpi::LogicalSize, event::Event, keyboard::KeyCode, window::Fullscreen},
     winit_input_helper::WinitInputHelper,
 };

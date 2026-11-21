@@ -19,12 +19,12 @@ use {
             physical_device::khr::RayTracingPipelineProperties,
             ray_tracing::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
             shader::Shader,
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
     vk_graph_window::Window,
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 static SHADER_RAY_GEN: &[u32] = glsl!(

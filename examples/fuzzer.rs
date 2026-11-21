@@ -43,12 +43,12 @@ use {
             physical_device::Vulkan10Limits,
             render_pass::ResolveMode,
             shader::{Shader, ShaderBuilder, SpecializationMap},
+            sync::AccessType,
         },
         pool::{Pool as _, hash::HashPool},
     },
     vk_graph_window::{FrameContext, Window, WindowError},
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 static OPERATIONS: &[Operation] = &[

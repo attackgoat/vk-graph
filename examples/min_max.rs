@@ -13,12 +13,12 @@ use {
             device::{Device, DeviceInfo},
             image::{Image, ImageInfo},
             shader::{SamplerInfo, Shader},
+            sync::AccessType,
         },
         node::ImageNode,
         pool::hash::HashPool,
     },
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 /*

@@ -10,13 +10,13 @@ use {
             device::Device,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
+            sync::AccessType,
         },
         node::AnyBufferNode,
         pool::hash::HashPool,
         stream::CommandStream,
     },
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 struct QueryOwner {

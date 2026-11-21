@@ -30,13 +30,13 @@ use {
             graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::ImageInfo,
             shader::Shader,
+            sync::AccessType,
         },
         node::AccelerationStructureLeaseNode,
         pool::{Pool as _, lazy::LazyPool},
     },
     vk_graph_window::Window,
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 fn best_2d_optimal_format(

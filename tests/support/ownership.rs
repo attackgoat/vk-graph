@@ -16,12 +16,12 @@ use {
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
             fence::Fence,
+            sync::AccessType,
         },
         pool::{Pool, hash::HashPool},
         submission::{QueueSubmitInfo, RecordSelection, SemaphoreSubmit2Info, SemaphoreSubmitInfo},
     },
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 pub(super) fn supports_in_flight(device: &Device) -> bool {

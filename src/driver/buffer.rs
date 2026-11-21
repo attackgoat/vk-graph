@@ -3,6 +3,7 @@
 use {
     super::{
         DriverError, SharingMode, device::Device, is_write_access, pipeline_stage_access_flags,
+        sync::AccessType,
     },
     ash::vk,
     derive_builder::Builder,
@@ -21,7 +22,6 @@ use {
         sync::atomic::{AtomicU64, Ordering},
         thread::panicking,
     },
-    vk_sync::AccessType,
 };
 
 #[cfg(feature = "parking_lot")]

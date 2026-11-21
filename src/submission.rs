@@ -48,6 +48,10 @@ use {
             pipeline_stage_access_flags,
             query_pool::{QueryPool, QueryPoolInfo},
             render_pass::{RenderPass, RenderPassInfo},
+            sync::{
+                AccessType, BufferBarrier, GlobalBarrier, ImageBarrier, ImageLayout,
+                get_buffer_memory_barrier, get_image_memory_barrier, get_memory_barrier,
+            },
         },
         lazy_str,
         node::AnyNode,
@@ -74,10 +78,6 @@ use {
         slice,
         sync::{Arc, Mutex},
         time::Duration,
-    },
-    vk_sync::{
-        AccessType, BufferBarrier, GlobalBarrier, ImageBarrier, ImageLayout,
-        get_image_memory_barrier, get_memory_barrier,
     },
 };
 
@@ -3238,7 +3238,7 @@ impl Submission {
         vk::PipelineStageFlags,
         vk::BufferMemoryBarrier<'a>,
     ) {
-        let (mut src, mut dst, mut memory) = vk_sync::get_buffer_memory_barrier(barrier);
+        let (mut src, mut dst, mut memory) = get_buffer_memory_barrier(barrier);
         if barrier.src_queue_family_index != barrier.dst_queue_family_index {
             // This recorder emits acquires; releases are recorded on the owning queue separately.
             // The ignored source scope must still be legal on the destination queue.
@@ -5518,7 +5518,7 @@ impl Submission {
             tls.prev_accesses.clear();
             tls.prev_micromap_accesses.clear();
 
-            // Map remaining accesses into vk_sync barriers (some accesses may have been removed by
+            // Map remaining accesses into barriers (some accesses may have been removed by
             // the render pass request function)
 
             for (node_idx, node_accesses) in accesses.iter() {
@@ -9522,6 +9522,7 @@ mod test {
             graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageAccessSet, ImageInfo, SampleCount},
             render_pass::{RenderPassInfo, SubpassDependency, SubpassInfo},
+            sync::{self, AccessType, BufferBarrier, GlobalBarrier},
         },
         node::{AnyBufferNode, AnyImageNode, AnyNode, BufferNode},
         pool::{Pool, hash::HashPool},
@@ -9540,7 +9541,6 @@ mod test {
             time::{Duration, Instant},
         },
         vk_shader_macros::glsl,
-        vk_sync::{AccessType, BufferBarrier, GlobalBarrier},
     };
 
     thread_local! {
@@ -10379,9 +10379,9 @@ mod test {
                         assert!(previous_end <= gap.start && gap.start < gap.end);
                         assert!(gap.end <= query.end as u64);
                         previous_end = gap.end;
-                        for byte in gap.start as usize..gap.end as usize {
-                            assert!(!actual[byte]);
-                            actual[byte] = true;
+                        for claimed_byte in &mut actual[gap.start as usize..gap.end as usize] {
+                            assert!(!*claimed_byte);
+                            *claimed_byte = true;
                         }
                     }
                     for byte in 0..claimed.len() {
@@ -10893,7 +10893,7 @@ mod test {
         ] {
             let reads = [next_access];
             let (src_stage_mask, dst_stage_mask, barrier) =
-                vk_sync::get_memory_barrier(&vk_sync::GlobalBarrier {
+                sync::get_memory_barrier(&GlobalBarrier {
                     previous_accesses: &[AccessType::AccelerationStructureBuildWrite],
                     next_accesses: &reads,
                 });
@@ -11021,7 +11021,7 @@ mod test {
                         assert!(sync2.src_stage_mask.is_empty());
                         assert!(sync2.src_access_mask.is_empty());
                     } else {
-                        let (old_src, old_dst, old) = vk_sync::get_buffer_memory_barrier(&barrier);
+                        let (old_src, old_dst, old) = sync::get_buffer_memory_barrier(&barrier);
                         assert_eq!((src, dst), (old_src, old_dst));
                         assert_eq!(legacy.src_access_mask, old.src_access_mask);
                         assert_eq!(legacy.dst_access_mask, old.dst_access_mask);
@@ -15760,7 +15760,7 @@ mod test {
         ));
 
         let mut layout_transition = sampled_read_barrier(compute, ray_tracing);
-        layout_transition.next_layout = vk_sync::ImageLayout::General;
+        layout_transition.next_layout = sync::ImageLayout::General;
 
         assert!(!super::TrackedImageBarrier::can_elide_sampled_read(
             layout_transition

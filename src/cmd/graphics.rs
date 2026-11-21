@@ -11,12 +11,12 @@ use {
                 image_subresource_range_intersects,
             },
             render_pass::ResolveMode,
+            sync::AccessType,
         },
         node::{AnyBufferNode, AnyImageNode},
     },
     ash::vk,
     std::{cell::RefCell, ops::Deref, slice},
-    vk_sync::AccessType,
 };
 
 impl PipelineCommand<'_, GraphicsPipeline> {
@@ -1522,7 +1522,7 @@ impl GraphicsCommandRef<'_> {
     /// ```no_run
     /// # use ash::vk;
     /// # use vk_graph::cmd::{LoadOp, StoreOp};
-    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::sync::AccessType;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
@@ -1597,7 +1597,7 @@ impl GraphicsCommandRef<'_> {
     /// ```no_run
     /// # use ash::vk;
     /// # use vk_graph::cmd::{LoadOp, StoreOp};
-    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::sync::AccessType;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
@@ -1787,7 +1787,7 @@ impl GraphicsCommandRef<'_> {
     /// # use std::mem::size_of;
     /// # use ash::vk;
     /// # use vk_graph::cmd::{LoadOp, StoreOp};
-    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::sync::AccessType;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};

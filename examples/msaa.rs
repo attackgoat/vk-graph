@@ -16,12 +16,12 @@ use {
             graphics::{DepthStencilInfo, GraphicsPipeline, GraphicsPipelineInfo},
             image::{ImageInfo, SampleCount},
             physical_device::Vulkan10Limits,
+            sync::AccessType,
         },
         pool::{Pool as _, fifo::FifoPool},
     },
     vk_graph_window::Window,
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };

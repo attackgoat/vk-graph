@@ -51,7 +51,7 @@ use {
         NodeIndex,
         driver::{
             buffer::BufferSubresourceRange, format_texel_block_extent, format_texel_block_size,
-            image::ImageViewInfo, image_subresource_range_from_layers,
+            image::ImageViewInfo, image_subresource_range_from_layers, sync::AccessType,
         },
         resource::{
             AccelerationStructureAccessType, ImageAccessType, ResourceSetAccessType,
@@ -61,7 +61,6 @@ use {
     },
     ash::vk,
     std::{ops::Range, sync::Arc},
-    vk_sync::AccessType,
 };
 
 /// Alias for the index of a framebuffer attachment.

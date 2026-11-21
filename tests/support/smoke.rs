@@ -12,11 +12,11 @@ use {
             compute::{ComputePipeline, ComputePipelineInfo},
             device::Device,
             shader::Shader,
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 pub(super) fn run() -> Result<(), DriverError> {

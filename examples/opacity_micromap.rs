@@ -18,10 +18,10 @@ use {
             buffer::{Buffer, BufferInfo},
             device::{Device, DeviceInfo},
             micromap::{Micromap, MicromapInfo, OpacityMicromapUsage},
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
-    vk_sync::AccessType,
 };
 
 fn bytes_of<T>(value: &T) -> &[u8] {

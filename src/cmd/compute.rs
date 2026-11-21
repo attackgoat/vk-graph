@@ -111,7 +111,7 @@ impl ComputeCommandRef<'_> {
     ///
     /// ```no_run
     /// # use ash::vk;
-    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::sync::AccessType;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};
@@ -205,7 +205,7 @@ impl ComputeCommandRef<'_> {
     /// ```no_run
     /// # use ash::vk;
     /// # use bytemuck::{bytes_of, Pod, Zeroable};
-    /// # use vk_sync::AccessType;
+    /// # use vk_graph::driver::sync::AccessType;
     /// # use vk_graph::driver::DriverError;
     /// # use vk_graph::driver::device::{Device, DeviceInfo};
     /// # use vk_graph::driver::buffer::{Buffer, BufferInfo};

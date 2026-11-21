@@ -18,11 +18,11 @@ use {
             buffer::{Buffer, BufferInfo},
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 #[test]

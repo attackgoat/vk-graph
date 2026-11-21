@@ -16,12 +16,12 @@ use {
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
             image::{Image, ImageInfo},
             shader::{SamplerInfoBuilder, Shader},
+            sync::AccessType,
         },
         pool::lazy::LazyPool,
     },
     vk_graph_window::{Window, WindowError},
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 // TODO: Add texelFetch option

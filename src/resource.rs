@@ -14,6 +14,7 @@ use {
             device::Device,
             format_aspect_mask,
             image::{Image, ImageInfo, ImageSetQueue},
+            sync::AccessType,
         },
         pool::Lease,
     },
@@ -23,7 +24,6 @@ use {
         hash::{Hash, Hasher},
         sync::Arc,
     },
-    vk_sync::AccessType,
 };
 
 /// The read performed through an [`AccelerationStructureSet`].

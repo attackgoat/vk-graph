@@ -3,7 +3,7 @@
 use {
     super::{
         Buffer, BufferInfo, DriverError, device::Device, is_write_access,
-        micromap::OpacityMicromapUsage, pipeline_stage_access_flags,
+        micromap::OpacityMicromapUsage, pipeline_stage_access_flags, sync::AccessType,
     },
     ash::vk,
     derive_builder::Builder,
@@ -15,7 +15,6 @@ use {
         mem::size_of_val,
         thread::panicking,
     },
-    vk_sync::AccessType,
 };
 
 type Accesses = SmallVec<[AccessType; 4]>;

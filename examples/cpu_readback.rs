@@ -8,10 +8,10 @@ use {
             DriverError,
             buffer::Buffer,
             device::{Device, DeviceInfo},
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
-    vk_sync::AccessType,
 };
 
 /// Example demonstrating the steps to take when reading the results of buffer or image operations

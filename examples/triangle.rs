@@ -10,11 +10,11 @@ use {
         driver::{
             buffer::Buffer,
             graphics::{GraphicsPipeline, GraphicsPipelineInfo},
+            sync::AccessType,
         },
     },
     vk_graph_window::{Window, WindowError},
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 // A Vulkan triangle using a graphics pipeline, vertex/fragment shaders, and index/vertex buffers

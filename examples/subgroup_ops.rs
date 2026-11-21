@@ -12,11 +12,11 @@ use {
             device::{Device, DeviceInfo},
             physical_device::Vulkan11Properties,
             shader::{Shader, SpecializationMap},
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 /// Advanced example demonstrating subgroup operations (arithmetic and ballot).

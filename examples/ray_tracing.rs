@@ -22,12 +22,12 @@ use {
             physical_device::khr::RayTracingPipelineProperties,
             ray_tracing::{RayTracingPipeline, RayTracingPipelineInfo, RayTracingShaderGroup},
             shader::Shader,
+            sync::AccessType,
         },
         pool::{Pool as _, hash::HashPool},
     },
     vk_graph_window::Window,
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
     winit::{event::Event, keyboard::KeyCode},
     winit_input_helper::WinitInputHelper,
 };

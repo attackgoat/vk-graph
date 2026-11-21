@@ -10,11 +10,11 @@ use {
             compute::{ComputePipeline, ComputePipelineInfo},
             image::{Image, ImageInfo},
             shader::Descriptor,
+            sync::AccessType,
         },
         pool::hash::HashPool,
     },
     vk_shader_macros::glsl,
-    vk_sync::AccessType,
 };
 
 #[test]

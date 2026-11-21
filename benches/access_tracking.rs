@@ -7,8 +7,8 @@ use {
     vk_graph::driver::{
         buffer::bench::{AccessBenchHarness as Buffer, RunLookupBenchHarness as RunLookup},
         image::bench::SwapAccessBenchHarness as Image,
+        sync::AccessType,
     },
-    vk_sync::AccessType,
 };
 
 fn range(layers: u32, mips: u32) -> vk::ImageSubresourceRange {
